@@ -24,3 +24,8 @@ example/macos/Pods/
 # FRB-generated bindings ARE committed (`lib/src/ffi/`, `rust/src/frb_generated.rs`)
 # so that `flutter pub get` works without requiring the FRB CLI to be installed.
 # Regenerate with: flutter_rust_bridge_codegen generate
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
