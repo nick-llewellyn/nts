@@ -1,0 +1,42 @@
+# Slim the published tarball: exclude regenerable Flutter platform
+# scaffolding and large icon-source assets from the example app. The
+# Dart source (lib/, bin/, test/), pubspec, and documentation are kept
+# so pub.dev's Example tab and the CLI/GUI guides remain useful.
+#
+# A .pubignore in this directory replaces example/.gitignore for the
+# purposes of `dart pub publish` (per dart.dev/go/pubignore). Patterns
+# follow gitignore syntax. Hidden files, root .gitignore rules, and
+# subdirectory .gitignore rules elsewhere in the tree still apply.
+
+# Platform scaffolding (regenerable via `flutter create --platforms=...`)
+android/
+ios/
+linux/
+macos/
+windows/
+
+# Icon source assets (regenerable from tool/generate_icon.py)
+assets/icon/
+
+# Icon-generator tooling (consumers don't need it)
+tool/
+
+# Defensive: also covered by root .gitignore but listed for clarity
+pubspec.lock
+.dart_tool/
+build/
+
+# Carry over the non-redundant parts of the original example/.gitignore
+# so we don't accidentally ship local IDE / build droppings if any
+# happen to exist at publish time.
+*.class
+*.log
+*.pyc
+*.swp
+*.iml
+*.ipr
+*.iws
+migrate_working_dir/
+**/doc/api/
+app.*.symbols
+app.*.map.json
