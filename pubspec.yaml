@@ -9,8 +9,12 @@ repository: https://github.com/nick-llewellyn/nts
 issue_tracker: https://github.com/nick-llewellyn/nts/issues
 
 environment:
-  sdk: '^3.11.5'
-  flutter: '^3.41.7'
+  # Lower bound matches the `hooks` package floor (Dart >=3.10.0), which
+  # corresponds to Flutter 3.38.0 stable (Nov 2025) -- the first release to
+  # ship Dart 3.10. CI exercises both this floor and the pinned `.fvmrc`
+  # version (3.41.7) to keep Native Assets + FRB bindings drift-free.
+  sdk: '^3.10.0'
+  flutter: '>=3.38.0'
 
 dependencies:
   flutter:

@@ -17,8 +17,17 @@ on:
 
 jobs:
   build:
-    name: Format / analyze / Dart tests
+    # Matrix exercises both the declared SDK floor (3.38.10 -- oldest stable
+    # satisfying `flutter: ^3.38.0` in pubspec.yaml, ships Dart 3.10.9) and
+    # the pinned current version (3.41.7, matches .fvmrc). Format check runs
+    # only on the pinned version because `dart format` output can shift
+    # between Dart minors and we don't want spurious failures on the floor.
+    name: Format / analyze / Dart tests (Flutter ${{ matrix.flutter }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flutter: ['3.38.10', '3.41.7']
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -26,13 +35,14 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.7'
+          flutter-version: ${{ matrix.flutter }}
           channel: 'stable'
 
       - name: Resolve package dependencies
         run: flutter pub get
 
       - name: Verify formatting
+        if: matrix.flutter == '3.41.7'
         run: dart format --output=none --set-exit-if-changed .
 
       - name: Analyze package
