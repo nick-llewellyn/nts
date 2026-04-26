@@ -92,4 +92,4 @@ flutter_launcher_icons:
 hooks:
   user_defines:
     nts:
-      verbose_logs: true
+      verbose_logs: false
