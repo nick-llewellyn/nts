@@ -1,0 +1,94 @@
+[package]
+name = "nts_rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Rust client for RFC 8915 Network Time Security, bridged to Dart via flutter_rust_bridge."
+
+# This crate is consumed by Flutter via the Native Assets API (`hook/build.dart`).
+# - `cdylib`  — produced for iOS / Android / desktop dylib bundling.
+# - `staticlib` — used on platforms where the native asset hook prefers a
+#                 static archive (e.g. iOS device builds without dynamic
+#                 framework wrapping).
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+# Compile-time logging-level strip is gated behind a default-on Cargo
+# feature so the Native Assets build hook (`hook/build.dart`) can drop
+# it via `--no-default-features` when the consuming app sets the
+# `verbose_logs` user-define for local debugging. The default keeps
+# production-correctness as the safe-by-default behaviour: any caller
+# (CI, app store builds, downstream embedders) that does not opt into
+# a non-default feature set still gets the stripped binary. This is
+# load-bearing for desktop and future web targets where the mobile
+# obfuscators (DexGuard / IXGuard) are not present and the binary
+# strip is the primary protection against leaking protocol-level
+# strings. Cargo features are additive across the dep graph, so a
+# single `log-strip` activation propagates to `rustls`, FRB, and any
+# future direct `log::*!` call sites without per-crate edits.
+[features]
+default = ["log-strip"]
+log-strip = ["log/release_max_level_warn", "tracing/release_max_level_warn"]
+
+[dependencies]
+aes-gcm-siv = { version = "0.11", default-features = false, features = ["alloc", "aes"] }
+aes-siv = { version = "0.7", default-features = false, features = ["alloc"] }
+# Pinned to match the `flutter_rust_bridge` Dart dependency in pubspec.yaml.
+# Bumps must be coordinated across both sides (`cargo update` + `flutter pub upgrade`).
+flutter_rust_bridge = "=2.12.0"
+getrandom = { version = "0.2", default-features = false, features = ["std"] }
+# `release_max_level_warn` is forwarded from the crate's own `log-strip`
+# feature (see `[features]` above) so the build hook can flip it via
+# the `verbose_logs` user-define. The `nts::hybrid_verifier` warn-level
+# fallback notice and any future error paths are preserved and reach
+# the platform subscriber (FRB's `android_logger` on Android; the
+# `tracing-oslog` layer wired up by `src/ios_init.rs` on iOS).
+log = "0.4"
+# RFC 8915 §3 mandates TLS 1.3 for NTS-KE — the `tls12` feature is
+# deliberately omitted so the rustls build cannot negotiate a TLS 1.2
+# session at all. The protocol-version filter in `ke::TLS_PROTOCOL_VERSIONS`
+# is a redundant in-code guard: even if a future edit re-adds the feature,
+# the explicit `builder_with_protocol_versions(&[&TLS13])` call in
+# `build_tls_config` keeps the negotiated version pinned to TLS 1.3.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
+rustls-pki-types = "1"
+rustls-platform-verifier = "0.5"
+# `tracing` is the structured event surface used by the iOS observability
+# path (`src/ios_init.rs`) and any future cross-platform instrumentation.
+# Its `release_max_level_warn` is also routed through the `log-strip`
+# feature so a single hook-side toggle gates both `log::*!` and
+# `tracing::*!` call sites. On platforms that do not install a
+# `tracing::Subscriber` (Android, macOS host, desktop) events are
+# silently dropped, so this dep adds no host-side noise.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+webpki-roots = "0.26"
+
+# Android-only: JNI handles for bootstrapping `rustls-platform-verifier`'s
+# Java glue layer. The verifier delegates X.509 chain validation to the
+# Android system's `X509TrustManager`, which requires the Rust side to call
+# `rustls_platform_verifier::android::init_with_env(&mut JNIEnv, JObject)`
+# from a JNI entry point exactly once before the first TLS handshake. The
+# Kotlin caller for that entry point lives in the example app
+# (`RustlsBootstrap.kt`); see `src/android_init.rs` for the Rust counterpart.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }
+
+# iOS-only: subscriber stack that pipes `tracing` events and `log::*!`
+# records into Apple's unified logging system (`os_log`). Initialized once
+# from `api::simple::init_app` via `crate::ios_init::init_logging`. This
+# replaces FRB's `setup_log_to_console` on iOS — that helper would
+# otherwise install `oslog::OsLogger::new("frb_user")` as the global
+# `log` logger, claiming the `log::set_logger` slot under a generic
+# subsystem and blocking `tracing-log::LogTracer` from installing.
+# Console.app filter: `process:Runner subsystem:com.nts.example`.
+[target.'cfg(target_os = "ios")'.dependencies]
+tracing-oslog = "0.3"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+tracing-log = "0.2"
+
+[lints.rust]
+# `frb_expand` is set by flutter_rust_bridge_codegen during macro expansion.
+# Declaring it here silences the spurious `unexpected_cfgs` warning on builds
+# that don't run codegen.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

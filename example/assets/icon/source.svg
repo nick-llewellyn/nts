@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Canonical source for the `nts` example app icon.
+
+  Composition:
+    * 1024x1024 canvas matching the iOS / Play Store master tile.
+    * Solid indigo plate (#3F51B5) that matches the brand seed used
+      as the M3 ColorScheme.fromSeed input and the explicit AppBar /
+      title accent in main.dart.
+    * Centered white shield silhouette (the "trust" half of
+      "trusted time"), drawn as a single closed cubic-Bezier path so
+      it scales cleanly at every density bucket.
+    * Two darker indigo (#1A237E) clock hands inside the shield,
+      posed at the classic 10:10 pose so the V-shape stays balanced
+      and legible at small icon sizes.
+    * Centre pin disc + tiny inner dot to anchor the hands.
+
+  Companion: tool/generate_icon.py rasterizes the same geometry to
+  PNG (full-bleed icon + transparent adaptive foreground) for the
+  flutter_launcher_icons toolchain.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1024 1024"
+     width="1024" height="1024">
+  <!-- Background plate -->
+  <rect width="1024" height="1024" fill="#3F51B5"/>
+
+  <!-- Shield: top-rounded rectangle that tapers into a curved point
+       at the bottom. Path drawn clockwise from the top-left
+       shoulder so the standard non-zero fill rule applies. -->
+  <path d="
+    M 280 240
+    Q 280 180 340 180
+    L 684 180
+    Q 744 180 744 240
+    L 744 540
+    C 744 700 640 820 512 870
+    C 384 820 280 700 280 540
+    Z"
+    fill="#FFFFFF"/>
+
+  <!-- Clock hands: 10:10 pose. Hour hand points to 10 (60deg west
+       of north), minute hand points to 2 (60deg east of north).
+       Both originate from the centre pin. Stroke width tuned for
+       readability at 48px. -->
+  <g stroke="#1A237E" stroke-linecap="round" fill="none">
+    <!-- Hour hand -> 10 o'clock -->
+    <line x1="512" y1="540"
+          x2="412" y2="430"
+          stroke-width="44"/>
+    <!-- Minute hand -> 2 o'clock (longer) -->
+    <line x1="512" y1="540"
+          x2="650" y2="380"
+          stroke-width="36"/>
+  </g>
+
+  <!-- Centre pin -->
+  <circle cx="512" cy="540" r="26" fill="#1A237E"/>
+  <circle cx="512" cy="540" r="10" fill="#FFFFFF"/>
+</svg>

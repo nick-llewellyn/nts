@@ -1,0 +1,38 @@
+# Rust toolchain pin for the `nts` Native Assets build hook.
+#
+# `native_toolchain_rust`'s `RustBuilder` reads this file via rustup to install
+# (or activate) the toolchain and the cross-compile targets it needs for
+# every Flutter platform we ship to. Pinning here keeps CI, local dev, and
+# user-side `flutter run` reproducible regardless of the developer's shell
+# default.
+#
+# When upgrading: bump `channel`, run `rustup update`, then exercise
+# `flutter run --dart-define=NTS_BRIDGE=real` in the example app on at least
+# macOS and one of {linux, ios, android} before merging.
+
+[toolchain]
+# 1.85+ required so transitive deps pulling in edition2024 (e.g.
+# `security-framework 3.7.0`) compile cleanly. Tracking developer-host
+# rustc 1.92.0 keeps stable compatible with our `Cargo.lock`.
+channel = "1.92.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = [
+    # Apple
+    "aarch64-apple-darwin",         # macOS arm64
+    "x86_64-apple-darwin",          # macOS x86_64 (universal slice)
+    "aarch64-apple-ios",            # iOS device
+    "aarch64-apple-ios-sim",        # iOS simulator on Apple silicon
+    "x86_64-apple-ios",             # iOS simulator on Intel hosts
+    # Android
+    "aarch64-linux-android",        # arm64-v8a
+    "armv7-linux-androideabi",      # armeabi-v7a
+    "x86_64-linux-android",         # x86_64 emulator
+    "i686-linux-android",           # x86 emulator (still common for AVDs)
+    # Linux
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-gnu",
+    # Windows
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]

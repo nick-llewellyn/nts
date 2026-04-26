@@ -1,0 +1,18 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    # FRB-generated bindings — committed to the repo so consumers don't need
+    # the FRB CLI, but never hand-edited and not subject to our lint rules.
+    - lib/src/ffi/**
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
+linter:
+  rules:
+    public_member_api_docs: true
+    avoid_print: true
+    prefer_const_constructors: true
+    prefer_final_locals: true

@@ -1,0 +1,43 @@
+name: nts
+description: >-
+  Authenticated Network Time Security (RFC 8915) for Dart and Flutter. Wraps
+  a Rust NTS-KE + AEAD-NTP client via flutter_rust_bridge and bundles the
+  native binary through the stable Native Assets API.
+version: 1.0.0
+homepage: https://github.com/nick-llewellyn/nts
+repository: https://github.com/nick-llewellyn/nts
+issue_tracker: https://github.com/nick-llewellyn/nts/issues
+
+environment:
+  sdk: '^3.11.5'
+  flutter: '^3.41.7'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Pinned exactly: the Rust-side `flutter_rust_bridge` crate and this Dart
+  # package use a shared wire format and must move in lockstep. Bumping
+  # this requires a coordinated update of `rust/Cargo.toml`.
+  flutter_rust_bridge: 2.12.0
+  # Required by FRB-generated `nts.freezed.dart` for the sealed `NtsError`
+  # variant types. Runtime annotations only; the generator itself is in
+  # `dev_dependencies`.
+  freezed_annotation: ^3.1.0
+  # Build-hook dependencies (consumed only by `hook/build.dart`). The Dart
+  # SDK resolves these out-of-band when running the Native Assets pipeline,
+  # so they don't pull native_toolchain_rust into the app's runtime graph.
+  hooks: ^1.0.3
+  native_toolchain_rust: ^1.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  # Used internally by `flutter_rust_bridge_codegen generate` to emit the
+  # `dart:ffi` bindings. Not a runtime dependency.
+  ffigen: ^19.1.0
+  # Code generator backing `@freezed`. FRB v2 invokes it transparently when
+  # bridging Rust enums-with-data to Dart sealed classes.
+  freezed: ^3.2.5
+  # Required by `freezed`'s build pipeline.
+  build_runner: ^2.14.1

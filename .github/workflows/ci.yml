@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Format / analyze / Dart tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.7'
+          channel: 'stable'
+
+      - name: Resolve package dependencies
+        run: flutter pub get
+
+      - name: Verify formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze package
+        run: dart analyze .
+
+      - name: Run Dart tests (mock-mode FRB smoke)
+        run: flutter test
+
+      - name: Resolve example dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Analyze example app
+        working-directory: example
+        run: flutter analyze
+
+  rust:
+    name: Rust build + tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + crate target
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: rust
+
+      - name: Build Rust crate (--locked)
+        working-directory: rust
+        run: cargo build --locked
+
+      - name: Run Rust unit tests
+        working-directory: rust
+        run: cargo test --lib --locked
+
+  rust-bridge-sync:
+    name: Verify FRB bindings are in sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + crate target
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: rust
+
+      - name: Cache flutter_rust_bridge_codegen binary
+        id: frb-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/flutter_rust_bridge_codegen
+          key: frb-codegen-2.12.0-${{ runner.os }}
+
+      - name: Install flutter_rust_bridge_codegen (=2.12.0)
+        if: steps.frb-cache.outputs.cache-hit != 'true'
+        run: cargo install flutter_rust_bridge_codegen --version "=2.12.0" --locked
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.7'
+          channel: 'stable'
+
+      - name: Resolve package dependencies
+        run: flutter pub get
+
+      - name: Install FVM and link Flutter SDK
+        run: |
+          dart pub global activate fvm
+          echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+          # Reuse the SDK already installed by subosito/flutter-action so FVM
+          # does not re-download Flutter 3.41.7 (~1.4 GB) into its own cache.
+          mkdir -p "$HOME/fvm/versions"
+          ln -sfn "$FLUTTER_ROOT" "$HOME/fvm/versions/3.41.7"
+
+      - name: Verify FVM resolves to the linked SDK
+        run: fvm flutter --version
+
+      - name: Regenerate FRB bindings
+        run: flutter_rust_bridge_codegen generate
+
+      - name: Assert committed bindings match generator output
+        run: |
+          if ! git diff --exit-code -- lib/src/ffi rust/src/frb_generated.rs; then
+            echo "::error::FRB bindings drifted from rust/src/api/. Run 'flutter_rust_bridge_codegen generate' locally and commit the result."
+            git diff --stat -- lib/src/ffi rust/src/frb_generated.rs
+            exit 1
+          fi

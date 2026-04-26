@@ -1,0 +1,21 @@
+# flutter_rust_bridge_codegen v2 config for the nts package.
+#
+# Regenerate bindings after editing anything under rust/src/api/:
+#
+#     flutter_rust_bridge_codegen generate
+
+# Path to the Rust source modules that should be exposed to Dart.
+# Every public function/type in these files becomes a Dart binding.
+rust_input: crate::api
+
+# Where the generated Rust glue (`frb_generated.rs`) is written. Imported
+# by `rust/src/lib.rs` as `mod frb_generated;`.
+rust_output: rust/src/frb_generated.rs
+
+# Where the generated Dart bindings are written. The file `frb_generated.dart`
+# is the entry point; per-module bindings land in subfolders mirroring the
+# Rust `api::` tree (e.g. `lib/src/ffi/api/simple.dart`).
+dart_output: lib/src/ffi
+
+# Path to the Rust crate root (Cargo.toml lives in this directory).
+rust_root: rust/
