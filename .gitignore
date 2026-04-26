@@ -35,3 +35,6 @@ example/macos/Pods/
 *.iml
 *.ipr
 *.iws
+
+# FVM Version Cache
+.fvm/
