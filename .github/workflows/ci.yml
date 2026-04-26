@@ -119,13 +119,7 @@ jobs:
       - name: Verify FVM resolves to the linked SDK
         run: fvm flutter --version
 
-      - name: Regenerate FRB bindings
-        run: flutter_rust_bridge_codegen generate
-
-      - name: Assert committed bindings match generator output
-        run: |
-          if ! git diff --exit-code -- lib/src/ffi rust/src/frb_generated.rs; then
-            echo "::error::FRB bindings drifted from rust/src/api/. Run 'flutter_rust_bridge_codegen generate' locally and commit the result."
-            git diff --stat -- lib/src/ffi rust/src/frb_generated.rs
-            exit 1
-          fi
+      - name: Regenerate bindings + assert no drift
+        # Single source of truth for drift detection; the same script runs
+        # locally via `dart run tool/check_bindings.dart`.
+        run: dart run tool/check_bindings.dart

@@ -29,3 +29,9 @@ example/macos/Pods/
 .dolt/
 *.db
 .beads-credential-key
+
+# IDE — JetBrains (machine-specific; matches Flutter's default template)
+.idea/
+*.iml
+*.ipr
+*.iws

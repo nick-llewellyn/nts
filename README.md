@@ -58,6 +58,7 @@ Three tools, distinct roles.
 |------|---------|-------------|
 | `cargo` (in `rust/`) | Manage Rust deps, run unit tests | During Rust development |
 | `flutter_rust_bridge_codegen` | Regenerate Dart bindings | After any change to `rust/src/api/*.rs` |
+| `tool/check_bindings.dart` | Verify committed bindings match the generator | Before pushing changes that touch `rust/src/api/*.rs` |
 | `hook/build.dart` (Native Assets) | Compile + bundle the dylib for Flutter | Automatically on `flutter build` |
 
 ### Regenerate bindings
@@ -67,6 +68,19 @@ flutter_rust_bridge_codegen generate
 ```
 
 Commit the regenerated `lib/src/ffi/**` and `rust/src/frb_generated.rs`.
+
+### Verify bindings are in sync
+
+```bash
+dart run tool/check_bindings.dart
+```
+
+Mirrors CI's drift check: regenerates bindings, runs `dart format` on the
+output, then `git diff --exit-code` against the watched paths. Exits non-zero
+with the same error message CI emits when `lib/src/ffi/` or
+`rust/src/frb_generated.rs` differ from the committed state. The pinned
+codegen version is read from `pubspec.yaml` so the script and CI stay in
+lockstep.
 
 ### Rust unit tests (no Flutter required)
 
