@@ -7,12 +7,16 @@ on:
       - '**.md'
       - 'LICENSE'
       - '.gitignore'
+      - '.beads/**'
+      - 'screenshots/**'
   pull_request:
     branches: [main]
     paths-ignore:
       - '**.md'
       - 'LICENSE'
       - '.gitignore'
+      - '.beads/**'
+      - 'screenshots/**'
   workflow_dispatch:
 
 jobs:
