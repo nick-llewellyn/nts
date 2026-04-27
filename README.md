@@ -70,7 +70,7 @@ calls to `init` are no-ops, so it's safe to invoke from a shared
 bootstrap path.
 
 A complete, runnable version with exhaustive `NtsError` handling lives
-in [`example/example.dart`](example/example.dart). For valid hostnames
+in [`example/main.dart`](example/main.dart). For valid hostnames
 to plug into `NtsServerSpec`, see the community-maintained
 [NTS server list](https://github.com/jauderho/nts-servers).
 
@@ -94,7 +94,7 @@ failure handling.
 The repository ships three reference surfaces, in increasing order of
 complexity:
 
-- **[`example/example.dart`](example/example.dart)** — the minimal
+- **[`example/main.dart`](example/main.dart)** — the minimal
   single-file snippet shown on the pub.dev "Example" tab. Start here.
 - **Flutter GUI** (`example/lib/`) — visual showcase with a server
   catalog, favourites, region filtering, and a unified live log. See

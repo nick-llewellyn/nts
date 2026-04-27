@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.3
+
+pub.dev Example tab fix. No runtime changes.
+
+- Rename `example/example.dart` to `example/main.dart` so pub.dev's
+  Example tab renders the intended minimal single-call sample. pub.dev
+  picks the rendered file from a hardcoded priority list documented
+  at <https://dart.dev/tools/pub/package-layout#examples>; the previous
+  layout placed the minimal sample at priority 5
+  (`example[/lib]/example.dart`) where it was shadowed by the Flutter
+  GUI showcase at priority 2 (`example/lib/main.dart`). The bare
+  `example/main.dart` slot also sits at priority 2 but wins over the
+  `lib/` variant, so the rename promotes the minimal sample without
+  removing the GUI showcase from the published tarball.
+- Update `example/README.md` to spell the GUI entry point explicitly
+  as `flutter run -t lib/main.dart` (or `-t example/lib/main.dart`
+  from the repo root) so contributors don't accidentally launch the
+  new top-level `example/main.dart` as the Flutter target.
+- Update root `README.md` and `ARCHITECTURE.md` to reference the new
+  path. The 1.0.1 changelog entry that introduced
+  `example/example.dart` is left unchanged for historical accuracy.
+
 ## 1.0.2
 
 Static-analysis score recovery. No runtime changes.

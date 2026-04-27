@@ -1,18 +1,21 @@
 # nts_example
 
-Showcase surfaces for the [`nts`](../) RFC 8915 package. Two
-front-ends share the same Rust-backed bridge and the same formatting
+Showcase surfaces for the [`nts`](../) RFC 8915 package. Three
+entry points share the same Rust-backed bridge and the same formatting
 layer:
 
+- `example/main.dart` — the minimal single-file usage snippet that
+  pub.dev renders on the [Example tab](https://pub.dev/packages/nts/example).
+  One authenticated NTPv4 query plus an exhaustive `NtsError` switch.
 - a Flutter GUI (`lib/`) — the visual showcase, with a server catalog,
   favourites, region filtering, and a unified terminal-style live log;
 - a Dart CLI (`bin/nts_cli.dart`) — a scriptable companion for batched
   probing, cron jobs, and CI smoke checks.
 
-Both render identical multi-line output for `ntsQuery` results because
-the format helpers live in `lib/src/state/nts_format.dart` and are
-imported by the GUI controller and the CLI alike (see
-[Shared formatting](#shared-formatting)).
+The GUI and CLI render identical multi-line output for `ntsQuery`
+results because the format helpers live in
+`lib/src/state/nts_format.dart` and are imported by the GUI controller
+and the CLI alike (see [Shared formatting](#shared-formatting)).
 
 ## User Documentation
 
@@ -97,20 +100,25 @@ No manual `cargo build` is required when running through `flutter run`.
 Default boot is the **real bridge** — `RustLib.init()` resolves
 `libnts_rust` through the bundled native asset and the
 buttons drive the actual RFC 8915 client against the chosen NTS-KE
-server:
+server. Pass `-t lib/main.dart` so Flutter targets the GUI entry point
+rather than the top-level `main.dart` (the latter is the minimal
+single-call sample for pub.dev's Example tab):
 
 ```bash
-fvm flutter run -d macos
+fvm flutter run -d macos -t lib/main.dart
 # or, for Linux / Android / iOS:
-fvm flutter run -d linux
+fvm flutter run -d linux -t lib/main.dart
 ```
+
+The same target spelled from the repo root is
+`-t example/lib/main.dart`.
 
 To exercise the UI without network or on a host whose target triple
 isn't pinned in `rust/rust-toolchain.toml`, switch to the in-memory
 fake via the `NTS_BRIDGE` dart-define:
 
 ```bash
-fvm flutter run -d macos --dart-define=NTS_BRIDGE=mock
+fvm flutter run -d macos -t lib/main.dart --dart-define=NTS_BRIDGE=mock
 ```
 
 If `RustLib.init()` cannot locate the dylib (typically because the

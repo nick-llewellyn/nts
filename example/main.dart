@@ -1,7 +1,7 @@
 // Minimal `package:nts` usage example — one authenticated NTPv4
 // exchange against `time.cloudflare.com` over RFC 8915.
 //
-// Run from a Flutter target (`flutter run -t example/example.dart`)
+// Run from a Flutter target (`flutter run -t example/main.dart`)
 // so the Native Assets pipeline bundles the Rust dylib. Plain
 // `dart run` does not invoke build hooks; see `example/bin/nts_cli.dart`
 // for the explicit `ExternalLibrary.open` loader pattern needed there.

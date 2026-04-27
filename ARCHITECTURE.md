@@ -36,7 +36,7 @@ Rust  : nts_query()
 | `rust/src/` | Protocol implementation (records, KE driver, AEAD, NTP, cookies). |
 | `hook/build.dart` | Native Assets build hook; invokes `cargo build` for the active target. |
 | `tool/check_bindings.dart` | CI drift check for generated bindings. |
-| `example/` | Showcase apps (Flutter GUI + Dart CLI) and `example/example.dart`. |
+| `example/` | Showcase apps (Flutter GUI + Dart CLI) and `example/main.dart`. |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the toolchain, codegen, and
 verbose-logging workflows.
