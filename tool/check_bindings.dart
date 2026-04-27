@@ -1,6 +1,7 @@
 // Local equivalent of the CI `Verify FRB bindings are in sync` job. Runs
-// `flutter_rust_bridge_codegen generate`, formats the regenerated Dart
-// bindings, and fails non-zero if `lib/src/ffi/` or
+// `flutter_rust_bridge_codegen generate`, applies the lint-suppression
+// patches FRB cannot emit on its own (see `_lintIgnorePatches`), formats
+// the regenerated Dart bindings, and fails non-zero if `lib/src/ffi/` or
 // `rust/src/frb_generated.rs` differ from the committed state.
 //
 // Usage:
@@ -20,6 +21,21 @@ import 'dart:io';
 // `flutter_rust_bridge.yaml`.
 const _watchedPaths = <String>['lib/src/ffi', 'rust/src/frb_generated.rs'];
 
+// Lint-suppression patches applied after codegen. Each entry adds the
+// listed lint names to the file's `// ignore_for_file:` directive.
+//
+// `public_member_api_docs` on `lib/src/ffi/api/nts.dart`: pana scores the
+// package with a stricter ruleset than `flutter_lints` and fires
+// `public_member_api_docs` for every public member of the synthesized
+// freezed sealed class wrapper (`NtsError`) and the auto-generated default
+// constructors of `NtsServerSpec` / `NtsTimeSample`. FRB does not propagate
+// the upstream Rust docstrings to those positions, so we cannot fix the
+// underlying lints at the source level. Suppressing them at the file scope
+// keeps the pana "Pass static analysis" score at 50/50.
+const _lintIgnorePatches = <String, List<String>>{
+  'lib/src/ffi/api/nts.dart': <String>['public_member_api_docs'],
+};
+
 // GitHub Actions annotation prefix; emitted only when running inside GHA so
 // the workflow log surfaces drift as an error annotation.
 String get _errorPrefix => Platform.environment.containsKey('GITHUB_ACTIONS')
@@ -31,6 +47,10 @@ Future<void> main(List<String> args) async {
   _ensureCodegenAvailable(pinnedVersion);
 
   await _run('flutter_rust_bridge_codegen', const ['generate']);
+
+  // Apply lint-suppression patches that FRB does not emit on its own. Run
+  // before `dart format` so the formatter sees the final content.
+  _lintIgnorePatches.forEach(_addLintsToIgnoreForFile);
 
   // Format the regenerated Dart so the diff check below catches semantic
   // drift only -- not formatter noise that CI's `dart format` step would
@@ -144,4 +164,42 @@ Future<bool> _hasDrift() async {
   ]);
   stdout.write(stat.stdout);
   return true;
+}
+
+// Append the given lint names to the `// ignore_for_file:` directive of
+// the file at `path`. Idempotent: lints already listed are left in place,
+// and the directive's existing order is preserved. Errors out if the file
+// or directive is missing so accidental codegen-format changes surface
+// loudly rather than silently no-oping.
+void _addLintsToIgnoreForFile(String path, List<String> lintsToAdd) {
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln(
+      '$_errorPrefix expected generated file not found: $path '
+      '(post-codegen lint patch cannot be applied)',
+    );
+    exit(1);
+  }
+  final original = file.readAsStringSync();
+  final pattern = RegExp(r'^// ignore_for_file:\s*(.+)$', multiLine: true);
+  final match = pattern.firstMatch(original);
+  if (match == null) {
+    stderr.writeln(
+      "$_errorPrefix `// ignore_for_file:` directive missing in $path "
+      '(FRB output format may have changed; update _lintIgnorePatches)',
+    );
+    exit(1);
+  }
+  final existing = <String>[
+    for (final raw in match.group(1)!.split(',')) raw.trim(),
+  ];
+  final missing = lintsToAdd.where((l) => !existing.contains(l)).toList();
+  if (missing.isEmpty) return;
+  final replacement =
+      '// ignore_for_file: ${[...existing, ...missing].join(', ')}';
+  final patched = original.replaceFirst(match.group(0)!, replacement);
+  file.writeAsStringSync(patched);
+  stdout.writeln(
+    'Patched $path: added ${missing.join(', ')} to ignore_for_file',
+  );
 }

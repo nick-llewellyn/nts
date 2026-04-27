@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Suppress `public_member_api_docs` lints on the FRB-generated
+  `lib/src/ffi/api/nts.dart` via the `// ignore_for_file:` directive,
+  applied as a post-codegen patch step in `tool/check_bindings.dart`.
+  pana's static-analysis run uses a stricter ruleset than `flutter_lints`
+  and surfaced ~120 of these lints against the synthesized freezed sealed
+  class (`NtsError`) and the auto-generated default constructors of
+  `NtsServerSpec` / `NtsTimeSample`, costing 10 pub points. FRB does not
+  propagate the upstream Rust docstrings to those positions, so suppression
+  at the file scope is the only mechanical fix that survives regeneration.
+
 ## 1.0.1
 
 Documentation and pub.dev metadata polish. No runtime changes.

@@ -31,12 +31,28 @@ Commit the regenerated `lib/src/ffi/**` and `rust/src/frb_generated.rs`.
 dart run tool/check_bindings.dart
 ```
 
-Mirrors CI's drift check: regenerates bindings, runs `dart format` on the
-output, then `git diff --exit-code` against the watched paths. Exits non-zero
-with the same error message CI emits when `lib/src/ffi/` or
-`rust/src/frb_generated.rs` differ from the committed state. The pinned
-codegen version is read from `pubspec.yaml` so the script and CI stay in
-lockstep.
+Mirrors CI's drift check: regenerates bindings, applies the lint-suppression
+patches that FRB cannot emit on its own (see `_lintIgnorePatches` in the
+script), runs `dart format` on the output, then `git diff --exit-code`
+against the watched paths. Exits non-zero with the same error message CI
+emits when `lib/src/ffi/` or `rust/src/frb_generated.rs` differ from the
+committed state. The pinned codegen version is read from `pubspec.yaml`
+so the script and CI stay in lockstep.
+
+#### Post-codegen lint-suppression patches
+
+`flutter_rust_bridge_codegen` does not propagate Rust struct/enum
+docstrings to its synthesized freezed sealed class wrappers and
+auto-generated default constructors. pana scores the generated bindings
+with a stricter ruleset than `flutter_lints` and fires
+`public_member_api_docs` for every undocumented public member of those
+positions (~120 lints in `lib/src/ffi/api/nts.dart` alone). Since the
+underlying lints cannot be fixed at the Rust source, the script appends
+the offending rule names to the file-level `// ignore_for_file:`
+directive after each codegen run. The patch table lives in
+`_lintIgnorePatches` and is idempotent: re-running adds nothing if the
+rule is already present. If FRB ever emits the missing docs natively,
+remove the corresponding entry from the table.
 
 ### Rust unit tests (no Flutter required)
 
