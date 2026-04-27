@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.0.5
+
+Example clarity and pub.dev metadata fidelity. No changes to the
+published Dart surface, the Rust crate, or the Native Assets bridge.
+
+- `example/main.dart`: switch the minimal sample from a single
+  `ntsQuery()` call to a warm-then-query flow that calls
+  `ntsWarmCookies()` first and then `ntsQuery()`. The original
+  one-call form lumped the NTS-KE handshake into the same latency
+  budget as the NTPv4 exchange and never made the cookie pool
+  visible; the new form mirrors the production access pattern,
+  surfaces the `cookies_remaining` counter on `NtsTimeSample`, and
+  gives readers a self-contained reference for both stages of the
+  protocol. `example/example.md` is regenerated as a byte-for-byte
+  fenced mirror so the pub.dev Example tab tracks the runnable
+  sample. The exhaustive `NtsError` switch and the `RustLib.init()`
+  bootstrap order are unchanged.
+
+- `example/example.md`: drop the developer-facing meta-commentary
+  about the rendering quirk that motivated the file's existence
+  (`pana` priority list, the `example/main.dart` shadowing dance from
+  1.0.3 / 1.0.4). The fenced sample is the consumer-visible artefact;
+  the rendering history is recorded in this changelog and in the
+  `nts-9td` commit message, not in the file pub.dev publishes.
+
+- `analysis_options.yaml`: remove the
+  `analyzer.exclude: [lib/src/ffi/**]` block so local
+  `dart analyze` / `flutter analyze` runs see the same surface
+  pana sees on pub.dev. The FRB-generated files in `lib/src/ffi/`
+  carry file-level `// ignore_for_file:` directives (managed by
+  `tool/check_bindings.dart` and landed in 1.0.2) for the rules they
+  cannot satisfy, which pana respects but `analyzer.exclude` does not
+  — keeping both meant local CI was strictly more permissive than the
+  pub.dev scorecard. With the exclude removed, lint drift between
+  the two environments is impossible.
+
+- `pubspec.yaml`: add a top-level `platforms:` allow-list with
+  `android`, `ios`, `macos`, `linux`, `windows`. Earlier releases
+  shipped without this block, which let pana award the `web` and
+  `wasm` platform tags on the strength of the Dart surface compiling
+  cleanly under `dart2js` / `dart2wasm` — but actual runtime use of
+  any nts API on Web cannot work, because RFC 8915 needs raw TCP for
+  NTS-KE on `:4460` and raw UDP for NTPv4 on `:123` (neither of which
+  browsers expose to web pages), and the `rustls` + `ring` +
+  `rustls-platform-verifier` stack does not target
+  `wasm32-unknown-unknown`. Declaring the supported platforms
+  explicitly drops both incorrect tags from the next pana rescore so
+  the pub.dev scorecard reflects the package's true platform surface.
+
 ## 1.0.4
 
 pub.dev Example tab fix (take two). No runtime changes.
