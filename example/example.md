@@ -4,11 +4,8 @@ The smallest end-to-end use of `package:nts`: one authenticated NTPv4
 exchange against `time.cloudflare.com` over RFC 8915 NTS-KE, with an
 exhaustive switch on every `NtsError` variant.
 
-This file is the canonical Example tab content on pub.dev. The same
-source ships in the package as [`example/main.dart`](main.dart), which
-is the runnable Flutter target; the `.md` form is here so pub.dev's
-selection algorithm prefers it over the larger GUI showcase at
-[`example/lib/main.dart`](lib/main.dart).
+The same code ships as a runnable Flutter target at
+[`example/main.dart`](main.dart).
 
 ```dart
 // Minimal `package:nts` usage example — one authenticated NTPv4
