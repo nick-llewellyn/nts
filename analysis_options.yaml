@@ -1,11 +1,13 @@
 include: package:flutter_lints/flutter.yaml
 
-# Note: lib/src/ffi/** is intentionally NOT excluded here. pana on pub.dev
-# ignores analyzer.exclude when scoring static analysis, so we surface the
-# same lints locally that pana sees. The FRB-generated files carry their
-# own file-level `// ignore_for_file:` directives (managed by
-# `tool/check_bindings.dart`) which suppress the lints that cannot be
-# fixed at the Rust source level. See `nts-2cq` / `nts-o5w` for context.
+# Note: lib/src/ffi/** is intentionally NOT excluded here. The generated
+# FFI surface is shipped as part of the published package, so consumers'
+# analyzers run these lints against it; the local analyzer config has to
+# stay in lockstep with that downstream view rather than hiding behind
+# an `analyzer.exclude`. The FRB-generated files instead carry file-level
+# `// ignore_for_file:` directives (managed by `tool/check_bindings.dart`)
+# which suppress the lints that cannot be fixed at the Rust source
+# level. See `nts-2cq` / `nts-o5w` for context.
 analyzer:
   language:
     strict-casts: true

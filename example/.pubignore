@@ -1,7 +1,8 @@
 # Slim the published tarball: exclude regenerable Flutter platform
 # scaffolding and large icon-source assets from the example app. The
 # Dart source (lib/, bin/, test/), pubspec, and documentation are kept
-# so pub.dev's Example tab and the CLI/GUI guides remain useful.
+# so the example sources and the CLI/GUI guides remain readable to
+# package consumers.
 #
 # A .pubignore in this directory replaces example/.gitignore for the
 # purposes of `dart pub publish` (per dart.dev/go/pubignore). Patterns

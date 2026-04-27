@@ -4,9 +4,8 @@ Showcase surfaces for the [`nts`](../) RFC 8915 package. Three
 entry points share the same Rust-backed bridge and the same formatting
 layer:
 
-- `example/main.dart` — the minimal single-file usage snippet that
-  pub.dev renders on the [Example tab](https://pub.dev/packages/nts/example).
-  One authenticated NTPv4 query plus an exhaustive `NtsError` switch.
+- `example/main.dart` — the minimal single-file usage snippet: one
+  authenticated NTPv4 query plus an exhaustive `NtsError` switch.
 - a Flutter GUI (`lib/`) — the visual showcase, with a server catalog,
   favourites, region filtering, and a unified terminal-style live log;
 - a Dart CLI (`bin/nts_cli.dart`) — a scriptable companion for batched
@@ -102,7 +101,7 @@ Default boot is the **real bridge** — `RustLib.init()` resolves
 buttons drive the actual RFC 8915 client against the chosen NTS-KE
 server. Pass `-t lib/main.dart` so Flutter targets the GUI entry point
 rather than the top-level `main.dart` (the latter is the minimal
-single-call sample for pub.dev's Example tab):
+single-call usage sample):
 
 ```bash
 fvm flutter run -d macos -t lib/main.dart

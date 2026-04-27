@@ -24,13 +24,15 @@ const _watchedPaths = <String>['lib/src/ffi', 'rust/src/frb_generated.rs'];
 // Lint-suppression patches applied after codegen. Each entry adds the
 // listed lint names to the file's `// ignore_for_file:` directive.
 //
-// pana scores the package with a stricter ruleset than `flutter_lints`
-// and surfaces lints across the entire FRB output that cannot be fixed
-// at the Rust source level (FRB does not propagate Rust docstrings to
-// the synthesized freezed wrappers / dispatcher boilerplate, and emits
-// generated locals / temporaries that trip `prefer_final_locals` and
-// `prefer_const_constructors`). Suppressing them at the file scope
-// keeps the pana "Pass static analysis" score at 50/50:
+// `analysis_options.yaml` enables `public_member_api_docs`,
+// `prefer_final_locals`, and `prefer_const_constructors` for the entire
+// package, and `lib/src/ffi/**` is intentionally not excluded so the
+// local analyzer matches the surface a downstream consumer will see.
+// FRB does not propagate Rust docstrings to its synthesized freezed
+// wrappers / dispatcher boilerplate, and emits generated locals and
+// temporaries that trip the `prefer_*` lints. None of those can be
+// fixed at the Rust source level, so the offending rules are pinned at
+// file scope on the generated outputs:
 //
 //   api/nts.dart            : public_member_api_docs (freezed wrappers)
 //   frb_generated.dart      : public_member_api_docs + prefer_final_locals

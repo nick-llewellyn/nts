@@ -95,7 +95,8 @@ The repository ships three reference surfaces, in increasing order of
 complexity:
 
 - **[`example/main.dart`](example/main.dart)** — the minimal
-  single-file snippet shown on the pub.dev "Example" tab. Start here.
+  single-file usage snippet: one authenticated NTPv4 query plus an
+  exhaustive `NtsError` switch. Start here.
 - **Flutter GUI** (`example/lib/`) — visual showcase with a server
   catalog, favourites, region filtering, and a unified live log. See
   the [GUI User Manual](example/GUI_GUIDE.md) for navigation, the

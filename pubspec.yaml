@@ -20,12 +20,12 @@ screenshots:
       favourites, and a unified live log of authenticated time queries.
     path: screenshots/gui_showcase.png
 
-# Explicit platform allow-list for pub.dev / pana. RFC 8915 needs raw TCP
-# (NTS-KE on :4460) and raw UDP (NTPv4 on :123); neither is exposed to
-# browser tabs, and the rustls + ring stack does not target
-# wasm32-unknown-unknown. Omitting `web` and `wasm` here makes pana drop
-# both tags so consumers see the package's true platform surface on the
-# pub.dev scorecard.
+# Explicit platform allow-list. RFC 8915 requires raw TCP (NTS-KE on
+# :4460) and raw UDP (NTPv4 on :123) sockets, neither of which is
+# reachable from a browser tab, and the underlying rustls + ring stack
+# has no wasm32-unknown-unknown build target. `web` and `wasm` are
+# therefore omitted so the declared platform set matches what the
+# package can actually run on.
 platforms:
   android:
   ios:
@@ -54,10 +54,11 @@ dependencies:
   # `tool/check_bindings.dart` in CI.
   #
   # `dart pub publish` will warn that this constraint should allow more
-  # than one version (pana "Support up-to-date dependencies" rubric). That
-  # warning is accepted: the safety of an exact pin outweighs the small
-  # score deduction. Do not relax to `^2.12.0` without first verifying that
-  # the FRB project has stabilised its wire format across minors.
+  # than one version. That warning is accepted: silent memory corruption
+  # on a wire-format mismatch is a worse failure mode than refusing to
+  # pick up a newer FRB. Do not relax to `^2.12.0` without first
+  # verifying that the FRB project has stabilised its wire format across
+  # minors.
   flutter_rust_bridge: 2.12.0
   # Required by FRB-generated `nts.freezed.dart` for the sealed `NtsError`
   # variant types. Runtime annotations only; the generator itself is in

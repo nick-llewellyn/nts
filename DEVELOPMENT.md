@@ -43,16 +43,18 @@ so the script and CI stay in lockstep.
 
 `flutter_rust_bridge_codegen` does not propagate Rust struct/enum
 docstrings to its synthesized freezed sealed class wrappers and
-auto-generated default constructors. pana scores the generated bindings
-with a stricter ruleset than `flutter_lints` and fires
-`public_member_api_docs` for every undocumented public member of those
-positions (~120 lints in `lib/src/ffi/api/nts.dart` alone). Since the
-underlying lints cannot be fixed at the Rust source, the script appends
-the offending rule names to the file-level `// ignore_for_file:`
-directive after each codegen run. The patch table lives in
-`_lintIgnorePatches` and is idempotent: re-running adds nothing if the
-rule is already present. If FRB ever emits the missing docs natively,
-remove the corresponding entry from the table.
+auto-generated default constructors. With `public_member_api_docs`
+enabled in `analysis_options.yaml` and `lib/src/ffi/**` left in the
+analyzed file set (so the published surface stays in lockstep with what
+downstream consumers' analyzers see), every undocumented public member
+in those positions fires the lint -- ~120 hits in
+`lib/src/ffi/api/nts.dart` alone. Since the underlying lints cannot be
+fixed at the Rust source, the script appends the offending rule names
+to the file-level `// ignore_for_file:` directive after each codegen
+run. The patch table lives in `_lintIgnorePatches` and is idempotent:
+re-running adds nothing if the rule is already present. If FRB ever
+emits the missing docs natively, remove the corresponding entry from
+the table.
 
 ### Rust unit tests (no Flutter required)
 
