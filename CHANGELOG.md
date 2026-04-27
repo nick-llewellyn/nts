@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.4
+
+pub.dev Example tab fix (take two). No runtime changes.
+
+- Add `example/example.md` containing the minimal NTS-KE sample as a
+  fenced ```dart block plus a pointer to the Flutter GUI showcase at
+  `example/lib/main.dart`. The 1.0.3 rename of the minimal sample to
+  `example/main.dart` did not unblock the Example tab: empirical check
+  on the published version-pinned URL still rendered
+  `example/lib/main.dart`. The bracket notation
+  `example[/lib]/main.dart` in dart.dev's package-layout doc is
+  shorthand for two **separate** slots in pana's selection list, with
+  the `lib/` form ranked **higher** than the bare form. The actual
+  list lives in
+  [`pana/lib/src/maintenance.dart`](https://github.com/dart-lang/pana/blob/master/lib/src/maintenance.dart):
+
+  1. `example/README.md`
+  2. **`example/example.md`** ← new in 1.0.4, secures the slot
+  3. `example/lib/main.dart` (GUI showcase, no longer rendered)
+  4. `example/bin/main.dart`
+  5. `example/main.dart` (1.0.3 rename target, also no longer rendered)
+
+  Slot 2 beats slot 3, so the new `example/example.md` finally wins
+  over `example/lib/main.dart`. The minimal sample at
+  `example/main.dart` stays in the archive as the runnable Flutter
+  target; the `.md` is just a syntactic mirror so pub.dev picks it.
+
+- No changes to the published Dart surface, the Rust crate, or the
+  Native Assets bridge. The two new lines in `pubspec.yaml` and
+  `CHANGELOG.md` are the only metadata edits.
+
 ## 1.0.3
 
 pub.dev Example tab fix. No runtime changes.
