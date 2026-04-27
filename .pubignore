@@ -45,3 +45,31 @@ example/macos/Pods/
 # consumers, who never run those agents against the published tarball.
 AGENTS.md
 CLAUDE.md
+
+# Contributor documentation. Both files explicitly state at the top
+# that they are for contributors / integrators and that day-to-day API
+# users only need the README. Keeping them in git for the repo audience
+# but excluded from the published surface.
+ARCHITECTURE.md
+DEVELOPMENT.md
+
+# flutter_rust_bridge codegen config. The generated bindings are
+# committed under lib/src/ffi/** and rust/src/frb_generated.rs and ship
+# pre-built; the FRB codegen CLI is only ever run by maintainers on
+# this repo, never by package consumers.
+flutter_rust_bridge.yaml
+
+# Maintainer's analyzer configuration. A consumer's analyzer reads the
+# consumer's own analysis_options.yaml; ours does not influence their
+# lints, so shipping it is noise on the package surface.
+analysis_options.yaml
+
+# Internal tooling. tool/check_bindings.dart is a CI drift check for
+# the FRB codegen step that only runs when rust/src/api/*.rs changes;
+# consumers never invoke it.
+tool/
+
+# Internal tests. test/ffi_smoke_test.dart exercises the FFI bridge
+# in this repo's CI; it is not part of the public API and does not
+# help consumers verify their integration.
+test/

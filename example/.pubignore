@@ -1,8 +1,8 @@
 # Slim the published tarball: exclude regenerable Flutter platform
-# scaffolding and large icon-source assets from the example app. The
-# Dart source (lib/, bin/, test/), pubspec, and documentation are kept
-# so the example sources and the CLI/GUI guides remain readable to
-# package consumers.
+# scaffolding, large icon-source assets, and developer-only tooling
+# from the example app. The Dart source (lib/, bin/), pubspec, and
+# consumer-facing documentation are kept so the example sources and
+# the CLI/GUI guides remain readable to package consumers.
 #
 # A .pubignore in this directory replaces example/.gitignore for the
 # purposes of `dart pub publish` (per dart.dev/go/pubignore). Patterns
@@ -21,6 +21,16 @@ assets/icon/
 
 # Icon-generator tooling (consumers don't need it)
 tool/
+
+# Example app's analyzer configuration. Consumers run their own
+# analyzer against their own code; this file does not influence their
+# lints, so shipping it is noise on the package surface.
+analysis_options.yaml
+
+# Example app's test suite. Tests for the showcase apps belong in the
+# repo for CI but do not help consumers learn the public API; the
+# canonical entry point is example/main.dart.
+test/
 
 # Defensive: also covered by root .gitignore but listed for clarity
 pubspec.lock
