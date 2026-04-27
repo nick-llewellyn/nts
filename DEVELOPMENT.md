@@ -104,3 +104,62 @@ stripped release binary.
 deliberately a manual pubspec edit rather than a separate Flutter
 flavor so the production-vs-developer split is visible at the call
 site.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs four jobs on every push to `main` and
+every pull request:
+
+| Job | Cost | Purpose |
+|-----|------|---------|
+| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `ci` flags consumed by the gates below. |
+| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test` on the SDK floor (3.38.10) and the pinned current (3.41.7). Always runs. |
+| `rust` | ~5–8 min | `cargo build --locked` + `cargo test --lib` on Linux. Gated. |
+| `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated. |
+
+### Filter-driven gating
+
+The expensive Rust jobs are skipped unless the diff actually requires
+them. Filters and gates:
+
+| Filter | Watches | Gates |
+|--------|---------|-------|
+| `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `rust`, `rust-bridge-sync` |
+| `bindings` | `lib/src/ffi/**`, `tool/check_bindings.dart` | `rust-bridge-sync` |
+| `ci` | `.github/workflows/**` | `rust`, `rust-bridge-sync` |
+
+`pubspec.yaml` lives in the `rust` filter because the
+`flutter_rust_bridge: 2.12.0` exact pin sits there; bumping it must
+trigger a full Rust + drift run. `workflow_dispatch` (manual reruns
+from the Actions UI) bypasses every gate so a forced run executes
+the full pipeline.
+
+GitHub treats skipped jobs as passing for branch-protection purposes,
+so existing required-check rules continue to work unchanged.
+
+### Trigger-level skips
+
+Two cheaper filters run before the workflow even queues:
+
+- **`paths-ignore`** (`.github/workflows/ci.yml`): doc / metadata
+  paths — `**.md`, `LICENSE`, `.gitignore`, `.beads/**`,
+  `screenshots/**` — never trigger a workflow run.
+- **`[skip ci]` commit-message flag**: any commit whose message
+  contains `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, or
+  `[actions skip]` is bypassed by GitHub Actions. Prefer this only
+  when `paths-ignore` doesn't cover the case (e.g. a single commit
+  that touches both an ignored file and a non-ignored one but is
+  known to be CI-irrelevant).
+
+### When to use each layer
+
+| Change | Behaviour |
+|--------|-----------|
+| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow doesn't run (`paths-ignore`). |
+| Beads issue update (`.beads/**`) | Workflow doesn't run (`paths-ignore`). |
+| Screenshot asset swap (`screenshots/**`) | Workflow doesn't run (`paths-ignore`). |
+| Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust` and `rust-bridge-sync` skip. |
+| Rust source change (`rust/src/**`) | All three runtime jobs run. |
+| Hand-edit of generated bindings | `build` and `rust-bridge-sync` run; `rust-bridge-sync` will fail with a drift error (regenerate via `flutter_rust_bridge_codegen generate` instead). |
+| `pubspec.yaml` edit | All three runtime jobs run (FRB pin sits there). |
+| Workflow file edit | All three runtime jobs run (validates the change end-to-end). |
