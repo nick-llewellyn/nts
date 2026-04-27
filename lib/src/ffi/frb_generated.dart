@@ -264,9 +264,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 4:
         return NtsError_Authentication(dco_decode_String(raw[1]));
       case 5:
-        return NtsError_Timeout();
+        return const NtsError_Timeout();
       case 6:
-        return NtsError_NoCookies();
+        return const NtsError_NoCookies();
       case 7:
         return NtsError_Internal(dco_decode_String(raw[1]));
       default:
@@ -328,7 +328,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   String sse_decode_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var inner = sse_decode_list_prim_u_8_strict(deserializer);
+    final inner = sse_decode_list_prim_u_8_strict(deserializer);
     return utf8.decoder.convert(inner);
   }
 
@@ -349,7 +349,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var len_ = sse_decode_i_32(deserializer);
+    final len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
   }
 
@@ -357,29 +357,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   NtsError sse_decode_nts_error(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
-    var tag_ = sse_decode_i_32(deserializer);
+    final tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        var var_field0 = sse_decode_String(deserializer);
+        final var_field0 = sse_decode_String(deserializer);
         return NtsError_InvalidSpec(var_field0);
       case 1:
-        var var_field0 = sse_decode_String(deserializer);
+        final var_field0 = sse_decode_String(deserializer);
         return NtsError_Network(var_field0);
       case 2:
-        var var_field0 = sse_decode_String(deserializer);
+        final var_field0 = sse_decode_String(deserializer);
         return NtsError_KeProtocol(var_field0);
       case 3:
-        var var_field0 = sse_decode_String(deserializer);
+        final var_field0 = sse_decode_String(deserializer);
         return NtsError_NtpProtocol(var_field0);
       case 4:
-        var var_field0 = sse_decode_String(deserializer);
+        final var_field0 = sse_decode_String(deserializer);
         return NtsError_Authentication(var_field0);
       case 5:
-        return NtsError_Timeout();
+        return const NtsError_Timeout();
       case 6:
-        return NtsError_NoCookies();
+        return const NtsError_NoCookies();
       case 7:
-        var var_field0 = sse_decode_String(deserializer);
+        final var_field0 = sse_decode_String(deserializer);
         return NtsError_Internal(var_field0);
       default:
         throw UnimplementedError('');
@@ -389,19 +389,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   NtsServerSpec sse_decode_nts_server_spec(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_host = sse_decode_String(deserializer);
-    var var_port = sse_decode_u_16(deserializer);
+    final var_host = sse_decode_String(deserializer);
+    final var_port = sse_decode_u_16(deserializer);
     return NtsServerSpec(host: var_host, port: var_port);
   }
 
   @protected
   NtsTimeSample sse_decode_nts_time_sample(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_utcUnixMicros = sse_decode_i_64(deserializer);
-    var var_roundTripMicros = sse_decode_i_64(deserializer);
-    var var_serverStratum = sse_decode_u_8(deserializer);
-    var var_aeadId = sse_decode_u_16(deserializer);
-    var var_freshCookies = sse_decode_u_32(deserializer);
+    final var_utcUnixMicros = sse_decode_i_64(deserializer);
+    final var_roundTripMicros = sse_decode_i_64(deserializer);
+    final var_serverStratum = sse_decode_u_8(deserializer);
+    final var_aeadId = sse_decode_u_16(deserializer);
+    final var_freshCookies = sse_decode_u_32(deserializer);
     return NtsTimeSample(
       utcUnixMicros: var_utcUnixMicros,
       roundTripMicros: var_roundTripMicros,
