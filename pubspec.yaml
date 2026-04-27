@@ -20,6 +20,19 @@ screenshots:
       favourites, and a unified live log of authenticated time queries.
     path: screenshots/gui_showcase.png
 
+# Explicit platform allow-list for pub.dev / pana. RFC 8915 needs raw TCP
+# (NTS-KE on :4460) and raw UDP (NTPv4 on :123); neither is exposed to
+# browser tabs, and the rustls + ring stack does not target
+# wasm32-unknown-unknown. Omitting `web` and `wasm` here makes pana drop
+# both tags so consumers see the package's true platform surface on the
+# pub.dev scorecard.
+platforms:
+  android:
+  ios:
+  macos:
+  linux:
+  windows:
+
 environment:
   # Lower bound matches the `hooks` package floor (Dart >=3.10.0), which
   # corresponds to Flutter 3.38.0 stable (Nov 2025) -- the first release to
