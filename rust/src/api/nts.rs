@@ -43,7 +43,8 @@ const NTP_TO_UNIX_EPOCH_SECS: u64 = 2_208_988_800;
 pub struct NtsServerSpec {
     /// Hostname for TLS SNI and certificate validation.
     pub host: String,
-    /// TCP port; pass [`DEFAULT_KE_PORT`] (4460) unless the deployment overrides it.
+    /// TCP port; pass `4460` (the IANA-assigned NTS-KE default, RFC 8915 §6)
+    /// unless the deployment overrides it.
     pub port: u16,
 }
 
@@ -358,8 +359,8 @@ fn bind_connected_udp(host: &str, port: u16, timeout: Duration) -> Result<UdpSoc
 /// On the first call (or after the cookie pool is exhausted) this performs a
 /// full NTS-KE handshake before sending the NTPv4 request; subsequent calls
 /// reuse the cached AEAD keys and spend a stored cookie. `timeout_ms` is
-/// applied independently to the KE handshake and to the UDP recv; pass 0 for
-/// the [`DEFAULT_TIMEOUT_MS`] default.
+/// applied independently to the KE handshake and to the UDP recv; pass `0`
+/// for the built-in `5000` ms default.
 pub fn nts_query(spec: NtsServerSpec, timeout_ms: u32) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);

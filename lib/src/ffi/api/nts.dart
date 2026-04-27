@@ -17,8 +17,8 @@ part 'nts.freezed.dart';
 /// On the first call (or after the cookie pool is exhausted) this performs a
 /// full NTS-KE handshake before sending the NTPv4 request; subsequent calls
 /// reuse the cached AEAD keys and spend a stored cookie. `timeout_ms` is
-/// applied independently to the KE handshake and to the UDP recv; pass 0 for
-/// the [`DEFAULT_TIMEOUT_MS`] default.
+/// applied independently to the KE handshake and to the UDP recv; pass `0`
+/// for the built-in `5000` ms default.
 Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   required int timeoutMs,
@@ -70,7 +70,8 @@ class NtsServerSpec {
   /// Hostname for TLS SNI and certificate validation.
   final String host;
 
-  /// TCP port; pass [`DEFAULT_KE_PORT`] (4460) unless the deployment overrides it.
+  /// TCP port; pass `4460` (the IANA-assigned NTS-KE default, RFC 8915 §6)
+  /// unless the deployment overrides it.
   final int port;
 
   const NtsServerSpec({required this.host, required this.port});
