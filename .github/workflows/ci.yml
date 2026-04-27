@@ -20,14 +20,50 @@ on:
   workflow_dispatch:
 
 jobs:
+  changes:
+    # Cheap path-filter pass that classifies the diff and gates the heavy
+    # Rust jobs below. paths-ignore (above) already drops doc / metadata
+    # commits at the trigger level; this job adds finer per-area gating
+    # so e.g. a Dart-only edit doesn't pay for cargo build + frb codegen.
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      bindings: ${{ steps.filter.outputs.bindings }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            rust:
+              - 'rust/**'
+              - 'hook/**'
+              - 'flutter_rust_bridge.yaml'
+              - 'pubspec.yaml'
+            bindings:
+              - 'lib/src/ffi/**'
+              - 'tool/check_bindings.dart'
+            ci:
+              - '.github/workflows/**'
+
   build:
     # Matrix exercises both the declared SDK floor (3.38.10 -- oldest stable
     # satisfying `flutter: ^3.38.0` in pubspec.yaml, ships Dart 3.10.9) and
     # the pinned current version (3.41.7, matches .fvmrc). Format check runs
     # only on the pinned version because `dart format` output can shift
     # between Dart minors and we don't want spurious failures on the floor.
+    #
+    # Always runs (no `if:` gate): the Dart pipeline is cheap and provides
+    # the foundational format / analyze / test feedback on every change
+    # that survives paths-ignore.
     name: Format / analyze / Dart tests (Flutter ${{ matrix.flutter }})
     runs-on: ubuntu-latest
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -66,6 +102,14 @@ jobs:
   rust:
     name: Rust build + tests
     runs-on: ubuntu-latest
+    needs: changes
+    # Skip when the diff doesn't touch Rust sources, the build hook, the
+    # FRB config, the pubspec (FRB pin lives there), or the workflow file
+    # itself. workflow_dispatch always runs everything.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.ci == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -89,6 +133,16 @@ jobs:
   rust-bridge-sync:
     name: Verify FRB bindings are in sync
     runs-on: ubuntu-latest
+    needs: changes
+    # Drift check only matters when Rust source, the generated bindings,
+    # or the workflow itself moved. Bindings-only edits (someone hand-
+    # editing lib/src/ffi/) still trigger this so the regenerator catches
+    # the drift.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.bindings == 'true' ||
+      needs.changes.outputs.ci == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
