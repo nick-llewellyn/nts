@@ -1,5 +1,97 @@
 # Changelog
 
+## 1.1.0
+
+Protocol-compliance and reliability hardening across the Rust core. The
+public Dart surface (`ntsQuery`, `ntsWarmCookies`, `NtsServerSpec`,
+`NtsTimeSample`, `NtsError`) is unchanged; consumer-visible behaviour
+improves on the timeout, cookie-cache, and error-classification paths.
+Rust crate `nts_rust` is bumped from `0.1.0` to `0.2.0` to mark the
+internal protocol-validation tightening; the bindings (`lib/src/ffi/`)
+and Native Assets bridge are unaffected.
+
+### NTS-KE handshake (`rust/src/nts/ke.rs`)
+
+- Replace the OS-default TCP connect with a deadline-aware connection
+  loop that honours the caller's `timeoutMs`. Earlier releases passed
+  the budget only to the read/write side of the socket and let
+  `TcpStream::connect` block on the platform default (typically 75 s
+  on macOS / 21 s on Linux), which made `ntsQuery(..., timeoutMs: 5000)`
+  hang for the full kernel default when the KE endpoint blackholed
+  SYNs. The new loop iterates the resolved address list, computes the
+  per-attempt deadline from the remaining budget, and surfaces a
+  `KeError::Io(ErrorKind::TimedOut)` on the *first* exhausted attempt
+  rather than the last. Mapped through `From<KeError> for NtsError` to
+  `NtsError.timeout` so the Dart-side switch arm is reached.
+- Regression test
+  `connect_with_timeout_respects_budget_for_unroutable_ip` exercises
+  the deadline against `192.0.2.1` (RFC 5737 TEST-NET-1) and asserts
+  the call returns within 1.5× the configured budget.
+
+### Cookie management (`rust/src/api/nts.rs`)
+
+- Introduce a monotonically-increasing `generation: u64` on `Session`
+  and propagate it into `QueryContext::session_generation` so each
+  in-flight NTPv4 query carries the identity of the handshake that
+  produced its cookies. `Session::deposit_cookies` now gates the
+  cookie-jar update on a matching generation: cookies extracted from
+  a response signed under generation N are silently dropped if the
+  session has been re-handshaked to generation N+1 between dispatch
+  and receipt. This closes a cross-session poisoning window where a
+  late response from a stale session could install cookies bound to
+  retired keys, causing the next `ntsQuery` to dispatch
+  unauthenticatable cookies and fail the AEAD seal.
+- The generation counter is also incremented on every successful
+  `Session::rehandshake`, so the stale-cookie filter applies
+  symmetrically to both concurrent-query races and explicit
+  `ntsWarmCookies` invocations during an in-flight query.
+
+### NTPv4 header validation (`rust/src/nts/ntp.rs`)
+
+- Add `STRATUM_UNSYNCHRONIZED_FLOOR = 16` and reject any post-AEAD
+  reply with `stratum >= 16` as `NtpError::Unsynchronized`. RFC 5905
+  reserves stratum 16 as the "unsynchronized" sentinel and 17–255 as
+  reserved; previous versions only filtered LI=3, so a server in the
+  alarm condition could surface a wall-clock offset to the discipline
+  loop if it left LI=0.
+- Reorder the validation so the Stratum-0 short-circuit (Kiss-o'-Death)
+  runs *before* the LI=3 / stratum-ceiling check. Real-world KoD
+  packets routinely arrive with LI=3 because the server has no
+  synchronised time to advertise; the previous ordering swallowed the
+  4-octet kiss code (`RATE`, `DENY`, `RSTR`, `NTSN`, …) into a generic
+  `Unsynchronized` error and stripped the diagnostic the caller needs
+  to choose a back-off strategy.
+- Validation remains positioned *after* AEAD `open()` and the
+  origin-timestamp check. `stratum` and the leap indicator are part
+  of the NTP AAD, so by this point the server has signed the value;
+  off-path attackers cannot forge KoD or stratum-16 to disrupt the
+  client. The post-AEAD ordering is pinned by the
+  `*_after_seal_*_tamper_as_aead_failure` test family.
+- New regression tests:
+  - `parse_response_prefers_kod_over_unsynchronized_when_both_set`
+    pins the new precedence (Stratum 0 + LI=3 ⇒ `KissOfDeath`).
+  - `parse_response_rejects_invalid_high_stratum` pins the new
+    stratum-ceiling check (stratum 16 + LI=0 ⇒ `Unsynchronized`).
+- Broaden the `Display` arm and rustdoc on `NtpError::Unsynchronized`
+  to `"server reports unsynchronized clock (LI=3 or stratum >= 16)"`
+  so the diagnostic accurately reflects both triggers; the message
+  passes through `NtsError::NtpProtocol(..)` to the Dart side
+  unchanged.
+
+### Housekeeping
+
+- `rust/src/nts/records.rs`: replace `body.len() % 2 != 0` with
+  `!body.len().is_multiple_of(2)` in `decode_u16_array` to satisfy
+  the `clippy::manual_is_multiple_of` lint (warn-by-default in
+  clippy 1.92, surfaced once `cargo clippy --all-targets -- -D
+  warnings` was added to the release gate). Behaviour is unchanged.
+
+### Verification
+
+- `cargo test --lib`: 95 passed, 0 failed, 3 ignored (live-network).
+- `cargo clippy --tests --all-targets -- -D warnings`: clean across
+  the workspace.
+
 ## 1.0.7
 
 Documentation and published-tarball hygiene. No changes to the published

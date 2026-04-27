@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -104,7 +105,14 @@ impl std::error::Error for NtsError {}
 impl From<KeError> for NtsError {
     fn from(e: KeError) -> Self {
         match e {
-            KeError::Io(io) => Self::Network(io.to_string()),
+            // Funnel through `From<std::io::Error>` so `TimedOut` /
+            // `WouldBlock` (the kinds produced by `connect_timeout` and
+            // by socket read/write deadlines) surface as `Timeout`
+            // rather than being flattened into `Network`. Without this,
+            // a blackholed TCP/4460 destination would arrive on the
+            // Dart side as a generic network error after the connect
+            // deadline fired.
+            KeError::Io(io) => Self::from(io),
             KeError::Tls(t) => Self::KeProtocol(format!("TLS: {t}")),
             KeError::NoCookies => Self::NoCookies,
             other => Self::KeProtocol(other.to_string()),
@@ -116,6 +124,16 @@ impl From<NtpError> for NtsError {
     fn from(e: NtpError) -> Self {
         match e {
             NtpError::Aead(a) => Self::Authentication(a.to_string()),
+            // Server-attested "no usable time" signals (RFC 5905 §7.3 LI=3
+            // and §7.4 stratum-0 KoD) reach Dart as `NtpProtocol` with the
+            // diagnostic string preserved verbatim — for KoD this includes
+            // the 4-octet kiss code (`RATE`, `DENY`, `RSTR`, `NTSN`, …) so
+            // callers can inspect the message and back off appropriately.
+            // We list them explicitly so a future split into dedicated
+            // `NtsError` variants is a localised change rather than a hunt
+            // through the catch-all arm.
+            e @ NtpError::Unsynchronized => Self::NtpProtocol(e.to_string()),
+            e @ NtpError::KissOfDeath(_) => Self::NtpProtocol(e.to_string()),
             other => Self::NtpProtocol(other.to_string()),
         }
     }
@@ -148,6 +166,20 @@ impl From<std::io::Error> for NtsError {
 
 /// Cached per-(KE host:port) session built from a successful handshake.
 struct Session {
+    /// Process-wide unique identifier for *this* handshake instance.
+    ///
+    /// NTS cookies are cryptographically bound to the C2S/S2C keys
+    /// negotiated during the KE that produced them (RFC 8915 §6). The
+    /// global session table is keyed only by `host:port`, so a
+    /// concurrent `nts_warm_cookies` (or a `checkout` that triggered
+    /// its own re-handshake) can replace the entry while an in-flight
+    /// `nts_query` is still waiting on the wire. When that query
+    /// returns, its fresh cookies belong to the *old* keys; stuffing
+    /// them into the new session's jar would cause every subsequent
+    /// query to fail authentication. The generation is captured into
+    /// `QueryContext` at checkout and re-checked at deposit time so
+    /// stale cookies are dropped instead of poisoning the cache.
+    generation: u64,
     aead_id: u16,
     c2s_key: AeadKey,
     s2c_key: AeadKey,
@@ -161,6 +193,19 @@ impl Session {
     fn cookies_remaining(&self) -> usize {
         self.jar.count(&self.ntpv4_host)
     }
+}
+
+/// Mint a fresh, monotonically-increasing session generation ID.
+///
+/// `Relaxed` is sufficient because the value is only ever compared for
+/// equality against a snapshot taken under the same `sessions()` mutex
+/// that gates every read/write of the session table. The mutex
+/// provides the cross-thread happens-before relationship; the atomic
+/// is here purely to give us a cheap uniqueness oracle without having
+/// to widen the lock-protected state.
+fn next_session_generation() -> u64 {
+    static GEN: AtomicU64 = AtomicU64::new(1);
+    GEN.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Process-wide session table. Sessions are keyed by `host:port` so two specs
@@ -218,6 +263,7 @@ fn establish_session(spec: &NtsServerSpec, timeout: Duration) -> Result<Session,
     }
     jar.put_many(&outcome.ntpv4_host, outcome.cookies);
     Ok(Session {
+        generation: next_session_generation(),
         aead_id: outcome.aead_id,
         c2s_key,
         s2c_key,
@@ -229,6 +275,10 @@ fn establish_session(spec: &NtsServerSpec, timeout: Duration) -> Result<Session,
 
 /// Snapshot of the data a single NTPv4 exchange needs once the lock is released.
 struct QueryContext {
+    /// Generation of the [`Session`] this cookie/key tuple was drawn from.
+    /// The deposit-side cookie writer compares it against the live session
+    /// to refuse stale writes; see [`deposit_cookies`].
+    session_generation: u64,
     cookie: Vec<u8>,
     c2s_key: AeadKey,
     s2c_key: AeadKey,
@@ -263,6 +313,7 @@ fn checkout(spec: &NtsServerSpec, timeout: Duration) -> Result<QueryContext, Nts
         .take(&session.ntpv4_host)
         .ok_or(NtsError::NoCookies)?;
     Ok(QueryContext {
+        session_generation: session.generation,
         cookie,
         c2s_key: session.c2s_key.clone(),
         s2c_key: session.s2c_key.clone(),
@@ -273,12 +324,28 @@ fn checkout(spec: &NtsServerSpec, timeout: Duration) -> Result<QueryContext, Nts
 }
 
 /// Deposit fresh cookies harvested from a verified server reply.
-fn deposit_cookies(spec_key: &str, cookies: Vec<Vec<u8>>) {
+///
+/// The cookies are AEAD-sealed by the server with the C2S/S2C key pair
+/// from `expected_generation`. If a concurrent `nts_warm_cookies` (or
+/// another `checkout` that ran its own re-handshake) replaced the
+/// session under `spec_key` while this query was on the wire, the
+/// cached entry now holds an unrelated key pair and these cookies
+/// would be unusable against it — every future query that spent one
+/// would round-trip through `NtsError::Authentication` and force yet
+/// another KE handshake. Drop the cookies on the floor in that case;
+/// the next query will simply re-handshake and refill the jar from
+/// scratch, which is strictly cheaper than poisoning the cache.
+fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8>>) {
     if cookies.is_empty() {
         return;
     }
     let mut guard = sessions().lock().expect("session table poisoned");
     if let Some(session) = guard.get_mut(spec_key) {
+        if session.generation != expected_generation {
+            // Session has been replaced since checkout; these cookies
+            // are bound to keys we no longer hold. Discard.
+            return;
+        }
         let host = session.ntpv4_host.clone();
         session.jar.put_many(&host, cookies);
     }
@@ -400,7 +467,7 @@ pub fn nts_query(spec: NtsServerSpec, timeout_ms: u32) -> Result<NtsTimeSample, 
 
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)?;
     let fresh_count = response.fresh_cookies.len() as u32;
-    deposit_cookies(&key, response.fresh_cookies);
+    deposit_cookies(&key, ctx.session_generation, response.fresh_cookies);
 
     Ok(NtsTimeSample {
         utc_unix_micros: ntp64_to_unix_micros(response.header.transmit_timestamp),
@@ -569,6 +636,149 @@ mod tests {
         let (n, src) = echo.recv_from(&mut buf).expect("recv");
         assert_eq!(&buf[..n], b"ping6");
         assert!(matches!(src, SocketAddr::V6(_)));
+    }
+
+    /// Build a throwaway `Session` for cookie-jar plumbing tests.
+    ///
+    /// Uses AES-SIV-CMAC-256 because it's the RFC 8915 §5.1 baseline
+    /// and `AeadKey::from_keying_material` will accept any 32-byte
+    /// blob — these tests never seal or open packets, they only
+    /// exercise the session-table bookkeeping around `deposit_cookies`.
+    fn make_test_session(host: &str, ntpv4_port: u16, generation: u64) -> Session {
+        let key_material = [0u8; 32];
+        let c2s_key = AeadKey::from_keying_material(aead_ids::AES_SIV_CMAC_256, &key_material)
+            .expect("32-byte SIV key");
+        let s2c_key = AeadKey::from_keying_material(aead_ids::AES_SIV_CMAC_256, &key_material)
+            .expect("32-byte SIV key");
+        Session {
+            generation,
+            aead_id: aead_ids::AES_SIV_CMAC_256,
+            c2s_key,
+            s2c_key,
+            ntpv4_host: host.to_owned(),
+            ntpv4_port,
+            jar: CookieJar::new(),
+        }
+    }
+
+    /// Sanity check on the generation oracle: every call must return a
+    /// distinct value. If this ever regresses (e.g. someone swaps the
+    /// counter for a hash of the spec), the race-fix invariant in
+    /// `deposit_cookies` collapses silently.
+    #[test]
+    fn next_session_generation_is_unique() {
+        let a = next_session_generation();
+        let b = next_session_generation();
+        let c = next_session_generation();
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+    }
+
+    /// Happy path: when the cached session's generation still matches the
+    /// `QueryContext`, fresh cookies land in the jar as before.
+    #[test]
+    fn deposit_cookies_writes_when_generation_matches() {
+        let key = "deposit-match.invalid:4460";
+        let gen = next_session_generation();
+        let session = make_test_session("deposit-match.invalid", 123, gen);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .insert(key.to_owned(), session);
+
+        deposit_cookies(key, gen, vec![vec![1, 2, 3], vec![4, 5, 6]]);
+
+        let guard = sessions().lock().expect("session table poisoned");
+        let s = guard.get(key).expect("session present");
+        assert_eq!(
+            s.cookies_remaining(),
+            2,
+            "expected both cookies to land in the matched session's jar"
+        );
+        // Drop the lock before we mutate the table again.
+        drop(guard);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .remove(key);
+    }
+
+    /// Race-fix invariant: when a concurrent handshake replaces the
+    /// cached session between checkout and deposit, the in-flight
+    /// query's cookies are bound to the old C2S/S2C keys and must be
+    /// discarded — depositing them into the new session would cause
+    /// every future query to fail authentication and trigger another
+    /// (wasted) re-handshake.
+    #[test]
+    fn deposit_cookies_drops_when_session_replaced() {
+        let key = "deposit-mismatch.invalid:4460";
+        // Stand up an "old" session and snapshot its generation as a
+        // simulated `QueryContext.session_generation`. Generations come
+        // from the real oracle so this test exercises the same
+        // uniqueness guarantee `establish_session` relies on.
+        let stale_generation = next_session_generation();
+        let old = make_test_session("deposit-mismatch.invalid", 123, stale_generation);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .insert(key.to_owned(), old);
+
+        // Simulate `nts_warm_cookies` (or another `checkout` re-handshake)
+        // landing while the original query was on the wire: replace the
+        // entry under the same key with a session whose generation has
+        // advanced.
+        let fresh_generation = next_session_generation();
+        assert_ne!(
+            stale_generation, fresh_generation,
+            "fresh handshake must mint a distinct generation"
+        );
+        let fresh = make_test_session("deposit-mismatch.invalid", 123, fresh_generation);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .insert(key.to_owned(), fresh);
+
+        // Deposit with the *stale* generation — must be a no-op.
+        deposit_cookies(key, stale_generation, vec![vec![0xAA; 16]; 4]);
+
+        let guard = sessions().lock().expect("session table poisoned");
+        let s = guard.get(key).expect("session present");
+        assert_eq!(
+            s.cookies_remaining(),
+            0,
+            "stale-generation cookies must not poison the new session's jar",
+        );
+        assert_eq!(
+            s.generation, fresh_generation,
+            "fresh session must still be the one cached",
+        );
+        drop(guard);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .remove(key);
+    }
+
+    /// If the session was evicted entirely (no entry at the key), a
+    /// late deposit is a quiet no-op rather than a panic. This was
+    /// already the behaviour pre-fix; the regression test pins it
+    /// explicitly so the new generation check can't accidentally
+    /// reintroduce a panic on the missing-entry path.
+    #[test]
+    fn deposit_cookies_is_noop_when_session_missing() {
+        let key = "deposit-missing.invalid:4460";
+        // Ensure no leftover from another test.
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .remove(key);
+        // Any generation ID will do — the entry is absent.
+        deposit_cookies(key, 1, vec![vec![1, 2, 3]]);
+        // No assertion needed beyond "did not panic"; verify the table
+        // really is empty for this key.
+        let guard = sessions().lock().expect("session table poisoned");
+        assert!(guard.get(key).is_none());
     }
 
     /// A hostname that resolves to nothing maps to a structured

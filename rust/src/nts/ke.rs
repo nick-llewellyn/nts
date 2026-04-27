@@ -7,9 +7,9 @@
 //! cleanly into the FRB v2 worker pool as a plain `pub fn`.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, SupportedProtocolVersion};
@@ -388,7 +388,7 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
         .to_owned();
     let mut conn = ClientConnection::new(cfg, server_name)?;
 
-    let mut tcp = TcpStream::connect((req.host.as_str(), req.port))?;
+    let mut tcp = connect_with_timeout(req.host.as_str(), req.port, req.timeout)?;
     if let Some(t) = req.timeout {
         tcp.set_read_timeout(Some(t))?;
         tcp.set_write_timeout(Some(t))?;
@@ -425,6 +425,52 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
         cookies: partial.cookies,
         warnings: partial.warnings,
     })
+}
+
+/// Open a TCP connection to `host:port`, bounded by `timeout`.
+///
+/// Resolves `host:port` via [`ToSocketAddrs`] and attempts each candidate
+/// with [`TcpStream::connect_timeout`]. When `timeout` is `Some`, the entire
+/// connect phase shares a single deadline so a multi-record DNS response
+/// cannot stretch the wall-clock cost beyond the caller's budget — once the
+/// deadline has elapsed, the next attempt yields a `TimedOut` `io::Error`
+/// which the `From<KeError> for NtsError` mapping translates to
+/// `NtsError::Timeout` on the Dart side. This replaces the prior plain
+/// `TcpStream::connect` call, whose OS-default connect timeout could leave
+/// the FFI future hanging for tens of seconds when TCP/4460 is blackholed.
+///
+/// When `timeout` is `None` (no caller deadline), falls through to
+/// [`TcpStream::connect`] for parity with the previous behaviour.
+fn connect_with_timeout(
+    host: &str,
+    port: u16,
+    timeout: Option<Duration>,
+) -> Result<TcpStream, KeError> {
+    let Some(total) = timeout else {
+        return Ok(TcpStream::connect((host, port))?);
+    };
+    let addrs = (host, port).to_socket_addrs()?;
+    let deadline = Instant::now() + total;
+    let mut last_err: Option<std::io::Error> = None;
+    for addr in addrs {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(KeError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "connect timed out",
+            )));
+        }
+        match TcpStream::connect_timeout(&addr, remaining) {
+            Ok(s) => return Ok(s),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(KeError::Io(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!("no addresses resolved for {host}:{port}"),
+        )
+    })))
 }
 
 /// Read until the peer closes the TLS stream or the cap is reached.
@@ -776,6 +822,56 @@ mod tests {
             aead_record,
             vec![aead::AES_SIV_CMAC_256, aead::AES_128_GCM_SIV]
         );
+    }
+
+    /// `connect_with_timeout` must honour the caller's deadline when the
+    /// destination is blackholed. RFC 5737 reserves `192.0.2.0/24`
+    /// (TEST-NET-1) for documentation; no public network advertises a
+    /// route for it, so a SYN to `192.0.2.1:4460` either gets dropped on
+    /// the wire (deadline fires mid-SYN) or rejected locally with a
+    /// routing error (`EHOSTUNREACH` / `ENETUNREACH`). Both outcomes
+    /// satisfy the contract — what we assert is that the call returns
+    /// well inside the OS-default ~75 s connect window, which is the
+    /// regression this helper exists to prevent. When the deadline
+    /// itself fires, the resulting `io::Error` must carry
+    /// `ErrorKind::TimedOut` so the `From<KeError> for NtsError`
+    /// mapping in `api/nts.rs` produces `NtsError::Timeout` rather
+    /// than `NtsError::Network`.
+    #[test]
+    fn connect_with_timeout_respects_budget_for_unroutable_ip() {
+        let budget = Duration::from_millis(500);
+        let started = Instant::now();
+        let result = connect_with_timeout("192.0.2.1", 4460, Some(budget));
+        let elapsed = started.elapsed();
+
+        let err = result.expect_err("connecting to 192.0.2.1:4460 must fail");
+        let KeError::Io(io) = err else {
+            panic!("expected KeError::Io, got {err:?}");
+        };
+
+        // The cap is generous enough to absorb scheduling jitter on slow
+        // CI runners while still being orders of magnitude tighter than
+        // the OS-default connect timeout this code path replaces.
+        let cap = Duration::from_secs(5);
+        assert!(
+            elapsed < cap,
+            "connect took {elapsed:?} (> {cap:?}); OS-default connect \
+             timeout is leaking through (io kind = {:?}, msg = {io})",
+            io.kind(),
+        );
+
+        // When the deadline elapsed (rather than the OS rejecting
+        // immediately), the kind must be TimedOut so downstream error
+        // mapping produces NtsError::Timeout.
+        if elapsed >= budget {
+            assert_eq!(
+                io.kind(),
+                std::io::ErrorKind::TimedOut,
+                "deadline elapsed after {elapsed:?} but io kind was \
+                 {:?} ({io}); would surface as NtsError::Network",
+                io.kind(),
+            );
+        }
     }
 
     /// Live integration probe against Cloudflare's public NTS-KE endpoint.

@@ -40,6 +40,22 @@ pub const VERSION_4: u8 = 4;
 /// `LI=0, VN=4, Mode=3` for an unsynchronized client request (`0x23`).
 pub const LI_VN_MODE_CLIENT: u8 = (VERSION_4 << 3) | mode::CLIENT;
 
+/// Leap Indicator value `11` — server clock is unsynchronized / in an alarm
+/// condition (RFC 5905 §7.3). A reply carrying this LI conveys no usable
+/// time and must be rejected before it reaches the caller.
+pub const LI_UNSYNCHRONIZED: u8 = 3;
+
+/// Stratum value reserved for Kiss-o'-Death packets (RFC 5905 §7.4). When the
+/// stratum field is `0`, `reference_id` carries a 4-octet ASCII kiss code
+/// (e.g. `RATE`, `DENY`, `RSTR`, `NTSN`) describing why the server is
+/// refusing service.
+pub const STRATUM_KISS_OF_DEATH: u8 = 0;
+
+/// First stratum value RFC 5905 §7.3 marks as "unsynchronized" (`16`) or
+/// "reserved" (`17`–`255`). A reply carrying any of these conveys no usable
+/// time regardless of the Leap Indicator and must be rejected.
+pub const STRATUM_UNSYNCHRONIZED_FLOOR: u8 = 16;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NtpHeader {
     pub li_vn_mode: u8,
@@ -79,6 +95,13 @@ impl NtpHeader {
 
     pub fn mode(&self) -> u8 {
         self.li_vn_mode & 0x07
+    }
+
+    /// Two-bit Leap Indicator field (RFC 5905 §7.3). Value `3` means the
+    /// server's clock is unsynchronized; values `0`–`2` describe known
+    /// upcoming leap-second adjustments.
+    pub fn leap(&self) -> u8 {
+        (self.li_vn_mode >> 6) & 0x03
     }
 
     pub fn to_bytes(&self) -> [u8; HEADER_LEN] {
@@ -130,6 +153,19 @@ pub enum NtpError {
     /// Server's `origin_timestamp` did not echo the client's `transmit_timestamp`.
     /// Defense-in-depth replay guard layered on top of the AEAD (RFC 5905 §8).
     OriginTimestampMismatch { expected: u64, actual: u64 },
+    /// Server-attested "no usable time" signal: either Leap Indicator
+    /// `11` (alarm condition, RFC 5905 §7.3) or a stratum at or above
+    /// [`STRATUM_UNSYNCHRONIZED_FLOOR`] (`16` = unsynchronized,
+    /// `17`–`255` reserved). Both conditions collapse into this
+    /// variant because they carry identical semantics for the caller:
+    /// the packet may be AEAD-authentic but the sample must be
+    /// dropped rather than fed to the clock discipline.
+    Unsynchronized,
+    /// Server returned a Kiss-o'-Death packet (RFC 5905 §7.4): stratum `0`
+    /// with a 4-octet ASCII kiss code in `reference_id`. Common codes are
+    /// `RATE` (rate-limited), `DENY` (access denied), `RSTR` (restricted),
+    /// and the NTS-specific `NTSN` (cookie not recognised, RFC 8915 §5.7).
+    KissOfDeath(String),
     Aead(AeadError),
 }
 
@@ -151,6 +187,10 @@ impl std::fmt::Display for NtpError {
                 f,
                 "origin timestamp {actual:#018x} did not echo client transmit {expected:#018x}",
             ),
+            Self::Unsynchronized => {
+                f.write_str("server reports unsynchronized clock (LI=3 or stratum >= 16)")
+            }
+            Self::KissOfDeath(code) => write!(f, "kiss-o'-death: {code}"),
             Self::Aead(e) => write!(f, "AEAD: {e}"),
         }
     }
@@ -397,6 +437,41 @@ pub fn parse_server_response(
         });
     }
 
+    // Reject Stratum = 0 (Kiss-o'-Death) and Leap Indicator = 3 (alarm /
+    // unsynchronized) only after the AEAD has cleared. RFC 8915 §5.7 is
+    // explicit: "NTS clients MUST verify the AEAD authenticator on KoD
+    // packets before acting on them." Otherwise an off-path attacker
+    // could spoof a `DENY` or unsync state and trick the client into
+    // discarding a healthy server. Both checks read header fields that
+    // are part of the AAD, so by this point they are server-attested.
+    //
+    // Order matters: KoD packets routinely ship with LI=3 because a
+    // server that is refusing service has no synchronised time to
+    // advertise (RFC 5905 §7.4). Checking stratum first preserves the
+    // 4-octet kiss code (`RATE`, `DENY`, `RSTR`, `NTSN`, …) for
+    // diagnostics and back-off logic; the inverse order would collapse
+    // every authenticated KoD into the generic `Unsynchronized` arm
+    // and silently drop that information.
+    if header.stratum == STRATUM_KISS_OF_DEATH {
+        // RFC 5905 §7.4: kiss codes are 4 ASCII octets carried verbatim
+        // in `reference_id`. `from_utf8_lossy` keeps the standard codes
+        // intact while preserving diagnostic value if a server ships
+        // non-printable bytes.
+        let code = String::from_utf8_lossy(&header.reference_id).into_owned();
+        return Err(NtpError::KissOfDeath(code));
+    }
+    // Anything from stratum 16 upward is server-attested "no usable
+    // time": RFC 5905 §7.3 reserves `16` for explicit unsynchronized
+    // state and `17`–`255` for future use. Folded into the same arm
+    // as LI=3 because both signals carry identical semantics for the
+    // caller (drop the sample; do not feed an offset to the clock
+    // discipline). The stratum check is paired with the LI check
+    // rather than the KoD arm so that an authenticated `RATE`/`DENY`
+    // at stratum 0 still surfaces with its kiss code intact.
+    if header.leap() == LI_UNSYNCHRONIZED || header.stratum >= STRATUM_UNSYNCHRONIZED_FLOOR {
+        return Err(NtpError::Unsynchronized);
+    }
+
     let encrypted_exts = parse_extensions(&plaintext)?;
     let fresh_cookies = encrypted_exts
         .into_iter()
@@ -443,12 +518,28 @@ mod tests {
     /// an Authenticator extension sealed with the S2C key. Works for any
     /// AEAD by sizing the wire nonce from `s2c.nonce_len()`.
     fn craft_response(uid: &[u8], fresh_cookies: &[&[u8]], s2c: &AeadKey) -> Vec<u8> {
+        craft_response_with(uid, fresh_cookies, s2c, |_| {})
+    }
+
+    /// Same as [`craft_response`] but lets the test mutate the header
+    /// after the canonical fields are populated and *before* the AEAD
+    /// seals it. Required to exercise post-AEAD validation paths
+    /// (Stratum-0 KoD, LI=3 alarm) under a wire-correct, authentic
+    /// packet — anything that mutates the header *after* sealing would
+    /// trip the AAD check and surface as an `Aead` error instead.
+    fn craft_response_with(
+        uid: &[u8],
+        fresh_cookies: &[&[u8]],
+        s2c: &AeadKey,
+        tweak: impl FnOnce(&mut NtpHeader),
+    ) -> Vec<u8> {
         let mut header = NtpHeader::client_request(0xCAFE_BABE_1234_5678);
         header.li_vn_mode = (VERSION_4 << 3) | mode::SERVER;
         header.stratum = 1;
         header.receive_timestamp = 0xCAFE_BABE_1234_0000;
         header.transmit_timestamp = 0xCAFE_BABE_1234_5678;
         header.origin_timestamp = CLIENT_TX;
+        tweak(&mut header);
         let mut packet = Vec::new();
         packet.extend_from_slice(&header.to_bytes());
         packet.extend_from_slice(&encode_extension(ext_type::UNIQUE_IDENTIFIER, uid));
@@ -735,6 +826,144 @@ mod tests {
         match parse_server_response(&packet, &UID, CLIENT_TX, &s2c_gcm) {
             Err(NtpError::Aead(_)) => {}
             other => panic!("expected Aead failure on algorithm mismatch, got {other:?}"),
+        }
+    }
+
+    /// Sanity-check the bit-shifting in `NtpHeader::leap()` so the
+    /// downstream LI=3 rejection has a stable foundation. Each LI value
+    /// (`00`, `01`, `10`, `11`) must round-trip through the standard
+    /// `LL VVV MMM` packing with VN=4 and Mode=server.
+    #[test]
+    fn leap_indicator_extracts_two_high_bits() {
+        for li in 0u8..=3 {
+            let li_vn_mode = (li << 6) | (VERSION_4 << 3) | mode::SERVER;
+            let mut h = NtpHeader::client_request(0);
+            h.li_vn_mode = li_vn_mode;
+            assert_eq!(h.leap(), li, "leap() failed to recover LI={li:#b}");
+            assert_eq!(h.version(), VERSION_4);
+            assert_eq!(h.mode(), mode::SERVER);
+        }
+    }
+
+    /// LI=3 (alarm / unsynchronized) on an otherwise wire-correct,
+    /// AEAD-authentic reply must short-circuit to `Unsynchronized`
+    /// before any `NtsTimeSample` could be constructed. The mutation
+    /// happens *before* sealing so the AAD covers the bad LI; this
+    /// proves the post-AEAD ordering of the new check.
+    #[test]
+    fn parse_response_rejects_unsynchronized_alarm() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+            // LL=11, VVV=100 (v4), MMM=100 (server) → 0xE4.
+            h.li_vn_mode = (LI_UNSYNCHRONIZED << 6) | (VERSION_4 << 3) | mode::SERVER;
+        });
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::Unsynchronized) => {}
+            other => panic!("expected Unsynchronized, got {other:?}"),
+        }
+    }
+
+    /// Stratum 16 is RFC 5905 §7.3's explicit "unsynchronized" marker;
+    /// `17`–`255` are reserved. An authenticated reply carrying any
+    /// such value conveys no usable time and must surface as
+    /// `Unsynchronized` even when the Leap Indicator is clean (LI=0).
+    /// The mutation happens pre-seal so the AAD covers the stratum
+    /// byte; this pins the post-AEAD ordering of the new check
+    /// against off-path stratum spoofing.
+    #[test]
+    fn parse_response_rejects_invalid_high_stratum() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+            h.stratum = STRATUM_UNSYNCHRONIZED_FLOOR;
+            // Leave LI=0 so the rejection is attributable purely to
+            // the stratum ceiling, not a bleed-through from the
+            // sibling LI=3 check.
+            assert_eq!(h.leap(), 0, "test setup must keep LI clean");
+        });
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::Unsynchronized) => {}
+            other => panic!("expected Unsynchronized for stratum=16, got {other:?}"),
+        }
+    }
+
+    /// Stratum-0 reply with the well-known `RATE` kiss code (RFC 5905
+    /// §7.4) must surface as `KissOfDeath("RATE")`. Mutated pre-seal
+    /// so the AEAD authenticates the kiss state; verifies the
+    /// reference-id-to-ASCII conversion preserves standard codes
+    /// byte-for-byte.
+    #[test]
+    fn parse_response_rejects_kiss_of_death_with_ascii_code() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+            h.stratum = STRATUM_KISS_OF_DEATH;
+            h.reference_id = *b"RATE";
+        });
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::KissOfDeath(code)) => assert_eq!(code, "RATE"),
+            other => panic!("expected KissOfDeath(\"RATE\"), got {other:?}"),
+        }
+    }
+
+    /// Defensive: a malformed Stratum-0 reply whose `reference_id`
+    /// carries non-printable bytes must still be classified as KoD
+    /// rather than silently slipping through. `from_utf8_lossy`
+    /// substitutes the Unicode replacement character (U+FFFD) for
+    /// any invalid sequence; the test only requires the variant to
+    /// be `KissOfDeath` so the diagnostic is preserved without
+    /// pinning the exact lossy representation.
+    #[test]
+    fn parse_response_rejects_kiss_of_death_with_non_ascii_refid() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+            h.stratum = STRATUM_KISS_OF_DEATH;
+            h.reference_id = [0xFF, 0xFE, 0xFD, 0xFC];
+        });
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::KissOfDeath(_)) => {}
+            other => panic!("expected KissOfDeath, got {other:?}"),
+        }
+    }
+
+    /// Off-path spoofing guard: a Stratum-0 packet whose header is
+    /// mutated *after* sealing (i.e., not authenticated) must be
+    /// rejected as an AEAD failure, not as KoD. This pins the
+    /// post-AEAD ordering of the new check; flipping it would let an
+    /// active adversary forge KoD states without holding the S2C key.
+    #[test]
+    fn parse_response_rejects_post_seal_kod_tamper_as_aead_failure() {
+        let (_, s2c) = fresh_keys();
+        let mut packet = craft_response(&UID, &[&[0xAA; 64]], &s2c);
+        packet[1] = STRATUM_KISS_OF_DEATH; // stratum is byte 1 of the header
+        packet[12..16].copy_from_slice(b"DENY");
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::Aead(_)) => {}
+            other => panic!("expected Aead failure on post-seal tamper, got {other:?}"),
+        }
+    }
+
+    /// Precedence pin: a real-world KoD reply almost always carries
+    /// LI=3 alongside Stratum=0, because a server that is refusing to
+    /// serve has no synchronised time to advertise (RFC 5905 §7.4).
+    /// The classification must surface as `KissOfDeath` so the kiss
+    /// code (`NTSN`, `RATE`, `DENY`, …) reaches the caller; collapsing
+    /// it to the generic `Unsynchronized` arm would silently discard
+    /// the back-off signal that distinguishes "rotate cookies" from
+    /// "rate-limited" from "permission denied".
+    #[test]
+    fn parse_response_prefers_kod_over_unsynchronized_when_both_set() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+            h.li_vn_mode = (LI_UNSYNCHRONIZED << 6) | (VERSION_4 << 3) | mode::SERVER;
+            h.stratum = STRATUM_KISS_OF_DEATH;
+            // `NTSN` is the NTS-specific kiss code (RFC 8915 §5.7) the
+            // client uses as the trigger to re-handshake. Pinning it
+            // here documents the precise back-off path that depends on
+            // the kiss code surviving the parse.
+            h.reference_id = *b"NTSN";
+        });
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::KissOfDeath(code)) => assert_eq!(code, "NTSN"),
+            other => panic!("expected KissOfDeath(\"NTSN\"), got {other:?}"),
         }
     }
 }

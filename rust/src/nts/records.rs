@@ -246,7 +246,7 @@ fn decode_kind(record_type: u16, body: &[u8]) -> Result<RecordKind, CodecError> 
 }
 
 fn decode_u16_array(body: &[u8]) -> Result<Vec<u16>, CodecError> {
-    if body.len() % 2 != 0 {
+    if !body.len().is_multiple_of(2) {
         return Err(CodecError::OddU16Array { len: body.len() });
     }
     Ok(body
