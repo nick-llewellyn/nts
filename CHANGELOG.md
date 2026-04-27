@@ -1,16 +1,23 @@
 # Changelog
 
-## Unreleased
+## 1.0.2
 
-- Suppress `public_member_api_docs` lints on the FRB-generated
-  `lib/src/ffi/api/nts.dart` via the `// ignore_for_file:` directive,
-  applied as a post-codegen patch step in `tool/check_bindings.dart`.
-  pana's static-analysis run uses a stricter ruleset than `flutter_lints`
-  and surfaced ~120 of these lints against the synthesized freezed sealed
-  class (`NtsError`) and the auto-generated default constructors of
-  `NtsServerSpec` / `NtsTimeSample`, costing 10 pub points. FRB does not
-  propagate the upstream Rust docstrings to those positions, so suppression
-  at the file scope is the only mechanical fix that survives regeneration.
+Static-analysis score recovery. No runtime changes.
+
+- Suppress pana-only lints across the FRB-generated bindings via the
+  `// ignore_for_file:` directive of each file, applied as a post-codegen
+  patch step in `tool/check_bindings.dart`. pana's static-analysis run
+  uses a stricter ruleset than `flutter_lints` and surfaced 117+ INFO
+  lints against the synthesized freezed wrappers (`NtsError`),
+  auto-generated default constructors (`NtsServerSpec`, `NtsTimeSample`),
+  and dispatcher boilerplate that FRB cannot back with Rust docstrings,
+  costing 10 pub points. Patched files and rules:
+  - `lib/src/ffi/api/nts.dart`: `public_member_api_docs`.
+  - `lib/src/ffi/frb_generated.dart`: `public_member_api_docs`,
+    `prefer_final_locals`, `prefer_const_constructors`.
+  - `lib/src/ffi/frb_generated.io.dart`: `public_member_api_docs`.
+  - `lib/src/ffi/frb_generated.web.dart`: `public_member_api_docs`.
+  Local `pana 0.23.12` now reports 160 / 160 against the working tree.
 
 ## 1.0.1
 
