@@ -1,12 +1,24 @@
 name: nts
 description: >-
-  Authenticated Network Time Security (RFC 8915) for Dart and Flutter. Wraps
-  a Rust NTS-KE + AEAD-NTP client via flutter_rust_bridge and bundles the
-  native binary through the stable Native Assets API.
+  Authenticated NTP via Network Time Security (RFC 8915) for Dart and Flutter
+  using the Native Assets pipeline.
 version: 1.0.0
 homepage: https://github.com/nick-llewellyn/nts
 repository: https://github.com/nick-llewellyn/nts
 issue_tracker: https://github.com/nick-llewellyn/nts/issues
+
+topics:
+  - ntp
+  - time
+  - networking
+  - security
+  - cryptography
+
+screenshots:
+  - description: >-
+      Flutter GUI showcase: NTS server catalog with region filtering,
+      favourites, and a unified live log of authenticated time queries.
+    path: screenshots/gui_showcase.png
 
 environment:
   # Lower bound matches the `hooks` package floor (Dart >=3.10.0), which
@@ -20,8 +32,19 @@ dependencies:
   flutter:
     sdk: flutter
   # Pinned exactly: the Rust-side `flutter_rust_bridge` crate and this Dart
-  # package use a shared wire format and must move in lockstep. Bumping
-  # this requires a coordinated update of `rust/Cargo.toml`.
+  # package share a wire format that is not guaranteed stable across minor
+  # versions. A mismatch between the codegen used to emit `lib/src/ffi/` and
+  # the runtime crate produces silent memory corruption rather than a clear
+  # error, so both sides must move in lockstep. Bumping this requires a
+  # coordinated update of `rust/Cargo.toml` and a regeneration of the
+  # bindings via `flutter_rust_bridge_codegen generate`, gated by
+  # `tool/check_bindings.dart` in CI.
+  #
+  # `dart pub publish` will warn that this constraint should allow more
+  # than one version (pana "Support up-to-date dependencies" rubric). That
+  # warning is accepted: the safety of an exact pin outweighs the small
+  # score deduction. Do not relax to `^2.12.0` without first verifying that
+  # the FRB project has stabilised its wire format across minors.
   flutter_rust_bridge: 2.12.0
   # Required by FRB-generated `nts.freezed.dart` for the sealed `NtsError`
   # variant types. Runtime annotations only; the generator itself is in
