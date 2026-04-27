@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.0.7
+
+Documentation and published-tarball hygiene. No changes to the published
+Dart surface, the Rust crate, or the Native Assets bridge.
+
+- `example/lib/src/state/nts_controller.dart`: prepend a 46-line dartdoc
+  block to `runQuery` that documents the NTS-KE cold-start cost
+  (TCP + TLS 1.3 + KE handshake + first NTPv4 exchange ≈ 4 RTTs end to
+  end, no session-ticket resumption), the steady-state path (cached
+  session keys, in-band cookie pool replenishment, ~1 RTT), and the
+  attribution boundary (the latency is RFC 8915 protocol overhead, not
+  `RustLib.init()`, the Native Assets pipeline, or per-call FFI cost).
+  Includes a production note pointing at `example/main.dart`'s
+  `ntsWarmCookies()` warm-then-query pattern as the canonical way to
+  amortize the cold-start cost; the GUI deliberately does not follow it
+  so that the protocol observation tool surfaces the unmasked latency.
+
+- Repository-wide documentation refactor (7 files: `pubspec.yaml`,
+  `analysis_options.yaml`, `DEVELOPMENT.md`, `README.md`,
+  `example/.pubignore`, `example/README.md`, `tool/check_bindings.dart`)
+  to replace meta-commentary about pub.dev scorecards, `pana` rubrics,
+  and tag-drop heuristics with objective technical justifications. The
+  platform allow-list now reads as RFC 8915's raw TCP/UDP requirement
+  plus rustls+ring's lack of a wasm32 target; the FRB pin is justified
+  by the silent-memory-corruption risk of a wire-format mismatch; the
+  analyzer-exclude removal is justified by lockstep with the consumer's
+  analyzer view; the `// ignore_for_file:` directives in `lib/src/ffi/**`
+  are justified by `public_member_api_docs` being enabled and the FFI
+  surface not being excluded. The IANA AEAD-registry reference in
+  `example/GUI_GUIDE.md` is preserved as a legitimate protocol citation.
+
+- `.pubignore` (new, root): introduce a root `.pubignore` that mirrors
+  the root `.gitignore` patterns (per dart.dev/go/pubignore, a
+  directory's `.pubignore` replaces its `.gitignore` for publish
+  purposes) and additionally excludes consumer-irrelevant files:
+  `AGENTS.md`, `CLAUDE.md` (AI-agent guidance), `ARCHITECTURE.md`,
+  `DEVELOPMENT.md` (self-identified contributor-only documentation),
+  `analysis_options.yaml` (consumer analyzers read the consumer's own
+  config), `flutter_rust_bridge.yaml` (FRB codegen config; bindings ship
+  pre-generated), `tool/` (CI drift check for FRB regeneration), and
+  `test/` (internal FFI smoke test, not a public-API verifier).
+
+- `example/.pubignore`: add `analysis_options.yaml` and `test/` to the
+  example's exclusion list for the same reasons as the root. The
+  canonical consumer entry point remains `example/main.dart`.
+
+- Net effect verified via `dart pub publish --dry-run`: the published
+  tarball drops from 840 KB (1.0.6) to 824 KB, twelve maintainer-only
+  files are stripped, and the warning/hint output is unchanged. No
+  source files in `lib/`, `rust/`, or `hook/` are touched, so the
+  binding drift gate and Native Assets build hook are unaffected.
+
 ## 1.0.6
 
 Binding regen consequent on the 1.0.5 analyzer-exclude removal. No
