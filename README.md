@@ -1,153 +1,129 @@
 # nts
 
-Authenticated Network Time Security (RFC 8915) for Dart and Flutter.
-Performs the TLS 1.3 NTS-KE handshake against a key-exchange server,
-then issues AEAD-protected NTPv4 time queries against the negotiated
-NTP server. The cryptographic core is implemented in Rust (rustls,
-AES-SIV-CMAC / AES-128-GCM-SIV) and bridged to Dart via
-`flutter_rust_bridge`, bundled through the stable Native Assets API.
+Tamper-proof time synchronization for Dart and Flutter.
 
-## User Documentation
+## Why NTS?
 
-The bundled showcase under `example/` ships with two task-focused
-manuals aimed at end users rather than package integrators. They
-describe the GUI and CLI surfaces without assuming any familiarity
-with the underlying Rust bridge or the Native Assets pipeline:
+Most apps trust whatever time their device reports, and that time
+ultimately comes from plain NTP — an unauthenticated protocol that any
+attacker on the network path can forge or replay. Shifting a client's
+clock breaks anything anchored to it: TLS certificate validity, JWT
+expiry, TOTP codes, OAuth refresh windows, license checks, audit logs.
 
-- [GUI User Manual](example/GUI_GUIDE.md) — navigating the server
-  catalog, searching / filtering / favouriting, driving the **NTS
-  Query** and **Warm Cookies** actions, reading the live log, and
-  interpreting the status banners.
-- [CLI User Manual](example/CLI_GUIDE.md) — invoking
-  `bin/nts_cli.dart`, the positional host arguments, the `--port` /
-  `--timeout` / `--warm` / `--mock` / `--exit-on-error` / `--json`
-  flags, and how to read the round-trip and AEAD fields in the
-  terminal output.
+[Network Time Security (NTS)](https://datatracker.ietf.org/doc/html/rfc8915)
+fixes this by authenticating the time server with TLS and
+cryptographically signing every time response. A forged or modified
+reply is rejected; a hijacked NTP server is detected. The result is a
+clock you can trust as much as you trust the operator's TLS
+certificate, rather than as much as you trust the network between you
+and an anonymous UDP listener.
 
-For developer-facing notes on the example app's architecture, bridge
-modes, and dylib loading, see the [example
-README](example/README.md). The remainder of this file is the
-package-level reference.
+This package gives Dart and Flutter apps a single async call that
+returns an authenticated UTC sample, with the protocol details
+delegated to a bundled native implementation. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the underlying RFC 8915 layering
+and cryptographic specifics.
 
-## Architecture
+## Getting Started
 
-The Dart side is intentionally thin. All cryptographic work lives in a
-Rust crate that implements the protocol directly across `records.rs`
-(NTS-KE wire format), `ke.rs` (TLS 1.3 + ALPN handshake driver),
-`aead.rs` (SIV-CMAC / GCM-SIV authenticators), `ntp.rs` (AEAD-protected
-NTPv4 packets), `cookies.rs` (cookie jar), and `hybrid_verifier.rs`
-(Android trust-store fallback). It is bridged to Dart through
-`flutter_rust_bridge` and bundled via the stable Native Assets API
-(`hook/build.dart`), so no manual `cargo` invocation is required from
-consumers.
-
-```
-Dart  : ntsQuery() / ntsWarmCookies()
-        └─ FRB stub
-Rust  : nts_query()
-        ├─ NTS-KE handshake (rustls, TLS 1.3, ALPN ntske/1, port 4460)
-        ├─ AEAD-protected NTPv4 over UDP/123 (AES-SIV-CMAC-256)
-        └─ Cookie store (RAM, optional persisted blob)
-```
-
-## Working with the Rust bridge
-
-Three tools, distinct roles.
-
-| Tool | Purpose | When to run |
-|------|---------|-------------|
-| `cargo` (in `rust/`) | Manage Rust deps, run unit tests | During Rust development |
-| `flutter_rust_bridge_codegen` | Regenerate Dart bindings | After any change to `rust/src/api/*.rs` |
-| `tool/check_bindings.dart` | Verify committed bindings match the generator | Before pushing changes that touch `rust/src/api/*.rs` |
-| `hook/build.dart` (Native Assets) | Compile + bundle the dylib for Flutter | Automatically on `flutter build` |
-
-### Regenerate bindings
+### Install
 
 ```bash
-flutter_rust_bridge_codegen generate
+flutter pub add nts
 ```
 
-Commit the regenerated `lib/src/ffi/**` and `rust/src/frb_generated.rs`.
+(Pure-Dart projects can use `dart pub add nts`; the package itself
+depends on the Flutter SDK because it ships through the Native Assets
+pipeline.)
 
-### Verify bindings are in sync
+### Use
 
-```bash
-dart run tool/check_bindings.dart
+```dart
+import 'package:nts/nts.dart';
+
+Future<void> main() async {
+  // 1. Initialize the native bridge exactly once, before anything else
+  //    in this package. This loads the bundled Rust binary that does
+  //    the actual NTS-KE handshake and AEAD-NTP exchange.
+  await RustLib.init();
+
+  // 2. Pick an RFC 8915 NTS-KE endpoint. Port 4460 is the IANA default.
+  final spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
+
+  // 3. Query. The first call handshakes; later calls reuse cached keys.
+  final sample = await ntsQuery(spec: spec, timeoutMs: 5000);
+
+  final utc = DateTime.fromMicrosecondsSinceEpoch(
+    sample.utcUnixMicros.toInt(),
+    isUtc: true,
+  );
+  print('utc=$utc  rtt=${sample.roundTripMicros}µs');
+}
 ```
 
-Mirrors CI's drift check: regenerates bindings, runs `dart format` on the
-output, then `git diff --exit-code` against the watched paths. Exits non-zero
-with the same error message CI emits when `lib/src/ffi/` or
-`rust/src/frb_generated.rs` differ from the committed state. The pinned
-codegen version is read from `pubspec.yaml` so the script and CI stay in
-lockstep.
+**Why the order matters.** `RustLib.init()` loads the bundled native
+binary and wires the call table the rest of the API uses. Calling
+`ntsQuery` before `init` completes raises an error because the bridge
+isn't ready. In a Flutter app, do it right after
+`WidgetsFlutterBinding.ensureInitialized()` in `main()`; subsequent
+calls to `init` are no-ops, so it's safe to invoke from a shared
+bootstrap path.
 
-### Rust unit tests (no Flutter required)
+A complete, runnable version with exhaustive `NtsError` handling lives
+in [`example/example.dart`](example/example.dart). For valid hostnames
+to plug into `NtsServerSpec`, see the community-maintained
+[NTS server list](https://github.com/jauderho/nts-servers).
 
-```bash
-cd rust && cargo test
-```
+## API summary
 
-### Smoke test the Dart bindings
+| Symbol | Purpose |
+|--------|---------|
+| `RustLib.init()` | Load the native bridge. Await once before any other call. |
+| `ntsQuery({spec, timeoutMs})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
+| `ntsWarmCookies({spec, timeoutMs})` | Force a fresh NTS-KE handshake; returns cookie count. |
+| `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
+| `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`. |
+| `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout`, `noCookies`, `internal`. |
 
-```bash
-flutter test
-```
+`timeoutMs` is applied independently to the KE handshake and the UDP
+recv leg. Use a `switch` expression on `NtsError` for exhaustive
+failure handling.
 
-This runs `test/ffi_smoke_test.dart`, which exercises the generated
-FRB API contract in mock mode. Live Dart→Rust→network round-trips
-run from the example app (`example/`); the underlying Rust crate has
-its own live integration probes gated behind `--ignored` (run with
-`cargo test --ignored` in `rust/`).
+## Demos & Examples
 
-## Rust log verbosity
+The repository ships three reference surfaces, in increasing order of
+complexity:
 
-The Rust crate is compiled in one of two configurations, selected by
-the `verbose_logs` Native Assets user-define in the consuming app's
-`pubspec.yaml`:
+- **[`example/example.dart`](example/example.dart)** — the minimal
+  single-file snippet shown on the pub.dev "Example" tab. Start here.
+- **Flutter GUI** (`example/lib/`) — visual showcase with a server
+  catalog, favourites, region filtering, and a unified live log. See
+  the [GUI User Manual](example/GUI_GUIDE.md) for navigation, the
+  **NTS Query** / **Warm Cookies** actions, and how to read the
+  status banners.
+- **Dart CLI** (`example/bin/nts_cli.dart`) — scriptable companion
+  for batched probing, cron jobs, and CI smoke checks. See the
+  [CLI User Manual](example/CLI_GUIDE.md) for the positional host
+  arguments and the `--port` / `--timeout` / `--warm` / `--mock` /
+  `--json` / `--exit-on-error` flags.
 
-| `verbose_logs` | Cargo profile | `log-strip` feature | Visible log levels |
-|----------------|---------------|---------------------|--------------------|
-| `false` (default) | `--release` | active | `warn!` / `error!` only |
-| `true` | debug | dropped (`--no-default-features`) | all (`trace!` upward, incl. `rustls`) |
+Both showcase surfaces share the same Rust-backed bridge and the same
+formatting helpers; see the [example README](example/README.md) for the
+internal wiring.
 
-The default produces a stripped binary: `release_max_level_warn` is
-compiled in via the `log-strip` Cargo feature, eliding `info!` /
-`debug!` / `trace!` call sites at compile time. On iOS / Android the
-shipped binary is also obfuscated by IXGuard / DexGuard; the strip is
-the load-bearing protection on **desktop and future web** targets,
-where those obfuscators are not in play.
+## Technical reference
 
-### Enabling verbose logs locally
+For internals, contribution workflow, and operational tuning:
 
-To see `rustls` handshake traces and the crate's own `info!` / `debug!`
-events on iOS Console.app (subsystem `com.nts.example`) or
-Android `logcat`, edit the example app's pubspec and rebuild:
-
-```yaml
-# example/pubspec.yaml
-hooks:
-  user_defines:
-    nts:
-      verbose_logs: true   # <- flip this
-```
-
-```bash
-cd example
-flutter clean              # drop the Native Assets hook cache
-flutter run                # rebuilds rust/ without --release and
-                           # without log-strip default features
-```
-
-Restore `verbose_logs: false` before committing or shipping. The
-default-off posture means any pipeline that does not explicitly opt
-in (CI, app-store builds, downstream embedders) still gets the
-stripped release binary.
-
-`hook/build.dart` is the authoritative wiring; the toggle is
-deliberately a manual pubspec edit rather than a separate Flutter
-flavor so the production-vs-developer split is visible at the call
-site.
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — Dart ↔ FRB ↔ Rust layering,
+  module-by-module breakdown of the Rust crate, and the repository
+  layout.
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** — Rust toolchain, regenerating
+  FRB bindings, the `check_bindings.dart` drift gate, running Rust /
+  Dart tests, and the `verbose_logs` Native Assets user-define for
+  enabling `rustls` trace output.
+- **[RFC 8915](https://datatracker.ietf.org/doc/html/rfc8915)** —
+  Official IETF specification for Network Time Security.
 
 ## License
 
