@@ -1,5 +1,7 @@
-// Minimal `package:nts` usage example — one authenticated NTPv4
-// exchange against `time.cloudflare.com` over RFC 8915.
+// Minimal `package:nts` usage example — a warm-then-query flow against
+// `time.cloudflare.com` over RFC 8915. Phase 1 fills the per-host cookie
+// jar with a fresh NTS-KE handshake; phase 2 spends one of those cookies
+// on an authenticated NTPv4 exchange.
 //
 // Run from a Flutter target (`flutter run -t example/main.dart`)
 // so the Native Assets pipeline bundles the Rust dylib. Plain
@@ -22,11 +24,21 @@ Future<void> main() async {
   const spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
 
   try {
-    // First call performs the full TLS 1.3 NTS-KE handshake, then the
-    // AEAD-protected NTPv4 query. Subsequent calls against the same
-    // `spec` reuse the cached keys and spend a stored cookie, so
-    // steady-state cost is one UDP round-trip. The 5-second timeout
-    // applies independently to the KE leg and the UDP recv leg.
+    // Phase 1 — warm the cookie jar. Forces a fresh TLS 1.3 NTS-KE
+    // handshake against `spec`, ingests the delivered cookie pool, and
+    // returns how many cookies the server handed out (typically 8).
+    // Replaces any cached session for that `spec`, so subsequent
+    // `ntsQuery` calls skip the KE leg until the jar drains. Useful at
+    // startup or whenever the NTS-KE cost should be amortized away from
+    // a time-critical path.
+    final warmed = await ntsWarmCookies(spec: spec, timeoutMs: 5000);
+    print('warmed   = $warmed cookies');
+
+    // Phase 2 — spend one cookie on an authenticated NTPv4 exchange.
+    // The session warmed above covers the AEAD keys and the NTPv4
+    // destination, so steady-state cost is one UDP round-trip. The
+    // 5-second timeout applies independently to the KE leg (a no-op
+    // here because the jar is full) and the UDP recv leg.
     final sample = await ntsQuery(spec: spec, timeoutMs: 5000);
 
     final utc = DateTime.fromMicrosecondsSinceEpoch(
@@ -43,7 +55,8 @@ Future<void> main() async {
   } on NtsError catch (err) {
     // `NtsError` is a `freezed` sealed class — exhaustive switch
     // expressions catch new variants at compile time if the package
-    // ever grows them.
+    // ever grows them. Both `ntsWarmCookies` and `ntsQuery` surface
+    // failures through this same hierarchy.
     final detail = switch (err) {
       NtsError_InvalidSpec(:final field0) => 'invalid spec: $field0',
       NtsError_Network(:final field0) => 'network: $field0',
@@ -54,6 +67,6 @@ Future<void> main() async {
       NtsError_NoCookies() => 'no cookies returned',
       NtsError_Internal(:final field0) => 'internal: $field0',
     };
-    print('nts query failed: $detail');
+    print('nts call failed: $detail');
   }
 }
