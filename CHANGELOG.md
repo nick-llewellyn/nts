@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.6
+
+Binding regen consequent on the 1.0.5 analyzer-exclude removal. No
+changes to the published Dart surface, the Rust crate, or the Native
+Assets bridge.
+
+- `lib/src/ffi/frb_generated.dart`: regenerate against the current
+  `analysis_options.yaml`. Removing the `analyzer.exclude:
+  [lib/src/ffi/**]` block in 1.0.5 (`nts-2cq`) had a side effect that
+  the bindings CI job did not surface until the next commit that
+  re-triggered the job: `flutter_rust_bridge_codegen` runs an
+  analyzer-aware fix-up over the Dart it emits before exiting, that
+  pass was a no-op while the FFI files were excluded, and with the
+  exclude gone the pass applies `prefer_final_locals` and
+  `prefer_const_constructors` to the synthesized dispatcher
+  boilerplate. The committed file (last regenerated in 1.0.2,
+  `0349077`) was therefore stale relative to the codegen's
+  deterministic output. The regen is purely cosmetic — `var` locals
+  inside `dco_decode_nts_error` / `sse_decode_*` become `final`, and
+  the two nullary `NtsError` variants gain `const` prefixes — and
+  produces no wire-format or public-API change. The file-level
+  `// ignore_for_file:` directives managed by
+  `tool/check_bindings.dart` still suppress both rules so future
+  codegen output that emits a non-final local or non-const
+  constructor remains acceptable to pana without re-failing the
+  drift gate.
+
 ## 1.0.5
 
 Example clarity and pub.dev metadata fidelity. No changes to the
