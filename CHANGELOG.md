@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.1
+
+Documentation and pub.dev metadata polish. No runtime changes.
+
+- Restructure README around a What → Why → How flow and offload the
+  Rust toolchain, build hooks, and crate breakdown into new
+  `ARCHITECTURE.md` and `DEVELOPMENT.md` reference documents.
+- Add a self-contained `example/example.dart` for pub.dev's Example
+  tab.
+- Resolve two `dartdoc` unresolved-reference warnings in
+  `lib/src/ffi/api/nts.dart` by replacing Rust intra-doc link syntax
+  with literal values in the upstream Rust docstrings and regenerating
+  the bindings.
+- Trim the package description to fit pana's 180-char ceiling, add
+  five pub.dev topics (`ntp`, `time`, `networking`, `security`,
+  `cryptography`), and register `screenshots/gui_showcase.png` as the
+  package listing screenshot.
+- Expand the inline comment on the `flutter_rust_bridge: 2.12.0` pin
+  to document the wire-format rationale and the accepted pana
+  warning.
+
 ## 1.0.0
 
 Initial stable release.
