@@ -9,6 +9,11 @@ sync-state.json
 last-touched
 .exclusive-lock
 
+# Generated onboarding/integration files. Keep local copies, but do not
+# publish them in project history.
+README.md
+hooks/
+
 # Daemon runtime (lock, log, pid)
 daemon.*
 
