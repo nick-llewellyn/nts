@@ -83,8 +83,10 @@ Two buttons sit between the server list and the log:
   sample with round-trip latency and stratum.
 - **Warm Cookies** — runs only the key-establishment leg and refreshes the
   pool of single-use authentication cookies the client keeps for the
-  selected server. Use this if you plan to make a burst of subsequent
-  queries and want to amortise the handshake cost.
+  selected server. The pool size is set by the server's NTS-KE policy
+  (RFC 8915 §4) and is reported in the live log as the
+  `recovered N fresh cookie(s)` count. Use this if you plan to make a
+  burst of subsequent queries and want to amortise the handshake cost.
 
 Both actions are **re-entrant**: tap them as many times as you like, with
 or without changing the selected server in between, and every request

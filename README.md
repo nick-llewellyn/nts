@@ -91,9 +91,11 @@ logic to wall-clock time should add two cheap layers on top:
 1. **Burst sampling.** A single NTPv4 reply carries whatever jitter the
    network and the server's queueing happened to introduce on that one
    packet. Calling `ntsWarmCookies` once and then `ntsQuery` several
-   times in quick succession (e.g. eight samples — the size of a typical
-   freshly-warmed cookie pool) produces a small distribution you can
-   reason about statistically. Pick the sample with the smallest
+   times in quick succession — one query per cookie the server
+   delivered, since RFC 8915 §4 leaves the pool size to server policy
+   and `ntsWarmCookies` returns the actual count — produces a small
+   distribution you can reason about statistically. Pick the sample
+   with the smallest
    `roundTripMicros`; on a low-RTT path the symmetric-path assumption
    below holds tightest, so that sample carries the smallest residual
    offset error. More sophisticated callers can median-filter, score by

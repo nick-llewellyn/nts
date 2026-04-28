@@ -1,9 +1,10 @@
 // Minimal `package:nts` usage example — a warm-then-burst flow against
 // `time.cloudflare.com` over RFC 8915. Phase 1 fills the per-host cookie
-// jar with a fresh NTS-KE handshake; phase 2 spends a handful of those
-// cookies on authenticated NTPv4 exchanges, picks the lowest-RTT reply,
-// and applies the standard symmetric-path delay correction to recover
-// the server's clock at the moment the chosen reply arrived.
+// jar with a fresh NTS-KE handshake; phase 2 spends every cookie the
+// server delivered on authenticated NTPv4 exchanges, picks the
+// lowest-RTT reply, and applies the standard symmetric-path delay
+// correction to recover the server's clock at the moment the chosen
+// reply arrived.
 //
 // `ntsQuery` returns the raw protocol primitives — server transmit
 // timestamp plus measured round-trip time — not a finished synchronized
@@ -20,11 +21,6 @@
 
 import 'package:nts/nts.dart';
 
-/// Number of NTPv4 samples to take per burst. Eight matches the cookie
-/// pool a typical NTS-KE handshake hands out, so the whole burst fits
-/// inside the warmed jar without forcing a re-handshake mid-flight.
-const _burstSize = 8;
-
 Future<void> main() async {
   // Bridge bootstrap. Resolves the bundled `libnts_rust.{dylib|so|dll}`
   // through the stable Native Assets API and wires the FRB dispatch
@@ -39,20 +35,22 @@ Future<void> main() async {
   try {
     // Phase 1 — warm the cookie jar. Forces a fresh TLS 1.3 NTS-KE
     // handshake against `spec`, ingests the delivered cookie pool, and
-    // returns how many cookies the server handed out (typically 8).
-    // Replaces any cached session for that `spec`, so subsequent
-    // `ntsQuery` calls skip the KE leg until the jar drains. Useful at
-    // startup or whenever the NTS-KE cost should be amortized away from
-    // a time-critical path.
+    // returns how many cookies the server handed out. RFC 8915 §4
+    // leaves that count to server policy, so the burst below is sized
+    // off this return value rather than any fixed constant. Replaces
+    // any cached session for that `spec`, so subsequent `ntsQuery`
+    // calls skip the KE leg until the jar drains. Useful at startup or
+    // whenever the NTS-KE cost should be amortized away from a
+    // time-critical path.
     final warmed = await ntsWarmCookies(spec: spec, timeoutMs: 5000);
     print('warmed   = $warmed cookies');
 
-    // Phase 2 — spend `_burstSize` cookies on authenticated NTPv4
+    // Phase 2 — spend the warmed cookies on authenticated NTPv4
     // exchanges. Each `ntsQuery` reuses the warmed AEAD keys, so the
     // steady-state cost is one UDP round-trip per call. Collect every
     // sample so we can score them against each other below.
     final samples = <NtsTimeSample>[];
-    for (var i = 0; i < _burstSize; i++) {
+    for (var i = 0; i < warmed; i++) {
       samples.add(await ntsQuery(spec: spec, timeoutMs: 5000));
     }
 
