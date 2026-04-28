@@ -39,8 +39,14 @@ pub const RECOMMENDED_NONCE_LEN: usize = 16;
 
 #[derive(Debug)]
 pub enum AeadError {
-    InvalidKeyLength { actual: usize, expected: usize },
-    InvalidNonceLength { actual: usize, expected: usize },
+    InvalidKeyLength {
+        actual: usize,
+        expected: usize,
+    },
+    InvalidNonceLength {
+        actual: usize,
+        expected: usize,
+    },
     /// Caller asked [`AeadKey::from_keying_material`] for an IANA AEAD ID
     /// the crate does not implement. In normal flow this is unreachable
     /// — `nts::ke::validate_response` already rejects unsupported IDs
@@ -99,7 +105,9 @@ impl SivKey {
 
 impl std::fmt::Debug for SivKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SivKey").field("bytes", &"<redacted>").finish()
+        f.debug_struct("SivKey")
+            .field("bytes", &"<redacted>")
+            .finish()
     }
 }
 
@@ -275,14 +283,11 @@ mod tests {
     /// Cross-checked against `aes-siv` 0.7's `aes128cmacsiv` test fixture.
     #[test]
     fn rfc_5297_a1_deterministic_vector() {
-        let key_bytes = hex(
-            "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0\
-             f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
-        );
+        let key_bytes = hex("fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0\
+             f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
         let ad = hex("101112131415161718191a1b1c1d1e1f2021222324252627");
         let plaintext = hex("112233445566778899aabbccddee");
-        let expected =
-            hex("85632d07c6e8f37f950acd320a2ecc9340c02b9690c4dc04daef7f6afe5c");
+        let expected = hex("85632d07c6e8f37f950acd320a2ecc9340c02b9690c4dc04daef7f6afe5c");
 
         let key = SivKey::from_slice(&key_bytes).unwrap();
         let sealed = siv_seal(&key, &[&ad], &plaintext).unwrap();
@@ -295,22 +300,16 @@ mod tests {
     /// RFC 5297 §A.2 nonce-based vector (three AD components, longer plaintext).
     #[test]
     fn rfc_5297_a2_nonce_based_vector() {
-        let key_bytes = hex(
-            "7f7e7d7c7b7a79787776757473727170\
-             404142434445464748494a4b4c4d4e4f",
-        );
-        let ad1 = hex(
-            "00112233445566778899aabbccddeeffdeaddadadeaddada\
-             ffeeddccbbaa99887766554433221100",
-        );
+        let key_bytes = hex("7f7e7d7c7b7a79787776757473727170\
+             404142434445464748494a4b4c4d4e4f");
+        let ad1 = hex("00112233445566778899aabbccddeeffdeaddadadeaddada\
+             ffeeddccbbaa99887766554433221100");
         let ad2 = hex("102030405060708090a0");
         let nonce = hex("09f911029d74e35bd84156c5635688c0");
-        let plaintext = hex(
-            "7468697320697320736f6d6520706c61\
+        let plaintext = hex("7468697320697320736f6d6520706c61\
              696e7465787420746f20656e63727970\
              74207573696e6720534956\
-             2d414553",
-        );
+             2d414553");
         let expected = hex(
             "7bdb6e3b432667eb06f4d14bff2fbd0fcb900f2fddbe404326601965c889bf17\
              dba77ceb094fa663b7a3f748ba8af829ea64ad544a272e9c485b62a3fd5c0d",
@@ -356,7 +355,10 @@ mod tests {
     #[test]
     fn rejects_short_key() {
         match SivKey::from_slice(&[0u8; 16]) {
-            Err(AeadError::InvalidKeyLength { actual: 16, expected: KEY_LEN }) => {}
+            Err(AeadError::InvalidKeyLength {
+                actual: 16,
+                expected: KEY_LEN,
+            }) => {}
             other => panic!("expected InvalidKeyLength(16, {KEY_LEN}), got {other:?}"),
         }
     }
@@ -389,7 +391,10 @@ mod tests {
         let key = AeadKey::from_keying_material(30, &[0u8; KEY_LEN_GCM_SIV]).unwrap();
         // SIV-CMAC tolerates any non-empty nonce length, but GCM-SIV must be 12.
         match key.seal_packet(b"ad", &[0u8; 16], b"x") {
-            Err(AeadError::InvalidNonceLength { actual: 16, expected: 12 }) => {}
+            Err(AeadError::InvalidNonceLength {
+                actual: 16,
+                expected: 12,
+            }) => {}
             other => panic!("expected InvalidNonceLength, got {other:?}"),
         }
     }

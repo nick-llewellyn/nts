@@ -22,6 +22,7 @@
 
 pub mod aead;
 pub mod cookies;
+pub mod dns;
 pub mod ke;
 pub mod ntp;
 pub mod records;

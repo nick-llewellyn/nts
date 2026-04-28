@@ -7,9 +7,11 @@
 //! cleanly into the FRB v2 worker pool as a plain `pub fn`.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use super::dns::{resolve_with_global, system_lookup};
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, SupportedProtocolVersion};
@@ -40,6 +42,55 @@ const ALPN_NTSKE: &[u8] = b"ntske/1";
 /// `tls_protocol_versions_are_tls13_only` test below for the regression
 /// guard that pins this constant.
 const TLS_PROTOCOL_VERSIONS: &[&SupportedProtocolVersion] = &[&rustls::version::TLS13];
+
+/// Single wall-clock budget shared across every blocking phase of one
+/// NTS-KE handshake — DNS lookup, per-address TCP connect attempts, TLS
+/// handshake, and the chunked record-exchange read loop. Captured once
+/// from `Instant::now() + total` at the top of `perform_handshake` so
+/// the budget shrinks monotonically as those phases consume time, in
+/// place of the prior pattern where each phase received a fresh
+/// `Duration` and the wall-clock cost of a single handshake could
+/// overshoot the caller's `req.timeout` by 2-3x.
+#[derive(Debug, Clone, Copy)]
+struct Deadline(Instant);
+
+impl Deadline {
+    /// Anchor a deadline `total` from `now`. Callers pass the entire
+    /// caller-visible budget (`req.timeout`); subsequent phases consult
+    /// [`Deadline::remaining`] before issuing any blocking syscall.
+    fn new(total: Duration) -> Self {
+        Self(Instant::now() + total)
+    }
+
+    /// Time left before the deadline expires. Saturates at
+    /// [`Duration::ZERO`] so callers can branch on `is_zero()` without
+    /// handling a negative-duration case.
+    fn remaining(&self) -> Duration {
+        self.0.saturating_duration_since(Instant::now())
+    }
+
+    /// Refresh `tcp`'s read+write timeouts so the *next* blocking
+    /// syscall on that socket fires no later than the global deadline.
+    /// Returns `io::ErrorKind::TimedOut` when the deadline has already
+    /// elapsed; the `From<KeError> for NtsError` mapping in
+    /// `api/nts.rs` translates that to `NtsError::Timeout` rather than
+    /// `NtsError::Network`. Re-applied between phases (post-connect,
+    /// before each write/flush, and once per iteration of the chunked
+    /// read loop) so a slow trickle from the server cannot extend the
+    /// total wall-clock cost past `req.timeout`.
+    fn apply_to(&self, tcp: &TcpStream) -> std::io::Result<()> {
+        let remaining = self.remaining();
+        if remaining.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "NTS-KE deadline elapsed",
+            ));
+        }
+        tcp.set_read_timeout(Some(remaining))?;
+        tcp.set_write_timeout(Some(remaining))?;
+        Ok(())
+    }
+}
 
 /// Inputs for a single NTS-KE handshake.
 #[derive(Debug, Clone)]
@@ -378,6 +429,17 @@ fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {
 
 /// Drive a complete NTS-KE handshake against `req.host:req.port` and return
 /// the negotiated AEAD parameters, exporter-derived keys, and cookie pool.
+///
+/// `req.timeout`, when set, is enforced as a single global deadline that
+/// spans every blocking phase of the handshake — DNS lookup, per-address
+/// TCP connect, TLS handshake, request write, response read loop. The
+/// deadline is anchored once at the top of the function (via
+/// [`Deadline::new`]) and the remaining budget is re-applied to the
+/// underlying `TcpStream`'s read/write timeouts before each phase, so
+/// the wall-clock cost cannot exceed the caller's budget regardless of
+/// how time is distributed across phases. `req.timeout = None` keeps
+/// the prior un-bounded behaviour for callers that opt out of timeout
+/// enforcement entirely.
 pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     if req.aead_algorithms.is_empty() {
         return Err(KeError::MissingAead);
@@ -388,18 +450,25 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
         .to_owned();
     let mut conn = ClientConnection::new(cfg, server_name)?;
 
-    let mut tcp = connect_with_timeout(req.host.as_str(), req.port, req.timeout)?;
-    if let Some(t) = req.timeout {
-        tcp.set_read_timeout(Some(t))?;
-        tcp.set_write_timeout(Some(t))?;
+    let deadline = req.timeout.map(Deadline::new);
+    let mut tcp =
+        connect_with_deadline_using(req.host.as_str(), req.port, deadline, system_lookup)?;
+    if let Some(d) = deadline.as_ref() {
+        d.apply_to(&tcp)?;
     }
 
     let request = build_request(&req.aead_algorithms);
     let response = {
         let mut stream = Stream::new(&mut conn, &mut tcp);
+        if let Some(d) = deadline.as_ref() {
+            d.apply_to(stream.sock)?;
+        }
         stream.write_all(&request)?;
+        if let Some(d) = deadline.as_ref() {
+            d.apply_to(stream.sock)?;
+        }
         stream.flush()?;
-        read_to_end_capped(&mut stream)?
+        read_to_end_capped(&mut stream, deadline.as_ref())?
     };
 
     let records = parse_message(&response)?;
@@ -429,15 +498,18 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
 
 /// Open a TCP connection to `host:port`, bounded by `timeout`.
 ///
-/// Resolves `host:port` via [`ToSocketAddrs`] and attempts each candidate
-/// with [`TcpStream::connect_timeout`]. When `timeout` is `Some`, the entire
-/// connect phase shares a single deadline so a multi-record DNS response
-/// cannot stretch the wall-clock cost beyond the caller's budget — once the
-/// deadline has elapsed, the next attempt yields a `TimedOut` `io::Error`
-/// which the `From<KeError> for NtsError` mapping translates to
-/// `NtsError::Timeout` on the Dart side. This replaces the prior plain
-/// `TcpStream::connect` call, whose OS-default connect timeout could leave
-/// the FFI future hanging for tens of seconds when TCP/4460 is blackholed.
+/// When `timeout` is `Some`, a single deadline is established before any
+/// I/O begins and is shared by the DNS lookup *and* every per-address
+/// `TcpStream::connect_timeout` attempt. The lookup runs through the
+/// bounded resolver in [`crate::nts::dns`], which offloads the blocking
+/// system call to a worker thread; this prevents a slow or blackholed
+/// `getaddrinfo` from stretching the wall-clock cost beyond the
+/// caller's budget. Once the deadline has elapsed, the next operation
+/// yields a `TimedOut` `io::Error` which the `From<KeError> for
+/// NtsError` mapping translates to `NtsError::Timeout` on the Dart
+/// side. This replaces the prior plain `TcpStream::connect` call, whose
+/// OS-default connect timeout could leave the FFI future hanging for
+/// tens of seconds when TCP/4460 is blackholed.
 ///
 /// When `timeout` is `None` (no caller deadline), falls through to
 /// [`TcpStream::connect`] for parity with the previous behaviour.
@@ -446,14 +518,69 @@ fn connect_with_timeout(
     port: u16,
     timeout: Option<Duration>,
 ) -> Result<TcpStream, KeError> {
-    let Some(total) = timeout else {
+    connect_with_timeout_using(host, port, timeout, system_lookup)
+}
+
+/// Test-friendly variant of [`connect_with_timeout`] that takes a
+/// caller-supplied lookup closure. Production callers go through
+/// [`connect_with_timeout`] which forwards [`system_lookup`]; the
+/// `nts-6ka` slow-DNS regression test injects a closure that
+/// `thread::sleep`s past the budget so the deadline path can be
+/// exercised deterministically without standing up an adversarial
+/// nameserver. Behaviour is otherwise identical to
+/// [`connect_with_timeout`].
+fn connect_with_timeout_using<F>(
+    host: &str,
+    port: u16,
+    timeout: Option<Duration>,
+    lookup: F,
+) -> Result<TcpStream, KeError>
+where
+    F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+{
+    connect_with_deadline_using(host, port, timeout.map(Deadline::new), lookup)
+}
+
+/// Core connect helper bounded by an optional [`Deadline`]. When
+/// `deadline` is `Some`, the same instant bounds the DNS lookup *and*
+/// every per-`SocketAddr` `TcpStream::connect_timeout` attempt, so the
+/// total wall-clock cost cannot exceed the caller's original budget.
+/// When `deadline` is `None`, falls through to a plain
+/// [`TcpStream::connect`] for parity with callers that explicitly opted
+/// out of timeout enforcement.
+///
+/// Pulled out as a standalone helper so [`perform_handshake`] can build
+/// its [`Deadline`] once at the top and thread the same instance
+/// through both this connect step and the subsequent socket-timeout
+/// refreshes during TLS I/O — the previous duration-per-phase API
+/// allowed each phase to consume up to `req.timeout` in isolation.
+fn connect_with_deadline_using<F>(
+    host: &str,
+    port: u16,
+    deadline: Option<Deadline>,
+    lookup: F,
+) -> Result<TcpStream, KeError>
+where
+    F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+{
+    let Some(deadline) = deadline else {
         return Ok(TcpStream::connect((host, port))?);
     };
-    let addrs = (host, port).to_socket_addrs()?;
-    let deadline = Instant::now() + total;
+    let initial = deadline.remaining();
+    if initial.is_zero() {
+        return Err(KeError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "NTS-KE deadline elapsed before DNS lookup",
+        )));
+    }
+    // Bound the resolver by the live remaining budget rather than the
+    // caller's original duration. A stalled getaddrinfo would otherwise
+    // consume the entire budget before the first connect attempt could
+    // even start.
+    let addrs = resolve_with_global(host, port, initial, lookup)?;
     let mut last_err: Option<std::io::Error> = None;
     for addr in addrs {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let remaining = deadline.remaining();
         if remaining.is_zero() {
             return Err(KeError::Io(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
@@ -479,10 +606,25 @@ fn connect_with_timeout(
 /// followed by a TLS `close_notify`; rustls surfaces that as a clean EOF on
 /// the next read. A `WouldBlock` from the underlying TCP socket is mapped to
 /// the I/O timeout the caller configured.
-fn read_to_end_capped<S: Read>(stream: &mut S) -> Result<Vec<u8>, KeError> {
+///
+/// When `deadline` is `Some`, the loop refreshes the underlying
+/// `TcpStream`'s read/write timeouts before every `stream.read` call so
+/// the budget shrinks per-iteration. Without this refresh,
+/// `set_read_timeout` would re-arm a fresh `remaining` window for every
+/// chunk and a slow trickle from the server could extend the total
+/// wall-clock cost past the caller's `req.timeout`. A deadline already
+/// expired before the next read is surfaced as `KeError::Io` with
+/// `ErrorKind::TimedOut`.
+fn read_to_end_capped(
+    stream: &mut Stream<'_, ClientConnection, TcpStream>,
+    deadline: Option<&Deadline>,
+) -> Result<Vec<u8>, KeError> {
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     loop {
+        if let Some(d) = deadline {
+            d.apply_to(stream.sock)?;
+        }
         match stream.read(&mut chunk) {
             Ok(0) => return Ok(buf),
             Ok(n) => {
@@ -872,6 +1014,125 @@ mod tests {
                 io.kind(),
             );
         }
+    }
+
+    /// Slow-DNS regression guard for [`connect_with_timeout`]. Injects a
+    /// resolver that blocks past the budget and asserts the call returns
+    /// a `KeError::Io` with `ErrorKind::TimedOut` well inside the cap.
+    /// Pinning the kind here is what the `From<KeError> for NtsError`
+    /// mapping in `api/nts.rs` relies on to surface stalled
+    /// `getaddrinfo` as `NtsError::Timeout` rather than as a generic
+    /// network error. Companion to `dns::tests::slow_resolver_*` and
+    /// `api::nts::tests::bind_connected_udp_surfaces_slow_dns_*`; see
+    /// `nts-6ka` for the full set of injection points.
+    #[test]
+    fn connect_with_timeout_surfaces_slow_dns_as_timed_out() {
+        let budget = Duration::from_millis(50);
+        let started = Instant::now();
+        let result =
+            connect_with_timeout_using("ignored.invalid", 0, Some(budget), |_host, _port| {
+                std::thread::sleep(Duration::from_secs(2));
+                Ok(vec![SocketAddr::from(([127, 0, 0, 1], 0))])
+            });
+        let elapsed = started.elapsed();
+
+        let err = result.expect_err("slow resolver must trip the deadline");
+        let KeError::Io(io) = err else {
+            panic!("expected KeError::Io, got {err:?}");
+        };
+        assert_eq!(
+            io.kind(),
+            std::io::ErrorKind::TimedOut,
+            "slow-DNS path must surface as TimedOut, got {io:?}",
+        );
+        let cap = budget * 5;
+        assert!(
+            elapsed < cap,
+            "connect_with_timeout took {elapsed:?} (> {cap:?}); \
+             resolver budget did not propagate",
+        );
+    }
+
+    /// Pins the `Deadline::remaining` saturation contract: once the
+    /// anchored instant has passed, `remaining()` reports zero rather
+    /// than panicking on the underlying `Duration` subtraction.
+    /// `apply_to` and the connect/read paths in `perform_handshake`
+    /// rely on `is_zero()` as the "deadline elapsed" signal, so
+    /// regressing this would silently re-enable budget overshoot.
+    #[test]
+    fn deadline_remaining_saturates_at_zero_after_expiry() {
+        let d = Deadline::new(Duration::from_micros(1));
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(
+            d.remaining().is_zero(),
+            "expired deadline must saturate at zero, got {:?}",
+            d.remaining(),
+        );
+    }
+
+    /// `Deadline::apply_to` is the funnel that translates "budget
+    /// elapsed" into the `io::Error` shape the `From<KeError> for
+    /// NtsError` mapping in `api/nts.rs` recognises as
+    /// `NtsError::Timeout`. Any other `ErrorKind` would surface as
+    /// `NtsError::Network`, which is exactly the regression this
+    /// helper exists to prevent.
+    #[test]
+    fn deadline_apply_to_returns_timed_out_when_expired() {
+        let d = Deadline::new(Duration::from_micros(1));
+        std::thread::sleep(Duration::from_millis(10));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let err = d.apply_to(&tcp).expect_err("expired deadline must fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    /// `apply_to` must shrink the socket's read/write timeouts to the
+    /// remaining budget (not re-arm the original duration). Pinning
+    /// both bounds — strictly positive and bounded above by the
+    /// configured budget — guarantees that subsequent socket syscalls
+    /// will trip well before the original `req.timeout` could have
+    /// allowed them to.
+    #[test]
+    fn deadline_apply_to_sets_socket_timeouts_within_remaining_budget() {
+        let budget = Duration::from_millis(500);
+        let d = Deadline::new(budget);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        d.apply_to(&tcp).expect("non-zero remaining");
+        let read_t = tcp.read_timeout().unwrap().expect("read timeout set");
+        let write_t = tcp.write_timeout().unwrap().expect("write timeout set");
+        assert!(
+            read_t > Duration::ZERO && read_t <= budget,
+            "read timeout {read_t:?} must be in (0, {budget:?}]",
+        );
+        assert!(
+            write_t > Duration::ZERO && write_t <= budget,
+            "write timeout {write_t:?} must be in (0, {budget:?}]",
+        );
+    }
+
+    /// Companion to the `Deadline` unit tests: drives the same
+    /// blackholed-IP scenario as
+    /// `connect_with_timeout_respects_budget_for_unroutable_ip`,
+    /// but through `connect_with_deadline_using` directly to prove the
+    /// new entry point honours an externally-supplied deadline (the
+    /// shape `perform_handshake` passes in). Without this, a future
+    /// edit could accidentally regress the connect helper to use the
+    /// caller's original duration on each iteration.
+    #[test]
+    fn connect_with_deadline_respects_external_deadline_for_unroutable_ip() {
+        let budget = Duration::from_millis(500);
+        let deadline = Some(Deadline::new(budget));
+        let started = Instant::now();
+        let result = connect_with_deadline_using("192.0.2.1", 4460, deadline, system_lookup);
+        let elapsed = started.elapsed();
+        assert!(result.is_err(), "connecting to TEST-NET-1 must fail");
+        let cap = Duration::from_secs(5);
+        assert!(
+            elapsed < cap,
+            "connect_with_deadline_using took {elapsed:?} (> {cap:?}); \
+             OS-default connect timeout is leaking through",
+        );
     }
 
     /// Live integration probe against Cloudflare's public NTS-KE endpoint.

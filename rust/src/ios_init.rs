@@ -88,8 +88,8 @@ pub(crate) fn init_logging() {
         // `Registry` keeps the door open for adding further layers
         // (e.g. per-module categories or a `fmt::Layer` during
         // `cargo test` runs) without restructuring the init path.
-        let registry = tracing_subscriber::registry()
-            .with(OsLogger::new(SUBSYSTEM, DEFAULT_CATEGORY));
+        let registry =
+            tracing_subscriber::registry().with(OsLogger::new(SUBSYSTEM, DEFAULT_CATEGORY));
         if registry.try_init().is_ok() {
             // Smoke-test event: confirms the chain end-to-end the
             // first time the bridge is loaded. Visible in Console.app

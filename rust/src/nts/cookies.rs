@@ -39,7 +39,10 @@ impl CookieJar {
     /// Construct an empty jar with `capacity` cookies per host. Panics if zero.
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity > 0, "CookieJar capacity must be > 0");
-        Self { capacity, inner: HashMap::new() }
+        Self {
+            capacity,
+            inner: HashMap::new(),
+        }
     }
 
     pub fn capacity(&self) -> usize {

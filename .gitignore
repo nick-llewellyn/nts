@@ -38,3 +38,6 @@ example/macos/Pods/
 
 # FVM Version Cache
 .fvm/
+
+# macOS Finder metadata
+.DS_Store

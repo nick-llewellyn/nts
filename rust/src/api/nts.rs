@@ -13,13 +13,14 @@
 //! is the only persistent state the bridge maintains.
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::nts::aead::{AeadError, AeadKey};
 use crate::nts::cookies::CookieJar;
+use crate::nts::dns::{resolve_with_global, system_lookup};
 use crate::nts::ke::{perform_handshake, KeError, KeOutcome, KeRequest};
 use crate::nts::ntp::{build_client_request, parse_server_response, ClientRequest, NtpError};
 use crate::nts::records::aead as aead_ids;
@@ -375,17 +376,121 @@ fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8
 /// The first remote address whose `bind` + `connect` pair both succeed
 /// wins. Per-address failures are accumulated into a single
 /// `NtsError::Network` so the caller (and therefore the Dart side via
-/// FRB) sees the full picture rather than just the last error. `timeout`
-/// is applied identically to read and write deadlines on the returned
-/// socket.
+/// FRB) sees the full picture rather than just the last error.
+///
+/// `timeout` is enforced as a single global deadline that spans every
+/// blocking phase of the UDP setup — bounded DNS lookup (via the
+/// resolver in [`crate::nts::dns`]), the per-address `bind`+`connect`
+/// loop, and the read/write timeouts written onto the returned socket
+/// (which then bound the subsequent `send`/`recv` in [`nts_query`]).
+/// The deadline is anchored once via [`UdpDeadline::new`] and the
+/// remaining budget is consulted before the lookup and again before
+/// `set_read_timeout`/`set_write_timeout` so the wall-clock cost of
+/// the UDP phase cannot exceed `timeout` regardless of how it is
+/// distributed across DNS and I/O. Either an elapsed budget or a
+/// resolver that exceeded its slice surfaces as `NtsError::Timeout`
+/// rather than as a generic network error so the Dart side can
+/// distinguish a stalled `getaddrinfo` from a true reachability
+/// failure.
 ///
 /// Empty resolution (e.g. NXDOMAIN) maps to
 /// `NtsError::Network("no addresses resolved for host:port")`.
+///
+/// Single wall-clock budget shared across the UDP setup phase — the
+/// bounded DNS lookup *and* the read/write timeouts written onto the
+/// returned socket. Anchored once from `Instant::now() + total` at the
+/// top of [`bind_connected_udp_using`] so the budget shrinks
+/// monotonically as DNS consumes time, in place of the prior pattern
+/// where the caller's `timeout` was passed verbatim to both phases and
+/// the wall-clock cost of one UDP setup could overshoot it by up to 2x.
+///
+/// This is the UDP companion to the `Deadline` newtype private to
+/// [`crate::nts::ke`]; the two intentionally do not share an
+/// implementation because `apply_to` must be socket-type-aware
+/// (`TcpStream` vs `UdpSocket`) and the duplicated surface is small.
+#[derive(Debug, Clone, Copy)]
+struct UdpDeadline(Instant);
+
+impl UdpDeadline {
+    /// Anchor a deadline `total` from `now`. Callers pass the entire
+    /// caller-visible UDP-phase budget; subsequent steps consult
+    /// [`UdpDeadline::remaining_or_timeout`] before issuing any
+    /// blocking syscall or arming a socket-level timeout.
+    fn new(total: Duration) -> Self {
+        Self(Instant::now() + total)
+    }
+
+    /// Time left before the deadline expires. Saturates at
+    /// [`Duration::ZERO`] so callers can branch on `is_zero()` without
+    /// handling a negative-duration case.
+    fn remaining(&self) -> Duration {
+        self.0.saturating_duration_since(Instant::now())
+    }
+
+    /// Convenience wrapper that yields the remaining budget when there
+    /// is still time on the clock and `NtsError::Timeout` once the
+    /// deadline has elapsed. Callers use this immediately before a
+    /// blocking step so an already-blown budget short-circuits cleanly
+    /// instead of re-arming a zero-length socket timeout (which the
+    /// platform may reject with `EINVAL`) or making a doomed
+    /// `resolve_with_global` call.
+    fn remaining_or_timeout(&self) -> Result<Duration, NtsError> {
+        let remaining = self.remaining();
+        if remaining.is_zero() {
+            return Err(NtsError::Timeout);
+        }
+        Ok(remaining)
+    }
+}
+
 fn bind_connected_udp(host: &str, port: u16, timeout: Duration) -> Result<UdpSocket, NtsError> {
-    let candidates: Vec<SocketAddr> = (host, port)
-        .to_socket_addrs()
-        .map_err(|e| NtsError::Network(format!("DNS lookup failed for {host}:{port}: {e}")))?
-        .collect();
+    bind_connected_udp_using(host, port, timeout, system_lookup)
+}
+
+/// Test-friendly variant of [`bind_connected_udp`] that takes a
+/// caller-supplied lookup closure. Production callers go through
+/// [`bind_connected_udp`] which forwards [`system_lookup`]; the
+/// `nts-6ka` slow-DNS regression test injects a closure that
+/// `thread::sleep`s past the budget so the
+/// `ErrorKind::TimedOut → NtsError::Timeout` mapping can be exercised
+/// deterministically without standing up an adversarial nameserver.
+///
+/// Honours the same single-budget-spans-DNS-and-UDP-I/O contract as
+/// [`bind_connected_udp`]; see that function for the deadline rules.
+fn bind_connected_udp_using<F>(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+    lookup: F,
+) -> Result<UdpSocket, NtsError>
+where
+    F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+{
+    let deadline = UdpDeadline::new(timeout);
+    let dns_budget = deadline.remaining_or_timeout()?;
+    let candidates: Vec<SocketAddr> = match resolve_with_global(host, port, dns_budget, lookup) {
+        Ok(v) => v,
+        // `WouldBlock` means the bounded resolver pool was saturated
+        // when the call arrived (see `nts::dns`); from the caller's
+        // perspective that is still a "would have to wait, retry
+        // later" condition, so we surface it the same way as a
+        // `TimedOut` resolution rather than as a generic `Network`
+        // error. Matches the canonical `From<io::Error> for NtsError`
+        // mapping used by the KE-side path.
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            return Err(NtsError::Timeout)
+        }
+        Err(e) => {
+            return Err(NtsError::Network(format!(
+                "DNS lookup failed for {host}:{port}: {e}"
+            )))
+        }
+    };
     if candidates.is_empty() {
         return Err(NtsError::Network(format!(
             "no addresses resolved for {host}:{port}"
@@ -409,11 +514,19 @@ fn bind_connected_udp(host: &str, port: u16, timeout: Duration) -> Result<UdpSoc
                 continue;
             }
         };
-        if let Err(e) = socket.set_read_timeout(Some(timeout)) {
+        // Set socket timeouts to the *remaining* budget rather than the
+        // caller's original `timeout`. The subsequent `send`/`recv` in
+        // `nts_query` inherit these values, so the only blocking
+        // post-bind syscall (`recv`) trips no later than the global
+        // deadline. Re-arming the original `timeout` here is exactly
+        // the regression nts-zf2 fixes — it allowed the UDP phase to
+        // overshoot the caller's budget by up to 2x.
+        let socket_budget = deadline.remaining_or_timeout()?;
+        if let Err(e) = socket.set_read_timeout(Some(socket_budget)) {
             errors.push(format!("set_read_timeout for {addr}: {e}"));
             continue;
         }
-        if let Err(e) = socket.set_write_timeout(Some(timeout)) {
+        if let Err(e) = socket.set_write_timeout(Some(socket_budget)) {
             errors.push(format!("set_write_timeout for {addr}: {e}"));
             continue;
         }
@@ -434,8 +547,10 @@ fn bind_connected_udp(host: &str, port: u16, timeout: Duration) -> Result<UdpSoc
 /// On the first call (or after the cookie pool is exhausted) this performs a
 /// full NTS-KE handshake before sending the NTPv4 request; subsequent calls
 /// reuse the cached AEAD keys and spend a stored cookie. `timeout_ms` is
-/// applied independently to the KE handshake and to the UDP recv; pass `0`
-/// for the built-in `5000` ms default.
+/// applied independently to the KE handshake and to the UDP recv, and bounds
+/// the DNS lookup that precedes each phase so a stalled `getaddrinfo` cannot
+/// stretch the wall-clock cost past the caller's budget; pass `0` for the
+/// built-in `5000` ms default.
 ///
 /// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
 /// finished synchronized clock. `utc_unix_micros` is the server transmit
@@ -816,6 +931,105 @@ mod tests {
             }
             other => panic!("expected NtsError::Network, got {other:?}"),
         }
+    }
+
+    /// Slow-DNS regression guard for [`bind_connected_udp`]. Injects a
+    /// resolver that blocks past the budget and asserts the call
+    /// returns `NtsError::Timeout` (not `NtsError::Network`) well
+    /// inside the cap. Companion to `dns::tests::slow_resolver_*` and
+    /// `nts::ke::tests::connect_with_timeout_surfaces_slow_dns_*`; see
+    /// `nts-6ka` for the full set of injection points.
+    #[test]
+    fn bind_connected_udp_surfaces_slow_dns_as_timeout() {
+        let budget = Duration::from_millis(50);
+        let started = Instant::now();
+        let result = bind_connected_udp_using("ignored.invalid", 0, budget, |_host, _port| {
+            std::thread::sleep(Duration::from_secs(2));
+            Ok(vec![SocketAddr::from(([127, 0, 0, 1], 0))])
+        });
+        let elapsed = started.elapsed();
+
+        match result {
+            Err(NtsError::Timeout) => {}
+            other => panic!("slow-DNS path must surface as NtsError::Timeout, got {other:?}",),
+        }
+        let cap = budget * 5;
+        assert!(
+            elapsed < cap,
+            "bind_connected_udp took {elapsed:?} (> {cap:?}); \
+             resolver budget did not propagate",
+        );
+    }
+
+    /// Pins the `UdpDeadline::remaining_or_timeout` contract: once the
+    /// anchored instant has passed, the helper short-circuits with
+    /// `NtsError::Timeout` rather than handing back a zero-length
+    /// `Duration` (which the platform would reject when fed to
+    /// `set_read_timeout`). The connect/bind path in
+    /// `bind_connected_udp_using` relies on this to surface budget
+    /// exhaustion as `NtsError::Timeout` instead of `NtsError::Network`.
+    #[test]
+    fn udp_deadline_remaining_or_timeout_after_expiry() {
+        let d = UdpDeadline::new(Duration::from_micros(1));
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(d.remaining().is_zero(), "expired deadline must saturate");
+        match d.remaining_or_timeout() {
+            Err(NtsError::Timeout) => {}
+            other => panic!("expired deadline must yield NtsError::Timeout, got {other:?}"),
+        }
+    }
+
+    /// Drives `bind_connected_udp_using` against a 127.0.0.1 echo
+    /// socket but injects a resolver that consumes the bulk of the
+    /// budget before returning. The post-bind `set_read_timeout` /
+    /// `set_write_timeout` calls must see the *remaining* budget, not
+    /// the caller's original `timeout`. We pin both bounds on the
+    /// resulting socket: strictly less than the original budget (the
+    /// regression this test guards against would re-arm the full
+    /// duration) and strictly positive (a zero-length deadline would
+    /// short-circuit before bind). Companion to nts-zf2.
+    #[test]
+    fn bind_connected_udp_socket_timeouts_reflect_remaining_budget() {
+        let echo = UdpSocket::bind("127.0.0.1:0").expect("bind echo");
+        let echo_addr = echo.local_addr().expect("local addr");
+        let echo_port = echo_addr.port();
+
+        let budget = Duration::from_millis(500);
+        let dns_consumes = Duration::from_millis(200);
+        let socket =
+            bind_connected_udp_using("ignored.invalid", echo_port, budget, move |_host, _port| {
+                std::thread::sleep(dns_consumes);
+                Ok(vec![SocketAddr::from(([127, 0, 0, 1], echo_port))])
+            })
+            .expect("bind_connected_udp_using");
+
+        let read_t = socket
+            .read_timeout()
+            .expect("read_timeout call ok")
+            .expect("read timeout set");
+        let write_t = socket
+            .write_timeout()
+            .expect("write_timeout call ok")
+            .expect("write timeout set");
+
+        // The original `timeout` was 500 ms and the resolver burned
+        // 200 ms of it; the post-bind socket timeouts must therefore
+        // be strictly less than 500 ms (and not zero). Allow
+        // generous slack on the upper bound so this test is robust
+        // to scheduling jitter on slow CI runners while still
+        // catching the regression — re-arming the full `timeout`
+        // would land the socket timeout at exactly 500 ms.
+        let upper_bound = budget - Duration::from_millis(50);
+        assert!(
+            read_t > Duration::ZERO && read_t < upper_bound,
+            "read_timeout {read_t:?} must be in (0, {upper_bound:?}); \
+             original budget was {budget:?} and DNS consumed ~{dns_consumes:?}",
+        );
+        assert!(
+            write_t > Duration::ZERO && write_t < upper_bound,
+            "write_timeout {write_t:?} must be in (0, {upper_bound:?}); \
+             original budget was {budget:?} and DNS consumed ~{dns_consumes:?}",
+        );
     }
 
     /// Live integration probe — performs a real NTS-KE handshake and

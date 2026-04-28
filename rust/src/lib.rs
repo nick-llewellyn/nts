@@ -8,8 +8,8 @@
 //                      Do not edit by hand; regenerate after changing `api/`.
 
 pub mod api;
-pub(crate) mod nts;
 mod frb_generated;
+pub(crate) mod nts;
 
 // Android-only: exports a JNI symbol that bootstraps `rustls-platform-verifier`
 // against the Android system trust store. Called once from

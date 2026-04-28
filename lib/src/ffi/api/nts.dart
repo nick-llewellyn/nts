@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `bind_connected_udp`, `checkout`, `cookies_remaining`, `deposit_cookies`, `effective_timeout`, `establish_session`, `next_session_generation`, `ntp64_to_unix_micros`, `session_key`, `sessions`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`
+// These functions are ignored because they are not marked as `pub`: `bind_connected_udp_using`, `bind_connected_udp`, `checkout`, `cookies_remaining`, `deposit_cookies`, `effective_timeout`, `establish_session`, `next_session_generation`, `ntp64_to_unix_micros`, `session_key`, `sessions`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `QueryContext`, `Session`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`
 
@@ -17,8 +17,10 @@ part 'nts.freezed.dart';
 /// On the first call (or after the cookie pool is exhausted) this performs a
 /// full NTS-KE handshake before sending the NTPv4 request; subsequent calls
 /// reuse the cached AEAD keys and spend a stored cookie. `timeout_ms` is
-/// applied independently to the KE handshake and to the UDP recv; pass `0`
-/// for the built-in `5000` ms default.
+/// applied independently to the KE handshake and to the UDP recv, and bounds
+/// the DNS lookup that precedes each phase so a stalled `getaddrinfo` cannot
+/// stretch the wall-clock cost past the caller's budget; pass `0` for the
+/// built-in `5000` ms default.
 ///
 /// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
 /// finished synchronized clock. `utc_unix_micros` is the server transmit

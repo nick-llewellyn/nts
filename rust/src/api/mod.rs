@@ -2,5 +2,5 @@
 // by `flutter_rust_bridge_codegen generate`. Keep this module organized by
 // protocol concern; one file per concern.
 
-pub mod simple;
 pub mod nts;
+pub mod simple;

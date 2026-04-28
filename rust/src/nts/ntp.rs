@@ -142,8 +142,12 @@ pub enum NtpError {
     PacketTooShort,
     TruncatedExtension,
     InvalidExtensionLength,
-    UnexpectedMode { actual: u8 },
-    UnexpectedVersion { actual: u8 },
+    UnexpectedMode {
+        actual: u8,
+    },
+    UnexpectedVersion {
+        actual: u8,
+    },
     MissingUniqueIdentifier,
     UniqueIdentifierMismatch,
     MissingAuthenticator,
@@ -152,7 +156,10 @@ pub enum NtpError {
     EmptyNonce,
     /// Server's `origin_timestamp` did not echo the client's `transmit_timestamp`.
     /// Defense-in-depth replay guard layered on top of the AEAD (RFC 5905 §8).
-    OriginTimestampMismatch { expected: u64, actual: u64 },
+    OriginTimestampMismatch {
+        expected: u64,
+        actual: u64,
+    },
     /// Server-attested "no usable time" signal: either Leap Indicator
     /// `11` (alarm condition, RFC 5905 §7.3) or a stratum at or above
     /// [`STRATUM_UNSYNCHRONIZED_FLOOR`] (`16` = unsynchronized,
@@ -245,7 +252,10 @@ pub fn parse_extensions(bytes: &[u8]) -> Result<Vec<RawExt>, NtpError> {
             return Err(NtpError::InvalidExtensionLength);
         }
         let body = bytes[pos + EXT_HEADER_LEN..pos + len].to_vec();
-        out.push(RawExt { field_type: ft, body });
+        out.push(RawExt {
+            field_type: ft,
+            body,
+        });
         pos += len;
     }
     Ok(out)
@@ -308,7 +318,6 @@ pub fn parse_authenticator_body(body: &[u8]) -> Result<AuthenticatorBody<'_>, Nt
     Ok(AuthenticatorBody { nonce, ciphertext })
 }
 
-
 /// Inputs for [`build_client_request`]. All randomness is supplied by the
 /// caller; the api layer threads the OS RNG through in phase 3.
 #[derive(Debug, Clone)]
@@ -344,7 +353,10 @@ pub fn build_client_request(req: &ClientRequest, c2s_key: &AeadKey) -> Result<Ve
     let header = NtpHeader::client_request(req.transmit_timestamp);
     let mut packet = Vec::with_capacity(HEADER_LEN + 256);
     packet.extend_from_slice(&header.to_bytes());
-    packet.extend_from_slice(&encode_extension(ext_type::UNIQUE_IDENTIFIER, &req.unique_id));
+    packet.extend_from_slice(&encode_extension(
+        ext_type::UNIQUE_IDENTIFIER,
+        &req.unique_id,
+    ));
     packet.extend_from_slice(&encode_extension(ext_type::NTS_COOKIE, &req.cookie));
     let placeholder_body = vec![0u8; req.cookie.len()];
     for _ in 0..req.placeholder_count {
@@ -392,14 +404,17 @@ pub fn parse_server_response(
     if bytes.len() < HEADER_LEN {
         return Err(NtpError::PacketTooShort);
     }
-    let header_bytes: &[u8; HEADER_LEN] =
-        bytes[..HEADER_LEN].try_into().expect("checked above");
+    let header_bytes: &[u8; HEADER_LEN] = bytes[..HEADER_LEN].try_into().expect("checked above");
     let header = NtpHeader::from_bytes(header_bytes);
     if header.version() != VERSION_4 {
-        return Err(NtpError::UnexpectedVersion { actual: header.version() });
+        return Err(NtpError::UnexpectedVersion {
+            actual: header.version(),
+        });
     }
     if header.mode() != mode::SERVER {
-        return Err(NtpError::UnexpectedMode { actual: header.mode() });
+        return Err(NtpError::UnexpectedMode {
+            actual: header.mode(),
+        });
     }
 
     let extensions = parse_extensions(&bytes[HEADER_LEN..])?;
@@ -479,7 +494,11 @@ pub fn parse_server_response(
         .map(|ext| ext.body)
         .collect();
 
-    Ok(ServerResponse { header, unique_id, fresh_cookies })
+    Ok(ServerResponse {
+        header,
+        unique_id,
+        fresh_cookies,
+    })
 }
 
 #[cfg(test)]
@@ -612,7 +631,9 @@ mod tests {
 
     #[test]
     fn parse_extensions_rejects_below_minimum() {
-        let bytes = vec![0x01, 0x04, 0x00, 0x0C, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8];
+        let bytes = vec![
+            0x01, 0x04, 0x00, 0x0C, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
+        ];
         match parse_extensions(&bytes) {
             Err(NtpError::InvalidExtensionLength) => {}
             other => panic!("expected InvalidExtensionLength, got {other:?}"),
@@ -967,4 +988,3 @@ mod tests {
         }
     }
 }
-

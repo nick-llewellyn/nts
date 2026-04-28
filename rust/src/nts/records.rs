@@ -186,7 +186,9 @@ pub fn serialize_message(records: &[Record]) -> Vec<u8> {
 /// `EndOfMessage` body is required to be empty (RFC 8915 §4.1.5).
 pub fn parse_message(bytes: &[u8]) -> Result<Vec<Record>, CodecError> {
     if bytes.len() > MAX_MESSAGE_BYTES {
-        return Err(CodecError::MessageTooLarge { actual: bytes.len() });
+        return Err(CodecError::MessageTooLarge {
+            actual: bytes.len(),
+        });
     }
     let mut out = Vec::new();
     let mut cursor = 0usize;
@@ -208,7 +210,10 @@ pub fn parse_message(bytes: &[u8]) -> Result<Vec<Record>, CodecError> {
         let record_type = header & 0x7FFF;
         let remaining = bytes.len() - cursor;
         if body_len > remaining {
-            return Err(CodecError::BodyOverflow { claimed: body_len, remaining });
+            return Err(CodecError::BodyOverflow {
+                claimed: body_len,
+                remaining,
+            });
         }
         let body = &bytes[cursor..cursor + body_len];
         cursor += body_len;
@@ -241,7 +246,10 @@ fn decode_kind(record_type: u16, body: &[u8]) -> Result<RecordKind, CodecError> 
         record_type::NTPV4_SERVER => std::str::from_utf8(body)
             .map(|s| RecordKind::Server(s.to_owned()))
             .map_err(|_| CodecError::InvalidUtf8),
-        other => Ok(RecordKind::Unknown { record_type: other, body: body.to_vec() }),
+        other => Ok(RecordKind::Unknown {
+            record_type: other,
+            body: body.to_vec(),
+        }),
     }
 }
 
@@ -257,11 +265,13 @@ fn decode_u16_array(body: &[u8]) -> Result<Vec<u16>, CodecError> {
 
 fn decode_u16_scalar(body: &[u8]) -> Result<u16, CodecError> {
     if body.len() != 2 {
-        return Err(CodecError::BodyLengthMismatch { actual: body.len(), expected: 2 });
+        return Err(CodecError::BodyLengthMismatch {
+            actual: body.len(),
+            expected: 2,
+        });
     }
     Ok(u16::from_be_bytes([body[0], body[1]]))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -275,7 +285,10 @@ mod tests {
     fn round_trip_full_message() {
         let msg = vec![
             rec(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4])),
-            rec(true, RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256])),
+            rec(
+                true,
+                RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
+            ),
             rec(false, RecordKind::NewCookie(vec![0xAA; 100])),
             rec(false, RecordKind::Server("time.example.com".to_owned())),
             rec(false, RecordKind::Port(123)),
@@ -308,7 +321,13 @@ mod tests {
     #[test]
     fn unknown_record_round_trips() {
         let msg = vec![
-            rec(true, RecordKind::Unknown { record_type: 0x1234, body: vec![1, 2, 3, 4, 5] }),
+            rec(
+                true,
+                RecordKind::Unknown {
+                    record_type: 0x1234,
+                    body: vec![1, 2, 3, 4, 5],
+                },
+            ),
             rec(true, RecordKind::EndOfMessage),
         ];
         let parsed = parse_message(&serialize_message(&msg)).unwrap();
@@ -329,7 +348,10 @@ mod tests {
         // Header claims body of 8 bytes but only 2 follow.
         let bytes = vec![0x80, 0x00, 0x00, 0x08, 0xAA, 0xBB];
         match parse_message(&bytes) {
-            Err(CodecError::BodyOverflow { claimed: 8, remaining: 2 }) => {}
+            Err(CodecError::BodyOverflow {
+                claimed: 8,
+                remaining: 2,
+            }) => {}
             other => panic!("expected BodyOverflow, got {other:?}"),
         }
     }
@@ -354,14 +376,7 @@ mod tests {
         // test.
         //
         // Wire layout: critical=0, type=NTPV4_PORT(7), len=2, body=0x007B.
-        let bytes = vec![
-            0x00,
-            record_type::NTPV4_PORT as u8,
-            0x00,
-            0x02,
-            0x00,
-            0x7B,
-        ];
+        let bytes = vec![0x00, record_type::NTPV4_PORT as u8, 0x00, 0x02, 0x00, 0x7B];
         match parse_message(&bytes) {
             Err(CodecError::MissingTerminator) => {}
             other => panic!("expected MissingTerminator, got {other:?}"),
@@ -383,7 +398,10 @@ mod tests {
         let mut bytes = serialize_message(&[rec(true, RecordKind::EndOfMessage)]);
         bytes.extend_from_slice(&[0x00, 0x07, 0x00, 0x02, 0x00, 0x7B]);
         match parse_message(&bytes) {
-            Err(CodecError::BodyLengthMismatch { actual: 6, expected: 0 }) => {}
+            Err(CodecError::BodyLengthMismatch {
+                actual: 6,
+                expected: 0,
+            }) => {}
             other => panic!("expected BodyLengthMismatch, got {other:?}"),
         }
     }
@@ -410,9 +428,14 @@ mod tests {
     #[test]
     fn rejects_wrong_length_error_record() {
         // Error record (type 2, critical) with body length 4 instead of 2.
-        let bytes = vec![0x80, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00];
+        let bytes = vec![
+            0x80, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00,
+        ];
         match parse_message(&bytes) {
-            Err(CodecError::BodyLengthMismatch { actual: 4, expected: 2 }) => {}
+            Err(CodecError::BodyLengthMismatch {
+                actual: 4,
+                expected: 2,
+            }) => {}
             other => panic!("expected BodyLengthMismatch, got {other:?}"),
         }
     }
@@ -441,10 +464,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "RFC 8915 §4")]
     fn serialize_message_debug_asserts_eom_terminator() {
-        let msg = vec![rec(
-            true,
-            RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4]),
-        )];
+        let msg = vec![rec(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4]))];
         let _ = serialize_message(&msg);
     }
 
