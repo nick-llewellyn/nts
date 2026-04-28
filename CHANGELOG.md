@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.1
+
+Maintenance release. The public Dart surface (`ntsQuery`, `ntsWarmCookies`,
+`NtsServerSpec`, `NtsTimeSample`, `NtsError`) is unchanged.
+
+- Bump the `native_toolchain_rust` build-hook dependency floor from
+  `^1.0.3` to `^1.0.4` to pick up upstream fixes shipped in the
+  `native_toolchain_rust` 1.0.4 release (pub.dev, 2026-04-27). The
+  package has no runtime impact; it runs only inside `hook/build.dart`
+  during the Native Assets compile of the bundled Rust crate.
+- Refresh `pubspec.lock` and `rust/Cargo.lock` to keep the resolved
+  dependency graph aligned with the new floor.
+- Patch-bump the internal Rust crate `nts_rust` from `0.2.0` to `0.2.1`
+  so the crate version moves in lockstep with the Dart package release.
+  The bindings (`lib/src/ffi/`) and Native Assets bridge are unaffected;
+  no behavioural changes ship in the Rust core.
+- README, example, and dartdoc updates from the previous release stay
+  in place; this release adds no new user-facing documentation.
+
 ## 1.1.0
 
 Protocol-compliance and reliability hardening across the Rust core. The
