@@ -1,5 +1,11 @@
 # nts
 
+[![CI](https://github.com/nick-llewellyn/nts/actions/workflows/ci.yml/badge.svg)](https://github.com/nick-llewellyn/nts/actions/workflows/ci.yml)
+[![Pub Version](https://img.shields.io/pub/v/nts.svg)](https://pub.dev/packages/nts)
+[![MIT License](https://img.shields.io/badge/license-MIT-purple.svg)](https://opensource.org/licenses/MIT)
+
+---
+
 Tamper-proof time synchronization for Dart and Flutter.
 
 ## Why NTS?
