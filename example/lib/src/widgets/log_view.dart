@@ -136,11 +136,14 @@ class _LogViewState extends State<LogView> {
                 controller: _scroll,
                 child: SingleChildScrollView(
                   controller: _scroll,
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
                   child: SelectableText.rich(
                     TextSpan(
                       children: [
-                        for (final e in entries) ..._spansFor(theme, colors, e),
+                        for (var i = 0; i < entries.length; i++) ...[
+                          if (i > 0) const TextSpan(text: '\n'),
+                          ..._spansFor(theme, colors, entries[i]),
+                        ],
                       ],
                     ),
                     style: theme.textTheme.bodySmall?.copyWith(
@@ -163,6 +166,11 @@ class _LogViewState extends State<LogView> {
   /// `SelectableText.rich` walks the span tree to assemble the copied
   /// payload, so this still yields a clean grep-friendly line when the
   /// user drags a selection across it.
+  ///
+  /// No trailing newline: separators between entries are emitted by
+  /// the build-site loop so the very last entry doesn't leave a
+  /// phantom blank line below itself, which would otherwise inflate
+  /// the gap between the newest log line and the bottom of the card.
   ///
   /// Colour assignment funnels through [NtsColors]:
   /// - `info` lines whose message starts with `OK ` (the success
@@ -202,7 +210,7 @@ class _LogViewState extends State<LogView> {
         style: TextStyle(color: dimColour),
       ),
       TextSpan(
-        text: '${e.message}\n',
+        text: e.message,
         style: TextStyle(color: messageColour),
       ),
     ];
