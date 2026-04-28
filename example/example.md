@@ -1,17 +1,32 @@
 # nts — minimal usage snippet
 
-The smallest end-to-end use of `package:nts`: one authenticated NTPv4
-exchange against `time.cloudflare.com` over RFC 8915 NTS-KE, with an
-exhaustive switch on every `NtsError` variant.
+The smallest end-to-end use of `package:nts`: a warm-then-burst flow
+against `time.cloudflare.com` over RFC 8915 NTS-KE that picks the
+lowest-RTT sample and applies symmetric-path delay compensation, with
+an exhaustive switch on every `NtsError` variant.
+
+`ntsQuery` deliberately returns the raw protocol primitives (server
+transmit timestamp + measured RTT) rather than a finished synchronized
+clock; this snippet shows the minimum filtering and offset correction
+a production caller needs. See the README's "Production Considerations"
+section for the rationale.
 
 The same code ships as a runnable Flutter target at
 [`example/main.dart`](main.dart).
 
 ```dart
-// Minimal `package:nts` usage example — a warm-then-query flow against
+// Minimal `package:nts` usage example — a warm-then-burst flow against
 // `time.cloudflare.com` over RFC 8915. Phase 1 fills the per-host cookie
-// jar with a fresh NTS-KE handshake; phase 2 spends one of those cookies
-// on an authenticated NTPv4 exchange.
+// jar with a fresh NTS-KE handshake; phase 2 spends a handful of those
+// cookies on authenticated NTPv4 exchanges, picks the lowest-RTT reply,
+// and applies the standard symmetric-path delay correction to recover
+// the server's clock at the moment the chosen reply arrived.
+//
+// `ntsQuery` returns the raw protocol primitives — server transmit
+// timestamp plus measured round-trip time — not a finished synchronized
+// clock. The burst-and-pick pattern below is the minimum a production
+// caller needs on top to get a stable offset; see `README.md`'s
+// "Production Considerations" section for the full rationale.
 //
 // Run from a Flutter target (`flutter run -t example/main.dart`)
 // so the Native Assets pipeline bundles the Rust dylib. Plain
@@ -21,6 +36,11 @@ The same code ships as a runnable Flutter target at
 // ignore_for_file: avoid_print
 
 import 'package:nts/nts.dart';
+
+/// Number of NTPv4 samples to take per burst. Eight matches the cookie
+/// pool a typical NTS-KE handshake hands out, so the whole burst fits
+/// inside the warmed jar without forcing a re-handshake mid-flight.
+const _burstSize = 8;
 
 Future<void> main() async {
   // Bridge bootstrap. Resolves the bundled `libnts_rust.{dylib|so|dll}`
@@ -44,24 +64,47 @@ Future<void> main() async {
     final warmed = await ntsWarmCookies(spec: spec, timeoutMs: 5000);
     print('warmed   = $warmed cookies');
 
-    // Phase 2 — spend one cookie on an authenticated NTPv4 exchange.
-    // The session warmed above covers the AEAD keys and the NTPv4
-    // destination, so steady-state cost is one UDP round-trip. The
-    // 5-second timeout applies independently to the KE leg (a no-op
-    // here because the jar is full) and the UDP recv leg.
-    final sample = await ntsQuery(spec: spec, timeoutMs: 5000);
+    // Phase 2 — spend `_burstSize` cookies on authenticated NTPv4
+    // exchanges. Each `ntsQuery` reuses the warmed AEAD keys, so the
+    // steady-state cost is one UDP round-trip per call. Collect every
+    // sample so we can score them against each other below.
+    final samples = <NtsTimeSample>[];
+    for (var i = 0; i < _burstSize; i++) {
+      samples.add(await ntsQuery(spec: spec, timeoutMs: 5000));
+    }
 
-    final utc = DateTime.fromMicrosecondsSinceEpoch(
-      sample.utcUnixMicros.toInt(),
+    // Pick the sample with the smallest measured round-trip. NTP's
+    // symmetric-path assumption is most accurate when the path is
+    // shortest, so the lowest-RTT reply yields the smallest residual
+    // offset error after compensation. This is the basic statistical
+    // filter every production NTP/NTS client implements; more
+    // sophisticated callers can also weight by stratum or run Marzullo's
+    // algorithm across multiple servers.
+    final best = samples.reduce(
+      (a, b) => a.roundTripMicros <= b.roundTripMicros ? a : b,
+    );
+
+    // Apply the standard symmetric-path correction: assume the one-way
+    // delay is half the round-trip, so the server's clock at the moment
+    // its reply landed locally is `utc_unix_micros + rtt / 2`. The
+    // package returns the raw server transmit timestamp on purpose;
+    // applying this offset is the caller's responsibility because the
+    // "right" filter (median, lowest-RTT, Marzullo, …) is workload
+    // specific.
+    final adjustedMicros =
+        best.utcUnixMicros.toInt() + (best.roundTripMicros.toInt() ~/ 2);
+    final adjustedUtc = DateTime.fromMicrosecondsSinceEpoch(
+      adjustedMicros,
       isUtc: true,
     );
-    final rttMs = sample.roundTripMicros.toInt() / 1000.0;
+    final rttMs = best.roundTripMicros.toInt() / 1000.0;
 
-    print('utc      = ${utc.toIso8601String()}');
-    print('rtt      = ${rttMs.toStringAsFixed(2)} ms');
-    print('stratum  = ${sample.serverStratum}');
-    print('aead-id  = ${sample.aeadId}');
-    print('cookies  = ${sample.freshCookies}');
+    print('samples  = ${samples.length}');
+    print('best-rtt = ${rttMs.toStringAsFixed(2)} ms');
+    print('utc      = ${adjustedUtc.toIso8601String()}  (RTT/2-compensated)');
+    print('stratum  = ${best.serverStratum}');
+    print('aead-id  = ${best.aeadId}');
+    print('cookies  = ${best.freshCookies}');
   } on NtsError catch (err) {
     // `NtsError` is a `freezed` sealed class — exhaustive switch
     // expressions catch new variants at compile time if the package

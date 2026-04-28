@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `bind_connected_udp`, `checkout`, `cookies_remaining`, `deposit_cookies`, `effective_timeout`, `establish_session`, `ntp64_to_unix_micros`, `session_key`, `sessions`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`
+// These functions are ignored because they are not marked as `pub`: `bind_connected_udp`, `checkout`, `cookies_remaining`, `deposit_cookies`, `effective_timeout`, `establish_session`, `next_session_generation`, `ntp64_to_unix_micros`, `session_key`, `sessions`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `QueryContext`, `Session`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`
 
@@ -19,6 +19,16 @@ part 'nts.freezed.dart';
 /// reuse the cached AEAD keys and spend a stored cookie. `timeout_ms` is
 /// applied independently to the KE handshake and to the UDP recv; pass `0`
 /// for the built-in `5000` ms default.
+///
+/// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
+/// finished synchronized clock. `utc_unix_micros` is the server transmit
+/// timestamp exactly as it appeared on the wire; it does not include any
+/// compensation for the one-way network delay between the server and this
+/// caller. To approximate the server's clock at the moment the reply
+/// arrived, callers should add `round_trip_micros / 2` to `utc_unix_micros`
+/// (the standard NTP assumption of a symmetric path). For high-precision
+/// synchronization, take a burst of samples and pick the one with the
+/// smallest `round_trip_micros` before applying that adjustment.
 Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   required int timeoutMs,
@@ -89,8 +99,16 @@ class NtsServerSpec {
 }
 
 /// Successful authenticated NTPv4 sample.
+///
+/// This is the raw output of one protocol exchange, not a synchronized
+/// clock. See [`nts_query`] for the recommended burst-and-RTT-compensation
+/// pattern callers should layer on top.
 class NtsTimeSample {
-  /// Server transmit time as microseconds since the Unix epoch.
+  /// Server transmit time as microseconds since the Unix epoch, taken
+  /// directly from the NTPv4 reply. No correction for the one-way
+  /// network delay between the server and this caller is applied; add
+  /// `round_trip_micros / 2` to estimate the server's clock at the
+  /// moment the reply arrived.
   final PlatformInt64 utcUnixMicros;
 
   /// Wall-clock microseconds elapsed between client send and client receive.

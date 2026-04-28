@@ -51,6 +51,10 @@ Future<void> main() async {
   final spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
 
   // 3. Query. The first call handshakes; later calls reuse cached keys.
+  //    The returned sample is the raw protocol output: a server
+  //    transmit timestamp plus the measured round-trip time. Production
+  //    callers should burst, filter, and apply RTT/2 compensation; see
+  //    "Production Considerations" below for the why.
   final sample = await ntsQuery(spec: spec, timeoutMs: 5000);
 
   final utc = DateTime.fromMicrosecondsSinceEpoch(
@@ -69,10 +73,55 @@ isn't ready. In a Flutter app, do it right after
 calls to `init` are no-ops, so it's safe to invoke from a shared
 bootstrap path.
 
-A complete, runnable version with exhaustive `NtsError` handling lives
-in [`example/main.dart`](example/main.dart). For valid hostnames
+A complete, runnable version that demonstrates the recommended
+warm-burst-filter-compensate flow with exhaustive `NtsError` handling
+lives in [`example/main.dart`](example/main.dart). For valid hostnames
 to plug into `NtsServerSpec`, see the community-maintained
 [NTS server list](https://github.com/jauderho/nts-servers).
+
+## Production Considerations
+
+`ntsQuery` exposes the RFC 8915 protocol primitives — a single
+authenticated round-trip with the server's transmit timestamp and the
+locally measured RTT — not a finished synchronized clock. A single raw
+sample is sufficient for an authenticated "what time does this server
+claim it is right now?" probe, but anything that anchors application
+logic to wall-clock time should add two cheap layers on top:
+
+1. **Burst sampling.** A single NTPv4 reply carries whatever jitter the
+   network and the server's queueing happened to introduce on that one
+   packet. Calling `ntsWarmCookies` once and then `ntsQuery` several
+   times in quick succession (e.g. eight samples — the size of a typical
+   freshly-warmed cookie pool) produces a small distribution you can
+   reason about statistically. Pick the sample with the smallest
+   `roundTripMicros`; on a low-RTT path the symmetric-path assumption
+   below holds tightest, so that sample carries the smallest residual
+   offset error. More sophisticated callers can median-filter, score by
+   `serverStratum`, or run Marzullo's algorithm across multiple servers.
+
+2. **Symmetric-path delay compensation.** `utcUnixMicros` is the moment
+   the server stamped the reply, not the moment it landed locally. The
+   reply then spent roughly half the round-trip travelling back to the
+   client, so the server's clock at the moment of arrival is best
+   approximated as `utcUnixMicros + roundTripMicros / 2`. This is the
+   standard NTP correction (RFC 5905 §8); it assumes the outbound and
+   return paths are symmetric, which is why filtering on the lowest-RTT
+   sample matters — short paths are more likely to be symmetric.
+
+The `offset` between local and server time is then
+`(utcUnixMicros + roundTripMicros / 2) - localUnixMicrosAtReceive`,
+sampled at the moment `await ntsQuery(...)` returns. Persist that offset
+and apply it on top of the device's monotonic clock rather than calling
+`ntsQuery` on every read; a few-second jitter floor on cellular
+networks makes per-call queries strictly worse than one well-filtered
+offset reused across many reads.
+
+The package stops at protocol primitives by design: the right filter
+(lowest-RTT, median, Marzullo across multiple servers, weighted by
+stratum), the right resampling cadence, and the right way to project
+the offset onto `DateTime.now()` are all workload specific. The
+[`example/main.dart`](example/main.dart) snippet shows the minimum
+burst-filter-compensate flow described above.
 
 ## API summary
 
