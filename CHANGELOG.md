@@ -1,5 +1,120 @@
 # Changelog
 
+## 1.2.0
+
+Reliability and timeout-budget hardening across the Rust core. The public
+Dart surface (`ntsQuery`, `ntsWarmCookies`, `NtsServerSpec`,
+`NtsTimeSample`, `NtsError`) is unchanged; consumer-visible behaviour
+improves on the timeout-fidelity and DNS-stall paths. Rust crate
+`nts_rust` is bumped from `0.2.1` to `0.2.2`; the bindings
+(`lib/src/ffi/`) and Native Assets bridge are unaffected aside from a
+doc-comment regen on `ntsQuery` reflecting the new contract.
+
+### Bounded DNS resolution (`rust/src/nts/dns.rs`, new module)
+
+- Replace the unbounded `ToSocketAddrs` lookup that previously fronted
+  both NTS-KE TCP connect and the NTPv4 UDP bind with a thread-pool
+  resolver that offloads `getaddrinfo` to a detached worker and bounds
+  the wait via a `mpsc::Receiver::recv_timeout`. A stalled name server
+  no longer holds the calling thread past the caller's `timeoutMs`
+  budget; the resolver returns `io::ErrorKind::TimedOut` once the
+  remaining budget is exhausted, which the `api::nts` and `nts::ke`
+  call sites collapse to `NtsError::Timeout`.
+- Add a global atomic concurrency cap of 16 in-flight resolver workers
+  to protect the host environment from a runaway burst of `ntsQuery`
+  calls against a blackholed DNS server. Cap exhaustion surfaces as
+  `io::ErrorKind::WouldBlock` from the resolver entry point and is
+  mapped to `NtsError::Timeout` at both KE and UDP call sites so the
+  Dart-side switch arm is reached without introducing a new variant.
+- The detached-worker pattern intentionally leaks the OS thread on
+  timeout rather than aborting it: `getaddrinfo` is not cancellable on
+  any major libc, so attempting to interrupt the worker would corrupt
+  the resolver state. The 16-slot cap bounds the steady-state cost of
+  this leak under pathological conditions.
+
+### NTS-KE handshake (`rust/src/nts/ke.rs`)
+
+- Introduce a private `Deadline` newtype that anchors a single
+  `Instant` at the top of `perform_handshake` and exposes
+  `remaining()` (saturating) plus `apply_to(&TcpStream)` (refreshes
+  socket read/write timeouts; returns `io::ErrorKind::TimedOut` if the
+  budget is exhausted). Replaces the previous pattern where every
+  blocking phase — DNS lookup, TCP connect, TLS handshake, NTS-KE
+  record I/O — was independently armed with the caller's full
+  `timeoutMs`, allowing the total wall-clock cost to overshoot the
+  budget by up to ~3x.
+- `connect_with_deadline_using<F>` becomes the new core path;
+  `connect_with_timeout_using` is retained as a thin
+  `Option<Duration> → Option<Deadline>` wrapper that preserves the
+  slow-DNS test seam. `perform_handshake` threads one `Deadline`
+  through DNS resolution, TCP connect, post-connect socket-timeout
+  setup, pre-write/pre-flush refreshes, and the read loop.
+- `read_to_end_capped` now takes `Stream<'_, ClientConnection,
+  TcpStream>` plus `Option<&Deadline>` and refreshes the underlying
+  socket's read/write timeouts on every loop iteration, so a server
+  that drip-feeds the NTS-KE response cannot stretch the read phase
+  past the global deadline.
+- New regression tests:
+  - `deadline_remaining_saturates_at_zero_after_expiry`,
+  - `deadline_apply_to_returns_timed_out_when_expired`,
+  - `deadline_apply_to_sets_socket_timeouts_within_remaining_budget`,
+  - `connect_with_deadline_respects_external_deadline_for_unroutable_ip`,
+  - `connect_with_timeout_surfaces_slow_dns_as_timed_out`.
+
+### UDP query path (`rust/src/api/nts.rs`)
+
+- Mirror the KE-side helper with a private `UdpDeadline` newtype for
+  `UdpSocket`. Surface: `new(Duration)`, `remaining()` (saturating),
+  and `remaining_or_timeout() -> Result<Duration, NtsError>` which
+  short-circuits to `NtsError::Timeout` once the budget is exhausted
+  rather than feeding `Duration::ZERO` into `set_read_timeout` (which
+  is `EINVAL` on some platforms).
+- `bind_connected_udp_using` rewritten to anchor one `UdpDeadline`,
+  invoke `remaining_or_timeout()?` before `resolve_with_global` so the
+  resolver receives the live remaining budget rather than the original
+  `timeoutMs`, and again before `set_read_timeout`/`set_write_timeout`
+  so the UDP socket inherits the *remaining* budget. The downstream
+  `socket.send` / `socket.recv` in `nts_query` therefore trip no later
+  than the global deadline, even when the KE phase has consumed most
+  of it.
+- `UdpDeadline` is intentionally a separate type from the KE-side
+  `Deadline` because `apply_to` would otherwise need to be
+  socket-type-generic; the duplicated surface is ~20 lines.
+- New regression tests:
+  - `udp_deadline_remaining_or_timeout_after_expiry`,
+  - `bind_connected_udp_socket_timeouts_reflect_remaining_budget`,
+  - `bind_connected_udp_surfaces_slow_dns_as_timeout`.
+
+### Documentation
+
+- The dartdoc on `ntsQuery` (regenerated into
+  `lib/src/ffi/api/nts.dart` from the Rust docstring on
+  `crate::api::nts::nts_query`) now states that `timeout_ms` "bounds
+  the DNS lookup that precedes each phase so a stalled `getaddrinfo`
+  cannot stretch the wall-clock cost past the caller's budget" rather
+  than the previous wording which described the timeout as
+  per-phase.
+
+### Housekeeping
+
+- Apply `cargo fmt` (pinned toolchain `1.92.0`) across `api/mod.rs`,
+  `ios_init.rs`, `lib.rs`, `nts/aead.rs`, `nts/cookies.rs`,
+  `nts/ntp.rs`, and `nts/records.rs` to reconcile drift accumulated
+  since the 1.1.0 cycle. Behaviour is unchanged.
+- `.gitignore`: add `.DS_Store` so macOS Finder metadata stops
+  appearing in `git status`.
+- `rust/src/nts/mod.rs`: declare the new `dns` module.
+
+### Verification
+
+- `cargo test --manifest-path rust/Cargo.toml`: 108 passed, 0 failed,
+  3 ignored (live-network).
+- `cargo clippy --manifest-path rust/Cargo.toml --tests --all-targets
+  -- -D warnings`: clean.
+- `cargo fmt --manifest-path rust/Cargo.toml --check`: clean.
+- `dart analyze`: clean.
+- `flutter test test/ffi_smoke_test.dart`: 5 / 5 pass.
+
 ## 1.1.2
 
 Example-app polish and RFC 8915 §4 compliance in the consumer demo. No
