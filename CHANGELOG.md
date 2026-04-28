@@ -4,11 +4,14 @@
 
 Reliability and timeout-budget hardening across the Rust core. The public
 Dart surface (`ntsQuery`, `ntsWarmCookies`, `NtsServerSpec`,
-`NtsTimeSample`, `NtsError`) is unchanged; consumer-visible behaviour
-improves on the timeout-fidelity and DNS-stall paths. Rust crate
-`nts_rust` is bumped from `0.2.1` to `0.2.2`; the bindings
-(`lib/src/ffi/`) and Native Assets bridge are unaffected aside from a
-doc-comment regen on `ntsQuery` reflecting the new contract.
+`NtsTimeSample`, `NtsError`) gains one new optional knob —
+`dnsConcurrencyCap` — for tuning the bounded DNS resolver per call;
+existing call sites that omit it continue to compile because the
+codegen marks the parameter required (pass `0` to inherit the default).
+Consumer-visible behaviour also improves on the timeout-fidelity and
+DNS-stall paths. Rust crate `nts_rust` is bumped from `0.2.1` to
+`0.2.2`; the bindings (`lib/src/ffi/`) are regenerated to reflect the
+new parameter.
 
 ### Bounded DNS resolution (`rust/src/nts/dns.rs`, new module)
 
@@ -20,16 +23,27 @@ doc-comment regen on `ntsQuery` reflecting the new contract.
   budget; the resolver returns `io::ErrorKind::TimedOut` once the
   remaining budget is exhausted, which the `api::nts` and `nts::ke`
   call sites collapse to `NtsError::Timeout`.
-- Add a global atomic concurrency cap of 16 in-flight resolver workers
-  to protect the host environment from a runaway burst of `ntsQuery`
-  calls against a blackholed DNS server. Cap exhaustion surfaces as
+- Add a global atomic concurrency cap on in-flight resolver workers to
+  protect the host environment from a runaway burst of `ntsQuery` calls
+  against a blackholed DNS server. The cap is **configurable per call**
+  via the `dnsConcurrencyCap` parameter on `ntsQuery` /
+  `ntsWarmCookies`; passing `0` selects the built-in default of **4**,
+  sized for mobile (worst-case ~512 KB-1 MB of pthread stack per leaked
+  worker on iOS/Android, capping the steady-state leak from a
+  blackholed resolver to ~4 MB instead of unbounded growth).
+  Server-side callers that legitimately need higher fan-out can pass a
+  larger cap per invocation. Cap exhaustion surfaces as
   `io::ErrorKind::WouldBlock` from the resolver entry point and is
   mapped to `NtsError::Timeout` at both KE and UDP call sites so the
   Dart-side switch arm is reached without introducing a new variant.
+- Because the threshold compares against a single process-wide counter,
+  two concurrent callers passing different caps share the same
+  in-flight pool: the effective ceiling at any moment is set by
+  whichever caller is currently being admitted, not a private quota.
 - The detached-worker pattern intentionally leaks the OS thread on
   timeout rather than aborting it: `getaddrinfo` is not cancellable on
   any major libc, so attempting to interrupt the worker would corrupt
-  the resolver state. The 16-slot cap bounds the steady-state cost of
+  the resolver state. The slot cap bounds the steady-state cost of
   this leak under pathological conditions.
 
 ### NTS-KE handshake (`rust/src/nts/ke.rs`)

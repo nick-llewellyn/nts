@@ -137,10 +137,15 @@ fn wire__crate__api__nts__nts_query_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_spec = <crate::api::nts::NtsServerSpec>::sse_decode(&mut deserializer);
             let api_timeout_ms = <u32>::sse_decode(&mut deserializer);
+            let api_dns_concurrency_cap = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::nts::NtsError>((move || {
-                    let output_ok = crate::api::nts::nts_query(api_spec, api_timeout_ms)?;
+                    let output_ok = crate::api::nts::nts_query(
+                        api_spec,
+                        api_timeout_ms,
+                        api_dns_concurrency_cap,
+                    )?;
                     Ok(output_ok)
                 })())
             }
@@ -171,10 +176,15 @@ fn wire__crate__api__nts__nts_warm_cookies_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_spec = <crate::api::nts::NtsServerSpec>::sse_decode(&mut deserializer);
             let api_timeout_ms = <u32>::sse_decode(&mut deserializer);
+            let api_dns_concurrency_cap = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::nts::NtsError>((move || {
-                    let output_ok = crate::api::nts::nts_warm_cookies(api_spec, api_timeout_ms)?;
+                    let output_ok = crate::api::nts::nts_warm_cookies(
+                        api_spec,
+                        api_timeout_ms,
+                        api_dns_concurrency_cap,
+                    )?;
                     Ok(output_ok)
                 })())
             }

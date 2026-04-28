@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use crate::nts::aead::{AeadError, AeadKey};
 use crate::nts::cookies::CookieJar;
-use crate::nts::dns::{resolve_with_global, system_lookup};
+use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
 use crate::nts::ke::{perform_handshake, KeError, KeOutcome, KeRequest};
 use crate::nts::ntp::{build_client_request, parse_server_response, ClientRequest, NtpError};
 use crate::nts::records::aead as aead_ids;
@@ -247,6 +247,19 @@ fn effective_timeout(timeout_ms: u32) -> Duration {
     Duration::from_millis(ms.into())
 }
 
+/// Resolve the FFI `dns_concurrency_cap` argument into a `usize`,
+/// substituting [`DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`] when the caller
+/// passes `0`. The default is sized for mobile (see the constant's
+/// rustdoc); 0-as-default mirrors the convention `effective_timeout`
+/// uses for `timeout_ms`.
+fn effective_dns_concurrency_cap(dns_concurrency_cap: u32) -> usize {
+    if dns_concurrency_cap == 0 {
+        DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS
+    } else {
+        dns_concurrency_cap as usize
+    }
+}
+
 /// Drive a complete NTS-KE handshake and convert its outcome into a [`Session`].
 ///
 /// The KE driver offers AES-SIV-CMAC-256 first and AES-128-GCM-SIV second:
@@ -254,12 +267,17 @@ fn effective_timeout(timeout_ms: u32) -> Duration {
 /// every public NTS server we tested actually picks today; GCM-SIV is added
 /// purely so a server that prefers nonce-misuse-resistant GCM still resolves
 /// to a usable AEAD instead of `UnsupportedAead`.
-fn establish_session(spec: &NtsServerSpec, timeout: Duration) -> Result<Session, NtsError> {
+fn establish_session(
+    spec: &NtsServerSpec,
+    timeout: Duration,
+    dns_concurrency_cap: usize,
+) -> Result<Session, NtsError> {
     let req = KeRequest {
         host: spec.host.clone(),
         port: spec.port,
         aead_algorithms: vec![aead_ids::AES_SIV_CMAC_256, aead_ids::AES_128_GCM_SIV],
         timeout: Some(timeout),
+        dns_concurrency_cap,
     };
     let outcome: KeOutcome = perform_handshake(&req)?;
     let c2s_key = AeadKey::from_keying_material(outcome.aead_id, &outcome.c2s_key)
@@ -298,7 +316,11 @@ struct QueryContext {
 
 /// Acquire (or establish) a session and pop one cookie. The returned context
 /// owns the cookie and key clones so the network exchange runs lock-free.
-fn checkout(spec: &NtsServerSpec, timeout: Duration) -> Result<QueryContext, NtsError> {
+fn checkout(
+    spec: &NtsServerSpec,
+    timeout: Duration,
+    dns_concurrency_cap: usize,
+) -> Result<QueryContext, NtsError> {
     let key = session_key(spec);
     let mut guard = sessions().lock().expect("session table poisoned");
     let need_handshake = match guard.get(&key) {
@@ -309,7 +331,7 @@ fn checkout(spec: &NtsServerSpec, timeout: Duration) -> Result<QueryContext, Nts
         // Drop the lock across the multi-RTT KE handshake so other queries
         // against unrelated hosts aren't serialized behind it.
         drop(guard);
-        let session = establish_session(spec, timeout)?;
+        let session = establish_session(spec, timeout, dns_concurrency_cap)?;
         let mut g = sessions().lock().expect("session table poisoned");
         g.insert(key.clone(), session);
         guard = g;
@@ -443,8 +465,13 @@ impl UdpDeadline {
     }
 }
 
-fn bind_connected_udp(host: &str, port: u16, timeout: Duration) -> Result<UdpSocket, NtsError> {
-    bind_connected_udp_using(host, port, timeout, system_lookup)
+fn bind_connected_udp(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+    dns_concurrency_cap: usize,
+) -> Result<UdpSocket, NtsError> {
+    bind_connected_udp_using(host, port, timeout, dns_concurrency_cap, system_lookup)
 }
 
 /// Test-friendly variant of [`bind_connected_udp`] that takes a
@@ -461,6 +488,7 @@ fn bind_connected_udp_using<F>(
     host: &str,
     port: u16,
     timeout: Duration,
+    dns_concurrency_cap: usize,
     lookup: F,
 ) -> Result<UdpSocket, NtsError>
 where
@@ -468,29 +496,30 @@ where
 {
     let deadline = UdpDeadline::new(timeout);
     let dns_budget = deadline.remaining_or_timeout()?;
-    let candidates: Vec<SocketAddr> = match resolve_with_global(host, port, dns_budget, lookup) {
-        Ok(v) => v,
-        // `WouldBlock` means the bounded resolver pool was saturated
-        // when the call arrived (see `nts::dns`); from the caller's
-        // perspective that is still a "would have to wait, retry
-        // later" condition, so we surface it the same way as a
-        // `TimedOut` resolution rather than as a generic `Network`
-        // error. Matches the canonical `From<io::Error> for NtsError`
-        // mapping used by the KE-side path.
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            ) =>
-        {
-            return Err(NtsError::Timeout)
-        }
-        Err(e) => {
-            return Err(NtsError::Network(format!(
-                "DNS lookup failed for {host}:{port}: {e}"
-            )))
-        }
-    };
+    let candidates: Vec<SocketAddr> =
+        match resolve_with_global(host, port, dns_budget, dns_concurrency_cap, lookup) {
+            Ok(v) => v,
+            // `WouldBlock` means the bounded resolver pool was saturated
+            // when the call arrived (see `nts::dns`); from the caller's
+            // perspective that is still a "would have to wait, retry
+            // later" condition, so we surface it the same way as a
+            // `TimedOut` resolution rather than as a generic `Network`
+            // error. Matches the canonical `From<io::Error> for NtsError`
+            // mapping used by the KE-side path.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(NtsError::Timeout)
+            }
+            Err(e) => {
+                return Err(NtsError::Network(format!(
+                    "DNS lookup failed for {host}:{port}: {e}"
+                )))
+            }
+        };
     if candidates.is_empty() {
         return Err(NtsError::Network(format!(
             "no addresses resolved for {host}:{port}"
@@ -546,11 +575,22 @@ where
 ///
 /// On the first call (or after the cookie pool is exhausted) this performs a
 /// full NTS-KE handshake before sending the NTPv4 request; subsequent calls
-/// reuse the cached AEAD keys and spend a stored cookie. `timeout_ms` is
-/// applied independently to the KE handshake and to the UDP recv, and bounds
-/// the DNS lookup that precedes each phase so a stalled `getaddrinfo` cannot
-/// stretch the wall-clock cost past the caller's budget; pass `0` for the
-/// built-in `5000` ms default.
+/// reuse the cached AEAD keys and spend a stored cookie. `timeout_ms` is a
+/// single global wall-clock budget that spans DNS, NTS-KE (TCP connect, TLS
+/// handshake, record I/O) and the AEAD-NTPv4 UDP exchange as one shrinking
+/// deadline; pass `0` for the built-in `5000` ms default.
+///
+/// `dns_concurrency_cap` is a per-call ceiling on the process-wide bounded
+/// DNS resolver (see the module docs in `nts::dns`): if the global in-flight
+/// counter has already reached this value when the call attempts a lookup,
+/// the call short-circuits with `NtsError::Timeout` instead of spawning
+/// another worker thread. The cap defaults (when `0` is passed) to a
+/// mobile-friendly value chosen to bound the worst-case stack-leak from a
+/// blackholed resolver to a few MB. Server-side callers that legitimately
+/// need higher fan-out can override it per call. Because the cap compares
+/// against a global counter, two concurrent callers with different caps
+/// share the same in-flight pool: the effective ceiling at any moment is
+/// whichever caller is currently being admitted.
 ///
 /// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
 /// finished synchronized clock. `utc_unix_micros` is the server transmit
@@ -561,12 +601,17 @@ where
 /// (the standard NTP assumption of a symmetric path). For high-precision
 /// synchronization, take a burst of samples and pick the one with the
 /// smallest `round_trip_micros` before applying that adjustment.
-pub fn nts_query(spec: NtsServerSpec, timeout_ms: u32) -> Result<NtsTimeSample, NtsError> {
+pub fn nts_query(
+    spec: NtsServerSpec,
+    timeout_ms: u32,
+    dns_concurrency_cap: u32,
+) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
+    let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
     let key = session_key(&spec);
 
-    let ctx = checkout(&spec, timeout)?;
+    let ctx = checkout(&spec, timeout, cap)?;
 
     let mut uid = [0u8; UID_LEN];
     let mut nonce = vec![0u8; ctx.c2s_key.nonce_len()];
@@ -589,7 +634,7 @@ pub fn nts_query(spec: NtsServerSpec, timeout_ms: u32) -> Result<NtsTimeSample, 
     // the family of whichever resolved address actually accepts a UDP
     // connection. The previous hard-coded `0.0.0.0:0` bind silently broke
     // every IPv6-only NTS endpoint (Netnod and several PTB hosts).
-    let socket = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, timeout)?;
+    let socket = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, timeout, cap)?;
 
     let send_at = Instant::now();
     socket.send(&packet)?;
@@ -613,10 +658,18 @@ pub fn nts_query(spec: NtsServerSpec, timeout_ms: u32) -> Result<NtsTimeSample, 
 
 /// Force a fresh NTS-KE handshake against `spec` and return the number of
 /// cookies the server delivered. Replaces any cached session for that spec.
-pub fn nts_warm_cookies(spec: NtsServerSpec, timeout_ms: u32) -> Result<u32, NtsError> {
+///
+/// `timeout_ms` and `dns_concurrency_cap` carry the same semantics as on
+/// [`nts_query`]; pass `0` for either to inherit the built-in default.
+pub fn nts_warm_cookies(
+    spec: NtsServerSpec,
+    timeout_ms: u32,
+    dns_concurrency_cap: u32,
+) -> Result<u32, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
-    let session = establish_session(&spec, timeout)?;
+    let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
+    let session = establish_session(&spec, timeout, cap)?;
     let count = session.cookies_remaining() as u32;
     let key = session_key(&spec);
     let mut guard = sessions().lock().expect("session table poisoned");
@@ -685,6 +738,21 @@ mod tests {
         assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
     }
 
+    /// Pins the FFI-default behaviour for `dns_concurrency_cap`: a `0`
+    /// from Dart is the agreed sentinel for "use the built-in default",
+    /// matching `timeout_ms`. Regressing this would silently let a
+    /// pathological caller pass `0` and saturate the resolver pool
+    /// (since `try_acquire_slot` with `cap = 0` always rejects).
+    #[test]
+    fn effective_dns_concurrency_cap_substitutes_default_when_zero() {
+        assert_eq!(
+            effective_dns_concurrency_cap(0),
+            DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+        );
+        assert_eq!(effective_dns_concurrency_cap(1), 1);
+        assert_eq!(effective_dns_concurrency_cap(32), 32);
+    }
+
     #[test]
     fn effective_timeout_substitutes_default_when_zero() {
         assert_eq!(
@@ -729,7 +797,11 @@ mod tests {
         let echo = UdpSocket::bind("127.0.0.1:0").expect("bind echo");
         let echo_port = echo.local_addr().expect("local addr").port();
 
-        let socket = bind_connected_udp("127.0.0.1", echo_port, Duration::from_secs(2))
+        // Generous cap so the suite's parallel slow-DNS tests
+        // (which leak detached workers for ~2 s) cannot saturate the
+        // global pool out from under this test. Pool-cap behaviour
+        // itself is covered by `dns::tests::cap_reached_returns_would_block`.
+        let socket = bind_connected_udp("127.0.0.1", echo_port, Duration::from_secs(2), 64)
             .expect("bind_connected_udp");
         assert!(matches!(
             socket.local_addr().expect("local addr"),
@@ -758,7 +830,7 @@ mod tests {
         };
         let echo_port = echo.local_addr().expect("local addr").port();
 
-        let socket = bind_connected_udp("::1", echo_port, Duration::from_secs(2))
+        let socket = bind_connected_udp("::1", echo_port, Duration::from_secs(2), 64)
             .expect("bind_connected_udp");
         assert!(matches!(
             socket.local_addr().expect("local addr"),
@@ -920,7 +992,7 @@ mod tests {
     /// hits a real DNS responder.
     #[test]
     fn bind_connected_udp_reports_dns_failure() {
-        let err = bind_connected_udp("no-such-host.invalid", 123, Duration::from_millis(500))
+        let err = bind_connected_udp("no-such-host.invalid", 123, Duration::from_millis(500), 64)
             .expect_err("must fail");
         match err {
             NtsError::Network(msg) => {
@@ -943,7 +1015,7 @@ mod tests {
     fn bind_connected_udp_surfaces_slow_dns_as_timeout() {
         let budget = Duration::from_millis(50);
         let started = Instant::now();
-        let result = bind_connected_udp_using("ignored.invalid", 0, budget, |_host, _port| {
+        let result = bind_connected_udp_using("ignored.invalid", 0, budget, 64, |_host, _port| {
             std::thread::sleep(Duration::from_secs(2));
             Ok(vec![SocketAddr::from(([127, 0, 0, 1], 0))])
         });
@@ -996,12 +1068,17 @@ mod tests {
 
         let budget = Duration::from_millis(500);
         let dns_consumes = Duration::from_millis(200);
-        let socket =
-            bind_connected_udp_using("ignored.invalid", echo_port, budget, move |_host, _port| {
+        let socket = bind_connected_udp_using(
+            "ignored.invalid",
+            echo_port,
+            budget,
+            64,
+            move |_host, _port| {
                 std::thread::sleep(dns_consumes);
                 Ok(vec![SocketAddr::from(([127, 0, 0, 1], echo_port))])
-            })
-            .expect("bind_connected_udp_using");
+            },
+        )
+        .expect("bind_connected_udp_using");
 
         let read_t = socket
             .read_timeout()
@@ -1044,7 +1121,7 @@ mod tests {
             host: "time.cloudflare.com".to_owned(),
             port: DEFAULT_KE_PORT,
         };
-        let sample = nts_query(spec.clone(), 10_000).expect("nts_query");
+        let sample = nts_query(spec.clone(), 10_000, 0).expect("nts_query");
         assert_eq!(sample.aead_id, aead_ids::AES_SIV_CMAC_256);
         assert!(sample.server_stratum > 0 && sample.server_stratum < 16);
         assert!(sample.round_trip_micros > 0);
@@ -1063,7 +1140,7 @@ mod tests {
         );
 
         // Second call should reuse the session and avoid a re-handshake.
-        let sample2 = nts_query(spec, 10_000).expect("nts_query 2");
+        let sample2 = nts_query(spec, 10_000, 0).expect("nts_query 2");
         assert!(sample2.utc_unix_micros >= sample.utc_unix_micros);
     }
 
@@ -1082,7 +1159,7 @@ mod tests {
             host: "ptbtime1.ptb.de".to_owned(),
             port: DEFAULT_KE_PORT,
         };
-        match nts_query(spec, 10_000) {
+        match nts_query(spec, 10_000, 0) {
             Ok(sample) => {
                 assert!(sample.server_stratum > 0 && sample.server_stratum < 16);
                 assert!(sample.round_trip_micros > 0);

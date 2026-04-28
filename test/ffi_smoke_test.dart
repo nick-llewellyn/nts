@@ -27,6 +27,7 @@ class _FakeRustLibApi implements RustLibApi {
   Future<NtsTimeSample> crateApiNtsNtsQuery({
     required NtsServerSpec spec,
     required int timeoutMs,
+    required int dnsConcurrencyCap,
   }) async => NtsTimeSample(
     utcUnixMicros: PlatformInt64Util.from(1_777_334_400 * 1000000),
     roundTripMicros: PlatformInt64Util.from(12_500),
@@ -39,6 +40,7 @@ class _FakeRustLibApi implements RustLibApi {
   Future<int> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
+    required int dnsConcurrencyCap,
   }) async => 8;
 
   @override
@@ -66,7 +68,11 @@ void main() {
 
     test('ntsQuery() dispatches through the mock api', () async {
       const spec = NtsServerSpec(host: 'time.example', port: 4460);
-      final sample = await ntsQuery(spec: spec, timeoutMs: 5000);
+      final sample = await ntsQuery(
+        spec: spec,
+        timeoutMs: 5000,
+        dnsConcurrencyCap: 0,
+      );
       expect(sample.aeadId, 15);
       expect(sample.serverStratum, 1);
       expect(sample.freshCookies, 1);
@@ -75,7 +81,11 @@ void main() {
 
     test('ntsWarmCookies() dispatches through the mock api', () async {
       const spec = NtsServerSpec(host: 'time.example', port: 4460);
-      final count = await ntsWarmCookies(spec: spec, timeoutMs: 5000);
+      final count = await ntsWarmCookies(
+        spec: spec,
+        timeoutMs: 5000,
+        dnsConcurrencyCap: 0,
+      );
       expect(count, 8);
     });
 

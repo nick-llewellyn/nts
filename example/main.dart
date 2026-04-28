@@ -42,7 +42,11 @@ Future<void> main() async {
     // calls skip the KE leg until the jar drains. Useful at startup or
     // whenever the NTS-KE cost should be amortized away from a
     // time-critical path.
-    final warmed = await ntsWarmCookies(spec: spec, timeoutMs: 5000);
+    final warmed = await ntsWarmCookies(
+      spec: spec,
+      timeoutMs: 5000,
+      dnsConcurrencyCap: 0,
+    );
     print('warmed   = $warmed cookies');
 
     // Phase 2 — spend the warmed cookies on authenticated NTPv4
@@ -51,7 +55,9 @@ Future<void> main() async {
     // sample so we can score them against each other below.
     final samples = <NtsTimeSample>[];
     for (var i = 0; i < warmed; i++) {
-      samples.add(await ntsQuery(spec: spec, timeoutMs: 5000));
+      samples.add(
+        await ntsQuery(spec: spec, timeoutMs: 5000, dnsConcurrencyCap: 0),
+      );
     }
 
     // Pick the sample with the smallest measured round-trip. NTP's

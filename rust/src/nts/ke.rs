@@ -104,6 +104,12 @@ pub struct KeRequest {
     pub aead_algorithms: Vec<u16>,
     /// Read/write timeout applied to the underlying TCP socket.
     pub timeout: Option<Duration>,
+    /// Per-call ceiling on the process-wide bounded DNS resolver pool
+    /// (see [`crate::nts::dns`]). Compared against the global in-flight
+    /// counter before the resolver thread is dispatched; saturation
+    /// surfaces as `io::ErrorKind::WouldBlock` which the
+    /// `From<io::Error> for NtsError` mapping reuses for `Timeout`.
+    pub dns_concurrency_cap: usize,
 }
 
 /// All artifacts negotiated during a successful handshake.
@@ -451,8 +457,13 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     let mut conn = ClientConnection::new(cfg, server_name)?;
 
     let deadline = req.timeout.map(Deadline::new);
-    let mut tcp =
-        connect_with_deadline_using(req.host.as_str(), req.port, deadline, system_lookup)?;
+    let mut tcp = connect_with_deadline_using(
+        req.host.as_str(),
+        req.port,
+        deadline,
+        req.dns_concurrency_cap,
+        system_lookup,
+    )?;
     if let Some(d) = deadline.as_ref() {
         d.apply_to(&tcp)?;
     }
@@ -518,7 +529,13 @@ fn connect_with_timeout(
     port: u16,
     timeout: Option<Duration>,
 ) -> Result<TcpStream, KeError> {
-    connect_with_timeout_using(host, port, timeout, system_lookup)
+    connect_with_timeout_using(
+        host,
+        port,
+        timeout,
+        crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+        system_lookup,
+    )
 }
 
 /// Test-friendly variant of [`connect_with_timeout`] that takes a
@@ -533,12 +550,19 @@ fn connect_with_timeout_using<F>(
     host: &str,
     port: u16,
     timeout: Option<Duration>,
+    dns_concurrency_cap: usize,
     lookup: F,
 ) -> Result<TcpStream, KeError>
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
-    connect_with_deadline_using(host, port, timeout.map(Deadline::new), lookup)
+    connect_with_deadline_using(
+        host,
+        port,
+        timeout.map(Deadline::new),
+        dns_concurrency_cap,
+        lookup,
+    )
 }
 
 /// Core connect helper bounded by an optional [`Deadline`]. When
@@ -558,6 +582,7 @@ fn connect_with_deadline_using<F>(
     host: &str,
     port: u16,
     deadline: Option<Deadline>,
+    dns_concurrency_cap: usize,
     lookup: F,
 ) -> Result<TcpStream, KeError>
 where
@@ -577,7 +602,7 @@ where
     // caller's original duration. A stalled getaddrinfo would otherwise
     // consume the entire budget before the first connect attempt could
     // even start.
-    let addrs = resolve_with_global(host, port, initial, lookup)?;
+    let addrs = resolve_with_global(host, port, initial, dns_concurrency_cap, lookup)?;
     let mut last_err: Option<std::io::Error> = None;
     for addr in addrs {
         let remaining = deadline.remaining();
@@ -1029,8 +1054,13 @@ mod tests {
     fn connect_with_timeout_surfaces_slow_dns_as_timed_out() {
         let budget = Duration::from_millis(50);
         let started = Instant::now();
+        // Generous cap so this test stays isolated from any other
+        // test in the suite that holds slots in the global resolver
+        // pool. The test is pinning the slow-DNS → TimedOut mapping,
+        // not the cap-exhaustion path (which has dedicated coverage in
+        // `dns::tests::cap_reached_returns_would_block`).
         let result =
-            connect_with_timeout_using("ignored.invalid", 0, Some(budget), |_host, _port| {
+            connect_with_timeout_using("ignored.invalid", 0, Some(budget), 64, |_host, _port| {
                 std::thread::sleep(Duration::from_secs(2));
                 Ok(vec![SocketAddr::from(([127, 0, 0, 1], 0))])
             });
@@ -1124,7 +1154,13 @@ mod tests {
         let budget = Duration::from_millis(500);
         let deadline = Some(Deadline::new(budget));
         let started = Instant::now();
-        let result = connect_with_deadline_using("192.0.2.1", 4460, deadline, system_lookup);
+        let result = connect_with_deadline_using(
+            "192.0.2.1",
+            4460,
+            deadline,
+            crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+            system_lookup,
+        );
         let elapsed = started.elapsed();
         assert!(result.is_err(), "connecting to TEST-NET-1 must fail");
         let cap = Duration::from_secs(5);
@@ -1148,6 +1184,7 @@ mod tests {
             port: 4460,
             aead_algorithms: vec![aead::AES_SIV_CMAC_256],
             timeout: Some(Duration::from_secs(10)),
+            dns_concurrency_cap: crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
         };
         let outcome = perform_handshake(&req).expect("handshake");
         assert_eq!(outcome.aead_id, aead::AES_SIV_CMAC_256);

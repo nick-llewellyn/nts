@@ -225,7 +225,11 @@ String? _autoLocateDylib() {
 Future<void> _runQuery(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
   ctx.start('nts_query', spec.host, 'Starting query');
   try {
-    final sample = await ntsQuery(spec: spec, timeoutMs: timeoutMs);
+    final sample = await ntsQuery(
+      spec: spec,
+      timeoutMs: timeoutMs,
+      dnsConcurrencyCap: 0,
+    );
     ctx.success(
       'nts_query',
       spec.host,
@@ -242,7 +246,11 @@ Future<void> _runQuery(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
 Future<void> _runWarm(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
   ctx.start('nts_warm_cookies', spec.host, 'Starting warm');
   try {
-    final n = await ntsWarmCookies(spec: spec, timeoutMs: timeoutMs);
+    final n = await ntsWarmCookies(
+      spec: spec,
+      timeoutMs: timeoutMs,
+      dnsConcurrencyCap: 0,
+    );
     ctx.success(
       'nts_warm_cookies',
       spec.host,

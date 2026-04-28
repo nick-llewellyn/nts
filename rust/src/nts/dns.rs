@@ -15,14 +15,26 @@
 //! lookup finish in the background and drop its result. To stop a
 //! pathological resolver from accumulating an unbounded backlog of
 //! detached workers (each holding a TLS stack and an OS thread), the
-//! module enforces a process-wide cap of
-//! [`MAX_INFLIGHT_DNS_LOOKUPS`] in-flight resolutions. When the cap is
-//! reached the next call returns `io::ErrorKind::WouldBlock` *without*
-//! spawning a thread — the caller can retry once the in-flight pool
-//! drains. Slots are tracked by a [`SlotGuard`] that is moved into the
-//! worker thread and decrements the global counter when the worker
-//! actually returns from the system resolver, so a timed-out request
-//! does not free its slot until `getaddrinfo` itself unblocks.
+//! module enforces a process-wide cap on in-flight resolutions. The
+//! cap defaults to [`DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`] (sized for
+//! mobile devices, where each leaked thread costs ~512 KB-1 MB of
+//! committed stack on iOS/Android) and can be raised per-call by
+//! callers that knowingly run on hosts with more headroom. When the
+//! cap is reached the next call returns `io::ErrorKind::WouldBlock`
+//! *without* spawning a thread — the caller can retry once the
+//! in-flight pool drains. Slots are tracked by a [`SlotGuard`] that is
+//! moved into the worker thread and decrements the global counter when
+//! the worker actually returns from the system resolver, so a
+//! timed-out request does not free its slot until `getaddrinfo` itself
+//! unblocks.
+//!
+//! The cap is fundamentally a *global* resource: there is one
+//! process-wide counter and the per-call argument is a threshold
+//! compared against it before dispatch. When two concurrent callers
+//! pass different caps, the effective ceiling at any moment is set by
+//! whichever caller is currently being admitted — the lower-cap caller
+//! still refuses to dispatch once its own threshold is reached, even
+//! if a higher-cap caller would have tolerated more workers.
 //!
 //! The lookup function and the slot counter are both parameterised so
 //! tests can substitute a deterministic stub (e.g. one that
@@ -40,12 +52,17 @@ use std::thread;
 use std::time::Duration;
 
 /// Maximum number of `nts-dns` worker threads that may be alive
-/// simultaneously. Sized for the expected NTS workload (a handful of
-/// servers warmed in parallel from the FRB v2 worker pool) with
-/// generous headroom so legitimate bursts never trip the cap, while
-/// still capping the memory cost of a blackholed resolver to ~16
-/// detached threads instead of one-per-call unbounded growth.
-pub(crate) const MAX_INFLIGHT_DNS_LOOKUPS: usize = 16;
+/// simultaneously when the caller does not specify a cap of its own.
+/// Sized for the expected NTS workload (a handful of servers warmed in
+/// parallel from the FRB v2 worker pool) on the most resource-
+/// constrained platforms we ship to: iOS extensions cap process memory
+/// at ~50 MB, and each leaked detached worker (see module docs) costs
+/// ~512 KB of pthread stack on iOS and ~1 MB on Android. Capping at
+/// four bounds the worst-case mobile leak from a blackholed resolver
+/// to ~4 MB. Server-side callers that legitimately need more
+/// concurrency can override this per-call via the `dns_concurrency_cap`
+/// FFI parameter on `nts_query` / `nts_warm_cookies`.
+pub(crate) const DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS: usize = 4;
 
 /// Process-wide counter of `nts-dns` worker threads currently blocked
 /// in [`system_lookup`] (or a test-injected stub). Incremented before
@@ -104,38 +121,46 @@ fn try_acquire_slot(counter: &'static AtomicUsize, cap: usize) -> Option<SlotGua
 /// `TimedOut` `io::Error` if the system resolver does not respond
 /// within `timeout`, or `WouldBlock` if the global resolver pool is
 /// already saturated. An empty result propagates as `Ok(vec![])` so
-/// the caller can attach its own context.
+/// the caller can attach its own context. Uses
+/// [`DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`] as the concurrency cap;
+/// callers that need a different threshold use [`resolve_with_global`]
+/// directly.
 pub(crate) fn resolve_with_timeout(
     host: &str,
     port: u16,
     timeout: Duration,
 ) -> io::Result<Vec<SocketAddr>> {
-    resolve_with_global(host, port, timeout, system_lookup)
+    resolve_with_global(
+        host,
+        port,
+        timeout,
+        DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+        system_lookup,
+    )
 }
 
-/// Bounded resolution against the global pool (`MAX_INFLIGHT_DNS_LOOKUPS`)
-/// with a caller-supplied lookup closure. Production NTS-KE / UDP
-/// callers route through this helper so the slow-resolver test seam
-/// in `nts::ke` and `api::nts` (which needs to inject a sleeping
-/// closure) shares the same cap-enforcement and slot-tracking as
+/// Bounded resolution against the global pool with a caller-supplied
+/// concurrency cap and lookup closure. Production NTS-KE / UDP callers
+/// route through this helper so the slow-resolver test seam in
+/// `nts::ke` and `api::nts` (which needs to inject a sleeping closure)
+/// shares the same cap-enforcement and slot-tracking as
 /// [`resolve_with_timeout`].
+///
+/// `cap` is compared against the *global* counter; concurrent callers
+/// that pass different caps see the global ceiling track whichever
+/// caller is currently being admitted. Pass
+/// [`DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`] for the FFI-default behaviour.
 pub(crate) fn resolve_with_global<F>(
     host: &str,
     port: u16,
     timeout: Duration,
+    cap: usize,
     lookup: F,
 ) -> io::Result<Vec<SocketAddr>>
 where
     F: FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + 'static,
 {
-    resolve_with(
-        &IN_FLIGHT_DNS_LOOKUPS,
-        MAX_INFLIGHT_DNS_LOOKUPS,
-        host,
-        port,
-        timeout,
-        lookup,
-    )
+    resolve_with(&IN_FLIGHT_DNS_LOOKUPS, cap, host, port, timeout, lookup)
 }
 
 /// Bounded resolution with a caller-supplied counter, cap, and lookup

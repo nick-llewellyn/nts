@@ -36,6 +36,7 @@ class MockNtsApi implements RustLibApi {
   Future<NtsTimeSample> crateApiNtsNtsQuery({
     required NtsServerSpec spec,
     required int timeoutMs,
+    required int dnsConcurrencyCap,
   }) async {
     // Simulate a realistic TLS+UDP RTT so the UI feels live.
     final rttMs = 25 + _random.nextInt(40);
@@ -61,6 +62,7 @@ class MockNtsApi implements RustLibApi {
   Future<int> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
+    required int dnsConcurrencyCap,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 80));
     return 8;

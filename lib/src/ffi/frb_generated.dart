@@ -86,11 +86,13 @@ abstract class RustLibApi extends BaseApi {
   Future<NtsTimeSample> crateApiNtsNtsQuery({
     required NtsServerSpec spec,
     required int timeoutMs,
+    required int dnsConcurrencyCap,
   });
 
   Future<int> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
+    required int dnsConcurrencyCap,
   });
 }
 
@@ -161,6 +163,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<NtsTimeSample> crateApiNtsNtsQuery({
     required NtsServerSpec spec,
     required int timeoutMs,
+    required int dnsConcurrencyCap,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -168,6 +171,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_box_autoadd_nts_server_spec(spec, serializer);
           sse_encode_u_32(timeoutMs, serializer);
+          sse_encode_u_32(dnsConcurrencyCap, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -180,7 +184,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_nts_error,
         ),
         constMeta: kCrateApiNtsNtsQueryConstMeta,
-        argValues: [spec, timeoutMs],
+        argValues: [spec, timeoutMs, dnsConcurrencyCap],
         apiImpl: this,
       ),
     );
@@ -188,13 +192,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiNtsNtsQueryConstMeta => const TaskConstMeta(
     debugName: "nts_query",
-    argNames: ["spec", "timeoutMs"],
+    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap"],
   );
 
   @override
   Future<int> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
+    required int dnsConcurrencyCap,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -202,6 +207,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_box_autoadd_nts_server_spec(spec, serializer);
           sse_encode_u_32(timeoutMs, serializer);
+          sse_encode_u_32(dnsConcurrencyCap, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -214,7 +220,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_nts_error,
         ),
         constMeta: kCrateApiNtsNtsWarmCookiesConstMeta,
-        argValues: [spec, timeoutMs],
+        argValues: [spec, timeoutMs, dnsConcurrencyCap],
         apiImpl: this,
       ),
     );
@@ -222,7 +228,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiNtsNtsWarmCookiesConstMeta => const TaskConstMeta(
     debugName: "nts_warm_cookies",
-    argNames: ["spec", "timeoutMs"],
+    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap"],
   );
 
   @protected

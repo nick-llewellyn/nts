@@ -80,7 +80,11 @@ class NtsController {
   Future<void> runQuery(NtsServerEntry entry) async {
     state.log.info('nts_query', 'Starting query', host: entry.hostname);
     try {
-      final sample = await ntsQuery(spec: entry.spec, timeoutMs: _kTimeoutMs);
+      final sample = await ntsQuery(
+        spec: entry.spec,
+        timeoutMs: _kTimeoutMs,
+        dnsConcurrencyCap: 0,
+      );
       state.log.info(
         'nts_query',
         formatQuerySuccess(sample),
@@ -103,7 +107,11 @@ class NtsController {
   Future<void> warmCookies(NtsServerEntry entry) async {
     state.log.info('nts_warm_cookies', 'Starting warm', host: entry.hostname);
     try {
-      final n = await ntsWarmCookies(spec: entry.spec, timeoutMs: _kTimeoutMs);
+      final n = await ntsWarmCookies(
+        spec: entry.spec,
+        timeoutMs: _kTimeoutMs,
+        dnsConcurrencyCap: 0,
+      );
       state.log.info(
         'nts_warm_cookies',
         formatWarmSuccess(n),

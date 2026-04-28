@@ -136,15 +136,35 @@ burst-filter-compensate flow described above.
 | Symbol | Purpose |
 |--------|---------|
 | `RustLib.init()` | Load the native bridge. Await once before any other call. |
-| `ntsQuery({spec, timeoutMs})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
-| `ntsWarmCookies({spec, timeoutMs})` | Force a fresh NTS-KE handshake; returns cookie count. |
+| `ntsQuery({spec, timeoutMs, dnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
+| `ntsWarmCookies({spec, timeoutMs, dnsConcurrencyCap})` | Force a fresh NTS-KE handshake; returns cookie count. |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
 | `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`. |
 | `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout`, `noCookies`, `internal`. |
 
-`timeoutMs` is applied independently to the KE handshake and the UDP
-recv leg. Use a `switch` expression on `NtsError` for exhaustive
-failure handling.
+`timeoutMs` is a global wall-clock budget anchored at the start of
+each call: it bounds DNS resolution, the NTS-KE TCP connect plus TLS
+handshake plus record I/O, and the AEAD-NTPv4 UDP exchange as a single
+shrinking deadline rather than rearming each phase independently. A
+stalled `getaddrinfo` therefore cannot stretch the total cost past the
+caller's budget, and the UDP recv inherits whatever portion of the
+budget the KE leg did not consume. Use a `switch` expression on
+`NtsError` for exhaustive failure handling; budget exhaustion at any
+phase surfaces as `NtsError.timeout`.
+
+`dnsConcurrencyCap` is a per-call ceiling on the number of in-flight
+`getaddrinfo` worker threads the package will spawn process-wide. The
+resolver is bounded by design — `getaddrinfo` is non-cancellable, so a
+stalled lookup is detached and finishes in the background; this cap is
+the primary defense against thread-stack accumulation when a recursive
+resolver blackholes traffic. Pass `0` to inherit the built-in default
+of **4**, sized for the worst case on iOS / Android (~512 KB-1 MB of
+committed pthread stack per leaked worker). Server-side callers that
+legitimately need higher fan-out can override per call (`32`, `64`,
+etc.). The cap is compared against the *global* counter, so two
+concurrent callers passing different values share the same in-flight
+pool: the effective ceiling at any moment is whichever caller is
+currently being admitted. Saturation surfaces as `NtsError.timeout`.
 
 ## Demos & Examples
 
