@@ -86,8 +86,7 @@ class _LogViewState extends State<LogView> {
     final bool followToBottom;
     if (_scroll.hasClients) {
       final pos = _scroll.position;
-      followToBottom =
-          pos.pixels >= pos.maxScrollExtent - _stickyThresholdPx;
+      followToBottom = pos.pixels >= pos.maxScrollExtent - _stickyThresholdPx;
     } else {
       // First frame: nothing has been laid out yet, so the user
       // cannot have scrolled away. Treat that as "follow".
