@@ -72,14 +72,31 @@ class _LogViewState extends State<LogView> {
   /// only when the user is already pinned within [_stickyThresholdPx]
   /// of the bottom — readers who scrolled up to inspect an older line
   /// are deliberately *not* yanked forward.
+  ///
+  /// The stickiness decision is made *synchronously* against the
+  /// current (pre-append) layout, before `Watch` has rebuilt and the
+  /// viewport has remeasured. Deferring it into the post-frame
+  /// callback would compare the user's unchanged `pos.pixels` against
+  /// the post-append (larger) `maxScrollExtent`, so any burst of
+  /// appends taller than [_stickyThresholdPx] would mis-classify a
+  /// reader who *was* at the bottom as "scrolled up" and skip the
+  /// follow-scroll. The animation target is still resolved inside the
+  /// post-frame callback so it reads the freshly grown extent.
   void _scheduleAutoScroll() {
-    // Run after the next frame so the underlying viewport has had a
-    // chance to remeasure with the appended entry.
+    final bool followToBottom;
+    if (_scroll.hasClients) {
+      final pos = _scroll.position;
+      followToBottom =
+          pos.pixels >= pos.maxScrollExtent - _stickyThresholdPx;
+    } else {
+      // First frame: nothing has been laid out yet, so the user
+      // cannot have scrolled away. Treat that as "follow".
+      followToBottom = true;
+    }
+    if (!followToBottom) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       final pos = _scroll.position;
-      final atBottom = pos.pixels >= pos.maxScrollExtent - _stickyThresholdPx;
-      if (!atBottom) return;
       // animateTo is preferred here so a burst of appends (e.g. a
       // probe-all run) reads as a smooth follow rather than a series
       // of teleports. The 120 ms ease-out lands well below the next
