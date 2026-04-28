@@ -2,7 +2,7 @@ name: nts
 description: >-
   Authenticated NTP via Network Time Security (RFC 8915) for Dart and Flutter
   using the Native Assets pipeline.
-version: 1.1.1
+version: 1.1.2
 homepage: https://github.com/nick-llewellyn/nts
 repository: https://github.com/nick-llewellyn/nts
 issue_tracker: https://github.com/nick-llewellyn/nts/issues
@@ -18,7 +18,7 @@ screenshots:
   - description: >-
       Flutter GUI showcase: NTS server catalog with region filtering,
       favourites, and a unified live log of authenticated time queries.
-    path: screenshots/gui_showcase.png
+    path: screenshots/gui_showcase.webp
 
 # Explicit platform allow-list. RFC 8915 requires raw TCP (NTS-KE on
 # :4460) and raw UDP (NTPv4 on :123) sockets, neither of which is

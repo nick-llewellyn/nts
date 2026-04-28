@@ -1,5 +1,71 @@
 # Changelog
 
+## 1.1.2
+
+Example-app polish and RFC 8915 §4 compliance in the consumer demo. No
+changes to the published Dart surface (`ntsQuery`, `ntsWarmCookies`,
+`NtsServerSpec`, `NtsTimeSample`, `NtsError`), the Rust crate
+(`nts_rust` stays at `0.2.1`), the FFI bindings, or the Native Assets
+build hook. The diff is confined to `example/`, `README.md`, and
+`example/GUI_GUIDE.md`.
+
+### Example app (`example/`)
+
+- `example/lib/src/widgets/log_view.dart`: fix an auto-scroll
+  "stickiness" race condition. The scroll-to-bottom side-effect ran in
+  a `WidgetsBinding.instance.addPostFrameCallback`, so by the time the
+  callback evaluated whether the user had been near the bottom the
+  layout had already been extended by the freshly-appended entry and
+  the threshold check fired against `maxScrollExtent` measured *after*
+  the append. The decision is now taken synchronously in the signal
+  effect against the pre-append layout, while the animated jump still
+  runs post-frame against the resolved target. The 32 px stickiness
+  threshold and 120 ms animation duration are unchanged.
+- `example/main.dart`, `example/example.md`, `README.md`,
+  `example/GUI_GUIDE.md`: drop the hardcoded `const _burstSize = 8`
+  assumption from the warm-then-burst sample. RFC 8915 §4 leaves the
+  cookie-pool size to server policy — the NTS-KE handshake does not
+  let a client request a specific count — so the burst loop now runs
+  `for (var i = 0; i < warmed; i++)` against the actual count returned
+  by `ntsWarmCookies`. Prose in `README.md` and `example/GUI_GUIDE.md`
+  is rewritten to cite the RFC and the live-log `recovered N fresh
+  cookie(s)` report rather than the previous "(typically 8)" /
+  "Eight matches" framing. `example/main.dart` and the fenced block in
+  `example/example.md` remain byte-for-byte identical at 5172 bytes.
+- `example/lib/src/widgets/log_view.dart`: trim ~20 px of trailing
+  whitespace below the newest log entry. After the stickiness fix made
+  the layout settle visibly, two compounding sources of dead space at
+  the bottom of the log card became apparent: `_spansFor` appended
+  `\n` to *every* entry (including the last), leaving a phantom blank
+  line; and `SingleChildScrollView` used symmetric
+  `EdgeInsets.all(12)`, stacking 12 px of bottom inset on top of that
+  phantom line. The fix drops the trailing newline from the message
+  span, inserts a `TextSpan(text: '\n')` separator *between* entries
+  at the build site (so adjacent entries still render on their own
+  lines, and selection-copy still yields one entry per line), and
+  tightens the bottom padding to `EdgeInsets.fromLTRB(12, 12, 12, 8)`.
+  Total trailing gutter below the newest entry: ~28 px → ~8 px.
+
+### Packaging
+
+- `screenshots/gui_showcase.png` (820,984 bytes) → `gui_showcase.webp`
+  (183,230 bytes, −78%) via `cwebp -lossless -z 9 -m 6`. Output is
+  pixel-identical to the source PNG (lossless ARGB, dimensions
+  preserved at 1766×2062, alpha intact). `pubspec.yaml`'s
+  `screenshots:` entry now points at the `.webp` path. pub.dev's
+  screenshot pipeline is WebP-native via pana's `webpinfo` validator,
+  so this also skips the server-side `cwebp` round-trip. Tarball
+  footprint drops from 835 KB to ~213 KB.
+
+### Verification
+
+- `fvm flutter analyze` (root + `example/`): no issues.
+- `fvm dart analyze` (root): no issues.
+- `fvm flutter test` (`example/`): 31 / 31 pass.
+- `example/main.dart` ↔ `example/example.md` fenced-block byte-for-byte
+  parity holds at 5172 bytes.
+- `webpinfo screenshots/gui_showcase.webp`: VP8L, 1766×2062, alpha=1.
+
 ## 1.1.1
 
 Maintenance release. The public Dart surface (`ntsQuery`, `ntsWarmCookies`,
