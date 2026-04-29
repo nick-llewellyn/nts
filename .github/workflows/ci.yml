@@ -355,11 +355,23 @@ jobs:
     name: Dependency review
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    # Force the JavaScript action runtime to Node.js 24. Upstream
+    # `actions/dependency-review-action` (latest v4.9.0, March 2026) still
+    # ships `runs.using: node20` in its action.yml, which the runner now
+    # warns against ("Node.js 20 actions are deprecated... forced to Node 24
+    # by default starting June 2nd, 2026"). The runner-documented opt-in
+    # below switches this job to the supported Node 24 runtime today; remove
+    # this env once a release of the action lands with `using: node24` (or
+    # once GitHub flips the default in June 2026).
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
       - name: Review dependencies
-        uses: actions/dependency-review-action@v4
+        # Pinned to the latest patch (v4.9.0) instead of the floating `v4`
+        # tag so dependency / Node-runtime bumps land deliberately.
+        uses: actions/dependency-review-action@v4.9.0
         with:
           fail-on-severity: high
