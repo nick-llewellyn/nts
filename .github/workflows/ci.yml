@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
       - 'LICENSE'
       - '.gitignore'
       - '.beads/**'
@@ -12,7 +11,6 @@ on:
   pull_request:
     branches: [main]
     paths-ignore:
-      - '**.md'
       - 'LICENSE'
       - '.gitignore'
       - '.beads/**'
@@ -42,9 +40,13 @@ concurrency:
 jobs:
   changes:
     # Cheap path-filter pass that classifies the diff and gates the heavy
-    # Rust jobs below. paths-ignore (above) already drops doc / metadata
-    # commits at the trigger level; this job adds finer per-area gating
-    # so e.g. a Dart-only edit doesn't pay for cargo build + frb codegen.
+    # Dart and Rust jobs below. The trigger-level `paths-ignore` only
+    # filters truly-irrelevant assets (LICENSE, top-level .gitignore,
+    # screenshots, beads issue snapshots). Markdown is intentionally NOT
+    # in `paths-ignore` so doc-only PRs still trigger the workflow and
+    # required status checks resolve (skipped jobs count as passing for
+    # branch protection); this job classifies the diff so doc-only PRs
+    # skip the heavy build/rust matrices instead.
     name: Detect changed paths
     runs-on: ubuntu-latest
     outputs:
@@ -52,6 +54,7 @@ jobs:
       bindings: ${{ steps.filter.outputs.bindings }}
       dart: ${{ steps.filter.outputs.dart }}
       ci: ${{ steps.filter.outputs.ci }}
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -76,6 +79,8 @@ jobs:
               - 'analysis_options.yaml'
             ci:
               - '.github/workflows/**'
+            docs:
+              - '**.md'
 
   build:
     # Matrix exercises both the declared SDK floor (3.38.10 -- oldest stable
@@ -84,12 +89,21 @@ jobs:
     # only on the pinned version because `dart format` output can shift
     # between Dart minors and we don't want spurious failures on the floor.
     #
-    # Always runs (no `if:` gate): the Dart pipeline is cheap and provides
-    # the foundational format / analyze / test feedback on every change
-    # that survives paths-ignore.
+    # Skipped (whole matrix) when the diff is doc-only: `**.md` is no
+    # longer in trigger-level `paths-ignore` (so required status checks
+    # can resolve on doc PRs), but there's nothing for `dart analyze` or
+    # `flutter test` to validate when only Markdown moved. Skipped jobs
+    # count as passing for branch protection, so the four required
+    # checks (this matrix + `rust` + `rust-bridge-sync`) all report green.
     name: Format / analyze / Dart tests (Flutter ${{ matrix.flutter }})
     runs-on: ubuntu-latest
     needs: changes
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.dart == 'true' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.bindings == 'true' ||
+      needs.changes.outputs.ci == 'true'
     # `id-token: write` is required for the Codecov OIDC tokenless
     # upload below. Scoped to this job rather than workflow-wide so the
     # `rust-bridge-sync` job (which does not upload coverage) keeps the

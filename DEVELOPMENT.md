@@ -187,21 +187,26 @@ so existing required-check rules continue to work unchanged.
 
 Two cheaper filters run before the workflow even queues:
 
-- **`paths-ignore`** (`.github/workflows/ci.yml`): doc / metadata
-  paths — `**.md`, `LICENSE`, `.gitignore`, `.beads/**`,
-  `screenshots/**` — never trigger a workflow run.
+- **`paths-ignore`** (`.github/workflows/ci.yml`): truly-irrelevant
+  assets — `LICENSE`, `.gitignore`, `.beads/**`, `screenshots/**` —
+  never trigger a workflow run. Markdown is **not** in this list:
+  doc-only PRs need to trigger the workflow so required status
+  checks resolve (the `build`, `rust`, and `rust-bridge-sync` jobs
+  then skip via job-level `if:` and report green, since GitHub
+  treats skipped jobs as passing for branch protection).
 - **`[skip ci]` commit-message flag**: any commit whose message
   contains `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, or
   `[actions skip]` is bypassed by GitHub Actions. Prefer this only
   when `paths-ignore` doesn't cover the case (e.g. a single commit
   that touches both an ignored file and a non-ignored one but is
-  known to be CI-irrelevant).
+  known to be CI-irrelevant); never use it on PRs to `main`, since
+  it would also bypass the required status checks.
 
 ### When to use each layer
 
 | Change | Behaviour |
 |--------|-----------|
-| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow doesn't run (`paths-ignore`). |
+| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, and `rust-bridge-sync` skip via `if:`. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
 | Beads issue update (`.beads/**`) | Workflow doesn't run (`paths-ignore`). |
 | Screenshot asset swap (`screenshots/**`) | Workflow doesn't run (`paths-ignore`). |
 | Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust` and `rust-bridge-sync` skip. |
@@ -228,7 +233,7 @@ protection rules → main*:
 | Require a pull request before merging | **on** | Forces every change through the CI pipeline and creates a reviewable diff. |
 | Required number of approvals before merging | **0** | Solo-maintainer repo; CI is the gate, not a second pair of eyes. |
 | Dismiss stale pull request approvals when new commits are pushed | **off** | No-op at 0 approvals; explicitly off so the setting is unambiguous. |
-| Require status checks to pass before merging | **off (for now)** | `ci.yml` declares `paths-ignore: '**.md'` on both `push` and `pull_request`, so a doc-only PR (e.g. a fix to this file) does not trigger the workflow at all and therefore never reports the required checks — GitHub would block such PRs forever waiting for a status that never comes. Turn this on (with required checks `Format / analyze / Dart tests (Flutter 3.38.10)`, `Format / analyze / Dart tests (Flutter 3.41.7)`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`) only after either dropping `**.md` from `paths-ignore` and gating `build` on the `changes` filter, or adding an always-on lightweight check that reports on doc-only PRs. Tracked in `nts-dz1`. |
+| Require status checks to pass before merging | **on** | Required checks: `Format / analyze / Dart tests (Flutter 3.38.10)`, `Format / analyze / Dart tests (Flutter 3.41.7)`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`. Markdown is intentionally excluded from trigger-level `paths-ignore` so doc-only PRs trigger the workflow and the four jobs all skip via `if:` (skipped → passing for branch protection). Codecov keeps reporting on doc-only commits via `.codecov.yml` carryforward flags. |
 | Require branches to be up to date before merging | **on** | Catches semantic conflicts CI would miss when `main` advances mid-PR. |
 | Require conversation resolution before merging | **on** | Self-applied: forces the author to mark their own follow-ups as addressed. |
 | Require linear history | **on** | Pairs with the squash-only merge policy below; matches the `vX.Y.Z` tag-driven release flow. |

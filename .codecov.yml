@@ -1,0 +1,39 @@
+# Codecov configuration for nts.
+#
+# Validate locally before merging:
+#   curl --data-binary @.codecov.yml https://codecov.io/validate
+#
+# Carryforward flags let a commit inherit the parent's coverage report
+# per flag when no upload is produced for that flag on the new commit.
+# Without this, a doc-only commit (or any commit where the gating
+# `if:` in ci.yml skips the matching matrix leg) lands on `main` with
+# no Codecov sessions and the dashboard reports "tracked lines
+# deactivated" until the next code-touching merge restores HEAD
+# coverage. With carryforward, the dart and rust flags inherit the
+# previous commit's sessions so HEAD always has data.
+#
+# `paths` is required for carryforward to disambiguate which files
+# belong to each flag; otherwise Codecov treats the flag as covering
+# the whole repo and merge logic gets surprising.
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    # Wait for all CI jobs to finish before posting the status. Avoids
+    # transient "missing dart flag" status flips when the rust job
+    # finishes first.
+    wait_for_ci: true
+
+flags:
+  dart:
+    paths:
+      - lib/
+    carryforward: true
+  rust:
+    paths:
+      - rust/src/
+    carryforward: true
+
+# Coverage status thresholds left at Codecov defaults (auto target,
+# no fixed floor). Tighten here once the project + patch baselines
+# stabilise; tracked separately from the carryforward fix.
