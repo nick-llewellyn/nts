@@ -16,8 +16,12 @@ bd dolt push          # Push beads data to remote
 
 `main` is protected; **never `git push` directly to `main`**. Every
 change — including agent-authored ones — must land through a pull
-request that has cleared CI. Required approvals are set to **0**, so
-self-merging is the expected default once CI is green.
+request. Required approvals are set to **0**, so self-merging is the
+expected default once the applicable checks pass. Most PRs must clear
+CI before merging; doc-only changes (covered by `paths-ignore: '**.md'`
+in `ci.yml`) skip the workflow entirely and merge once the PR exists.
+See [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow) for the
+authoritative branch-protection table.
 
 Standard agent loop on a fresh task:
 
