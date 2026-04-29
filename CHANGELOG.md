@@ -39,6 +39,25 @@ unchanged at `0.2.2`.
   regenerated from the Rust source and tracks the new wording. No
   other diff in the FRB-generated layer.
 
+### Documentation
+
+- Clarify shared-pool semantics for mixed-cap callers in the
+  `rust/src/nts/dns.rs` module header and the "Timeout budget and
+  bounded DNS" section of `ARCHITECTURE.md`. The 1.2.0 wording —
+  "the effective ceiling at any moment is set by whichever caller is
+  currently being admitted" — invited a stateful reading in which the
+  most recently admitted caller's cap somehow governs subsequent
+  admissions. The actual mechanic is purely local: every admitted
+  worker counts toward every caller's threshold, and each admission
+  decision compares the live pool size against *that call's* own cap.
+  The replacement wording names the asymmetric starvation behaviour
+  explicitly (a small-cap caller can be refused when the pool is
+  filled by a large-cap caller; the reverse cannot happen) so it is
+  discoverable by a future ctrl-F search for "starvation" or
+  "fairness". The published 1.2.0 changelog entry is intentionally
+  not retroactively edited (pub.dev archives the changelog at publish
+  time).
+
 ## 1.3.0
 
 Public-API stability layer, bounded DNS resolver pool observability,

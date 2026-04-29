@@ -30,11 +30,16 @@
 //!
 //! The cap is fundamentally a *global* resource: there is one
 //! process-wide counter and the per-call argument is a threshold
-//! compared against it before dispatch. When two concurrent callers
-//! pass different caps, the effective ceiling at any moment is set by
-//! whichever caller is currently being admitted — the lower-cap caller
-//! still refuses to dispatch once its own threshold is reached, even
-//! if a higher-cap caller would have tolerated more workers.
+//! compared against it before dispatch. Because admission is gated
+//! against this single process-wide counter, every admitted worker
+//! counts toward every caller's threshold. Each call's admission is
+//! decided by comparing the live pool size against that call's own
+//! cap, with no awareness of which caller's workers already occupy
+//! the pool. A small-cap caller can therefore be refused when the
+//! pool is filled by a larger-cap caller, even though it has used
+//! none of its own headroom; the reverse cannot happen, since a
+//! small-cap caller's workers are themselves bounded by the small
+//! cap.
 //!
 //! The lookup function and the slot counter are both parameterised so
 //! tests can substitute a deterministic stub (e.g. one that

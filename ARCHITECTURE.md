@@ -69,13 +69,18 @@ parameter on `ntsQuery` / `ntsWarmCookies`. Passing `0` selects the
 built-in default of **4**, sized for mobile (worst case ~512 KB-1 MB
 of pthread stack per leaked worker on iOS/Android). Server-side
 callers that legitimately need higher fan-out can pass a larger cap
-per invocation. Because the threshold compares against a single
-process-wide counter, two concurrent callers passing different caps
-share the same in-flight pool: the effective ceiling at any moment is
-whichever caller is currently being admitted, not a private quota.
-Saturation in either path returns `NtsError::Timeout` so callers see a
-single uniform "would-block / try-later" signal rather than having to
-distinguish DNS-pool exhaustion from a true `getaddrinfo` stall.
+per invocation. Because admission is gated against a single
+process-wide counter, every admitted worker counts toward every
+caller's threshold. Each call's admission is decided by comparing the
+live pool size against that call's own cap, with no awareness of which
+caller's workers already occupy the pool. A small-cap caller can
+therefore be refused when the pool is filled by a larger-cap caller,
+even though it has used none of its own headroom; the reverse cannot
+happen, since a small-cap caller's workers are themselves bounded by
+the small cap. Saturation in either path returns `NtsError::Timeout`
+so callers see a single uniform "would-block / try-later" signal
+rather than having to distinguish DNS-pool exhaustion from a true
+`getaddrinfo` stall.
 
 The synchronous `ntsDnsPoolStats()` entry point exposes four
 process-wide counters from the resolver pool — `inFlight`,
