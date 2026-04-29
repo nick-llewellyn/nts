@@ -19,6 +19,26 @@ on:
       - 'screenshots/**'
   workflow_dispatch:
 
+# Workflow-wide GITHUB_TOKEN baseline: `contents: read` is the minimum
+# `actions/checkout` needs and implicitly denies every other scope.
+# Jobs that need additional permissions opt in explicitly -- `build`
+# and `rust` below grant `id-token: write` for Codecov OIDC tokenless
+# uploads (no shared secret, works on fork PRs). We deliberately do
+# NOT set `read-all` here: extra read scopes would authorize future
+# steps to read data this workflow has no business touching.
+permissions:
+  contents: read
+
+# Cancel superseded matrix runs on PR branches (typically a force-push
+# to an open PR). Post-merge runs on `main` always complete: the merge
+# SHA's tree can differ from any PR head, and cancelling them would
+# erode the "main is green" guarantee that branch protection relies
+# on. Group is keyed on workflow + ref so push and pull_request runs
+# land in different groups (`refs/heads/main` vs `refs/pull/N/merge`).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   changes:
     # Cheap path-filter pass that classifies the diff and gates the heavy
@@ -30,6 +50,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       bindings: ${{ steps.filter.outputs.bindings }}
+      dart: ${{ steps.filter.outputs.dart }}
       ci: ${{ steps.filter.outputs.ci }}
     steps:
       - name: Checkout code
@@ -48,6 +69,11 @@ jobs:
             bindings:
               - 'lib/src/ffi/**'
               - 'tool/check_bindings.dart'
+            dart:
+              - 'lib/**'
+              - 'test/**'
+              - 'pubspec.yaml'
+              - 'analysis_options.yaml'
             ci:
               - '.github/workflows/**'
 
@@ -64,6 +90,16 @@ jobs:
     name: Format / analyze / Dart tests (Flutter ${{ matrix.flutter }})
     runs-on: ubuntu-latest
     needs: changes
+    # `id-token: write` is required for the Codecov OIDC tokenless
+    # upload below. Scoped to this job rather than workflow-wide so the
+    # `rust-bridge-sync` job (which does not upload coverage) keeps the
+    # read-only default. Codecov v6+ on public repos validates the
+    # GitHub OIDC JWT (repository / repository_owner claims), so a
+    # stolen token can only upload junk coverage to this repo's own
+    # Codecov project; no shared secret is exposed to fork PRs.
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -77,6 +113,20 @@ jobs:
         with:
           flutter-version: ${{ matrix.flutter }}
           channel: 'stable'
+          cache: true
+
+      # pubspec.lock is gitignored (standard for libraries), so the
+      # cache key falls back to pubspec.yaml content hash with a
+      # matrix.flutter discriminator. restore-keys allows a partial
+      # restore when only the pubspec changed: pub reuses the bulk of
+      # the existing cache and only fetches the deltas.
+      - name: Cache pub
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ matrix.flutter }}-${{ hashFiles('**/pubspec.yaml') }}
+          restore-keys: |
+            pub-${{ runner.os }}-${{ matrix.flutter }}-
 
       - name: Resolve package dependencies
         run: flutter pub get
@@ -88,8 +138,51 @@ jobs:
       - name: Analyze package
         run: dart analyze .
 
+      # `--coverage` writes coverage/lcov.info. Generated matrix-wide so
+      # coverage gaps caused by floor-only or pin-only code paths surface
+      # on both legs; uploaded pin-only below to avoid double-counting
+      # line coverage in downstream reports.
       - name: Run Dart tests (mock-mode FRB smoke)
-        run: flutter test
+        run: flutter test --coverage
+
+      # Coverage upload gated on (a) the pinned Flutter leg and (b)
+      # whether the diff actually touched Dart sources, the workflow
+      # itself, or was a manual rerun. Stops a Rust-only PR from
+      # republishing the same Dart coverage twice (once per matrix
+      # leg, once per merge).
+      - name: Upload Dart coverage artifact
+        if: |
+          matrix.flutter == '3.41.7' && (
+            github.event_name == 'workflow_dispatch' ||
+            needs.changes.outputs.dart == 'true' ||
+            needs.changes.outputs.ci == 'true'
+          )
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-dart-lcov
+          path: coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+
+      # Codecov tokenless OIDC (codecov-action v6+) works on PRs from
+      # forks because it does not depend on repository secrets; the
+      # runner mints a short-lived id-token via `id-token: write` on
+      # this job and Codecov validates it against GitHub's OIDC issuer.
+      # `fail_ci_if_error: false` keeps Codecov outages from breaking
+      # the build (third-party SLO is not in our CI critical path).
+      - name: Upload Dart coverage to Codecov
+        if: |
+          matrix.flutter == '3.41.7' && (
+            github.event_name == 'workflow_dispatch' ||
+            needs.changes.outputs.dart == 'true' ||
+            needs.changes.outputs.ci == 'true'
+          )
+        uses: codecov/codecov-action@v6
+        with:
+          files: coverage/lcov.info
+          flags: dart
+          use_oidc: true
+          fail_ci_if_error: false
 
       - name: Resolve example dependencies
         working-directory: example
@@ -100,12 +193,21 @@ jobs:
         run: flutter analyze
 
   rust:
-    name: Rust build + tests
+    name: Rust build + tests + coverage
     runs-on: ubuntu-latest
     needs: changes
+    # `id-token: write` is required for the Codecov OIDC tokenless
+    # upload below. Same threat-model note as the `build` job: the
+    # token is scoped to this repo's Codecov project and cannot reach
+    # any other OIDC-trusting service.
+    permissions:
+      contents: read
+      id-token: write
     # Skip when the diff doesn't touch Rust sources, the build hook, the
     # FRB config, the pubspec (FRB pin lives there), or the workflow file
-    # itself. workflow_dispatch always runs everything.
+    # itself. workflow_dispatch always runs everything. Coverage is part
+    # of this job rather than a sibling so the gate above is the single
+    # source of truth for "is the Rust pipeline relevant to this diff".
     if: |
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.rust == 'true' ||
@@ -129,6 +231,55 @@ jobs:
       - name: Run Rust unit tests
         working-directory: rust
         run: cargo test --lib --locked
+
+      # Tarpaulin install is the dominant cold-build cost of the
+      # coverage step (~3-5 min from source). Caching the binary by
+      # runner OS + version keeps subsequent runs at ~5 s for this
+      # step. The version is embedded in the cache key so a deliberate
+      # bump (edit both lines below) actually invalidates the cache
+      # and reinstalls; floating to whatever `latest` resolved to on a
+      # cold miss would silently change CI behaviour.
+      - name: Cache cargo-tarpaulin binary
+        id: tarpaulin-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-tarpaulin
+          key: cargo-tarpaulin-${{ runner.os }}-0.35.2
+
+      - name: Install cargo-tarpaulin
+        if: steps.tarpaulin-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-tarpaulin --locked --version 0.35.2
+
+      # `--lib` mirrors the test-runner step above so coverage and
+      # unit-test execution see the same target set. `--skip-clean`
+      # reuses the build artifacts produced by `cargo build` /
+      # `cargo test` above (tarpaulin defaults to a clean rebuild
+      # otherwise, doubling wall time). `--out Lcov` emits
+      # rust/coverage/lcov.info, the format Codecov accepts without
+      # additional conversion.
+      - name: Run Rust coverage (cargo-tarpaulin)
+        working-directory: rust
+        run: cargo tarpaulin --lib --locked --skip-clean --out Lcov --output-dir coverage
+
+      - name: Upload Rust coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-rust-lcov
+          path: rust/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
+
+      # Same OIDC-tokenless flow as the Dart upload above; `flags:
+      # rust` keeps the Dart and Rust components separable in
+      # Codecov's UI so a regression in one language does not
+      # mask coverage of the other.
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: rust/coverage/lcov.info
+          flags: rust
+          use_oidc: true
+          fail_ci_if_error: false
 
   rust-bridge-sync:
     name: Verify FRB bindings are in sync
@@ -191,3 +342,40 @@ jobs:
         # Single source of truth for drift detection; the same script runs
         # locally via `dart run tool/check_bindings.dart`.
         run: dart run tool/check_bindings.dart
+
+  dependency-review:
+    # Supply-chain gate: flags newly-introduced dependencies with
+    # CVEs at or above the configured severity threshold by diffing
+    # the PR against the base ref. PR-scoped because the action
+    # requires a base..head diff; `push` events to main have no
+    # equivalent context. Free on public repos (no GitHub Advanced
+    # Security required). Covers both pubspec (Dart) and Cargo.toml
+    # (Rust) via GitHub's dependency graph.
+    #
+    # `fail-on-severity: high` is the starting floor; tighten to
+    # `moderate` once we observe real signal volume. License policy
+    # (`allow-licenses` / `deny-licenses`) is intentionally not
+    # configured yet -- add it here when the policy is decided.
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    # Force the JavaScript action runtime to Node.js 24. Upstream
+    # `actions/dependency-review-action` (latest v4.9.0, March 2026) still
+    # ships `runs.using: node20` in its action.yml, which the runner now
+    # warns against ("Node.js 20 actions are deprecated... forced to Node 24
+    # by default starting June 2nd, 2026"). The runner-documented opt-in
+    # below switches this job to the supported Node 24 runtime today; remove
+    # this env once a release of the action lands with `using: node24` (or
+    # once GitHub flips the default in June 2026).
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Review dependencies
+        # Pinned to the latest patch (v4.9.0) instead of the floating `v4`
+        # tag so dependency / Node-runtime bumps land deliberately.
+        uses: actions/dependency-review-action@v4.9.0
+        with:
+          fail-on-severity: high

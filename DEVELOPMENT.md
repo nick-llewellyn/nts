@@ -125,32 +125,60 @@ site.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs four jobs on every push to `main` and
-every pull request:
+`.github/workflows/ci.yml` defines five jobs total: four run on every
+push to `main`, and all five run on pull requests because
+`dependency-review` is PR-only (it requires a base..head diff that
+push events don't have):
 
 | Job | Cost | Purpose |
 |-----|------|---------|
-| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `ci` flags consumed by the gates below. |
-| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test` on the SDK floor (3.38.10) and the pinned current (3.41.7). Always runs. |
-| `rust` | ~5–8 min | `cargo build --locked` + `cargo test --lib` on Linux. Gated. |
+| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci` flags consumed by the gates below. |
+| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the SDK floor (3.38.10) and the pinned current (3.41.7). Always runs. Pin-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
+| `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated. |
+| `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `high`-severity advisories across pubspec + Cargo.toml. |
+
+The workflow declares a top-level `permissions: contents: read` token
+baseline and grants `id-token: write` only to `build` and `rust` (the
+two jobs that mint a Codecov OIDC JWT). Codecov uses tokenless OIDC
+authentication (`use_oidc: true`, `codecov-action@v6`), so no shared
+secret is required and uploads work on PRs from forks. A
+`concurrency:` block cancels superseded PR runs while letting
+post-merge runs on `main` always complete.
+
+### Coverage outputs
+
+| Source | File | Codecov flag | Local reproduction |
+|--------|------|--------------|--------------------|
+| Dart   | `coverage/lcov.info` | `dart` | `flutter test --coverage` |
+| Rust   | `rust/coverage/lcov.info` | `rust` | `cd rust && cargo tarpaulin --lib --locked --skip-clean --out Lcov --output-dir coverage` |
+
+Both files are also published as workflow artifacts
+(`coverage-dart-lcov`, `coverage-rust-lcov`, 14-day retention) so
+contributors without Codecov access can download the raw `lcov.info`
+directly from the run.
 
 ### Filter-driven gating
 
-The expensive Rust jobs are skipped unless the diff actually requires
-them. Filters and gates:
+The expensive Rust jobs and the Dart coverage upload are skipped
+unless the diff actually requires them. Filters and gates:
 
 | Filter | Watches | Gates |
 |--------|---------|-------|
 | `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `rust`, `rust-bridge-sync` |
 | `bindings` | `lib/src/ffi/**`, `tool/check_bindings.dart` | `rust-bridge-sync` |
-| `ci` | `.github/workflows/**` | `rust`, `rust-bridge-sync` |
+| `dart` | `lib/**`, `test/**`, `pubspec.yaml`, `analysis_options.yaml` | Dart coverage upload steps inside `build` |
+| `ci` | `.github/workflows/**` | `rust`, `rust-bridge-sync`, Dart coverage upload |
 
 `pubspec.yaml` lives in the `rust` filter because the
 `flutter_rust_bridge: 2.12.0` exact pin sits there; bumping it must
-trigger a full Rust + drift run. `workflow_dispatch` (manual reruns
-from the Actions UI) bypasses every gate so a forced run executes
-the full pipeline.
+trigger a full Rust + drift run. The `dart` filter only gates the
+Codecov / artifact upload — the `flutter test --coverage` step itself
+always runs on both matrix legs so coverage gaps caused by pin-only
+or floor-only code paths surface in test failures even when the
+upload is skipped. `workflow_dispatch` (manual reruns from the
+Actions UI) bypasses every gate so a forced run executes the full
+pipeline.
 
 GitHub treats skipped jobs as passing for branch-protection purposes,
 so existing required-check rules continue to work unchanged.
@@ -181,3 +209,60 @@ Two cheaper filters run before the workflow even queues:
 | Hand-edit of generated bindings | `build` and `rust-bridge-sync` run; `rust-bridge-sync` will fail with a drift error (regenerate via `flutter_rust_bridge_codegen generate` instead). |
 | `pubspec.yaml` edit | All three runtime jobs run (FRB pin sits there). |
 | Workflow file edit | All three runtime jobs run (validates the change end-to-end). |
+
+## Contribution workflow
+
+Direct pushes to `main` are not permitted. Every change — including
+those authored by maintainers — lands through a pull request that
+has cleared the CI gates above. Required approvals are deliberately
+set to **zero**: the bar is that CI is green, not that a second
+human signed off. Self-merging your own PR is the expected default.
+
+### Required `main` branch protection settings
+
+Configure these on GitHub at *Settings → Branches → Branch
+protection rules → main*:
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| Require a pull request before merging | **on** | Forces every change through the CI pipeline and creates a reviewable diff. |
+| Required number of approvals before merging | **0** | Solo-maintainer repo; CI is the gate, not a second pair of eyes. |
+| Dismiss stale pull request approvals when new commits are pushed | **off** | No-op at 0 approvals; explicitly off so the setting is unambiguous. |
+| Require status checks to pass before merging | **off (for now)** | `ci.yml` declares `paths-ignore: '**.md'` on both `push` and `pull_request`, so a doc-only PR (e.g. a fix to this file) does not trigger the workflow at all and therefore never reports the required checks — GitHub would block such PRs forever waiting for a status that never comes. Turn this on (with required checks `Format / analyze / Dart tests (Flutter 3.38.10)`, `Format / analyze / Dart tests (Flutter 3.41.7)`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`) only after either dropping `**.md` from `paths-ignore` and gating `build` on the `changes` filter, or adding an always-on lightweight check that reports on doc-only PRs. Tracked in `nts-dz1`. |
+| Require branches to be up to date before merging | **on** | Catches semantic conflicts CI would miss when `main` advances mid-PR. |
+| Require conversation resolution before merging | **on** | Self-applied: forces the author to mark their own follow-ups as addressed. |
+| Require linear history | **on** | Squash- or rebase-only merges; matches the `vX.Y.Z` tag-driven release flow. |
+| Allow force pushes | **off** | Protected refs should never rewrite history. |
+| Allow deletions | **off** | `main` is the canonical ref. |
+
+`Required pull request reviews` with `Require review from Code
+Owners` is left **off**: no `CODEOWNERS` file is committed, and
+adding one would just re-introduce a blocking approval requirement
+that contradicts the 0-approvals policy above.
+
+### Local quality gates before opening a PR
+
+Mirrors what CI runs; failing locally is faster than waiting for
+the runner. The pinned Flutter version is `3.41.7` (see `.fvmrc`).
+
+```bash
+# Dart side
+dart format --output=none --set-exit-if-changed .
+dart analyze .
+flutter test --coverage
+
+# Example app (any Dart change touching the public surface)
+(cd example && flutter pub get && flutter analyze)
+
+# Rust side (any rust/** change)
+(cd rust && cargo build --locked && cargo test --lib --locked)
+(cd rust && cargo tarpaulin --lib --locked --skip-clean \
+            --out Lcov --output-dir coverage)
+
+# FRB drift gate (any change to rust/src/api/** or lib/src/ffi/**)
+dart run tool/check_bindings.dart
+```
+
+The PR template (`.github/pull_request_template.md`) carries the
+canonical checklist; tick the boxes you actually ran rather than
+the full set.

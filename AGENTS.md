@@ -12,6 +12,42 @@ bd close <id>         # Complete work
 bd dolt push          # Push beads data to remote
 ```
 
+## Pull Request Workflow (mandatory)
+
+`main` is protected; **never `git push` directly to `main`**. Every
+change — including agent-authored ones — must land through a pull
+request. Required approvals are set to **0**, so self-merging is the
+expected default once the applicable checks pass. Most PRs must clear
+CI before merging; doc-only changes (covered by `paths-ignore: '**.md'`
+in `ci.yml`) skip the workflow entirely and merge once the PR exists.
+See [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow) for the
+authoritative branch-protection table.
+
+Standard agent loop on a fresh task:
+
+```bash
+git switch -c <type>/<short-slug>      # e.g. feat/coverage-upload
+# ... make edits, run local quality gates (see DEVELOPMENT.md) ...
+git push -u origin HEAD                # push the feature branch
+gh pr create --fill                    # uses .github/pull_request_template.md
+# ... wait for CI; fix anything red ...
+gh pr merge --squash --delete-branch   # self-merge once green
+```
+
+Operational notes:
+
+- The PR template under `.github/pull_request_template.md` carries
+  the canonical checklist. Tick the boxes you actually ran; do not
+  blanket-check items you skipped.
+- The `dependency-review` job runs PR-only and fails on `high`-
+  severity advisories; if it fires on a transitive bump, prefer
+  pinning the offending dep over disabling the gate.
+- Branch-protection details (required checks, status-check names,
+  linear history, etc.) live in
+  [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow). Treat
+  that section as the source of truth when reconciling repo
+  settings.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
