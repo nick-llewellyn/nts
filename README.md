@@ -136,11 +136,22 @@ burst-filter-compensate flow described above.
 | Symbol | Purpose |
 |--------|---------|
 | `RustLib.init()` | Load the native bridge. Await once before any other call. |
-| `ntsQuery({spec, timeoutMs, dnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
-| `ntsWarmCookies({spec, timeoutMs, dnsConcurrencyCap})` | Force a fresh NTS-KE handshake; returns cookie count. |
+| `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
+| `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | Force a fresh NTS-KE handshake; returns cookie count. |
+| `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
+| `kDefaultTimeoutMs` | Package default for `timeoutMs` (5000). |
+| `kDefaultDnsConcurrencyCap` | Package default for `dnsConcurrencyCap` (`0`, the sentinel that selects the Rust-side default). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
 | `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`. |
+| `NtsDnsPoolStats` | `inFlight`, `highWaterMark`, `recovered`, `refused`. Process-wide pool counters; relaxed-atomic snapshot. |
 | `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout`, `noCookies`, `internal`. |
+
+`ntsQuery` and `ntsWarmCookies` ship as a hand-written wrapper around
+the bundled FFI surface; consumers can omit `timeoutMs` and
+`dnsConcurrencyCap` to inherit the package defaults, and future
+internal-only Rust signature changes do not propagate as breaking call-
+site edits. See [ARCHITECTURE.md](ARCHITECTURE.md)'s "Public API
+stability layer" section for the contract.
 
 `timeoutMs` is a global wall-clock budget anchored at the start of
 each call: it bounds DNS resolution, the NTS-KE TCP connect plus TLS
@@ -157,14 +168,15 @@ phase surfaces as `NtsError.timeout`.
 resolver is bounded by design — `getaddrinfo` is non-cancellable, so a
 stalled lookup is detached and finishes in the background; this cap is
 the primary defense against thread-stack accumulation when a recursive
-resolver blackholes traffic. Pass `0` to inherit the built-in default
-of **4**, sized for the worst case on iOS / Android (~512 KB-1 MB of
-committed pthread stack per leaked worker). Server-side callers that
-legitimately need higher fan-out can override per call (`32`, `64`,
-etc.). The cap is compared against the *global* counter, so two
-concurrent callers passing different values share the same in-flight
-pool: the effective ceiling at any moment is whichever caller is
-currently being admitted. Saturation surfaces as `NtsError.timeout`.
+resolver blackholes traffic. Omit the parameter (or pass `0`
+explicitly) to inherit the built-in default of **4**, sized for the
+worst case on iOS / Android (~512 KB-1 MB of committed pthread stack
+per leaked worker). Server-side callers that legitimately need higher
+fan-out can override per call (`32`, `64`, etc.). The cap is compared
+against the *global* counter, so two concurrent callers passing
+different values share the same in-flight pool: the effective ceiling
+at any moment is whichever caller is currently being admitted.
+Saturation surfaces as `NtsError.timeout`.
 
 ## Demos & Examples
 

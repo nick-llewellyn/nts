@@ -58,12 +58,10 @@ Future<void> main() async {
     // any cached session for that `spec`, so subsequent `ntsQuery`
     // calls skip the KE leg until the jar drains. Useful at startup or
     // whenever the NTS-KE cost should be amortized away from a
-    // time-critical path.
-    final warmed = await ntsWarmCookies(
-      spec: spec,
-      timeoutMs: 5000,
-      dnsConcurrencyCap: 0,
-    );
+    // time-critical path. `timeoutMs` and `dnsConcurrencyCap` are
+    // omitted here so the package's tuned defaults
+    // (`kDefaultTimeoutMs`, `kDefaultDnsConcurrencyCap`) apply.
+    final warmed = await ntsWarmCookies(spec: spec);
     print('warmed   = $warmed cookies');
 
     // Phase 2 — spend the warmed cookies on authenticated NTPv4
@@ -72,9 +70,7 @@ Future<void> main() async {
     // sample so we can score them against each other below.
     final samples = <NtsTimeSample>[];
     for (var i = 0; i < warmed; i++) {
-      samples.add(
-        await ntsQuery(spec: spec, timeoutMs: 5000, dnsConcurrencyCap: 0),
-      );
+      samples.add(await ntsQuery(spec: spec));
     }
 
     // Pick the sample with the smallest measured round-trip. NTP's

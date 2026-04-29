@@ -46,7 +46,7 @@
 
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -64,12 +64,95 @@ use std::time::Duration;
 /// FFI parameter on `nts_query` / `nts_warm_cookies`.
 pub(crate) const DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS: usize = 4;
 
-/// Process-wide counter of `nts-dns` worker threads currently blocked
-/// in [`system_lookup`] (or a test-injected stub). Incremented before
-/// the worker is spawned and decremented by [`SlotGuard::drop`] when
-/// the worker terminates, so the count tracks live OS threads even
-/// when the calling future has already given up on `recv_timeout`.
-static IN_FLIGHT_DNS_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
+/// Bundle of process-wide counters for the bounded DNS resolver pool.
+///
+/// The four atomics are grouped here so the production global pool and
+/// the per-test pools used by `dns::tests` share the same shape: every
+/// `try_acquire_slot` / `SlotGuard::drop` site updates the same set of
+/// counters regardless of which pool it ran against, and tests can
+/// stand up a private `PoolStats` and assert on its counters in
+/// isolation from the live global state.
+pub(crate) struct PoolStats {
+    /// Live count of resolver workers currently pinned in
+    /// [`system_lookup`] (or a test-injected stub). Incremented before
+    /// the worker is spawned (by [`try_acquire_slot`]) and decremented
+    /// by [`SlotGuard::drop`] when the worker terminates, so the count
+    /// tracks live OS threads even when the calling future has already
+    /// given up on `recv_timeout`.
+    pub(crate) in_flight: AtomicUsize,
+    /// Maximum value [`Self::in_flight`] has reached since this stats
+    /// bundle was constructed. Updated monotonically with `fetch_max`
+    /// after each successful admission. Distinguishes "I have headroom
+    /// in steady state but burst to the cap occasionally" from "I am
+    /// pinned at the cap continually" without forcing operators to
+    /// poll [`Self::in_flight`] on a tight loop.
+    pub(crate) high_water_mark: AtomicUsize,
+    /// Cumulative count of detached workers that have completed and
+    /// released their slot. Climbing alongside a non-zero
+    /// [`Self::in_flight`] is the diagnostic signature of "libc is
+    /// timing out internally as expected"; flat with `in_flight == cap`
+    /// is the signature of a libc-level wedge. `u64` (not `usize`)
+    /// because the counter grows monotonically over a process lifetime
+    /// and a 32-bit wraparound would be visible on long-running
+    /// CLI / server builds with a saturated resolver.
+    pub(crate) recovered: AtomicU64,
+    /// Cumulative count of [`try_acquire_slot`] calls that returned
+    /// `None` because the cap was reached. Direct signal for "raising
+    /// `dns_concurrency_cap` would have lowered the error rate"; the
+    /// expected delta when the resolver is healthy is zero.
+    pub(crate) refused: AtomicU64,
+}
+
+impl PoolStats {
+    pub(crate) const fn new() -> Self {
+        Self {
+            in_flight: AtomicUsize::new(0),
+            high_water_mark: AtomicUsize::new(0),
+            recovered: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+        }
+    }
+}
+
+/// Process-wide stats for the bounded DNS resolver pool. Production
+/// callers route through this via [`resolve_with_global`]; tests stand
+/// up a private [`PoolStats`] so cap-exhaustion / slot-release
+/// assertions don't collide with any other test that hits the live
+/// pool.
+static GLOBAL_POOL_STATS: PoolStats = PoolStats::new();
+
+/// Plain-data snapshot of [`PoolStats`] taken with `Relaxed` loads.
+///
+/// The snapshot is racy by construction (a caller may see a slightly
+/// stale `in_flight` relative to `high_water_mark`, etc.) but never a
+/// logically-impossible state: each individual counter is read
+/// atomically, and the snapshot is intended for human / dashboard
+/// consumption, not for synchronisation. The shape is mirrored to the
+/// FFI as `NtsDnsPoolStats` in `crate::api::nts`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PoolSnapshot {
+    pub(crate) in_flight: usize,
+    pub(crate) high_water_mark: usize,
+    pub(crate) recovered: u64,
+    pub(crate) refused: u64,
+}
+
+/// Snapshot the global resolver pool counters. Backs the FFI-level
+/// `nts_dns_pool_stats` entry point.
+pub(crate) fn pool_snapshot() -> PoolSnapshot {
+    snapshot_of(&GLOBAL_POOL_STATS)
+}
+
+/// Snapshot an arbitrary [`PoolStats`] instance. Used by `pool_snapshot`
+/// for the global pool and by the unit tests for their per-test pools.
+pub(crate) fn snapshot_of(stats: &PoolStats) -> PoolSnapshot {
+    PoolSnapshot {
+        in_flight: stats.in_flight.load(Ordering::Relaxed),
+        high_water_mark: stats.high_water_mark.load(Ordering::Relaxed),
+        recovered: stats.recovered.load(Ordering::Relaxed),
+        refused: stats.refused.load(Ordering::Relaxed),
+    }
+}
 
 /// Default lookup used by [`resolve_with_timeout`] and the production
 /// callers in `nts::ke` and `api::nts`. Thin wrapper over the blocking
@@ -88,33 +171,52 @@ pub(crate) fn system_lookup(host: &str, port: u16) -> io::Result<Vec<SocketAddr>
 /// `try_acquire_slot` is impossible (the field is private to the
 /// module), which keeps the increment/decrement balance auditable.
 struct SlotGuard {
-    counter: &'static AtomicUsize,
+    stats: &'static PoolStats,
 }
 
 impl Drop for SlotGuard {
     fn drop(&mut self) {
-        // `Release` so the decrement is observable to the `Acquire`
-        // load in subsequent `try_acquire_slot` calls.
-        self.counter.fetch_sub(1, Ordering::Release);
+        // Bump `recovered` *before* the in-flight decrement so a racing
+        // observer never sees `in_flight < cap` together with
+        // `recovered` not yet reflecting the freed slot — the
+        // operator-facing invariant is "every freed slot has been
+        // counted as recovered". `Relaxed` for the cumulative counter
+        // (no synchronisation, just an event tally); `Release` on the
+        // in-flight decrement so the new value is observable to the
+        // `Acquire` load in subsequent `try_acquire_slot` calls.
+        self.stats.recovered.fetch_add(1, Ordering::Relaxed);
+        self.stats.in_flight.fetch_sub(1, Ordering::Release);
     }
 }
 
 /// Try to claim one slot in the bounded resolver pool guarded by
-/// `counter`/`cap`. Returns `Some(SlotGuard)` on success; on failure
-/// (cap reached) the increment is rolled back and `None` is returned
-/// so the caller can fail fast without spawning a worker.
-fn try_acquire_slot(counter: &'static AtomicUsize, cap: usize) -> Option<SlotGuard> {
+/// `stats` / `cap`. Returns `Some(SlotGuard)` on success; on failure
+/// (cap reached) the increment is rolled back, the `refused` counter
+/// is incremented, and `None` is returned so the caller can fail fast
+/// without spawning a worker. On success the high-water mark is
+/// updated monotonically against the post-admission count.
+fn try_acquire_slot(stats: &'static PoolStats, cap: usize) -> Option<SlotGuard> {
     // `fetch_add` then check-and-rollback is cheaper than a CAS loop
     // and equivalent under contention: a transient over-count of at
     // most `cap + n_callers` is observed for a few nanoseconds before
     // the losers' `fetch_sub` restores the invariant. The cap is a
     // ceiling on long-lived threads, not a hard real-time bound.
-    let prev = counter.fetch_add(1, Ordering::AcqRel);
+    let prev = stats.in_flight.fetch_add(1, Ordering::AcqRel);
     if prev >= cap {
-        counter.fetch_sub(1, Ordering::Release);
+        stats.in_flight.fetch_sub(1, Ordering::Release);
+        // `Relaxed` is sufficient — the counter is a cumulative event
+        // tally for human / dashboard consumption, not a sync point.
+        stats.refused.fetch_add(1, Ordering::Relaxed);
         return None;
     }
-    Some(SlotGuard { counter })
+    // Update HWM monotonically against the *post-admission* count
+    // (`prev + 1`). `fetch_max` is a single CAS-loop primitive on
+    // modern targets; `AcqRel` keeps the load-side `Relaxed` reads in
+    // [`pool_snapshot`] from observing a partially-published update
+    // when the increment side races a snapshot.
+    let after = prev + 1;
+    let _ = stats.high_water_mark.fetch_max(after, Ordering::AcqRel);
+    Some(SlotGuard { stats })
 }
 
 /// Resolve `host:port` to a list of socket addresses, returning a
@@ -160,7 +262,7 @@ pub(crate) fn resolve_with_global<F>(
 where
     F: FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + 'static,
 {
-    resolve_with(&IN_FLIGHT_DNS_LOOKUPS, cap, host, port, timeout, lookup)
+    resolve_with(&GLOBAL_POOL_STATS, cap, host, port, timeout, lookup)
 }
 
 /// Bounded resolution with a caller-supplied counter, cap, and lookup
@@ -173,13 +275,13 @@ where
 /// detached worker eventually returns. See module docs for the full
 /// rationale.
 ///
-/// The counter and cap are explicit parameters (rather than the
-/// global default used by [`resolve_with_timeout`]) so tests can use
-/// a function-local `AtomicUsize` and a small cap to exercise the
+/// The stats bundle and cap are explicit parameters (rather than the
+/// global default used by [`resolve_with_timeout`]) so tests can use a
+/// function-local [`PoolStats`] and a small cap to exercise the
 /// exhaustion path without colliding with any other test that hits
 /// the production pool.
 pub(crate) fn resolve_with<F>(
-    counter: &'static AtomicUsize,
+    stats: &'static PoolStats,
     cap: usize,
     host: &str,
     port: u16,
@@ -189,7 +291,7 @@ pub(crate) fn resolve_with<F>(
 where
     F: FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + 'static,
 {
-    let Some(slot) = try_acquire_slot(counter, cap) else {
+    let Some(slot) = try_acquire_slot(stats, cap) else {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
             format!(
@@ -271,14 +373,14 @@ mod tests {
     /// tighter than the resolver's own runtime.
     #[test]
     fn slow_resolver_surfaces_as_timed_out() {
-        // Per-test counter so this test can't be starved by — and
-        // can't starve — any other test that hits the production
+        // Per-test stats bundle so this test can't be starved by —
+        // and can't starve — any other test that hits the production
         // pool. Cap of 1 is enough since the test only spawns one
         // worker.
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        static STATS: PoolStats = PoolStats::new();
         let budget = Duration::from_millis(50);
         let started = Instant::now();
-        let err = resolve_with(&COUNTER, 1, "ignored.invalid", 0, budget, |_host, _port| {
+        let err = resolve_with(&STATS, 1, "ignored.invalid", 0, budget, |_host, _port| {
             thread::sleep(Duration::from_secs(2));
             Ok(vec![SocketAddr::from(([127, 0, 0, 1], 0))])
         })
@@ -305,7 +407,7 @@ mod tests {
     /// false pass.
     #[test]
     fn cap_reached_returns_would_block() {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        static STATS: PoolStats = PoolStats::new();
         const CAP: usize = 2;
         let started = Instant::now();
         // Fill every slot with workers that will sleep for ~1 s.
@@ -314,7 +416,7 @@ mod tests {
         // background.
         for _ in 0..CAP {
             let err = resolve_with(
-                &COUNTER,
+                &STATS,
                 CAP,
                 "ignored.invalid",
                 0,
@@ -329,7 +431,7 @@ mod tests {
         }
         // Pool is now saturated. The next call must fail fast.
         let blocked = resolve_with(
-            &COUNTER,
+            &STATS,
             CAP,
             "ignored.invalid",
             0,
@@ -361,11 +463,11 @@ mod tests {
     /// zero once the worker finishes.
     #[test]
     fn slot_released_when_worker_completes() {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        static STATS: PoolStats = PoolStats::new();
         let worker_runtime = Duration::from_millis(150);
         let budget = Duration::from_millis(20);
 
-        let err = resolve_with(&COUNTER, 4, "ignored.invalid", 0, budget, move |_h, _p| {
+        let err = resolve_with(&STATS, 4, "ignored.invalid", 0, budget, move |_h, _p| {
             thread::sleep(worker_runtime);
             Ok(vec![])
         })
@@ -374,7 +476,7 @@ mod tests {
 
         // Worker is still asleep; slot is held.
         assert_eq!(
-            COUNTER.load(Ordering::Acquire),
+            STATS.in_flight.load(Ordering::Acquire),
             1,
             "in-flight slot must remain held while detached worker is running",
         );
@@ -384,9 +486,181 @@ mod tests {
         // turning a real regression into a flake.
         thread::sleep(worker_runtime * 4);
         assert_eq!(
-            COUNTER.load(Ordering::Acquire),
+            STATS.in_flight.load(Ordering::Acquire),
             0,
             "slot must be released once the detached worker completes",
+        );
+    }
+
+    /// `recovered` increments exactly once per worker that releases a
+    /// slot, regardless of whether the caller observed `TimedOut` or a
+    /// successful result. Companion to `slot_released_when_worker_completes`
+    /// for the cumulative-counter half of the contract.
+    #[test]
+    fn recovered_increments_on_worker_completion() {
+        static STATS: PoolStats = PoolStats::new();
+        let worker_runtime = Duration::from_millis(80);
+        let budget = Duration::from_millis(20);
+
+        let before = snapshot_of(&STATS).recovered;
+        let _ = resolve_with(&STATS, 4, "ignored.invalid", 0, budget, move |_h, _p| {
+            thread::sleep(worker_runtime);
+            Ok(vec![])
+        })
+        .expect_err("budget must trip before the worker returns");
+
+        // Recovered should still be `before` while the worker sleeps.
+        assert_eq!(
+            snapshot_of(&STATS).recovered,
+            before,
+            "recovered must not increment until the slot guard drops",
+        );
+
+        // Wait for the detached worker to finish and drop its guard.
+        thread::sleep(worker_runtime * 4);
+        assert_eq!(
+            snapshot_of(&STATS).recovered,
+            before + 1,
+            "recovered must increment exactly once per slot release",
+        );
+        assert_eq!(
+            snapshot_of(&STATS).in_flight,
+            0,
+            "in_flight must drain to zero alongside the recovered bump",
+        );
+    }
+
+    /// `refused` increments exactly once per `try_acquire_slot` call
+    /// that gets rejected because the cap was reached. Companion to
+    /// `cap_reached_returns_would_block`.
+    #[test]
+    fn refused_increments_on_cap_exhaustion() {
+        static STATS: PoolStats = PoolStats::new();
+        const CAP: usize = 1;
+
+        // Saturate the pool with a sleeping worker.
+        let _ = resolve_with(
+            &STATS,
+            CAP,
+            "ignored.invalid",
+            0,
+            Duration::from_millis(20),
+            |_host, _port| {
+                thread::sleep(Duration::from_millis(500));
+                Ok(vec![])
+            },
+        )
+        .expect_err("filler must time out");
+
+        let before = snapshot_of(&STATS).refused;
+        // Two cap-rejected calls — each must bump the counter exactly
+        // once and never spawn a worker.
+        for _ in 0..2 {
+            let blocked = resolve_with(
+                &STATS,
+                CAP,
+                "ignored.invalid",
+                0,
+                Duration::from_secs(60),
+                |_host, _port| panic!("lookup must not run when cap is reached"),
+            )
+            .expect_err("saturated pool must reject new work");
+            assert_eq!(blocked.kind(), io::ErrorKind::WouldBlock);
+        }
+        assert_eq!(
+            snapshot_of(&STATS).refused,
+            before + 2,
+            "refused must increment once per rejected admission",
+        );
+    }
+
+    /// `high_water_mark` tracks the maximum number of slots
+    /// concurrently held. Admits N workers behind a barrier, asserts
+    /// the mark equals N, then lets them finish and asserts the mark
+    /// stays at N (monotonic, not pinned to the live `in_flight`).
+    #[test]
+    fn high_water_mark_tracks_concurrent_admissions() {
+        use std::sync::{Arc, Barrier};
+
+        static STATS: PoolStats = PoolStats::new();
+        const N: usize = 4;
+
+        // All admitted workers park on the same barrier so the slot
+        // guards overlap. The test thread is barrier-party N+1 and
+        // releases everyone once it has observed the high-water mark.
+        // Driver threads deliberately do not assert on the
+        // `resolve_with` return value — depending on whether
+        // `recv_timeout` fires before or after the barrier completes,
+        // the call may legally surface either `Ok(vec![])` or
+        // `TimedOut`. The test asserts only what it is actually
+        // measuring: HWM bookkeeping under concurrent admissions.
+        let release = Arc::new(Barrier::new(N + 1));
+        let mut joins = Vec::with_capacity(N);
+        for _ in 0..N {
+            let release = Arc::clone(&release);
+            let join = thread::spawn(move || {
+                let _ = resolve_with(
+                    &STATS,
+                    N,
+                    "ignored.invalid",
+                    0,
+                    Duration::from_secs(5),
+                    move |_host, _port| {
+                        release.wait();
+                        Ok(vec![])
+                    },
+                );
+            });
+            joins.push(join);
+        }
+
+        // Spin until the mark catches up to N. Each `resolve_with`
+        // call increments `in_flight` *before* spawning the worker,
+        // so the mark publishes well before the workers reach the
+        // barrier — but we still poll under a 5 s ceiling to keep CI
+        // jitter from flaking the test.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snap = snapshot_of(&STATS);
+            if snap.high_water_mark >= N {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "high_water_mark stuck at {} (expected {N}); in_flight = {}",
+                snap.high_water_mark,
+                snap.in_flight,
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            snapshot_of(&STATS).high_water_mark,
+            N,
+            "mark must equal the number of concurrently admitted workers",
+        );
+
+        // Release the workers and wait for them to drain.
+        release.wait();
+        for j in joins {
+            j.join().expect("driver thread must not panic");
+        }
+        // Slot guards are dropped on the worker thread, which the
+        // driver join above does not synchronise with. Spin briefly
+        // until the in-flight counter drains; the workers have at
+        // most a millisecond of post-barrier work left.
+        let drain_deadline = Instant::now() + Duration::from_secs(1);
+        while snapshot_of(&STATS).in_flight > 0 {
+            assert!(
+                Instant::now() < drain_deadline,
+                "in_flight failed to drain after worker join: {}",
+                snapshot_of(&STATS).in_flight,
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let final_snap = snapshot_of(&STATS);
+        assert_eq!(
+            final_snap.high_water_mark, N,
+            "high_water_mark is monotonic; must stay at peak after drain",
         );
     }
 }

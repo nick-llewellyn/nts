@@ -1,5 +1,178 @@
 # Changelog
 
+## 1.3.0
+
+Public-API stability layer, bounded DNS resolver pool observability,
+and a documentation correction in the Rust core. Strictly additive on
+the Dart surface: existing call sites (including
+`test/ffi_smoke_test.dart` and the example app, GUI, and CLI) keep
+their current arguments and continue to compile. The Rust crate
+`nts_rust` is unchanged at `0.2.2`.
+
+### Public API stability layer (`lib/src/api/nts.dart`, new)
+
+- Introduce a hand-written wrapper in `lib/src/api/nts.dart` that
+  becomes the package's stable public surface. The wrapper exposes
+  `ntsQuery` and `ntsWarmCookies` with idiomatic Dart optional named
+  parameters (`timeoutMs`, `dnsConcurrencyCap`) and package defaults
+  (`kDefaultTimeoutMs = 5000`, `kDefaultDnsConcurrencyCap = 0`),
+  forwarding to the FRB-generated bindings for the actual FFI call.
+  `await ntsQuery(spec: spec)` (no other arguments) now compiles and
+  produces the same behaviour as 1.2.0's
+  `ntsQuery(spec: spec, timeoutMs: 5000, dnsConcurrencyCap: 0)`.
+- Rewrite `lib/nts.dart` as an explicit re-export of the wrapper plus
+  the bridge bootstrap (`RustLib`). The blanket re-export of
+  `lib/src/ffi/api/nts.dart` (and the `greet` toolchain helper from
+  `lib/src/ffi/api/simple.dart`) is removed; the FFI surface is now an
+  internal implementation detail. Consumers' call sites are unchanged
+  because the wrapper exposes the same names with compatible
+  signatures.
+- Motivation: `flutter_rust_bridge` v2 codegen emits every Rust `pub
+  fn` argument as a `required` named parameter on the Dart side, with
+  no FRB attribute today that maps it to an optional Dart parameter
+  with a default. Absorbing that asymmetry in a hand-written layer
+  decouples the public contract from the FFI contract — internal Rust
+  signature evolution (extra knobs, struct field churn, lint-pin
+  regen) no longer propagates as breaking call-site edits for every
+  downstream consumer. The 1.2.0 release was the concrete episode
+  that motivated this: adding `dnsConcurrencyCap` was a strict
+  superset of the previous behaviour but broke source compatibility
+  for every caller because the new parameter landed as `required`.
+- The deprecation policy for future Rust-side removals is symmetric:
+  parameters dropped from the Rust core survive in the wrapper as
+  deprecated no-ops for at least one minor release before being
+  removed at the next major. Documented in `ARCHITECTURE.md`'s new
+  "Public API stability layer" section.
+
+### Bounded DNS resolver pool observability
+
+- Add `ntsDnsPoolStats()` (synchronous; no future / isolate hop)
+  returning a process-wide snapshot of the bounded resolver pool with
+  four counters: `inFlight` (live workers currently pinned in the
+  system resolver), `highWaterMark` (peak `inFlight` since process
+  start, monotonic), `recovered` (cumulative completed workers that
+  released their slot), and `refused` (cumulative admission attempts
+  rejected because the cap was reached). The function is marked
+  `#[frb(sync)]` on the Rust side so reading four atomics does not pay
+  the FRB future-marshalling overhead.
+- The new struct `NtsDnsPoolStats` lands as part of the wrapper
+  layer's public surface alongside `NtsServerSpec` / `NtsTimeSample`.
+- Saturation surfaces unchanged on the hot path as `NtsError.timeout`
+  (the error contract stays collapsed); the new counters are the
+  side-channel that lets operators distinguish a healthy
+  oscillating-below-the-cap resolver from a true libc-level wedge.
+  The diagnostic shape is documented in dartdoc on
+  `ntsDnsPoolStats()` and in `ARCHITECTURE.md`'s "Timeout budget and
+  bounded DNS" section.
+- Internal refactor in `rust/src/nts/dns.rs`: the previous lone
+  `IN_FLIGHT_DNS_LOOKUPS: AtomicUsize` is replaced by a `PoolStats`
+  bundle (in-flight + high-water + recovered + refused atomics), so
+  `try_acquire_slot` / `SlotGuard::drop` keep the four counters in
+  lockstep and the test seam parameterises a per-test bundle the same
+  way the previous lone counter was parameterised. The existing
+  `resolve_with_global` / `resolve_with_timeout` signatures are
+  unchanged; only the internal `resolve_with` seam picks up the new
+  type. Memory-ordering rationale for each counter (`Relaxed` for
+  cumulative tallies, `AcqRel` for in-flight, `AcqRel` for the HWM
+  `fetch_max`) is documented inline.
+- Three new Rust unit tests in `nts::dns::tests`:
+  - `recovered_increments_on_worker_completion` — the cumulative
+    counter bumps exactly once per slot release, after the worker
+    returns from the resolver, alongside the in-flight drain.
+  - `refused_increments_on_cap_exhaustion` — companion to
+    `cap_reached_returns_would_block`; pins the counter delta on
+    rejected admissions.
+  - `high_water_mark_tracks_concurrent_admissions` — admits N
+    workers behind a `Barrier`, asserts the mark catches up to N
+    while the slots overlap, then releases and asserts the mark
+    stays at N (monotonic, not pinned to the live in-flight count).
+- New wrapper-level smoke test (`test/api_smoke_test.dart`) verifies
+  `ntsDnsPoolStats()` is a synchronous getter returning an
+  `NtsDnsPoolStats` and that the FFI struct's fields are forwarded
+  through the wrapper verbatim.
+
+### Documentation
+
+- `rust/src/nts/cookies.rs`: rewrite the `DEFAULT_CAPACITY` doc
+  comment. The previous wording claimed the "initial NTS-KE response
+  always delivers exactly 8" cookies, which is not mandated by the
+  protocol — RFC 8915 §4 leaves the count returned by any given
+  server to server policy. The replacement cites RFC 8915 §6 (the
+  client-side cap of 8 unused cookies) and notes that the value
+  matches what several public deployments (Cloudflare) are observed
+  to deliver, with a §4 reference for the server-policy framing. No
+  code change; this aligns the internal docs with the
+  `example/`-side framing already shipped in 1.1.2 / 1.2.0.
+- `README.md`: rewrite the "API summary" table to show the wrapper
+  signatures with `=` defaults (`timeoutMs = kDefaultTimeoutMs`,
+  `dnsConcurrencyCap = kDefaultDnsConcurrencyCap`), add rows for the
+  two `kDefault*` constants, and add a paragraph linking to the new
+  ARCHITECTURE.md section. The `dnsConcurrencyCap` prose is updated
+  to mention that omitting the parameter (or passing `0`) inherits
+  the built-in default.
+- `ARCHITECTURE.md`: add a new "Public API stability layer" section
+  describing the wrapper, the FRB asymmetry it absorbs, the
+  deprecation policy, and the contract split between
+  `lib/src/api/` (hand-written, stable) and `lib/src/ffi/`
+  (generated, regenerable). Update the repository layout table to
+  list the new wrapper directory.
+
+### Examples
+
+- `example/main.dart`: simplify the warm-then-burst flow to use the
+  new wrapper defaults (`await ntsWarmCookies(spec: spec)` and `await
+  ntsQuery(spec: spec)` instead of threading explicit `timeoutMs:
+  5000, dnsConcurrencyCap: 0` through every call). Comment in Phase
+  1 documents that the defaults are sourced from `kDefaultTimeoutMs`
+  / `kDefaultDnsConcurrencyCap`. `example/example.md`'s fenced
+  block stays byte-for-byte identical to `example/main.dart`
+  (5310 bytes).
+- The Flutter GUI controller (`example/lib/src/state/nts_controller.dart`)
+  and the CLI (`example/bin/nts_cli.dart`) continue to thread their
+  own configured values explicitly. They are not migrated to the
+  defaults pattern in this release; the wrapper accepts both call
+  styles.
+
+### Tests
+
+- `test/api_smoke_test.dart` (new): wrapper-level smoke test that
+  pins the package defaults (`kDefaultTimeoutMs == 5000`,
+  `kDefaultDnsConcurrencyCap == 0`), asserts the wrapper applies
+  them when the optional parameters are omitted, verifies that
+  explicit overrides (including the `0` sentinel) are forwarded
+  verbatim to the FRB layer, and exercises the synchronous
+  `ntsDnsPoolStats()` plumbing. Seven test cases.
+- `test/ffi_smoke_test.dart`: rewrite the import block. `greet` and
+  the FRB-layer `ntsQuery` / `ntsWarmCookies` are now imported
+  directly from `package:nts/src/ffi/...` rather than the public
+  barrel, so the test continues to exercise the FFI contract
+  unchanged while the public barrel stops re-exporting them. The
+  five existing test cases are unmodified and still pass.
+
+### Generated bindings
+
+- `lib/src/ffi/api/nts.dart`, `lib/src/ffi/frb_generated.dart`,
+  `lib/src/ffi/frb_generated.io.dart`,
+  `lib/src/ffi/frb_generated.web.dart`, and
+  `rust/src/frb_generated.rs` regenerated via
+  `flutter_rust_bridge_codegen generate` (pinned at 2.12.0) to pick
+  up the new `NtsDnsPoolStats` struct and the `nts_dns_pool_stats`
+  entry point. No drift detected by `tool/check_bindings.dart` after
+  the regen + lint-suppression patches.
+
+### Verification
+
+- `fvm flutter analyze`: clean (no issues).
+- `fvm flutter test test/api_smoke_test.dart test/ffi_smoke_test.dart`:
+  12 / 12 pass.
+- `fvm flutter test` (example/): 31 / 31 pass.
+- `cargo fmt --check` (in `rust/`): clean.
+- `cargo clippy --tests --all-targets -- -D warnings` (in `rust/`):
+  clean.
+- `cargo test` (in `rust/`): 112 / 112 pass, 3 ignored (live-network).
+- `example/main.dart` ↔ `example/example.md` fenced-block
+  byte-for-byte parity: 5310 bytes.
+
 ## 1.2.0
 
 Reliability and timeout-budget hardening across the Rust core. The public

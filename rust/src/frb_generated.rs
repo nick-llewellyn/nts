@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1324643202;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 811406475;
 
 // Section: executor
 
@@ -110,6 +110,35 @@ fn wire__crate__api__simple__init_app_impl(
                     Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__nts__nts_dns_pool_stats_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "nts_dns_pool_stats",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::nts::nts_dns_pool_stats())?;
+                Ok(output_ok)
+            })())
         },
     )
 }
@@ -221,6 +250,22 @@ impl SseDecode for Vec<u8> {
     }
 }
 
+impl SseDecode for crate::api::nts::NtsDnsPoolStats {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_inFlight = <u32>::sse_decode(deserializer);
+        let mut var_highWaterMark = <u32>::sse_decode(deserializer);
+        let mut var_recovered = <u64>::sse_decode(deserializer);
+        let mut var_refused = <u64>::sse_decode(deserializer);
+        return crate::api::nts::NtsDnsPoolStats {
+            in_flight: var_inFlight,
+            high_water_mark: var_highWaterMark,
+            recovered: var_recovered,
+            refused: var_refused,
+        };
+    }
+}
+
 impl SseDecode for crate::api::nts::NtsError {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -307,6 +352,13 @@ impl SseDecode for u32 {
     }
 }
 
+impl SseDecode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u64::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for u8 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -344,8 +396,8 @@ fn pde_ffi_dispatcher_primary_impl(
     match func_id {
         1 => wire__crate__api__simple__greet_impl(port, ptr, rust_vec_len, data_len),
         2 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__nts__nts_query_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__nts__nts_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__nts__nts_query_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__nts__nts_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -358,12 +410,36 @@ fn pde_ffi_dispatcher_sync_impl(
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
+        3 => wire__crate__api__nts__nts_dns_pool_stats_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
 
 // Section: rust2dart
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsDnsPoolStats {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.in_flight.into_into_dart().into_dart(),
+            self.high_water_mark.into_into_dart().into_dart(),
+            self.recovered.into_into_dart().into_dart(),
+            self.refused.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::nts::NtsDnsPoolStats
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsDnsPoolStats>
+    for crate::api::nts::NtsDnsPoolStats
+{
+    fn into_into_dart(self) -> crate::api::nts::NtsDnsPoolStats {
+        self
+    }
+}
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsError {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
@@ -470,6 +546,16 @@ impl SseEncode for Vec<u8> {
     }
 }
 
+impl SseEncode for crate::api::nts::NtsDnsPoolStats {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.in_flight, serializer);
+        <u32>::sse_encode(self.high_water_mark, serializer);
+        <u64>::sse_encode(self.recovered, serializer);
+        <u64>::sse_encode(self.refused, serializer);
+    }
+}
+
 impl SseEncode for crate::api::nts::NtsError {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -541,6 +627,13 @@ impl SseEncode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u64::<NativeEndian>(self).unwrap();
     }
 }
 

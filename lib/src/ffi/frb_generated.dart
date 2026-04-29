@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -1324643202;
+  int get rustContentHash => 811406475;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -82,6 +82,8 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiSimpleGreet({required String name});
 
   Future<void> crateApiSimpleInitApp();
+
+  NtsDnsPoolStats crateApiNtsNtsDnsPoolStats();
 
   Future<NtsTimeSample> crateApiNtsNtsQuery({
     required NtsServerSpec spec,
@@ -160,6 +162,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
+  NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 3)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_nts_dns_pool_stats,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNtsNtsDnsPoolStatsConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsNtsDnsPoolStatsConstMeta =>
+      const TaskConstMeta(debugName: "nts_dns_pool_stats", argNames: []);
+
+  @override
   Future<NtsTimeSample> crateApiNtsNtsQuery({
     required NtsServerSpec spec,
     required int timeoutMs,
@@ -175,7 +199,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 4,
             port: port_,
           );
         },
@@ -211,7 +235,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 5,
             port: port_,
           );
         },
@@ -253,6 +277,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  NtsDnsPoolStats dco_decode_nts_dns_pool_stats(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return NtsDnsPoolStats(
+      inFlight: dco_decode_u_32(arr[0]),
+      highWaterMark: dco_decode_u_32(arr[1]),
+      recovered: dco_decode_u_64(arr[2]),
+      refused: dco_decode_u_64(arr[3]),
+    );
   }
 
   @protected
@@ -320,6 +358,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt dco_decode_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
+  }
+
+  @protected
   int dco_decode_u_8(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -357,6 +401,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     final len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  NtsDnsPoolStats sse_decode_nts_dns_pool_stats(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final var_inFlight = sse_decode_u_32(deserializer);
+    final var_highWaterMark = sse_decode_u_32(deserializer);
+    final var_recovered = sse_decode_u_64(deserializer);
+    final var_refused = sse_decode_u_64(deserializer);
+    return NtsDnsPoolStats(
+      inFlight: var_inFlight,
+      highWaterMark: var_highWaterMark,
+      recovered: var_recovered,
+      refused: var_refused,
+    );
   }
 
   @protected
@@ -430,6 +489,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
+  }
+
+  @protected
   int sse_decode_u_8(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8();
@@ -481,6 +546,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
+  }
+
+  @protected
+  void sse_encode_nts_dns_pool_stats(
+    NtsDnsPoolStats self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.inFlight, serializer);
+    sse_encode_u_32(self.highWaterMark, serializer);
+    sse_encode_u_64(self.recovered, serializer);
+    sse_encode_u_64(self.refused, serializer);
   }
 
   @protected
@@ -545,6 +622,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint32(self);
+  }
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
   }
 
   @protected

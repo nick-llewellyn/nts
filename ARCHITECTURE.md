@@ -77,12 +77,62 @@ Saturation in either path returns `NtsError::Timeout` so callers see a
 single uniform "would-block / try-later" signal rather than having to
 distinguish DNS-pool exhaustion from a true `getaddrinfo` stall.
 
+The synchronous `ntsDnsPoolStats()` entry point exposes four
+process-wide counters from the resolver pool — `inFlight`,
+`highWaterMark`, `recovered`, and `refused` — so operators can
+distinguish, *outside* the hot-path error contract, the three failure
+modes that all collapse onto `NtsError::Timeout`. The snapshot is
+backed by relaxed-atomic loads (cheap enough to call from a UI poll
+loop) and does not reset cumulative counters; windowed measurements
+are obtained by snapshotting at `t0` and `t1` and subtracting.
+`recovered` climbing alongside a non-zero `inFlight` is the signature
+of "libc is timing out internally as expected"; flat `recovered` with
+`inFlight == cap` and `refused` climbing is the saturation signature
+operators should alert on (the system resolver is wedged and raising
+the cap would only push more threads into the same wedge).
+
+## Public API stability layer
+
+`lib/nts.dart` is the package's stable public contract. It is a thin,
+hand-written file that re-exports a wrapper layer in
+`lib/src/api/nts.dart` plus the bridge bootstrap (`RustLib`). The
+underlying FRB-generated bindings in `lib/src/ffi/` are an internal
+implementation detail.
+
+The wrapper exists to absorb an asymmetry in `flutter_rust_bridge` v2
+codegen: every Rust `pub fn` argument is emitted as a `required` named
+parameter on the Dart side, with no support for optional / defaulted
+parameters. Without an intermediate layer, every internal Rust-side
+signature change — even a strict superset like adding a new optional
+knob — would propagate as a source-level break for every consumer
+(see the 1.2.0 release notes for the concrete `dnsConcurrencyCap`
+episode that motivated the refactor). The wrapper interprets the FRB
+contract on behalf of the consumer and exposes idiomatic Dart
+signatures with named optional parameters and defaults
+(`kDefaultTimeoutMs`, `kDefaultDnsConcurrencyCap`); future Rust-side
+additions land as new optional arguments with package defaults that
+preserve the pre-existing behaviour, so they no longer require a
+SemVer event.
+
+The deprecation policy for future Rust-side removals is symmetric:
+when an underlying Rust parameter is dropped, the corresponding Dart
+parameter survives in the wrapper as a deprecated no-op for at least
+one minor release before being removed at the next major bump. This
+gives consumers a window to migrate without a breaking change.
+
+The split between `lib/src/api/` (hand-written, stable) and
+`lib/src/ffi/` (generated, regenerable) also pins the contract for
+contributors: Rust signature changes that don't appear in
+`lib/src/api/` are by definition non-public and free to land at any
+release type.
+
 ## Repository layout
 
 | Path | Role |
 |------|------|
-| `lib/nts.dart` | Public Dart API; re-exports the FRB-generated surface. |
-| `lib/src/ffi/` | Generated `flutter_rust_bridge` bindings — do not edit by hand. |
+| `lib/nts.dart` | Public Dart API; explicit re-export of the stability-layer wrapper plus `RustLib`. |
+| `lib/src/api/` | Hand-written Dart wrapper around the FFI surface. The package's stable contract; carries the consumer-facing dartdoc. |
+| `lib/src/ffi/` | Generated `flutter_rust_bridge` bindings — do not edit by hand. Internal implementation detail. |
 | `rust/src/api/` | Rust entry points exposed through FRB (`nts.rs`, `simple.rs`). |
 | `rust/src/nts/` | Protocol implementation (records, KE driver, AEAD, NTP, cookies, bounded DNS). |
 | `hook/build.dart` | Native Assets build hook; invokes `cargo build` for the active target. |

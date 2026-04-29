@@ -73,6 +73,77 @@ pub struct NtsTimeSample {
     pub fresh_cookies: u32,
 }
 
+/// Snapshot of the bounded DNS resolver pool counters.
+///
+/// All counters are process-wide and include workers spawned by every
+/// concurrent caller, including those that passed a different
+/// `dns_concurrency_cap` (the underlying pool is shared by design — see
+/// the `nts::dns` module docs for the global-counter rationale). The
+/// snapshot itself is racy: each counter is read with an atomic
+/// `Relaxed` load, so a caller may see a slightly stale combination
+/// (e.g. `in_flight` lagging `recovered` by one bump) but never a
+/// logically-impossible state. The snapshot does not reset cumulative
+/// counters; callers that want windowed measurements snapshot at `t0`
+/// and `t1` and subtract.
+///
+/// Operators can use the four counters to distinguish three failure
+/// modes that all collapse onto `NtsError::Timeout` in the hot-path
+/// error contract:
+///
+/// - **Healthy resolver, occasional bursts** — `in_flight` oscillates
+///   below the cap, `high_water_mark` plateaus a few steps above
+///   steady state, `recovered` climbs in lockstep with traffic,
+///   `refused` stays flat.
+/// - **Cap-bound deployment** — `refused` is climbing; raising the
+///   `dns_concurrency_cap` argument on `nts_query` /
+///   `nts_warm_cookies` would lower the timeout error rate.
+/// - **libc-level resolver wedge** — `in_flight` is pinned at the
+///   cap, `recovered` is flat, `refused` is climbing. The system
+///   resolver is not making progress; raising the cap would only push
+///   more threads into the same wedge.
+#[derive(Debug, Clone)]
+pub struct NtsDnsPoolStats {
+    /// Live count of resolver workers currently pinned in the system
+    /// resolver. The next admission decision will compare its `cap`
+    /// argument against this number.
+    pub in_flight: u32,
+    /// Maximum value `in_flight` has reached since process start.
+    /// Monotonically non-decreasing for the lifetime of the process.
+    pub high_water_mark: u32,
+    /// Cumulative count of detached workers that have completed and
+    /// released their slot since process start. `u64` because the
+    /// counter grows monotonically over a process lifetime and a
+    /// 32-bit wraparound would be visible on long-running CLI / server
+    /// builds with a saturated resolver.
+    pub recovered: u64,
+    /// Cumulative count of admission attempts that were refused
+    /// because the cap was reached since process start. The expected
+    /// delta when the resolver is healthy is zero.
+    pub refused: u64,
+}
+
+/// Snapshot the bounded DNS resolver pool counters. Reads four atomics
+/// with `Relaxed` ordering; the snapshot is intended for
+/// human / dashboard consumption, not for synchronisation. See
+/// [`NtsDnsPoolStats`] for the diagnostic signatures and
+/// `ARCHITECTURE.md`'s "Timeout budget and bounded DNS" section for
+/// the operational shape.
+///
+/// Marked `#[frb(sync)]` so reading four atomics does not pay the
+/// future-marshalling overhead a default FRB binding would impose;
+/// the function is cheap enough to call from a UI poll loop without
+/// thinking about isolate hops.
+#[flutter_rust_bridge::frb(sync)]
+pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
+    let snap = crate::nts::dns::pool_snapshot();
+    NtsDnsPoolStats {
+        in_flight: snap.in_flight as u32,
+        high_water_mark: snap.high_water_mark as u32,
+        recovered: snap.recovered,
+        refused: snap.refused,
+    }
+}
+
 /// Failure modes for [`nts_query`] and [`nts_warm_cookies`].
 #[derive(Debug, Clone)]
 pub enum NtsError {

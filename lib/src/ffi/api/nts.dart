@@ -10,7 +10,21 @@ part 'nts.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `bind_connected_udp_using`, `bind_connected_udp`, `checkout`, `cookies_remaining`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `remaining_or_timeout`, `remaining`, `session_key`, `sessions`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `QueryContext`, `Session`, `UdpDeadline`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`
+
+/// Snapshot the bounded DNS resolver pool counters. Reads four atomics
+/// with `Relaxed` ordering; the snapshot is intended for
+/// human / dashboard consumption, not for synchronisation. See
+/// [`NtsDnsPoolStats`] for the diagnostic signatures and
+/// `ARCHITECTURE.md`'s "Timeout budget and bounded DNS" section for
+/// the operational shape.
+///
+/// Marked `#[frb(sync)]` so reading four atomics does not pay the
+/// future-marshalling overhead a default FRB binding would impose;
+/// the function is cheap enough to call from a UI poll loop without
+/// thinking about isolate hops.
+NtsDnsPoolStats ntsDnsPoolStats() =>
+    RustLib.instance.api.crateApiNtsNtsDnsPoolStats();
 
 /// Run a complete authenticated NTPv4 exchange against `spec`.
 ///
@@ -66,6 +80,81 @@ Future<int> ntsWarmCookies({
   timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
 );
+
+/// Snapshot of the bounded DNS resolver pool counters.
+///
+/// All counters are process-wide and include workers spawned by every
+/// concurrent caller, including those that passed a different
+/// `dns_concurrency_cap` (the underlying pool is shared by design — see
+/// the `nts::dns` module docs for the global-counter rationale). The
+/// snapshot itself is racy: each counter is read with an atomic
+/// `Relaxed` load, so a caller may see a slightly stale combination
+/// (e.g. `in_flight` lagging `recovered` by one bump) but never a
+/// logically-impossible state. The snapshot does not reset cumulative
+/// counters; callers that want windowed measurements snapshot at `t0`
+/// and `t1` and subtract.
+///
+/// Operators can use the four counters to distinguish three failure
+/// modes that all collapse onto `NtsError::Timeout` in the hot-path
+/// error contract:
+///
+/// - **Healthy resolver, occasional bursts** — `in_flight` oscillates
+///   below the cap, `high_water_mark` plateaus a few steps above
+///   steady state, `recovered` climbs in lockstep with traffic,
+///   `refused` stays flat.
+/// - **Cap-bound deployment** — `refused` is climbing; raising the
+///   `dns_concurrency_cap` argument on `nts_query` /
+///   `nts_warm_cookies` would lower the timeout error rate.
+/// - **libc-level resolver wedge** — `in_flight` is pinned at the
+///   cap, `recovered` is flat, `refused` is climbing. The system
+///   resolver is not making progress; raising the cap would only push
+///   more threads into the same wedge.
+class NtsDnsPoolStats {
+  /// Live count of resolver workers currently pinned in the system
+  /// resolver. The next admission decision will compare its `cap`
+  /// argument against this number.
+  final int inFlight;
+
+  /// Maximum value `in_flight` has reached since process start.
+  /// Monotonically non-decreasing for the lifetime of the process.
+  final int highWaterMark;
+
+  /// Cumulative count of detached workers that have completed and
+  /// released their slot since process start. `u64` because the
+  /// counter grows monotonically over a process lifetime and a
+  /// 32-bit wraparound would be visible on long-running CLI / server
+  /// builds with a saturated resolver.
+  final BigInt recovered;
+
+  /// Cumulative count of admission attempts that were refused
+  /// because the cap was reached since process start. The expected
+  /// delta when the resolver is healthy is zero.
+  final BigInt refused;
+
+  const NtsDnsPoolStats({
+    required this.inFlight,
+    required this.highWaterMark,
+    required this.recovered,
+    required this.refused,
+  });
+
+  @override
+  int get hashCode =>
+      inFlight.hashCode ^
+      highWaterMark.hashCode ^
+      recovered.hashCode ^
+      refused.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NtsDnsPoolStats &&
+          runtimeType == other.runtimeType &&
+          inFlight == other.inFlight &&
+          highWaterMark == other.highWaterMark &&
+          recovered == other.recovered &&
+          refused == other.refused;
+}
 
 @freezed
 sealed class NtsError with _$NtsError implements FrbException {

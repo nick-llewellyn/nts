@@ -8,8 +8,11 @@
 
 use std::collections::{HashMap, VecDeque};
 
-/// Default per-host capacity. RFC 8915 §6 recommends 8 unused cookies and the
-/// initial NTS-KE response always delivers exactly 8.
+/// Default per-host capacity. RFC 8915 §6 advises clients keep at most 8
+/// unused cookies per server to bound exposure if KE state is later
+/// compromised; this matches the cap several public deployments (e.g.
+/// Cloudflare) deliver in the initial KE response. The count returned by any
+/// given server is per RFC 8915 §4 a matter of server policy.
 pub const DEFAULT_CAPACITY: usize = 8;
 
 /// FIFO cookie store keyed by NTS-KE host.
