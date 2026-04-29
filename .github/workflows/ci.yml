@@ -234,20 +234,21 @@ jobs:
 
       # Tarpaulin install is the dominant cold-build cost of the
       # coverage step (~3-5 min from source). Caching the binary by
-      # runner OS keeps subsequent runs at ~5 s for this step. Bumps
-      # to a newer tarpaulin should be done by busting the cache key
-      # (e.g. append a version suffix) so the binary actually
-      # refreshes.
+      # runner OS + version keeps subsequent runs at ~5 s for this
+      # step. The version is embedded in the cache key so a deliberate
+      # bump (edit both lines below) actually invalidates the cache
+      # and reinstalls; floating to whatever `latest` resolved to on a
+      # cold miss would silently change CI behaviour.
       - name: Cache cargo-tarpaulin binary
         id: tarpaulin-cache
         uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cargo-tarpaulin
-          key: cargo-tarpaulin-${{ runner.os }}
+          key: cargo-tarpaulin-${{ runner.os }}-0.35.2
 
       - name: Install cargo-tarpaulin
         if: steps.tarpaulin-cache.outputs.cache-hit != 'true'
-        run: cargo install cargo-tarpaulin --locked
+        run: cargo install cargo-tarpaulin --locked --version 0.35.2
 
       # `--lib` mirrors the test-runner step above so coverage and
       # unit-test execution see the same target set. `--skip-clean`
@@ -343,15 +344,18 @@ jobs:
         run: dart run tool/check_bindings.dart
 
   dependency-review:
-    # Supply-chain gate: flags newly-introduced dependencies with known
-    # CVEs or disallowed licenses by diffing the PR against the base
-    # ref. PR-scoped because the action requires a base..head diff;
-    # `push` events to main have no equivalent context. Free on public
-    # repos (no GitHub Advanced Security required). Covers both pubspec
-    # (Dart) and Cargo.toml (Rust) via GitHub's dependency graph.
+    # Supply-chain gate: flags newly-introduced dependencies with
+    # CVEs at or above the configured severity threshold by diffing
+    # the PR against the base ref. PR-scoped because the action
+    # requires a base..head diff; `push` events to main have no
+    # equivalent context. Free on public repos (no GitHub Advanced
+    # Security required). Covers both pubspec (Dart) and Cargo.toml
+    # (Rust) via GitHub's dependency graph.
     #
     # `fail-on-severity: high` is the starting floor; tighten to
-    # `moderate` once we observe real signal volume.
+    # `moderate` once we observe real signal volume. License policy
+    # (`allow-licenses` / `deny-licenses`) is intentionally not
+    # configured yet -- add it here when the policy is decided.
     name: Dependency review
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'

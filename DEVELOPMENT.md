@@ -125,8 +125,10 @@ site.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs five jobs on every push to `main` and
-every pull request:
+`.github/workflows/ci.yml` defines five jobs total: four run on every
+push to `main`, and all five run on pull requests because
+`dependency-review` is PR-only (it requires a base..head diff that
+push events don't have):
 
 | Job | Cost | Purpose |
 |-----|------|---------|
@@ -134,7 +136,7 @@ every pull request:
 | `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the SDK floor (3.38.10) and the pinned current (3.41.7). Always runs. Pin-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated. |
-| `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `high`-severity advisories or disallowed licenses across pubspec + Cargo.toml. |
+| `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `high`-severity advisories across pubspec + Cargo.toml. |
 
 The workflow declares a top-level `permissions: contents: read` token
 baseline and grants `id-token: write` only to `build` and `rust` (the

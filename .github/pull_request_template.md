@@ -35,14 +35,15 @@ floor, that's a real signal, not a flake.
 
 - [ ] `dart format --output=none --set-exit-if-changed .`
 - [ ] `dart analyze .`
-- [ ] `flutter test` (Dart smoke tests in mock-mode FRB)
+- [ ] `flutter test --coverage` (Dart smoke tests in mock-mode FRB;
+      mirrors CI and emits `coverage/lcov.info`)
 - [ ] `(cd example && flutter pub get && flutter analyze)`
 - [ ] `(cd rust && cargo build --locked && cargo test --lib --locked)`
       (Rust-touching changes)
 - [ ] `dart run tool/check_bindings.dart` (any change to
       `rust/src/api/**` or hand-edits under `lib/src/ffi/**`)
-- [ ] `(cd rust && cargo tarpaulin --lib --locked --skip-clean)`
-      (verify Rust coverage locally)
+- [ ] `(cd rust && cargo tarpaulin --lib --locked --skip-clean --out Lcov --output-dir coverage)`
+      (mirrors CI; emits `rust/coverage/lcov.info`)
 - [ ] Manual run on a real device / Simulator / Emulator <!-- describe -->
 
 ## Checklist
