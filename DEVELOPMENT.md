@@ -231,9 +231,22 @@ protection rules → main*:
 | Require status checks to pass before merging | **off (for now)** | `ci.yml` declares `paths-ignore: '**.md'` on both `push` and `pull_request`, so a doc-only PR (e.g. a fix to this file) does not trigger the workflow at all and therefore never reports the required checks — GitHub would block such PRs forever waiting for a status that never comes. Turn this on (with required checks `Format / analyze / Dart tests (Flutter 3.38.10)`, `Format / analyze / Dart tests (Flutter 3.41.7)`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`) only after either dropping `**.md` from `paths-ignore` and gating `build` on the `changes` filter, or adding an always-on lightweight check that reports on doc-only PRs. Tracked in `nts-dz1`. |
 | Require branches to be up to date before merging | **on** | Catches semantic conflicts CI would miss when `main` advances mid-PR. |
 | Require conversation resolution before merging | **on** | Self-applied: forces the author to mark their own follow-ups as addressed. |
-| Require linear history | **on** | Squash- or rebase-only merges; matches the `vX.Y.Z` tag-driven release flow. |
+| Require linear history | **on** | Pairs with the squash-only merge policy below; matches the `vX.Y.Z` tag-driven release flow. |
 | Allow force pushes | **off** | Protected refs should never rewrite history. |
 | Allow deletions | **off** | `main` is the canonical ref. |
+
+The following three settings live under *Settings → General → Pull
+Requests* (repo-level, not branch-scoped) but are listed here because
+they are part of the same merge-policy contract. They are also
+mirrored on the GitHub API and can be re-applied with `gh api -X
+PATCH /repos/<owner>/<repo> -F allow_squash_merge=true -F
+allow_merge_commit=false -F allow_rebase_merge=false`.
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| Allow squash merging | **on** | The only permitted merge strategy; collapses every PR into a single commit on `main`, keeping history linear and `git log --oneline` readable. |
+| Allow merge commits | **off** | Disabled to prevent the noisy two-parent commits that arise from the GitHub UI's default "Create a merge commit" button; conflicts with `Require linear history` above. |
+| Allow rebase merging | **off** | Disabled because per-commit rebases bypass the squash policy and replay potentially unsquashed WIP commits onto `main`. |
 
 `Required pull request reviews` with `Require review from Code
 Owners` is left **off**: no `CODEOWNERS` file is committed, and
