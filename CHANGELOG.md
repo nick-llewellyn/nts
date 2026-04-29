@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.3.1
+
+Documentation-only patch on the 1.3.0 observability surface. No code,
+FFI, or runtime behaviour changes; the Rust crate `nts_rust` is
+unchanged at `0.2.2`.
+
+### `NtsDnsPoolStats` — acknowledge `inFlight > highWaterMark` transient
+
+- Tighten the dartdoc on `ntsDnsPoolStats` (`lib/src/api/nts.dart`)
+  and the mirrored Rust docstring on `NtsDnsPoolStats` plus its
+  `high_water_mark` field (`rust/src/api/nts.rs`). The 1.3.0 wording
+  ("Monotonically non-decreasing for the lifetime of the process",
+  "racy by construction… never logically impossible") invited the
+  strict reading that `highWaterMark >= inFlight` holds at every
+  observation point. It does not: `try_acquire_slot` performs the
+  `fetch_add` on `in_flight` and the `fetch_max` on `high_water_mark`
+  as two independent atomic operations, so a concurrent
+  `pool_snapshot()` can observe `inFlight = prev + 1` and
+  `highWaterMark = prev` for the few-nanosecond window between them.
+  The replacement wording calls this transient out by name and
+  restates the actual guarantee — per-counter monotonicity across
+  consecutive snapshots, not a cross-counter invariant within a
+  single snapshot.
+- Rationale for documenting rather than patching `snapshot_of` to
+  return `max(in_flight, high_water_mark)`: the two `Relaxed` loads
+  in the snapshot path are not atomic together, so a derived `max()`
+  suppresses one common observation but does not produce a coherent
+  point-in-time view; closing the race in the increment path
+  requires a CAS loop on a packed `(in_flight, hwm)` tuple, which is
+  not justified by an observable-only-via-snapshot diagnostic
+  counter; and the three operator-facing failure-mode signatures
+  (healthy / cap-bound / libc wedge — see the rest of the dartdoc)
+  reason about per-counter trajectories across consecutive
+  snapshots, not single-snapshot cross-counter invariants. The
+  transient does not degrade their diagnostic value.
+- The generated FFI dartdoc in `lib/src/ffi/api/nts.dart` is
+  regenerated from the Rust source and tracks the new wording. No
+  other diff in the FRB-generated layer.
+
 ## 1.3.0
 
 Public-API stability layer, bounded DNS resolver pool observability,

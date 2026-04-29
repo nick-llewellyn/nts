@@ -101,10 +101,16 @@ Future<NtsTimeSample> ntsQuery({
 /// concurrent caller, including those passing different
 /// `dnsConcurrencyCap` values — the underlying pool is shared by
 /// design (see `ARCHITECTURE.md`'s "Timeout budget and bounded DNS"
-/// section). The snapshot is racy by construction: each individual
-/// counter is read atomically, but a caller may see a slightly stale
-/// combination across counters (e.g. `inFlight` lagging `recovered`
-/// by one bump). It is never logically impossible.
+/// section). The snapshot is racy by construction: each counter is
+/// read with an independent relaxed atomic load, so combinations
+/// across counters can be slightly stale — e.g. `inFlight` lagging
+/// `recovered` by one bump, or `inFlight > highWaterMark` for the
+/// few-nanosecond window between a worker's admission increment and
+/// the subsequent `fetch_max` on the high-water mark. The guarantee
+/// is per-counter monotonicity across consecutive snapshots
+/// (cumulative counters and `highWaterMark` never decrease; every
+/// loaded value is one the counter actually held at some real
+/// moment), not a cross-counter invariant within a single snapshot.
 ///
 /// Cumulative counters (`recovered`, `refused`) and the
 /// `highWaterMark` are *not* reset by this call. For windowed

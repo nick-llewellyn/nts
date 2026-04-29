@@ -87,12 +87,20 @@ Future<int> ntsWarmCookies({
 /// concurrent caller, including those that passed a different
 /// `dns_concurrency_cap` (the underlying pool is shared by design — see
 /// the `nts::dns` module docs for the global-counter rationale). The
-/// snapshot itself is racy: each counter is read with an atomic
-/// `Relaxed` load, so a caller may see a slightly stale combination
-/// (e.g. `in_flight` lagging `recovered` by one bump) but never a
-/// logically-impossible state. The snapshot does not reset cumulative
-/// counters; callers that want windowed measurements snapshot at `t0`
-/// and `t1` and subtract.
+/// snapshot is racy by construction: each counter is read with an
+/// independent atomic `Relaxed` load, so combinations across counters
+/// can be slightly stale — e.g. `in_flight` lagging `recovered` by one
+/// bump, or `in_flight > high_water_mark` for the few-nanosecond
+/// window between a worker's admission `fetch_add` on `in_flight` and
+/// the subsequent `fetch_max` on `high_water_mark` in
+/// `try_acquire_slot`. The actual guarantee is per-counter
+/// monotonicity in each counter's natural direction (cumulative
+/// counters and `high_water_mark` never decrease across consecutive
+/// snapshots; every loaded value is one the counter actually held at
+/// some real moment), not a cross-counter invariant within a single
+/// snapshot. The snapshot does not reset cumulative counters; callers
+/// that want windowed measurements snapshot at `t0` and `t1` and
+/// subtract.
 ///
 /// Operators can use the four counters to distinguish three failure
 /// modes that all collapse onto `NtsError::Timeout` in the hot-path
@@ -115,8 +123,13 @@ class NtsDnsPoolStats {
   /// argument against this number.
   final int inFlight;
 
-  /// Maximum value `in_flight` has reached since process start.
-  /// Monotonically non-decreasing for the lifetime of the process.
+  /// Largest value `in_flight` has reached since process start, as
+  /// published by the `fetch_max` in `try_acquire_slot` after each
+  /// successful admission. Non-decreasing across consecutive
+  /// snapshots, but **not** a cross-counter invariant within a
+  /// single snapshot: see the struct-level note on the transient
+  /// window where `in_flight > high_water_mark` between a worker's
+  /// admission increment and the subsequent `fetch_max`.
   final int highWaterMark;
 
   /// Cumulative count of detached workers that have completed and
