@@ -211,8 +211,8 @@ jobs:
     # `build` job's `if:` gate evaluates false, GitHub collapses both
     # matrix legs into one skipped check using the unexpanded template
     # name (`...(Flutter ${{ matrix.flutter }})`), so the per-leg
-    # expanded names branch protection would otherwise require do not
-    # appear in the rollup. This gate reports a single stable name
+    # expanded names that branch protection would otherwise require
+    # never appear in the rollup. This gate reports a single stable name
     # (`Dart tests gate`) and is the required-status-check entry on
     # `main` for the Dart side.
     #
