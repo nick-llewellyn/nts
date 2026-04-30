@@ -206,6 +206,28 @@ jobs:
         working-directory: example
         run: flutter analyze
 
+  build-gate:
+    # Aggregator that resolves the matrix-skip naming gap. When the
+    # `build` job's `if:` gate evaluates false, GitHub collapses both
+    # matrix legs into one skipped check using the unexpanded template
+    # name (`...(Flutter ${{ matrix.flutter }})`), so the per-leg
+    # expanded names branch protection would otherwise require do not
+    # appear in the rollup. This gate reports a single stable name
+    # (`Dart tests gate`) and is the required-status-check entry on
+    # `main` for the Dart side. Succeeds whether `build` ran green or
+    # was skipped; fails on any other terminal state.
+    name: Dart tests gate
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    steps:
+      - name: Resolve build matrix outcome
+        run: |
+          case "${{ needs.build.result }}" in
+            success|skipped) exit 0 ;;
+            *) echo "build aggregate result: ${{ needs.build.result }}" >&2; exit 1 ;;
+          esac
+
   rust:
     name: Rust build + tests + coverage
     runs-on: ubuntu-latest
