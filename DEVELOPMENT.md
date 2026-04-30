@@ -226,6 +226,12 @@ has cleared the CI gates above. Required approvals are deliberately
 set to **zero**: the bar is that CI is green, not that a second
 human signed off. Self-merging your own PR is the expected default.
 
+Primary maintainer: Nicholas Llewellyn (`nllewelln@gmail.com`). All
+commits authored from this repo should be signed with the same
+identity — set `git config user.email nllewelln@gmail.com` locally
+to match the global default and keep `.beads/issues.jsonl` `owner`
+fields consistent across new issues.
+
 ### Required `main` branch protection settings
 
 Configure these on GitHub at *Settings → Branches → Branch
