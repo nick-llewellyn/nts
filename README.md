@@ -215,6 +215,13 @@ For internals, contribution workflow, and operational tuning:
 - **[RFC 8915](https://datatracker.ietf.org/doc/html/rfc8915)** —
   Official IETF specification for Network Time Security.
 
+## Contact
+
+Maintainer: Nicholas Llewellyn — `nllewelln@gmail.com`. For bugs and
+feature requests, prefer
+[GitHub issues](https://github.com/nick-llewellyn/nts/issues); for
+private security reports, email the maintainer directly.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
