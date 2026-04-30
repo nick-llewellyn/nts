@@ -138,7 +138,7 @@ requires a base..head diff that push events don't have:
 |-----|------|---------|
 | `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, and `docs` flags consumed by the gates below (`docs` is informational — no job gates on it). Always runs. |
 | `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the SDK floor (3.38.10) and the pinned current (3.41.7). Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Pin-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
-| `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: build` + `if: always()` so it runs whether the matrix executed, was skipped, or failed; passes when `needs.build.result` is `success` or `skipped`, fails otherwise. Required-status-check entry on `main` for the Dart side. |
+| `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: [changes, build]` + `if: always()` so it runs whether the matrix executed, was skipped, or failed. Passes when `needs.changes.result == 'success'` AND `needs.build.result` is `success` or `skipped`; fails otherwise. The `changes`-success precondition discriminates a legitimate doc-only matrix skip from a `changes`-failure cascade-skip — without it, a transient paths-filter failure would silently green-light branch protection. Required-status-check entry on `main` for the Dart side. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated on `rust`/`bindings`/`ci`. |
 | `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `high`-severity advisories across pubspec + Cargo.toml. |
@@ -230,11 +230,14 @@ has cleared the CI gates above. Required approvals are deliberately
 set to **zero**: the bar is that CI is green, not that a second
 human signed off. Self-merging your own PR is the expected default.
 
-Primary maintainer: Nicholas Llewellyn (`nllewelln@gmail.com`). All
-commits authored from this repo should be signed with the same
-identity — set `git config user.email nllewelln@gmail.com` locally
-to match the global default and keep `.beads/issues.jsonl` `owner`
-fields consistent across new issues.
+Primary maintainer: Nicholas Llewellyn (`nllewelln@gmail.com`).
+**Maintainer-only**: when the primary maintainer authors commits or
+files Beads issues from this repo, the local `git config user.email`
+should be `nllewelln@gmail.com` (matching the global default) so
+`.beads/issues.jsonl` `owner` fields stay consistent across new
+issues. This is solo-maintainer hygiene, not a contributor policy
+— third-party contributors should commit under their own identity;
+attribution is not rewritten on merge.
 
 ### Required `main` branch protection settings
 
@@ -246,7 +249,7 @@ protection rules → main*:
 | Require a pull request before merging | **on** | Forces every change through the CI pipeline and creates a reviewable diff. |
 | Required number of approvals before merging | **0** | Solo-maintainer repo; CI is the gate, not a second pair of eyes. |
 | Dismiss stale pull request approvals when new commits are pushed | **off** | No-op at 0 approvals; explicitly off so the setting is unambiguous. |
-| Require status checks to pass before merging | **on** | Required checks: `Dart tests gate`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`. Markdown is intentionally excluded from trigger-level `paths-ignore` so doc-only PRs trigger the workflow and the gated jobs all skip via `if:` (skipped → passing for branch protection). The `Dart tests gate` aggregator job resolves a matrix-skip naming quirk: when the `build` job is skipped via `if:`, GitHub collapses both Flutter-version matrix legs into one check using the unexpanded template name, so the per-leg names cannot be required directly; the aggregator reports one stable name regardless of expansion. Codecov keeps reporting on doc-only commits via `.codecov.yml` carryforward flags. |
+| Require status checks to pass before merging | **on** | Required checks: `Detect changed paths`, `Dart tests gate`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`. Markdown is intentionally excluded from trigger-level `paths-ignore` so doc-only PRs trigger the workflow and the gated jobs all skip via `if:` (skipped → passing for branch protection). `Detect changed paths` is required directly so a `changes`-job failure (transient paths-filter error, network blip) surfaces as a hard fail rather than cascading into "skipped → passing" on every dependent gate. The `Dart tests gate` aggregator job resolves a matrix-skip naming quirk: when the `build` job is skipped via `if:`, GitHub collapses both Flutter-version matrix legs into one check using the unexpanded template name, so the per-leg names cannot be required directly; the aggregator reports one stable name regardless of expansion, and additionally requires `needs.changes.result == 'success'` for defense-in-depth so a `changes` failure cannot leak through as a skip. Codecov keeps reporting on doc-only commits via `.codecov.yml` carryforward flags. |
 | Require branches to be up to date before merging | **on** | Catches semantic conflicts CI would miss when `main` advances mid-PR. |
 | Require conversation resolution before merging | **on** | Self-applied: forces the author to mark their own follow-ups as addressed. |
 | Require linear history | **on** | Pairs with the squash-only merge policy below; matches the `vX.Y.Z` tag-driven release flow. |
