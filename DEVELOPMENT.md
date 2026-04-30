@@ -125,17 +125,18 @@ site.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` defines five jobs total: four run on every
-push to `main`, and all five run on pull requests because
-`dependency-review` is PR-only (it requires a base..head diff that
-push events don't have):
+`.github/workflows/ci.yml` defines five jobs total. `changes` always
+runs on push and PR; `build`, `rust`, and `rust-bridge-sync` are
+job-gated and skip on doc-only diffs (skipped jobs count as passing
+for branch protection). `dependency-review` is PR-only because it
+requires a base..head diff that push events don't have:
 
 | Job | Cost | Purpose |
 |-----|------|---------|
-| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci` flags consumed by the gates below. |
-| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the SDK floor (3.38.10) and the pinned current (3.41.7). Always runs. Pin-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
-| `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated. |
-| `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated. |
+| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, and `docs` flags consumed by the gates below (`docs` is informational — no job gates on it). Always runs. |
+| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the SDK floor (3.38.10) and the pinned current (3.41.7). Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Pin-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
+| `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
+| `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated on `rust`/`bindings`/`ci`. |
 | `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `high`-severity advisories across pubspec + Cargo.toml. |
 
 The workflow declares a top-level `permissions: contents: read` token
@@ -160,48 +161,55 @@ directly from the run.
 
 ### Filter-driven gating
 
-The expensive Rust jobs and the Dart coverage upload are skipped
-unless the diff actually requires them. Filters and gates:
+The Dart matrix, expensive Rust jobs, and Dart coverage upload are
+skipped unless the diff actually requires them. Filters and gates:
 
 | Filter | Watches | Gates |
 |--------|---------|-------|
-| `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `rust`, `rust-bridge-sync` |
-| `bindings` | `lib/src/ffi/**`, `tool/check_bindings.dart` | `rust-bridge-sync` |
-| `dart` | `lib/**`, `test/**`, `pubspec.yaml`, `analysis_options.yaml` | Dart coverage upload steps inside `build` |
-| `ci` | `.github/workflows/**` | `rust`, `rust-bridge-sync`, Dart coverage upload |
+| `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `build`, `rust`, `rust-bridge-sync` |
+| `bindings` | `lib/src/ffi/**`, `tool/check_bindings.dart` | `build`, `rust-bridge-sync` |
+| `dart` | `lib/**`, `test/**`, `pubspec.yaml`, `analysis_options.yaml` | `build` (whole job), Dart coverage upload step |
+| `ci` | `.github/workflows/**` | `build`, `rust`, `rust-bridge-sync`, Dart coverage upload |
+| `docs` | `**.md` | informational only — no job consumes this output; surfaced so doc-only diffs are observable in workflow run summaries |
 
 `pubspec.yaml` lives in the `rust` filter because the
 `flutter_rust_bridge: 2.12.0` exact pin sits there; bumping it must
-trigger a full Rust + drift run. The `dart` filter only gates the
-Codecov / artifact upload — the `flutter test --coverage` step itself
-always runs on both matrix legs so coverage gaps caused by pin-only
-or floor-only code paths surface in test failures even when the
-upload is skipped. `workflow_dispatch` (manual reruns from the
-Actions UI) bypasses every gate so a forced run executes the full
-pipeline.
+trigger a full Rust + drift run. The `dart` filter additionally gates
+the Codecov / artifact upload step inside `build`, on top of gating
+whether the matrix runs at all — so a `rust`-only or `bindings`-only
+diff still runs the Dart matrix (to catch FFI-surface drift visible
+to Dart tests) but skips the upload (no Dart-relevant coverage delta
+to publish). `workflow_dispatch` (manual reruns from the Actions UI)
+bypasses every gate so a forced run executes the full pipeline.
 
 GitHub treats skipped jobs as passing for branch-protection purposes,
-so existing required-check rules continue to work unchanged.
+so the four required checks resolve green on doc-only diffs even
+though `build`, `rust`, and `rust-bridge-sync` all skip.
 
 ### Trigger-level skips
 
 Two cheaper filters run before the workflow even queues:
 
-- **`paths-ignore`** (`.github/workflows/ci.yml`): doc / metadata
-  paths — `**.md`, `LICENSE`, `.gitignore`, `.beads/**`,
-  `screenshots/**` — never trigger a workflow run.
+- **`paths-ignore`** (`.github/workflows/ci.yml`): truly-irrelevant
+  assets — `LICENSE`, `.gitignore`, `.beads/**`, `screenshots/**` —
+  never trigger a workflow run. Markdown is **not** in this list:
+  doc-only PRs need to trigger the workflow so required status
+  checks resolve (the `build`, `rust`, and `rust-bridge-sync` jobs
+  then skip via job-level `if:` and report green, since GitHub
+  treats skipped jobs as passing for branch protection).
 - **`[skip ci]` commit-message flag**: any commit whose message
   contains `[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, or
   `[actions skip]` is bypassed by GitHub Actions. Prefer this only
   when `paths-ignore` doesn't cover the case (e.g. a single commit
   that touches both an ignored file and a non-ignored one but is
-  known to be CI-irrelevant).
+  known to be CI-irrelevant); never use it on PRs to `main`, since
+  it would also bypass the required status checks.
 
 ### When to use each layer
 
 | Change | Behaviour |
 |--------|-----------|
-| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow doesn't run (`paths-ignore`). |
+| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, and `rust-bridge-sync` skip via `if:`. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
 | Beads issue update (`.beads/**`) | Workflow doesn't run (`paths-ignore`). |
 | Screenshot asset swap (`screenshots/**`) | Workflow doesn't run (`paths-ignore`). |
 | Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust` and `rust-bridge-sync` skip. |
@@ -228,7 +236,7 @@ protection rules → main*:
 | Require a pull request before merging | **on** | Forces every change through the CI pipeline and creates a reviewable diff. |
 | Required number of approvals before merging | **0** | Solo-maintainer repo; CI is the gate, not a second pair of eyes. |
 | Dismiss stale pull request approvals when new commits are pushed | **off** | No-op at 0 approvals; explicitly off so the setting is unambiguous. |
-| Require status checks to pass before merging | **off (for now)** | `ci.yml` declares `paths-ignore: '**.md'` on both `push` and `pull_request`, so a doc-only PR (e.g. a fix to this file) does not trigger the workflow at all and therefore never reports the required checks — GitHub would block such PRs forever waiting for a status that never comes. Turn this on (with required checks `Format / analyze / Dart tests (Flutter 3.38.10)`, `Format / analyze / Dart tests (Flutter 3.41.7)`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`) only after either dropping `**.md` from `paths-ignore` and gating `build` on the `changes` filter, or adding an always-on lightweight check that reports on doc-only PRs. Tracked in `nts-dz1`. |
+| Require status checks to pass before merging | **on** | Required checks: `Format / analyze / Dart tests (Flutter 3.38.10)`, `Format / analyze / Dart tests (Flutter 3.41.7)`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`. Markdown is intentionally excluded from trigger-level `paths-ignore` so doc-only PRs trigger the workflow and the four jobs all skip via `if:` (skipped → passing for branch protection). Codecov keeps reporting on doc-only commits via `.codecov.yml` carryforward flags. |
 | Require branches to be up to date before merging | **on** | Catches semantic conflicts CI would miss when `main` advances mid-PR. |
 | Require conversation resolution before merging | **on** | Self-applied: forces the author to mark their own follow-ups as addressed. |
 | Require linear history | **on** | Pairs with the squash-only merge policy below; matches the `vX.Y.Z` tag-driven release flow. |
