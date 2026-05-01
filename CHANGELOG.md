@@ -12,13 +12,16 @@ no FFI behaviour change, no FRB pin movement; the Rust crate
 - Reconcile the four loci that determine the coverage denominator so
   local artifacts, CI flags, and the Codecov dashboard agree.
   `.codecov.yml` now ignores `lib/src/ffi/api/nts.dart` (FRB-generated
-  Dart forwarders, structurally unreachable through the
-  `RustLib.initMock()` short-circuit used by the smoke tests) and
-  `rust/src/api/simple.rs` (holds only the `#[frb(init)]` lifecycle
-  hook `init_app`, fired on dylib load and unreachable from
-  `cargo test --lib`). `rust/tarpaulin.toml` (new) carries the same
-  Rust exclusion set so a local `cargo tarpaulin` reproduces CI
-  numbers without per-invocation `--exclude-files` flags.
+  single-expression forwarders of the form
+  `ntsQuery(...) => RustLib.instance.api.crateApiNtsNtsQuery(...)` —
+  reachable from the smoke tests but low-signal for authored-code
+  coverage; the FFI dispatch they delegate into lives in
+  `frb_generated*.dart` and is what `RustLib.initMock()` substitutes)
+  and `rust/src/api/simple.rs` (holds only the `#[frb(init)]`
+  lifecycle hook `init_app`, fired on dylib load and unreachable
+  from `cargo test --lib`). `rust/tarpaulin.toml` (new) carries the
+  same Rust exclusion set so a local `cargo tarpaulin` reproduces
+  CI numbers without per-invocation `--exclude-files` flags.
   `.github/workflows/ci.yml` adds the matching
   `--exclude-files 'src/api/simple.rs'` and the comment block above
   the step now enumerates all four filtered Rust files (previously

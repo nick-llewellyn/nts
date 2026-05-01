@@ -194,14 +194,29 @@ Concrete partitioning today:
 - **Repo-level only:** `lib/src/ffi/frb_generated.dart`,
   `lib/src/ffi/frb_generated.io.dart`,
   `lib/src/ffi/frb_generated.web.dart`, and
-  `lib/src/ffi/api/nts.dart`. All four are FRB-emitted Dart bindings
-  whose function bodies forward to `RustLib.instance.api.crateApi*`;
-  `RustLib.initMock()` short-circuits that dispatch in the test
-  suite, so mock-mode tests cannot reach those bodies regardless of
-  effort spent. No `flutter test --coverage` filter is wired (would
-  require an extra `lcov --remove` step and `apt-get install lcov`
-  on the runner); the Dart lcov artifact still contains them, but
-  the dashboard does not.
+  `lib/src/ffi/api/nts.dart`. All four are FRB-emitted Dart bindings,
+  but the rationale for excluding them differs by file:
+  - The three `frb_generated*.dart` files contain the
+    `RustLibApiImpl` class — the FFI dispatch that loads the dylib
+    and marshals every `crateApi*` call across the bridge.
+    `RustLib.initMock()` substitutes the entire `RustLibApi`
+    instance via `instance.initMockImpl(api: api)`, so this impl
+    class is never constructed in mock mode and its method bodies
+    are genuinely unreachable from the test suite.
+  - `lib/src/ffi/api/nts.dart` holds the public-facing forwarders
+    (e.g.
+    `ntsQuery(...) => RustLib.instance.api.crateApiNtsNtsQuery(...)`).
+    These bodies *are* reached when the smoke tests call `ntsQuery`
+    / `ntsWarmCookies`; the mock intercepts at the
+    `RustLib.instance.api` level, one frame deeper. The exclusion
+    is therefore on **low-signal grounds** — single-expression
+    `=>` dispatchers that only forward arguments add line count
+    without measuring authored logic — not on unreachability.
+
+  No `flutter test --coverage` filter is wired (would require an
+  extra `lcov --remove` step and `apt-get install lcov` on the
+  runner); the Dart lcov artifact still contains all four files,
+  but the dashboard does not.
 
 When adding a new file that should be excluded, follow this
 decision tree:
