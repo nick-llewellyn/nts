@@ -1,0 +1,40 @@
+# cargo-tarpaulin configuration for the `nts` Rust crate.
+#
+# `[default]` is the implicit run-config tarpaulin loads when invoked
+# without `--config-name`, so `cd rust && cargo tarpaulin` picks up
+# the `exclude_files` list below automatically. This keeps the local
+# `lcov.info` artifact in sync with the one CI uploads to Codecov,
+# and matches the `ignore:` block in `.codecov.yml` so the dashboard
+# agrees with the artifact.
+#
+# Patterns are evaluated relative to this file's directory (the
+# crate root, `rust/`). See `DEVELOPMENT.md` → "Coverage exclusion
+# policy" for the rationale and the decision tree contributors
+# should follow when adding new entries.
+#
+# Files excluded:
+#   - `src/frb_generated.rs`: regenerated verbatim by
+#     `flutter_rust_bridge_codegen generate`; correctness is gated
+#     by the `rust-bridge-sync` CI job, not by coverage.
+#   - `src/android_init.rs` / `src/ios_init.rs`: JNI / Obj-C++ init
+#     shims only loaded on-device via `System.loadLibrary` /
+#     `dlopen`. Unreachable from the `ubuntu-latest` runner that
+#     produces the rust flag, and from any host-side `cargo test`.
+#   - `src/api/simple.rs`: holds only the `#[frb(init)]` lifecycle
+#     hook (`init_app`). Fires when the dylib is loaded, which
+#     `cargo test --lib` does not do; same justification as the
+#     `*_init.rs` shims above.
+#
+# The CI step in `.github/workflows/ci.yml` re-states these flags
+# explicitly via `--exclude-files`. The duplication is redundant in
+# behaviour but kept for in-workflow discoverability — a contributor
+# reading the workflow can see what is filtered without opening this
+# file.
+
+[default]
+exclude_files = [
+  "src/frb_generated.rs",
+  "src/android_init.rs",
+  "src/ios_init.rs",
+  "src/api/simple.rs",
+]

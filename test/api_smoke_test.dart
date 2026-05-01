@@ -80,9 +80,6 @@ class _RecordingApi implements RustLibApi {
   }
 
   @override
-  Future<String> crateApiSimpleGreet({required String name}) async => '';
-
-  @override
   Future<void> crateApiSimpleInitApp() async {}
 
   @override

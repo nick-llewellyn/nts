@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+Internal-only cleanup of the FRB scaffold and the coverage-filter
+plumbing. No public Dart API change (`lib/nts.dart` is byte-identical),
+no FFI behaviour change, no FRB pin movement; the Rust crate
+`nts_rust` is unchanged at `0.2.2`.
+
+### Coverage exclusion alignment
+
+- Reconcile the four loci that determine the coverage denominator so
+  local artifacts, CI flags, and the Codecov dashboard agree.
+  `.codecov.yml` now ignores `lib/src/ffi/api/nts.dart` (FRB-generated
+  Dart forwarders, structurally unreachable through the
+  `RustLib.initMock()` short-circuit used by the smoke tests) and
+  `rust/src/api/simple.rs` (holds only the `#[frb(init)]` lifecycle
+  hook `init_app`, fired on dylib load and unreachable from
+  `cargo test --lib`). `rust/tarpaulin.toml` (new) carries the same
+  Rust exclusion set so a local `cargo tarpaulin` reproduces CI
+  numbers without per-invocation `--exclude-files` flags.
+  `.github/workflows/ci.yml` adds the matching
+  `--exclude-files 'src/api/simple.rs'` and the comment block above
+  the step now enumerates all four filtered Rust files (previously
+  named only two). `DEVELOPMENT.md`'s "Coverage exclusion policy"
+  subsection is refreshed to match.
+
+### `greet` smoke-test stub removal
+
+- Delete the `greet` function from `rust/src/api/simple.rs` (left
+  over from the FRB scaffold; never re-exported through
+  `lib/nts.dart`, so internal-only by the package's own public-API
+  stability statement) and refresh the file header to document its
+  remaining role as the lifecycle-hook host.
+  `lib/src/ffi/api/simple.dart` is removed; FRB does not auto-clean
+  stale module files when a Rust `api/` module loses its last `pub`
+  item (followup tracked as `nts-lmf` to extend
+  `tool/check_bindings.dart` to flag this footgun). The
+  `crateApiSimpleGreet` overrides in `example/lib/src/mock_api.dart`,
+  `test/api_smoke_test.dart`, and `test/ffi_smoke_test.dart` are
+  removed in the same commit; the FRB-generated layer
+  (`lib/src/ffi/frb_generated.{dart,io.dart,web.dart}`,
+  `rust/src/frb_generated.rs`) is regenerated via
+  `flutter_rust_bridge_codegen 2.12.0` and committed clean against
+  the drift gate.
+
 ## 1.3.1
 
 Documentation-only patch on the 1.3.0 observability surface. No code,

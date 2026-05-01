@@ -1,13 +1,11 @@
-// Smoke-test surface used to validate the FRB toolchain end-to-end.
-// Removed once `nts.rs` carries a real round-trip.
-
-/// Returns a greeting that round-trips a string across the FFI boundary.
-///
-/// Used by `test/ffi_smoke_test.dart` to verify codegen, native asset
-/// bundling, and the Rust ↔ Dart marshalling layer are all wired up.
-pub fn greet(name: String) -> String {
-    format!("Hello, {name}, from nts_rust!")
-}
+// Bridge lifecycle hook. Carried in `api/` because FRB scans `crate::api`
+// for `#[frb(init)]` items; relocating it would only swap one form of
+// generated wiring for another. The function itself is unreachable from
+// host-runner `cargo test --lib` runs (it fires when the dynamic library
+// is loaded, which only happens on-device or via an integration test
+// that links the dylib), so the file is excluded from coverage at the
+// `.codecov.yml`, `rust/tarpaulin.toml`, and `ci.yml --exclude-files`
+// layers — see `DEVELOPMENT.md` → "Coverage exclusion policy".
 
 /// Initialises FRB's panic + logging hooks for the current target.
 ///

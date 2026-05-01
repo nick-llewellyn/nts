@@ -26,10 +26,6 @@ class MockNtsApi implements RustLibApi {
   final Random _random;
 
   @override
-  Future<String> crateApiSimpleGreet({required String name}) async =>
-      'Hello, $name, from nts (mock)!';
-
-  @override
   Future<void> crateApiSimpleInitApp() async {}
 
   @override
