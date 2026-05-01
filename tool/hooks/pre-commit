@@ -1,0 +1,51 @@
+#!/bin/sh
+# Refuse direct commits to protected branches.
+#
+# Activate once per clone:
+#   git config core.hooksPath tool/hooks
+#
+# Override (genuine emergency only): git commit --no-verify
+set -eu
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "DETACHED")
+
+case "$branch" in
+  main|master)
+    # Two heredocs: the first is unquoted so '$branch' interpolates
+    # to the actual current branch in the error line; the second is
+    # quoted (<<'EOF') so the recipe block is emitted verbatim. If
+    # the recipe block lived in the unquoted heredoc, the shell would
+    # try to expand 'n=$(git stash list | wc -l)' and '$n' at print
+    # time, and 'set -u' would abort the hook with 'n: unbound
+    # variable' instead of showing the user the recovery steps.
+    cat >&2 <<EOF
+ERROR: direct commits to '$branch' are forbidden by repo policy.
+
+Every change must land via a pull request from a feature branch.
+See AGENTS.md "Branch Protection" and DEVELOPMENT.md "Contribution
+workflow" for the full policy.
+EOF
+    cat >&2 <<'EOF'
+
+To proceed (the count check below keeps 'git stash pop' safe in
+both the clean-working-tree case and the case where an unrelated
+'park-pre-branch' entry already exists on the stack):
+
+  n=$(git stash list | wc -l)
+  git stash push -u -m park-pre-branch   # no-op if working tree is clean
+  git switch -c <type>/<short-slug>      # e.g. chore/fix-typo
+  [ "$(git stash list | wc -l)" -gt "$n" ] && git stash pop
+  git commit                             # this hook will allow it
+
+Override with 'git commit --no-verify' only in genuine emergencies.
+If the remote has branch protection configured for this branch,
+the eventual push will be refused for non-admin contributors;
+admin/owner pushes are refused only when 'enforce_admins=true' is
+also set. Treat this hook as a local-first guard, not a guarantee
+of remote rejection.
+EOF
+    exit 1
+    ;;
+esac
+
+exit 0
