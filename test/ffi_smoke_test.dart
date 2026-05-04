@@ -1,8 +1,8 @@
 // Smoke test for the flutter_rust_bridge codegen pipeline.
 //
 // Validates that:
-//   1. Codegen produced Dart bindings for both the simple `greet` stub and
-//      the NTS surface (`ntsQuery`, `ntsWarmCookies`).
+//   1. Codegen produced Dart bindings for the NTS surface (`ntsQuery`,
+//      `ntsWarmCookies`).
 //   2. The bindings carry the expected signatures and that calls dispatch
 //      through `RustLibApi` so mock implementations can intercept them.
 //   3. The bridge can be initialized in mock mode without loading the
@@ -11,12 +11,10 @@
 
 // This test deliberately exercises the FRB layer directly — it is the
 // contract test for the codegen pipeline, not for the hand-written
-// wrapper in `lib/src/api/`. `greet` is imported straight from the FFI
-// surface because it is the FRB toolchain smoke entry point and is not
-// part of the public `package:nts/nts.dart` barrel; `ntsQuery` /
-// `ntsWarmCookies` are imported from the FFI module too so the
-// signatures asserted here are FRB's, not the wrapper's. The companion
-// wrapper-layer smoke test lives in `test/api_smoke_test.dart`.
+// wrapper in `lib/src/api/`. `ntsQuery` / `ntsWarmCookies` are imported
+// from the FFI module so the signatures asserted here are FRB's, not
+// the wrapper's. The companion wrapper-layer smoke test lives in
+// `test/api_smoke_test.dart`.
 // ignore_for_file: implementation_imports
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
@@ -24,14 +22,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart' show NtsError, NtsServerSpec, NtsTimeSample;
 import 'package:nts/src/ffi/api/nts.dart' show ntsQuery, ntsWarmCookies;
-import 'package:nts/src/ffi/api/simple.dart' show greet;
 import 'package:nts/src/ffi/frb_generated.dart';
 
 class _FakeRustLibApi implements RustLibApi {
-  @override
-  Future<String> crateApiSimpleGreet({required String name}) async =>
-      'Hello, $name, from nts_rust!';
-
   @override
   Future<void> crateApiSimpleInitApp() async {}
 
@@ -68,16 +61,6 @@ void main() {
   });
 
   group('FRB toolchain smoke test', () {
-    test('greet() round-trips a string through the bridge contract', () async {
-      final result = await greet(name: 'NTS');
-      expect(result, 'Hello, NTS, from nts_rust!');
-    });
-
-    test('binding signature matches Future<String> Function({String})', () {
-      // ignore: unnecessary_type_check
-      expect(greet is Future<String> Function({required String name}), isTrue);
-    });
-
     test('ntsQuery() dispatches through the mock api', () async {
       const spec = NtsServerSpec(host: 'time.example', port: 4460);
       final sample = await ntsQuery(

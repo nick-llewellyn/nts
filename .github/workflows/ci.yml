@@ -309,9 +309,39 @@ jobs:
       # otherwise, doubling wall time). `--out Lcov` emits
       # rust/coverage/lcov.info, the format Codecov accepts without
       # additional conversion.
+      #
+      # `--exclude-files` patterns are evaluated relative to the
+      # tarpaulin manifest dir (`rust/`) and must mirror both the
+      # `ignore:` block in `.codecov.yml` (so the uploaded artifact
+      # and the dashboard report agree on the denominator) and the
+      # `exclude_files` list in `rust/tarpaulin.toml` (so contributors
+      # running `cd rust && cargo tarpaulin` locally see the same
+      # denominator as CI). The flags here are functionally redundant
+      # with `rust/tarpaulin.toml` — tarpaulin loads `[default]`
+      # automatically — but kept explicit so the filtered set is
+      # discoverable from the workflow without opening a second file.
+      # See `DEVELOPMENT.md` → "Coverage exclusion policy" for the
+      # decision tree governing additions to this list. Four files
+      # are filtered:
+      #   - `src/frb_generated.rs`: regenerated verbatim by
+      #     `flutter_rust_bridge_codegen generate`; the rust-bridge-sync
+      #     job is the source of truth for its correctness, not coverage.
+      #   - `src/android_init.rs` / `src/ios_init.rs`: JNI / Obj-C++
+      #     init shims only loaded on-device; unreachable from the
+      #     `ubuntu-latest` runner that produces the rust flag.
+      #   - `src/api/simple.rs`: holds only the `#[frb(init)]`
+      #     lifecycle hook (`init_app`). Fires on dylib load, which
+      #     `cargo test --lib` does not perform; same justification
+      #     as the `*_init.rs` shims above.
       - name: Run Rust coverage (cargo-tarpaulin)
         working-directory: rust
-        run: cargo tarpaulin --lib --locked --skip-clean --out Lcov --output-dir coverage
+        run: |
+          cargo tarpaulin --lib --locked --skip-clean \
+            --exclude-files 'src/frb_generated.rs' \
+            --exclude-files 'src/android_init.rs' \
+            --exclude-files 'src/ios_init.rs' \
+            --exclude-files 'src/api/simple.rs' \
+            --out Lcov --output-dir coverage
 
       - name: Upload Rust coverage artifact
         uses: actions/upload-artifact@v7

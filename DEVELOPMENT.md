@@ -163,6 +163,87 @@ Both files are also published as workflow artifacts
 contributors without Codecov access can download the raw `lcov.info`
 directly from the run.
 
+### Coverage exclusion policy
+
+Three layers can filter a file out of the coverage signal: inline
+directives in the source, tool-level flags at the collection step,
+and the centralized `.codecov.yml` `ignore:` block. The right layer
+depends on who emits the file and which consumers (the local
+`lcov.info` artifacts, IDE coverage gutters, the Codecov dashboard)
+need to agree.
+
+| Layer | Used for | Reach |
+|-------|----------|-------|
+| Inline directive (`// coverage:ignore-file`, tarpaulin attributes) | Generators that emit the directive themselves (Freezed: `*.freezed.dart`) | Local artifact + IDE + dashboard |
+| Tool-level filter (`rust/tarpaulin.toml` `exclude_files`, `tarpaulin --exclude-files`) | FRB-generated Rust and platform init shims — the source can't carry a directive and the filter must propagate into the local lcov artifact | Local artifact + dashboard |
+| Repo-level (`.codecov.yml` `ignore:`) | Same set as tool-level, plus FRB-generated Dart (where no equivalent CLI filter is wired up) | Dashboard only |
+
+Concrete partitioning today:
+
+- **Inline (generator-emitted):** `lib/src/ffi/api/nts.freezed.dart`
+  carries `// coverage:ignore-file` from `freezed_generator`. Honour
+  it; never duplicate it elsewhere.
+- **Tool-level + repo-level (belt-and-braces):**
+  `rust/src/frb_generated.rs`, `rust/src/android_init.rs`,
+  `rust/src/ios_init.rs`, and `rust/src/api/simple.rs` (which holds
+  only the `#[frb(init)]` lifecycle hook `init_app`, fired on dylib
+  load and unreachable from `cargo test --lib`). Listed in
+  `rust/tarpaulin.toml`'s `exclude_files` so local `cargo tarpaulin`
+  matches CI, and in `.codecov.yml` `ignore:` so the dashboard agrees
+  with the artifact.
+- **Repo-level only:** `lib/src/ffi/frb_generated.dart`,
+  `lib/src/ffi/frb_generated.io.dart`,
+  `lib/src/ffi/frb_generated.web.dart`, and
+  `lib/src/ffi/api/nts.dart`. All four are FRB-emitted Dart bindings,
+  but the rationale for excluding them differs by file:
+  - The three `frb_generated*.dart` files contain the
+    `RustLibApiImpl` class — the FFI dispatch that loads the dylib
+    and marshals every `crateApi*` call across the bridge.
+    `RustLib.initMock()` substitutes the entire `RustLibApi`
+    instance via `instance.initMockImpl(api: api)`, so this impl
+    class is never constructed in mock mode and its method bodies
+    are genuinely unreachable from the test suite.
+  - `lib/src/ffi/api/nts.dart` holds the public-facing forwarders
+    (e.g.
+    `ntsQuery(...) => RustLib.instance.api.crateApiNtsNtsQuery(...)`).
+    These bodies *are* reached when the smoke tests call `ntsQuery`
+    / `ntsWarmCookies`; the mock intercepts at the
+    `RustLib.instance.api` level, one frame deeper. The exclusion
+    is therefore on **low-signal grounds** — single-expression
+    `=>` dispatchers that only forward arguments add line count
+    without measuring authored logic — not on unreachability.
+
+  No `flutter test --coverage` filter is wired (would require an
+  extra `lcov --remove` step and `apt-get install lcov` on the
+  runner); the Dart lcov artifact still contains all four files,
+  but the dashboard does not.
+
+When adding a new file that should be excluded, follow this
+decision tree:
+
+1. **Generated, and the generator can emit
+   `// coverage:ignore-file` itself?** Configure the generator;
+   do nothing else.
+2. **Generated, but the generator cannot emit a directive
+   (e.g. FRB)?** Add to `.codecov.yml` `ignore:`. If it is Rust,
+   also add to `rust/tarpaulin.toml`'s `exclude_files` so the
+   local artifact matches.
+3. **Hand-written but globally untestable on the CI runner**
+   (e.g. JNI / Obj-C++ init shims)? Same as case 2. Do not gate
+   the module behind `#[cfg(target_os = "...")]` solely to remove
+   it from coverage — that would also remove it from the Linux
+   `cargo check` type-checking pass and let signature drift in.
+
+The Rust-side duplication between `rust/tarpaulin.toml` and
+`.codecov.yml` is intentional: tarpaulin filters the local artifact
+so contributors running `cd rust && cargo tarpaulin` get the same
+denominator as CI, and Codecov filters the dashboard so the
+displayed percentage agrees with the artifact. The explicit
+`--exclude-files` flags in `.github/workflows/ci.yml` are redundant
+with `rust/tarpaulin.toml` (tarpaulin picks the file up
+automatically) but kept as in-workflow documentation; the comment
+block above the step calls out the synchronization requirement.
+
 ### Filter-driven gating
 
 The Dart matrix, expensive Rust jobs, and Dart coverage upload are
