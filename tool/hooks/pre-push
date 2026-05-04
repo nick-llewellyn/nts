@@ -1,0 +1,57 @@
+#!/bin/sh
+# Refuse pushes that update remote main/master directly.
+#
+# Activate once per clone:
+#   git config core.hooksPath tool/hooks
+#
+# Override (genuine emergency only): git push --no-verify
+set -eu
+
+# Git invokes pre-push as: pre-push <remote-name> <remote-url>.
+# Use the actual remote name in the recovery recipe so contributors
+# pushing to a fork remote (or any name other than 'origin') see
+# accurate commands. The ${1:-origin} fallback keeps the recipe
+# coherent when the hook is invoked directly without args (e.g.
+# from ad-hoc tooling); both branches are pinned by
+# tool/hooks/test_hooks.sh under set -u.
+remote_name=${1:-origin}
+
+while read -r local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      cat >&2 <<EOF
+ERROR: pushing '$local_ref' to '$remote_ref' is forbidden by repo policy.
+
+Land changes via a pull request from a feature branch.
+
+If your work is already on a feature branch, push that branch
+directly (do not target main as the destination ref):
+
+  git push -u $remote_name HEAD          # push the current feature branch
+  gh pr create --fill                    # opens PR using template
+  gh pr merge --squash --delete-branch   # self-merge once CI is green
+
+If your work is on local 'main'/'master', first move it onto a
+feature branch (note 'git push -u $remote_name HEAD' from main would
+just repeat this push and be refused again):
+
+  git switch -c <type>/<short-slug>      # branch tracks current HEAD
+  git push -u $remote_name HEAD          # push the feature branch
+
+See AGENTS.md, section "Branch Protection (read this before any
+'git commit')", subsection "Recovery when the rule is broken",
+for the full recipe (including resetting local main back to
+origin/main).
+
+If the remote has branch protection configured for this branch,
+it will refuse this push for non-admin contributors; admin/owner
+pushes are refused only when 'enforce_admins=true' is also set.
+This hook is the local fast-fail and does not guarantee a remote
+rejection.
+EOF
+      exit 1
+      ;;
+  esac
+done
+
+exit 0

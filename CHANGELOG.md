@@ -2,10 +2,74 @@
 
 ## Unreleased
 
-Internal-only cleanup of the FRB scaffold and the coverage-filter
-plumbing. No public Dart API change (`lib/nts.dart` is byte-identical),
-no FFI behaviour change, no FRB pin movement; the Rust crate
-`nts_rust` is unchanged at `0.2.2`.
+Repo-policy and CI-hygiene cleanup. No public Dart API change
+(`lib/nts.dart` is byte-identical), no FFI behaviour change, no FRB
+pin movement; the Rust crate `nts_rust` is unchanged at `0.2.2`.
+
+### Branch-protection enforcement (repo policy, no runtime impact)
+
+- Toggle `enforce_admins: true` on the `main` branch protection rule
+  so the six required status checks (the four pre-existing CI gates
+  plus the two new `Hooks *` checks added in this PR), linear-history
+  requirement, and PR-only merge policy are binding for the maintainer
+  account. The
+  previous configuration (`enforce_admins: false`) made the rule
+  advisory for repo admins, which left a direct `git push origin main`
+  unblocked for the most likely violator.
+- Add repo-tracked git hooks under `tool/hooks/` (POSIX shell, no
+  runtime dependency beyond `git`) that refuse direct work on
+  `main`/`master`: `pre-commit` blocks plain commits,
+  `pre-merge-commit` blocks merge commits (which bypass
+  `pre-commit`), and `pre-push` blocks any push whose destination
+  ref is `refs/heads/main`/`refs/heads/master` regardless of the
+  source branch. Activated per clone with `git config
+  core.hooksPath tool/hooks`; without that activation layer 1
+  contributes nothing. Two commit-time bypasses remain, both
+  caught at push time by `pre-push` and the GitHub-side rule:
+  (a) rebases that rewrite local `main` (each replayed commit
+  runs in detached HEAD, so `pre-commit` falls through), and
+  (b) fast-forward merges (`git merge feature/foo` while `main`
+  has no diverging commits advances the ref without creating a
+  commit, so `pre-merge-commit` does not fire).
+- Document the enforcement model in `AGENTS.md`'s new "Branch
+  Protection" section and `DEVELOPMENT.md`'s "Local hook setup"
+  subsection. The model has two enforcement layers (local hooks
+  for fast-fail, GitHub branch protection at the remote) plus CI
+  as the upstream of the status checks the protection rule
+  consumes. The branch protection rule itself does the merge
+  gating: the rule refuses direct pushes from non-admin
+  contributors, and `enforce_admins: true` extends that refusal
+  to admin/owner accounts (closing the maintainer-bypass path);
+  `required_status_checks` refuses the PR merge until the listed
+  contexts pass. CI is not a separate enforcement layer, just
+  the source of the signals the rule reads. Public Dart/Rust API
+  unchanged.
+- CI gains two narrowly-scoped sibling jobs in
+  `.github/workflows/ci.yml` plus a `tool/hooks/**` path
+  classification on the existing `dorny/paths-filter` step, so a
+  PR that touches only the enforcement scripts still gets
+  validated rather than skipping every heavy job and merging
+  unverified. Both jobs are added to `required_status_checks` on
+  `main`, raising the required-context count from four to six:
+    - `Hooks shell-syntax check` runs `sh -n` plus presence and
+      exec-bit verification on each tracked hook (the explicit
+      list fails closed if a hook is deleted, renamed, or
+      chmod-stripped, where a glob would silently pass).
+    - `Hooks behaviour check` runs `tool/hooks/test_hooks.sh`,
+      a new POSIX-shell test that provisions a throwaway repo
+      via `mktemp -d`, points `core.hooksPath` at `tool/hooks/`,
+      stages real commits and real merges, and invokes
+      `pre-push` directly with synthetic refs/SHAs on stdin
+      (git's documented pre-push contract: read updates from
+      stdin, exit non-zero to abort). Asserts on exit codes
+      plus stderr content. Catches the regression shape `sh -n`
+      cannot — a script that parses but no longer enforces
+      policy at runtime — and carries an explicit assertion
+      sentinel for the unquoted-heredoc class of bug where
+      `set -u` aborts the hook before the recovery recipe can
+      print.
+  No other CI behaviour changes: the `build`, `rust`, and
+  `rust-bridge-sync` filters and gates are byte-identical.
 
 ### Coverage exclusion alignment
 

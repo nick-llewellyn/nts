@@ -14,14 +14,23 @@ bd dolt push          # Push beads data to remote
 
 ## Pull Request Workflow (mandatory)
 
-`main` is protected; **never `git push` directly to `main`**. Every
-change — including agent-authored ones — must land through a pull
-request. Required approvals are set to **0**, so self-merging is the
-expected default once the required status checks pass. Every PR
-triggers the CI workflow (including doc-only ones); the `build`,
-`rust`, and `rust-bridge-sync` jobs skip the heavy work on doc-only
-diffs but still report a status, so branch protection resolves
-without manual intervention. See
+`main` is protected; **never `git commit` or `git push` directly to
+`main`**. Every change — including agent-authored ones — must land
+through a pull request. The rule applies at *commit time*, not just
+push time: see [Branch Protection](#branch-protection-read-this-before-any-git-commit)
+below for the local hooks that enforce it mechanically once
+`core.hooksPath` is activated for the clone. A fresh checkout
+that has not opted in still permits the local commit on `main`;
+the GitHub-side rule refuses only the later push or PR merge, so
+recovery means resetting `main` back to `origin/main` rather than
+preventing the commit in the first place.
+Required
+approvals are set to **0**, so self-merging is the expected default
+once the required status checks pass. Every PR triggers the CI
+workflow (including doc-only ones); the `build`, `rust`,
+`rust-bridge-sync`, `hooks-syntax`, and `hooks-behaviour` jobs all
+skip the heavy work on doc-only diffs but still report a status, so
+branch protection resolves without manual intervention. See
 [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow) for the
 authoritative branch-protection table.
 
@@ -49,6 +58,139 @@ Operational notes:
   [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow). Treat
   that section as the source of truth when reconciling repo
   settings.
+
+## Branch Protection (read this before any `git commit`)
+
+> **Hard rule:** Never run `git commit` while `HEAD` points at `main`
+> (or `master`). The PR-only policy applies at *commit time*, not
+> just push time — landing a change starts with `git switch -c`,
+> not with staging on `main`.
+
+Before staging anything, confirm the working branch:
+
+```bash
+git branch --show-current        # MUST NOT print 'main' or 'master'
+```
+
+If it does, create a feature branch first. The stash-list count
+check keeps `git stash pop` safe in both the clean-working-tree
+case (where `git stash push` is a no-op and there is nothing to
+pop) and the case where the most recent existing stash already
+carries the `park-pre-branch` marker from an aborted earlier
+attempt:
+
+```bash
+n=$(git stash list | wc -l)
+git stash push -u -m park-pre-branch    # no-op if clean
+git switch -c <type>/<short-slug>
+[ "$(git stash list | wc -l)" -gt "$n" ] && git stash pop
+```
+
+### One-time setup per clone
+
+This repo ships `pre-commit`, `pre-merge-commit`, and `pre-push`
+hooks under `tool/hooks/` that refuse direct work on `main`/
+`master`. Activate them once per clone (git deliberately does not
+version `.git/hooks/`, so the opt-in must be re-run on every fresh
+clone):
+
+```bash
+git config core.hooksPath tool/hooks
+```
+
+Verify with:
+
+```bash
+git config --get core.hooksPath  # MUST print 'tool/hooks'
+```
+
+A fresh agent session that skips this step gets no local protection;
+treat it as part of the standard ramp-up alongside `bd prime`.
+
+### Recovery when the rule is broken
+
+If a commit lands on local `main` despite the above (the hook was
+off, or `--no-verify` was used):
+
+```bash
+# 1. Move the commit onto a feature branch
+git switch -c <type>/<short-slug>          # branch tracks current HEAD
+
+# 2. Reset local main to its remote
+git switch main
+git fetch --prune origin
+git reset --hard origin/main
+
+# 3. Resume on the feature branch
+git switch <type>/<short-slug>
+```
+
+Then push the branch and open a PR via the standard loop in the
+"Pull Request Workflow (mandatory)" section above. **Do not push
+local `main`** — GitHub branch protection (with `enforce_admins:
+true`) will refuse it, and the local `pre-push` hook will refuse
+it too provided `core.hooksPath` was activated for this clone (see
+"Local hook setup" in `DEVELOPMENT.md`); without that activation
+only the remote layer applies.
+
+### Why this section exists
+
+Branch protection on `main` is enforced at two layers, with CI
+acting as the upstream source of the signals the remote layer
+consumes:
+
+1. **Local hooks** (`tool/hooks/pre-commit`,
+   `tool/hooks/pre-merge-commit`, `tool/hooks/pre-push`) —
+   `pre-commit` refuses to record a plain commit on local `main`/
+   `master`; `pre-merge-commit` covers `git merge` *when git is
+   about to record an actual merge commit* (which does not fire
+   `pre-commit`); `pre-push` refuses to update `refs/heads/main`/
+   `refs/heads/master` on the remote regardless of source branch.
+   Two commit-time bypasses exist and are caught only at push
+   time: (a) rebases that replay history onto local `main` (each
+   replayed commit runs in detached HEAD, so `pre-commit` falls
+   through), and (b) fast-forward merges (`git merge feature/foo`
+   while `main` has no diverging commits advances the ref without
+   creating a commit, so `pre-merge-commit` does not fire). In
+   both cases the resulting `main` cannot be published without
+   tripping `pre-push` and layer 2. All three hooks require
+   activation per clone: `git config core.hooksPath tool/hooks`.
+   Without activation, layer 1 contributes nothing.
+2. **GitHub branch protection** — the rule on `main` does the
+   actual blocking at the remote and consists of two configured
+   gates:
+     - The protection rule itself refuses direct pushes from
+       non-admin contributors. `enforce_admins: true` extends
+       that refusal to admin/owner accounts, closing the
+       maintainer-bypass path that otherwise would let a single
+       `git push` skip every required check (re-apply with
+       `gh api -X POST /repos/<owner>/<repo>/branches/main/protection/enforce_admins`).
+     - `required_status_checks` refuses the PR merge until the six
+       listed contexts (`Detect changed paths`, `Dart tests gate`,
+       `Verify FRB bindings are in sync`, `Rust build + tests +
+       coverage`, `Hooks shell-syntax check`, `Hooks behaviour
+       check`) report success.
+
+CI is not a separate enforcement layer — it does not gate the
+merge. It runs the workflows that publish the status checks
+`required_status_checks` reads, so a regression in the workflows
+is the most common way the gate ends up reporting green on
+something that should not merge. The two `Hooks *` jobs in
+particular exist so a PR that touches only `tool/hooks/**` still
+gets validated rather than skipping every heavy job and reaching
+the merge gate unverified.
+
+The hook layer exists because the remote layer can only act once
+a commit already exists locally: the branch protection rule
+refuses the push from non-admin contributors (and from admins too
+once `enforce_admins: true` is set), and the
+`required_status_checks` gate refuses the PR merge after CI
+publishes its statuses. A direct commit on local `main` is a
+recoverable mistake (either remote gate plus the linear-history
+rule will refuse the eventual push or merge), but it consumes a
+`git reflog` window and reorders the natural workflow. Layer 1
+closes that window for the two common shapes (plain commit, merge
+commit) when `core.hooksPath` is activated.
 
 ## Non-Interactive Shell Commands
 

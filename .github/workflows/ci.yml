@@ -55,6 +55,7 @@ jobs:
       dart: ${{ steps.filter.outputs.dart }}
       ci: ${{ steps.filter.outputs.ci }}
       docs: ${{ steps.filter.outputs.docs }}
+      hooks: ${{ steps.filter.outputs.hooks }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -81,6 +82,8 @@ jobs:
               - '.github/workflows/**'
             docs:
               - '**.md'
+            hooks:
+              - 'tool/hooks/**'
 
   build:
     # Matrix exercises both the declared SDK floor (3.38.10 -- oldest stable
@@ -461,3 +464,140 @@ jobs:
         uses: actions/dependency-review-action@v4.9.0
         with:
           fail-on-severity: high
+
+  hooks-syntax:
+    # POSIX-shell syntax + presence + exec-bit check for the repo-tracked
+    # git hooks under `tool/hooks/`. Catches three regression shapes only:
+    # a script that no longer parses (`sh -n`), a hook that has been
+    # deleted or renamed out from under the explicit required list, and
+    # a hook that has lost its executable bit (git silently skips
+    # non-executable hooks). It does NOT validate that the policy logic
+    # inside each hook is correct -- a hook that parses but no longer
+    # refuses commits/pushes on `main` will still pass this job.
+    # Functional coverage lives in the sibling `hooks-behaviour` job
+    # below, which stages real commits and real merges in a throwaway
+    # repo and invokes `pre-push` directly with synthetic refs/SHAs on
+    # stdin (git's documented pre-push contract: read updates from
+    # stdin, exit non-zero to abort), then asserts on exit codes and
+    # stderr content.
+    # None of the heavy jobs above touch these files (they sit outside
+    # `rust:`, `bindings:`, and `dart:` filters). The sibling
+    # `hooks-behaviour` job below would also fail on a missing or
+    # non-executable hook because its test fixture invokes each hook
+    # by path, but it is a heavier signal (provisions a throwaway repo,
+    # stages real commits and merges) and reports a different failure
+    # shape (assertion mismatch rather than parse/presence/exec-bit
+    # error). This job exists for the cheaper, more targeted signal:
+    # a parse error or a missing/chmod-stripped hook file is reported
+    # in seconds with an actionable message, before any of the runtime
+    # plumbing runs.
+    #
+    # The job runs on three trigger shapes:
+    #   - `hooks` true  -> a hook script changed; verify it
+    #   - `ci` true     -> the workflow itself changed; verify *this job*
+    #                      can still validate the hooks (catches edits
+    #                      that would silently neuter the guard)
+    #   - workflow_dispatch -> manual run for branch-protection drills
+    #
+    # The validation step enumerates the expected set of hooks rather
+    # than globbing `tool/hooks/*`. A glob would silently pass on a PR
+    # that deletes, renames, or chmod-strips a hook -- git treats
+    # missing or non-executable hook files as no-ops, so a PR that
+    # quietly disables the enforcement layer would still merge green.
+    # The explicit list fails closed for that shape.
+    name: Hooks shell-syntax check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      needs.changes.outputs.hooks == 'true'
+      || needs.changes.outputs.ci == 'true'
+      || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Verify each required hook is present, executable, and parses
+        run: |
+          set -eu
+          # The `required_hooks` list below is the source of truth for
+          # what this job validates; the per-hook bullets in
+          # DEVELOPMENT.md "Local hook setup" must stay in sync with
+          # it. The drift check after the parse loop fails CI when a
+          # new hook script is added under tool/hooks/ without an
+          # entry here, so the list cannot silently fall behind.
+          required_hooks="pre-commit pre-merge-commit pre-push"
+          rc=0
+          for hook in $required_hooks; do
+            path="tool/hooks/$hook"
+            if [ ! -f "$path" ]; then
+              echo "ERROR: $path is missing" >&2
+              rc=1
+              continue
+            fi
+            if [ ! -x "$path" ]; then
+              echo "ERROR: $path is not executable (git silently skips non-executable hooks)" >&2
+              rc=1
+              continue
+            fi
+            echo "checking $path"
+            sh -n "$path" || rc=1
+          done
+          # Drift check: every executable file under tool/hooks/ that
+          # matches a known git client-hook name must appear in
+          # required_hooks. test_hooks.sh is excluded by name (it is a
+          # test harness, not a git hook). The list of valid client-hook
+          # names is taken from `git help hooks` (githooks(5)) -- update
+          # if git ever ships a new client-hook name we want to enforce.
+          known_hooks="applypatch-msg pre-applypatch post-applypatch \
+            pre-commit pre-merge-commit prepare-commit-msg commit-msg \
+            post-commit pre-rebase post-checkout post-merge pre-push \
+            post-rewrite sendemail-validate fsmonitor-watchman \
+            p4-changelist p4-prepare-changelist p4-post-changelist \
+            p4-pre-submit post-index-change pre-auto-gc"
+          for path in tool/hooks/*; do
+            [ -f "$path" ] || continue
+            base=$(basename "$path")
+            [ "$base" = "test_hooks.sh" ] && continue
+            in_known=0
+            for known in $known_hooks; do
+              [ "$base" = "$known" ] && { in_known=1; break; }
+            done
+            [ "$in_known" -eq 1 ] || continue
+            in_required=0
+            for req in $required_hooks; do
+              [ "$base" = "$req" ] && { in_required=1; break; }
+            done
+            if [ "$in_required" -eq 0 ]; then
+              echo "ERROR: tool/hooks/$base is a recognised git client hook but is not in required_hooks" >&2
+              echo "       add it to the required_hooks list in this job and to DEVELOPMENT.md 'Local hook setup'" >&2
+              rc=1
+            fi
+          done
+          exit "$rc"
+
+  hooks-behaviour:
+    # Runtime behaviour check for the repo-tracked git hooks. Sibling
+    # to `hooks-syntax`: that job catches parse-time and presence
+    # regressions, this one catches the gap `sh -n` cannot -- a script
+    # that parses cleanly but fails to enforce policy at runtime.
+    # The round-9 unquoted-heredoc bug (set -u + unexpanded `$n` in
+    # the recovery recipe -> hook aborts before printing the recipe)
+    # is the canonical example; `tool/hooks/test_hooks.sh` carries an
+    # explicit assertion sentinel for it.
+    #
+    # Trigger gating mirrors `hooks-syntax`. Both jobs are cheap
+    # (<10s on ubuntu-latest) and independent, so they run in
+    # parallel rather than sharing a runner.
+    name: Hooks behaviour check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      needs.changes.outputs.hooks == 'true'
+      || needs.changes.outputs.ci == 'true'
+      || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Run functional hook tests
+        run: sh tool/hooks/test_hooks.sh

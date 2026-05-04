@@ -125,23 +125,31 @@ site.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` defines six jobs total. `changes` always
+`.github/workflows/ci.yml` defines eight jobs total. `changes` always
 runs on push and PR; `build`, `rust`, and `rust-bridge-sync` are
 job-gated and skip on doc-only diffs (skipped jobs count as passing
 for branch protection). `build-gate` is an always-on aggregator that
 collapses the `build` matrix into a single status-check name so
 branch protection can require it cleanly even when matrix expansion
-is suppressed by a skip. `dependency-review` is PR-only because it
-requires a base..head diff that push events don't have:
+is suppressed by a skip. `hooks-syntax` and `hooks-behaviour` are
+both gated on changes under `tool/hooks/` or `.github/workflows/`
+(or a `workflow_dispatch` invocation, for branch-protection
+drills) and skip otherwise; they cover separate regression shapes
+(parse versus runtime) and run as parallel siblings rather than a
+chain.
+`dependency-review` is PR-only because it requires a base..head diff
+that push events don't have:
 
 | Job | Cost | Purpose |
 |-----|------|---------|
-| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, and `docs` flags consumed by the gates below (`docs` is informational — no job gates on it). Always runs. |
+| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, `docs`, and `hooks` flags consumed by the gates below (`docs` is informational — no job gates on it; `hooks` gates the two hook jobs). Always runs. |
 | `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the SDK floor (3.38.10) and the pinned current (3.41.7). Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Pin-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
 | `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: [changes, build]` + `if: always()` so it runs whether the matrix executed, was skipped, or failed. Passes when `needs.changes.result == 'success'` AND `needs.build.result` is `success` or `skipped`; fails otherwise. The `changes`-success precondition discriminates a legitimate doc-only matrix skip from a `changes`-failure cascade-skip — without it, a transient paths-filter failure would silently green-light branch protection. Required-status-check entry on `main` for the Dart side. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated on `rust`/`bindings`/`ci`. |
 | `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `high`-severity advisories across pubspec + Cargo.toml. |
+| `hooks-syntax` | ~5 s | POSIX-shell syntax (`sh -n`), presence, and exec-bit check for the repo-tracked git hooks under `tool/hooks/` (`pre-commit`, `pre-merge-commit`, `pre-push`). The validation step enumerates the required hooks explicitly rather than globbing — git treats missing or non-executable hook files as no-ops, so a glob would silently pass on a PR that deletes, renames, or chmod-strips a hook, and the explicit list fails closed for that shape. A second drift check then loops over `tool/hooks/*`, skips `test_hooks.sh`, and fails CI if any file matching a recognised git client-hook name (per `git help hooks`) is missing from `required_hooks`, so the list cannot silently fall behind when a new hook is added to the directory. Gated on `hooks`/`ci`/`workflow_dispatch`. Required-status-check entry on `main`. |
+| `hooks-behaviour` | ~10 s | Runtime functional check that complements `hooks-syntax`. Runs `tool/hooks/test_hooks.sh`, which provisions a throwaway repo, points `core.hooksPath` at `tool/hooks/`, stages real commits and real merges, and invokes `pre-push` directly with synthetic refs/SHAs on stdin (git's documented pre-push contract: read updates from stdin, exit non-zero to abort — running an actual `git push` would also need a remote target without exercising any additional hook logic). Asserts on exit codes plus stderr content. Catches the regression shape `sh -n` cannot — a script that parses but no longer enforces policy at runtime — including the round-9 unquoted-heredoc bug where `set -u` aborted `pre-commit` before the recovery recipe printed (the recipe assertion is the explicit sentinel). Gated on `hooks`/`ci`/`workflow_dispatch`. Required-status-check entry on `main`. |
 
 The workflow declares a top-level `permissions: contents: read` token
 baseline and grants `id-token: write` only to `build` and `rust` (the
@@ -294,22 +302,31 @@ Two cheaper filters run before the workflow even queues:
 
 | Change | Behaviour |
 |--------|-----------|
-| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, and `rust-bridge-sync` skip via `if:`. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
+| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, and `hooks-behaviour` skip via `if:`. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
 | Beads issue update (`.beads/**`) | Workflow doesn't run (`paths-ignore`). |
 | Screenshot asset swap (`screenshots/**`) | Workflow doesn't run (`paths-ignore`). |
 | Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust` and `rust-bridge-sync` skip. |
 | Rust source change (`rust/src/**`) | All three runtime jobs run. |
 | Hand-edit of generated bindings | `build` and `rust-bridge-sync` run; `rust-bridge-sync` will fail with a drift error (regenerate via `flutter_rust_bridge_codegen generate` instead). |
 | `pubspec.yaml` edit | All three runtime jobs run (FRB pin sits there). |
-| Workflow file edit | All three runtime jobs run (validates the change end-to-end). |
+| Workflow file edit | All three runtime jobs plus `hooks-syntax` and `hooks-behaviour` run (validates the change end-to-end and re-asserts the hook-enforcement layer still parses *and* still enforces, since all five gates trip on `ci`). |
+| Hook script change (`tool/hooks/**`) | `hooks-syntax` and `hooks-behaviour` run; the runtime jobs skip. |
 
 ## Contribution workflow
 
-Direct pushes to `main` are not permitted. Every change — including
-those authored by maintainers — lands through a pull request that
-has cleared the CI gates above. Required approvals are deliberately
-set to **zero**: the bar is that CI is green, not that a second
-human signed off. Self-merging your own PR is the expected default.
+Direct pushes to `main` are not permitted, and direct *commits* to
+local `main` are blocked by the repo-tracked git hooks under
+`tool/hooks/` once `core.hooksPath` has been activated for the
+clone (see [Local hook setup](#local-hook-setup) below). On a
+fresh checkout that has not run the opt-in, the local commit
+itself is not blocked — the GitHub-side rule only refuses the
+later push or PR merge, so the commit lands locally and has to be
+reset out of the reflog before the workflow recovers.
+Every change — including those authored by maintainers — lands
+through a pull request that has cleared the CI gates above.
+Required approvals are deliberately set to **zero**: the bar is
+that CI is green, not that a second human signed off. Self-merging
+your own PR is the expected default.
 
 Primary maintainer: Nicholas Llewellyn (`nllewelln@gmail.com`).
 **Maintainer-only**: when the primary maintainer authors commits or
@@ -330,12 +347,13 @@ protection rules → main*:
 | Require a pull request before merging | **on** | Forces every change through the CI pipeline and creates a reviewable diff. |
 | Required number of approvals before merging | **0** | Solo-maintainer repo; CI is the gate, not a second pair of eyes. |
 | Dismiss stale pull request approvals when new commits are pushed | **off** | No-op at 0 approvals; explicitly off so the setting is unambiguous. |
-| Require status checks to pass before merging | **on** | Required checks: `Detect changed paths`, `Dart tests gate`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`. Markdown is intentionally excluded from trigger-level `paths-ignore` so doc-only PRs trigger the workflow and the gated jobs all skip via `if:` (skipped → passing for branch protection). `Detect changed paths` is required directly so a `changes`-job failure (transient paths-filter error, network blip) surfaces as a hard fail rather than cascading into "skipped → passing" on every dependent gate. The `Dart tests gate` aggregator job resolves a matrix-skip naming quirk: when the `build` job is skipped via `if:`, GitHub collapses both Flutter-version matrix legs into one check using the unexpanded template name, so the per-leg names cannot be required directly; the aggregator reports one stable name regardless of expansion, and additionally requires `needs.changes.result == 'success'` for defense-in-depth so a `changes` failure cannot leak through as a skip. Codecov keeps reporting on doc-only commits via `.codecov.yml` carryforward flags. |
+| Require status checks to pass before merging | **on** | Required checks: `Detect changed paths`, `Dart tests gate`, `Verify FRB bindings are in sync`, `Rust build + tests + coverage`, `Hooks shell-syntax check`, `Hooks behaviour check`. Markdown is intentionally excluded from trigger-level `paths-ignore` so doc-only PRs trigger the workflow and the gated jobs all skip via `if:` (skipped → passing for branch protection). `Detect changed paths` is required directly so a `changes`-job failure (transient paths-filter error, network blip) surfaces as a hard fail rather than cascading into "skipped → passing" on every dependent gate. The `Dart tests gate` aggregator job resolves a matrix-skip naming quirk: when the `build` job is skipped via `if:`, GitHub collapses both Flutter-version matrix legs into one check using the unexpanded template name, so the per-leg names cannot be required directly; the aggregator reports one stable name regardless of expansion, and additionally requires `needs.changes.result == 'success'` for defense-in-depth so a `changes` failure cannot leak through as a skip. `Hooks shell-syntax check` and `Hooks behaviour check` are both required so the local-enforcement layer fails closed on two separate regression shapes — parse / presence / exec-bit (caught by the syntax job) and runtime policy logic (caught by the behaviour job, which is the only check that would catch a recurrence of the round-9 unquoted-heredoc bug). The surrounding `rust`/`dart`/`bindings` filters don't cover `tool/hooks/`, so without these two gates a hook regression could merge unnoticed. Codecov keeps reporting on doc-only commits via `.codecov.yml` carryforward flags. |
 | Require branches to be up to date before merging | **on** | Catches semantic conflicts CI would miss when `main` advances mid-PR. |
 | Require conversation resolution before merging | **on** | Self-applied: forces the author to mark their own follow-ups as addressed. |
 | Require linear history | **on** | Pairs with the squash-only merge policy below; matches the `vX.Y.Z` tag-driven release flow. |
 | Allow force pushes | **off** | Protected refs should never rewrite history. |
 | Allow deletions | **off** | `main` is the canonical ref. |
+| Enforce all configured restrictions for administrators (`enforce_admins`) | **on** | Subjects the maintainer account to the rules configured above (required status checks, linear history, pull-request workflow). Without this, admins can bypass each of those rules with a single `git push` or web-UI merge, and the PR-only policy becomes advisory for the role most likely to violate it. Re-apply with `gh api -X POST /repos/<owner>/<repo>/branches/main/protection/enforce_admins`; toggle off with the matching `DELETE`. |
 
 The following three settings live under *Settings → General → Pull
 Requests* (repo-level, not branch-scoped) but are listed here because
@@ -354,6 +372,81 @@ allow_merge_commit=false -F allow_rebase_merge=false`.
 Owners` is left **off**: no `CODEOWNERS` file is committed, and
 adding one would just re-introduce a blocking approval requirement
 that contradicts the 0-approvals policy above.
+
+### Local hook setup
+
+The repo ships `pre-commit`, `pre-merge-commit`, and `pre-push`
+hooks under `tool/hooks/` that refuse direct work on `main`/
+`master`. They are tracked in-tree (not under `.git/hooks/`,
+which git deliberately does not version) and require a one-time
+opt-in per clone:
+
+```bash
+git config core.hooksPath tool/hooks
+```
+
+Verify with:
+
+```bash
+git config --get core.hooksPath   # MUST print 'tool/hooks'
+```
+
+The hooks are POSIX shell and depend only on `git` itself.
+
+- `pre-commit` keys on the *current* branch (the value of
+  `git symbolic-ref --short HEAD`) and refuses plain commits on
+  `main`/`master`. It falls through to `exit 0` on detached HEAD
+  so interactive rebases of feature-branch history and `git
+  bisect` are unaffected; the consequence is that any rebase
+  that *rewrites local `main`* (typically `git pull --rebase` on
+  `main`, or `git rebase upstream/main` while checked out on
+  `main`) replays each commit with HEAD detached and is **not**
+  caught at commit time. Such a rebased `main` cannot reach the
+  remote without tripping `pre-push` and layer 2, but the gap
+  exists locally.
+- `pre-merge-commit` exists because `git merge` does not fire
+  `pre-commit`. It applies the same current-branch check and
+  refuses any `git merge` performed while on `main`/`master`
+  before the merge commit is recorded; the message it prints is
+  scoped to merges (recovery via `git merge --abort` and a fresh
+  branch) rather than reusing the plain-commit recipe. The hook
+  fires only when git is about to record an actual merge commit:
+  `git merge feature/foo` while local `main` has no commits
+  beyond the merge base is a fast-forward (no commit recorded,
+  no hook fired), so this is a second commit-time bypass alongside
+  the rebase case above. Both bypasses are caught at push time by
+  `pre-push` and layer 2.
+- `pre-push` keys on the *destination* ref reported by `git` on
+  stdin, so it refuses any push that updates `refs/heads/main` or
+  `refs/heads/master` regardless of which local branch is being
+  pushed — including `git push origin HEAD:main` from a feature
+  branch.
+
+All three hooks honour the standard `--no-verify` escape; pair
+this layer with `enforce_admins: true` above so the bypass loses
+its second line of defence.
+
+The functional test suite for these hooks lives at
+`tool/hooks/test_hooks.sh` and can be run locally without arguments
+(it provisions a throwaway repo via `mktemp -d` and cleans up on
+exit). CI runs the same script in the `hooks-behaviour` job. Use
+it after any change to `tool/hooks/` to confirm the policy logic
+still fires; `sh -n` syntax checking alone is not sufficient (the
+round-9 unquoted-heredoc bug parsed cleanly but aborted the hook
+with `n: unbound variable` under `set -u` before the recovery
+recipe could print).
+
+This layer exists because the remote layer can only act after the
+commit already exists locally: GitHub branch protection rejects the
+push when `refs/heads/main` is updated, and the required-check /
+PR-only merge settings reject the merge when a PR is squashed on
+GitHub. Either way, a plain or merge commit on local `main` is
+recoverable but it consumes a `git reflog` window and reorders the
+natural workflow; the commit-time hooks close that window for the
+two common shapes (plain commit, merge commit). Rebases that
+rewrite local `main` and fast-forward merges remain known
+commit-time gaps and are caught downstream by `pre-push` plus the
+remote layer.
 
 ### Local quality gates before opening a PR
 
