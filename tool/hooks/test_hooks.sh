@@ -251,13 +251,22 @@ grep -E '^  gh pr create --fill[[:space:]]+#' "$out" >/dev/null
 grep_rc=$?; set -e
 assert_eq 1 "$grep_rc" \
   "pre-push master recipe does not regress to bare 'gh pr create --fill'"
-# The shared epilogue's reset-pointer must be parameterised off
-# remote_ref -- a regression that hardcodes 'origin/main' would
-# send a 'master' contributor to the wrong reset target. The 'main'
-# epilogue is implicitly covered by every other pp_main_* assertion;
-# this one pins the 'master' arm.
-assert_grep "origin/master" "$out" \
-  "pre-push epilogue points 'master' pushers at origin/master, not origin/main"
+# Negative pin on the NO arm: the rejected push is 'feat/test:master'
+# -- local refs/heads/master is untouched, so the epilogue's "reset
+# local '$protected_branch'" cross-link must NOT fire here. A
+# regression that re-emits the cross-link unconditionally would
+# direct a contributor at the AGENTS.md "Recovery when the rule is
+# broken" recipe (which resets local master to origin/master) for
+# a push that did not put any commits on local master, potentially
+# blowing away unrelated local work. The 'master:master' YES-arm
+# coverage that pins the cross-link's *presence* lives in
+# pp_master_local below; this assertion locks the suppression in
+# on the NO arm.
+set +e
+grep -F "Recovery when the rule is broken" "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push epilogue suppresses recovery cross-link on feat:master (NO-arm)"
 
 # Pin the 'main:main' (and 'master:master') push shape: local_ref is
 # refs/heads/main and remote_ref is refs/heads/main, so the recovery
@@ -275,6 +284,14 @@ assert_grep 'git switch -c <type>/<short-slug> main' "$out" \
   "pre-push recipe branches from local_ref tip (not HEAD) for main:main"
 assert_grep 'git push -u origin <type>/<short-slug>' "$out" \
   "pre-push recipe pushes the new branch by name for main:main"
+# Positive pin on the YES arm: the rejected push originated from
+# local refs/heads/main, so commits really did land on local 'main'
+# and the recovery cross-link to AGENTS.md is the right next read.
+# A regression that drops the cross-link on the YES arm would leave
+# a 'main:main' pusher with only the in-arm "branch off the tip"
+# advice and no pointer to the reset-local-main recipe.
+assert_grep "Recovery when the rule is broken" "$out" \
+  "pre-push epilogue emits recovery cross-link on main:main (YES-arm)"
 
 # Round-24 master:master coverage: the inner 'refs/heads/main|
 # refs/heads/master)' arm extracts $local_branch from $local_ref
@@ -306,6 +323,22 @@ grep -F 'git switch -c <type>/<short-slug> main' "$out" >/dev/null
 grep_rc=$?; set -e
 assert_eq 1 "$grep_rc" \
   "pre-push master:master recipe does not seed branch from 'main'"
+# Positive pin on the YES arm: same rationale as pp_main_local
+# above, but locks in the master-side coverage. The cross-link
+# fires here because local 'master' really did receive the
+# rejected commits.
+assert_grep "Recovery when the rule is broken" "$out" \
+  "pre-push epilogue emits recovery cross-link on master:master (YES-arm)"
+# Round-22 epilogue parameterisation pin (relocated from the NO
+# arm pp_master): the shared epilogue's reset-pointer reference
+# must be parameterised off remote_ref -- a regression that
+# hardcodes 'origin/main' would send a 'master' contributor to
+# the wrong reset target. The 'main' epilogue is implicitly
+# covered by every other pp_main_local-side assertion; this one
+# pins the 'master' arm. It belongs on the YES arm because the
+# epilogue is now suppressed entirely on NO arms.
+assert_grep "origin/master" "$out" \
+  "pre-push epilogue points 'master' YES-arm pushers at origin/master, not origin/main"
 
 # Pin the HEAD-shape recovery branch added to the recovery recipe.
 # `git push <remote> HEAD:main` (or pushing from a detached HEAD) makes
@@ -472,18 +505,53 @@ rc=$?; set -e
 assert_eq 1 "$rc" "pre-push refuses push to main on alternate remote"
 assert_grep 'git push -u fork feat/test' "$out" \
   "pre-push interpolates alternate remote name in recipe"
-# Round-22 epilogue fork-safety pin: the reset target must point at
-# the canonical 'origin/<protected-branch>', not the user's push
-# remote. A regression that reverts to '$remote_name/$protected_branch'
-# would emit 'fork/main' here and silently rewind a fork-pushing
-# contributor's local 'main' to the fork's history.
+# Round-25 NO-arm epilogue suppression pin: the rejected push is
+# 'feat/test:main' on remote 'fork' -- local refs/heads/main is
+# untouched, so the entire "reset local '$protected_branch'"
+# epilogue (and its fork-safety caveat) must be suppressed. A
+# regression that re-emits the epilogue unconditionally would
+# point a contributor at the AGENTS.md recovery recipe for a push
+# that did not put commits on local main. The canonical-target
+# property ('origin/main' rather than 'fork/main') still matters
+# but now lives on the YES-arm pp_main_fork_local test below; on
+# this NO arm we lock in *neither* string appearing.
 set +e
 grep -F 'fork/main' "$out" >/dev/null
 grep_rc=$?; set -e
 assert_eq 1 "$grep_rc" \
-  "pre-push fork-remote epilogue does not point reset at fork/main"
+  "pre-push NO-arm fork epilogue suppressed: no 'fork/main' in output"
+set +e
+grep -F 'origin/main' "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push NO-arm fork epilogue suppressed: no 'origin/main' in output"
+
+# Round-25 YES-arm fork-remote pin: the rejected push is
+# 'main:main' on remote 'fork' -- local refs/heads/main carries
+# the rejected commits, so the recovery cross-link fires AND the
+# fork-safety caveat applies (the reset target must be the
+# canonical origin, not the destination remote). The earlier
+# pp_main_fork covers the NO-arm suppression; this test covers the
+# YES-arm where both the cross-link and the fork-safety property
+# have observable work to do. A regression that hardcodes
+# '$remote_name/$protected_branch' in the reset cross-link would
+# emit 'fork/main' here and silently rewind a fork-pushing
+# contributor's local 'main' to the fork's history.
+out="$WORK_DIR/pp_main_fork_local.out"
+set +e
+echo "refs/heads/main $sha refs/heads/main $zero" \
+  | "$HOOKS_DIR/pre-push" fork git@example.invalid:fork.git >"$out" 2>&1
+rc=$?; set -e
+assert_eq 1 "$rc" "pre-push refuses main:main push to alternate remote"
+assert_grep "Recovery when the rule is broken" "$out" \
+  "pre-push epilogue emits recovery cross-link on main:main fork (YES-arm)"
+set +e
+grep -F 'fork/main' "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push YES-arm fork epilogue does not point reset at fork/main"
 assert_grep 'origin/main' "$out" \
-  "pre-push fork-remote epilogue points reset at origin/main (canonical)"
+  "pre-push YES-arm fork epilogue points reset at origin/main (canonical)"
 
 # Pin the ${1:-origin} fallback for the no-args invocation path. Some
 # tooling (test harnesses, ad-hoc invocations, future shell wrappers)

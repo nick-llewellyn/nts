@@ -583,7 +583,7 @@ jobs:
     # to `hooks-syntax`: that job catches parse-time and presence
     # regressions, this one catches the gap `sh -n` cannot -- a script
     # that parses cleanly but fails to enforce policy at runtime.
-    # The round-9 unquoted-heredoc bug (set -u + unexpanded `$n` in
+    # The round-9 unquoted-heredoc bug (set -u + unexpanded `$m` in
     # the recovery recipe -> hook aborts before printing the recipe)
     # is the canonical example; `tool/hooks/test_hooks.sh` carries an
     # explicit assertion sentinel for it.

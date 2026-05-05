@@ -437,7 +437,7 @@ exit). CI runs the same script in the `hooks-behaviour` job. Use
 it after any change to `tool/hooks/` to confirm the policy logic
 still fires; `sh -n` syntax checking alone is not sufficient (the
 round-9 unquoted-heredoc bug parsed cleanly but aborted the hook
-with `n: unbound variable` under `set -u` before the recovery
+with `m: unbound variable` under `set -u` before the recovery
 recipe could print).
 
 This layer exists because the remote layer can only act after the

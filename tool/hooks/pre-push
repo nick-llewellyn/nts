@@ -39,6 +39,30 @@ EOF
       # branch, drive the recipe off the local_ref's branch name (not
       # the ambient HEAD) so the suggested follow-up acts on the work
       # the user actually tried to push.
+      # Per-arm flag controls whether the shared epilogue's "reset
+      # local '$protected_branch'" cross-link to AGENTS.md is emitted.
+      # That cross-link is the recipe for the case where a commit
+      # already landed on local '$protected_branch' and now needs
+      # moving onto a feature branch. The push shapes split into:
+      #   - true:  the rejected push originated FROM local
+      #            '$protected_branch' (main:main, master:master, or
+      #            HEAD:main while HEAD is attached to main/master),
+      #            so local '$protected_branch' really does carry
+      #            commits that need recovery in addition to the
+      #            in-arm "branch off the tip" advice.
+      #   - false: the rejected push did not touch local
+      #            '$protected_branch' at all -- the source is a
+      #            feature branch (refs/heads/*), a non-branch ref
+      #            (tag refspecs, '*)' arm), a delete refspec, or a
+      #            HEAD attached to a non-protected branch / detached.
+      #            Pointing those shapes at the "reset local
+      #            $protected_branch" recipe could mislead a
+      #            contributor into resetting unrelated local work
+      #            (e.g. a stale rebase on local main from another
+      #            workflow) that has nothing to do with the rejected
+      #            push. The in-arm recipe is self-contained for
+      #            those shapes; the universal branch-protection /
+      #            fast-fail caveat below still applies regardless.
       case "$local_ref" in
         '(delete)')
           # `git push <remote> :main` (or `:master`) sets local_ref
@@ -48,6 +72,7 @@ EOF
           # violation, not a side effect of one. The previous '*)'
           # fallback emitted 'git push <remote_name> (delete)' which
           # is not a valid command; route this shape explicitly.
+          needs_protected_reset=false
           cat >&2 <<EOF
 You attempted to delete '$remote_ref' (refspec ':$protected_branch').
 Deleting the protected branch is itself forbidden -- there is no
@@ -73,6 +98,7 @@ EOF
           current_head=$(git symbolic-ref --short HEAD 2>/dev/null || echo "DETACHED")
           case "$current_head" in
             main|master)
+              needs_protected_reset=true
               cat >&2 <<EOF
 You used 'HEAD:$protected_branch' while local HEAD is attached to
 '$current_head'. Re-pushing '$current_head' from any worktree would
@@ -88,6 +114,7 @@ elsewhere:
 EOF
               ;;
             DETACHED)
+              needs_protected_reset=false
               cat >&2 <<EOF
 You pushed from detached HEAD. Attach it to a feature branch first:
 
@@ -96,6 +123,7 @@ You pushed from detached HEAD. Attach it to a feature branch first:
 EOF
               ;;
             *)
+              needs_protected_reset=false
               cat >&2 <<EOF
 You used 'HEAD:$protected_branch'. HEAD points to '$current_head'
 -- push that branch by name and drop the ':$protected_branch'
@@ -109,6 +137,7 @@ EOF
           ;;
         refs/heads/main|refs/heads/master)
           local_branch=${local_ref#refs/heads/}
+          needs_protected_reset=true
           cat >&2 <<EOF
 Your work is on local '$local_branch'. Move it onto a feature branch
 first; start the new branch at '$local_branch' so the rejected
@@ -123,6 +152,7 @@ EOF
           ;;
         refs/heads/*)
           local_branch=${local_ref#refs/heads/}
+          needs_protected_reset=false
           # '--base $protected_branch' makes the PR target explicit
           # rather than letting 'gh pr create --fill' fall through to
           # the repository default. Without it, a 'feat:master' push
@@ -146,6 +176,7 @@ Your work is on '$local_branch'. Push that branch by name (drop the
 EOF
           ;;
         *)
+          needs_protected_reset=false
           cat >&2 <<EOF
 Your source ref is '$local_ref' (not a branch under refs/heads/).
 Push it under its own ref name rather than retargeting '$remote_ref':
@@ -154,15 +185,17 @@ Push it under its own ref name rather than retargeting '$remote_ref':
 EOF
           ;;
       esac
-      # The reset target is named as 'origin/$protected_branch' (the
-      # canonical reference) rather than '$remote_name/$protected_branch'.
-      # $remote_name is the *destination* of the rejected push -- on a
-      # fork it is not authoritative, and resetting against it would
-      # adopt the fork's history. The fork caveat below avoids naming
-      # '$remote_name/$protected_branch' literally so a fork-pushing
-      # contributor is not handed the wrong reset target as a string
-      # they might paste verbatim.
-      cat >&2 <<EOF
+      if [ "$needs_protected_reset" = "true" ]; then
+        # The reset target is named as 'origin/$protected_branch'
+        # (the canonical reference) rather than
+        # '$remote_name/$protected_branch'. $remote_name is the
+        # *destination* of the rejected push -- on a fork it is not
+        # authoritative, and resetting against it would adopt the
+        # fork's history. The fork caveat below avoids naming
+        # '$remote_name/$protected_branch' literally so a
+        # fork-pushing contributor is not handed the wrong reset
+        # target as a string they might paste verbatim.
+        cat >&2 <<EOF
 
 See AGENTS.md, section "Branch Protection (read this before any
 'git commit')", subsection "Recovery when the rule is broken",
@@ -173,6 +206,9 @@ If you push to multiple remotes (e.g. a fork plus the canonical
 repository), the destination remote of this push is not necessarily
 authoritative; reset against whichever remote tracks the upstream
 repo, not '$remote_name'.
+EOF
+      fi
+      cat >&2 <<EOF
 
 If the remote has branch protection configured for this branch,
 it will refuse this push for non-admin contributors; admin/owner
