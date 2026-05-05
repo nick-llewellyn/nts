@@ -44,6 +44,11 @@ floor, that's a real signal, not a flake.
       `rust/src/api/**` or hand-edits under `lib/src/ffi/**`)
 - [ ] `(cd rust && cargo tarpaulin --lib --locked --skip-clean --out Lcov --output-dir coverage)`
       (mirrors CI; emits `rust/coverage/lcov.info`)
+- [ ] `sh -n tool/hooks/pre-commit tool/hooks/pre-merge-commit tool/hooks/pre-push`
+      (any change under `tool/hooks/**`; mirrors the
+      `Hooks shell-syntax check` CI job)
+- [ ] `sh tool/hooks/test_hooks.sh` (any change under
+      `tool/hooks/**`; mirrors the `Hooks behaviour check` CI job)
 - [ ] Manual run on a real device / Simulator / Emulator <!-- describe -->
 
 ## Checklist
