@@ -456,6 +456,10 @@ remote layer.
 
 Mirrors what CI runs; failing locally is faster than waiting for
 the runner. The pinned Flutter version is `3.41.7` (see `.fvmrc`).
+The hook commands below mirror the `Hooks shell-syntax check` and
+`Hooks behaviour check` CI jobs and are required for any change
+under `tool/hooks/**` so a hook-only PR does not rely on CI as the
+first signal.
 
 ```bash
 # Dart side
@@ -473,6 +477,10 @@ flutter test --coverage
 
 # FRB drift gate (any change to rust/src/api/** or lib/src/ffi/**)
 dart run tool/check_bindings.dart
+
+# Hooks side (any change to tool/hooks/**); mirrors CI exactly
+sh -n tool/hooks/pre-commit tool/hooks/pre-merge-commit tool/hooks/pre-push
+sh tool/hooks/test_hooks.sh
 ```
 
 The PR template (`.github/pull_request_template.md`) carries the
