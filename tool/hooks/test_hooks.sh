@@ -431,6 +431,117 @@ assert_eq 1 "$grep_rc" \
   "pre-push DETACHED arm does not fall through to '*)' fallback message"
 git checkout -q feat/test
 
+# Round-28 cross-protected fixture (master:main): `git push origin
+# master:main` sends commits that live on local refs/heads/master to
+# refs/heads/main on the remote. The hook routes the shape through
+# the 'refs/heads/main|refs/heads/master)' arm with $local_branch =
+# 'master' and $protected_branch = 'main'. The round-27 fix used a
+# binary needs_protected_reset flag and emitted the cross-link with
+# "reset local '$protected_branch'" -- which would tell the user to
+# reset local 'main' even though the rejected commits live on
+# local 'master'. The round-28 fix keys the cross-link off
+# $local_branch_to_reset (= $local_branch here) so the recovery
+# names the source branch. A regression that re-introduces the
+# destination-keyed cross-link would say "resetting local 'main'"
+# and "origin/main" here, rewinding unrelated work on local main.
+out="$WORK_DIR/pp_master_to_main.out"
+set +e
+echo "refs/heads/master $sha refs/heads/main $zero" \
+  | "$HOOKS_DIR/pre-push" origin git@example.invalid:repo.git >"$out" 2>&1
+rc=$?; set -e
+assert_eq 1 "$rc" "pre-push refuses master:main push"
+assert_grep "Your work is on local 'master'" "$out" \
+  "pre-push master:main recipe header names source 'master'"
+assert_grep 'git switch -c <type>/<short-slug> master' "$out" \
+  "pre-push master:main recipe branches from local 'master' tip"
+assert_grep "resetting local 'master'" "$out" \
+  "pre-push master:main epilogue points reset at source 'master', not destination 'main'"
+assert_grep "origin/master" "$out" \
+  "pre-push master:main epilogue names canonical 'origin/master' reset target"
+# Negative pins: a regression keying the cross-link off
+# $protected_branch (the destination) would emit these strings.
+set +e
+grep -F "resetting local 'main'" "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push master:main epilogue does not point reset at destination 'main'"
+set +e
+grep -F "origin/main" "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push master:main epilogue does not name 'origin/main' as reset target"
+
+# Round-28 cross-protected fixture (main:master): the mirror of
+# master:main. Locks in the symmetry so a regression that
+# special-cases one direction (e.g. always resetting whichever
+# protected branch is named in $remote_ref) is caught.
+out="$WORK_DIR/pp_main_to_master.out"
+set +e
+echo "refs/heads/main $sha refs/heads/master $zero" \
+  | "$HOOKS_DIR/pre-push" origin git@example.invalid:repo.git >"$out" 2>&1
+rc=$?; set -e
+assert_eq 1 "$rc" "pre-push refuses main:master push"
+assert_grep "Your work is on local 'main'" "$out" \
+  "pre-push main:master recipe header names source 'main'"
+assert_grep 'git switch -c <type>/<short-slug> main' "$out" \
+  "pre-push main:master recipe branches from local 'main' tip"
+assert_grep "resetting local 'main'" "$out" \
+  "pre-push main:master epilogue points reset at source 'main', not destination 'master'"
+assert_grep "origin/main" "$out" \
+  "pre-push main:master epilogue names canonical 'origin/main' reset target"
+set +e
+grep -F "resetting local 'master'" "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push main:master epilogue does not point reset at destination 'master'"
+set +e
+grep -F "origin/master" "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push main:master epilogue does not name 'origin/master' as reset target"
+
+# Round-28 asymmetric HEAD fixture (HEAD:main while on local
+# master): `git push origin HEAD:main` while HEAD is attached to
+# local 'master' routes through the 'HEAD)' -> 'main|master)'
+# sub-arm. The round-27 binary flag emitted the cross-link with
+# "reset local '$protected_branch'" = 'main', but the rejected
+# commits actually live on local 'master' (the branch HEAD points
+# at). Round-28 keys the cross-link off $current_head so the
+# recovery names the local source branch. A regression keying the
+# cross-link off $protected_branch would say "resetting local
+# 'main'" / "origin/main" and rewind unrelated local main work.
+# Genuinely create local 'master' and attach HEAD to it; the hook
+# resolves HEAD via 'git symbolic-ref --short' so the test must
+# put HEAD on a real branch named 'master' rather than just
+# simulating the refspec.
+git checkout -q -b master
+out="$WORK_DIR/pp_head_on_master_to_main.out"
+set +e
+echo "HEAD $sha refs/heads/main $zero" \
+  | "$HOOKS_DIR/pre-push" origin git@example.invalid:repo.git >"$out" 2>&1
+rc=$?; set -e
+assert_eq 1 "$rc" "pre-push refuses HEAD:main push from local master"
+assert_grep "HEAD is attached to" "$out" \
+  "pre-push HEAD-on-master routes to 'main|master' sub-arm"
+assert_grep 'git switch -c <type>/<short-slug> master' "$out" \
+  "pre-push HEAD-on-master recipe branches from local 'master' tip"
+assert_grep "resetting local 'master'" "$out" \
+  "pre-push HEAD-on-master epilogue points reset at source 'master', not destination 'main'"
+assert_grep "origin/master" "$out" \
+  "pre-push HEAD-on-master epilogue names canonical 'origin/master' reset target"
+set +e
+grep -F "resetting local 'main'" "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push HEAD-on-master epilogue does not point reset at destination 'main'"
+set +e
+grep -F "origin/main" "$out" >/dev/null
+grep_rc=$?; set -e
+assert_eq 1 "$grep_rc" \
+  "pre-push HEAD-on-master epilogue does not name 'origin/main' as reset target"
+git checkout -q feat/test
+git branch -q -D master
+
 # Pin the '(delete)' shape: `git push <remote> :main` (or `:master`)
 # sets local_ref to the literal string '(delete)' and local_sha to
 # 40 zeros. Before the round-21 fix, this fell into the generic '*)'
