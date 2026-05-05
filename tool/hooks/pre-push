@@ -1,0 +1,247 @@
+#!/bin/sh
+# Refuse pushes that update remote main/master directly.
+#
+# Activate once per clone:
+#   git config core.hooksPath tool/hooks
+#
+# Override (genuine emergency only): git push --no-verify
+set -eu
+
+# Git invokes pre-push as: pre-push <remote-name> <remote-url>.
+# Use the actual remote name in the recovery recipe so contributors
+# pushing to a fork remote (or any name other than 'origin') see
+# accurate commands. The ${1:-origin} fallback keeps the recipe
+# coherent when the hook is invoked directly without args (e.g.
+# from ad-hoc tooling); both branches are pinned by
+# tool/hooks/test_hooks.sh under set -u.
+remote_name=${1:-origin}
+
+while read -r local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      # Branch name extracted from the destination ref; used both
+      # in the message header and (further down) in the shared
+      # epilogue's reset pointer so 'master' pushes do not get
+      # told to reset against 'origin/main'.
+      protected_branch=${remote_ref#refs/heads/}
+      cat >&2 <<EOF
+ERROR: pushing '$local_ref' to '$remote_ref' is forbidden by repo policy.
+
+Land changes via a pull request from a feature branch.
+
+EOF
+      # Recovery recipe is shape-specific because git's pre-push
+      # contract gives us local_ref from the refspec, which need not
+      # equal HEAD. 'git push -u $remote_name HEAD' would publish the
+      # wrong branch for 'git push <remote> release:main' issued from
+      # a different checked-out branch, and errors out entirely from
+      # detached HEAD. We route on local_ref and, where it names a
+      # branch, drive the recipe off the local_ref's branch name (not
+      # the ambient HEAD) so the suggested follow-up acts on the work
+      # the user actually tried to push.
+      # Per-arm string names the local branch that carries the
+      # rejected commits, parameterising the shared epilogue's
+      # "reset local '<branch>'" cross-link to AGENTS.md. That
+      # cross-link is the recipe for moving a commit that already
+      # landed on a protected local branch onto a feature branch.
+      # The naming matters because the source and destination are
+      # not always the same protected branch: 'master:main' rejects
+      # commits that live on local 'master', not on 'main', so a
+      # naive epilogue keyed off the destination ('$protected_branch')
+      # would tell the user to reset local 'main' (rewinding
+      # unrelated work) when the actual recovery target is 'master'.
+      # The push shapes split into:
+      #   - non-empty (named local branch): the rejected push
+      #     originated FROM that local branch which is protected
+      #     (main:main, master:master, master:main, main:master, or
+      #     HEAD:main|HEAD:master while HEAD is attached to a
+      #     protected branch). The named branch -- not necessarily
+      #     '$protected_branch' -- carries the rejected commits and
+      #     is what needs resetting in addition to the in-arm
+      #     "branch off the tip" advice.
+      #   - empty: the rejected push did not touch any protected
+      #     local branch at all -- the source is a feature branch
+      #     (refs/heads/*), a non-branch ref (tag refspecs, '*)'
+      #     arm), a delete refspec, or a HEAD attached to a
+      #     non-protected branch / detached. Pointing those shapes
+      #     at the "reset local <branch>" recipe could mislead a
+      #     contributor into resetting unrelated local work (e.g. a
+      #     stale rebase on local main from another workflow) that
+      #     has nothing to do with the rejected push. The in-arm
+      #     recipe is self-contained for those shapes; the universal
+      #     branch-protection / fast-fail caveat below still applies
+      #     regardless.
+      case "$local_ref" in
+        '(delete)')
+          # `git push <remote> :main` (or `:master`) sets local_ref
+          # to the literal string '(delete)' and local_sha to 40
+          # zeros. There is no "recovery branch" for this shape --
+          # deleting the protected branch is itself the policy
+          # violation, not a side effect of one. The previous '*)'
+          # fallback emitted 'git push <remote_name> (delete)' which
+          # is not a valid command; route this shape explicitly.
+          local_branch_to_reset=
+          cat >&2 <<EOF
+You attempted to delete '$remote_ref' (refspec ':$protected_branch').
+Deleting the protected branch is itself forbidden -- there is no
+equivalent valid action via 'git push'. If the branch genuinely
+needs to be retired or renamed, coordinate that change through the
+GitHub UI / API with branch-protection temporarily relaxed; do not
+attempt to push it from a clone.
+EOF
+          ;;
+        HEAD)
+          # `git push <remote> HEAD:<dest>` (and `git push` from a
+          # detached HEAD) pass local_ref=HEAD with no further hint
+          # at what HEAD actually is. The original two-case message
+          # (feature-branch / detached) silently fell through to the
+          # feature-branch reading when HEAD was attached to local
+          # 'main'/'master', producing 'git push -u $remote_name
+          # <branch>' as the recipe -- which a contributor would
+          # quite reasonably substitute as 'main' and re-push the
+          # very branch the hook just refused. Resolve HEAD ourselves
+          # and route on its symbolic name so the protected-branch
+          # attachment gets the same "branch off the protected tip"
+          # advice as the refs/heads/main|master arm.
+          current_head=$(git symbolic-ref --short HEAD 2>/dev/null || echo "DETACHED")
+          case "$current_head" in
+            main|master)
+              # The cross-link names '$current_head' (the local
+              # branch HEAD is attached to), not '$protected_branch'
+              # (the rejected destination): for `git push origin
+              # HEAD:main` while HEAD is on local 'master', the
+              # rejected commits live on local 'master'. Pointing
+              # the user at "reset local 'main'" would rewind
+              # unrelated work on local 'main' that has nothing to
+              # do with this push.
+              local_branch_to_reset=$current_head
+              cat >&2 <<EOF
+You used 'HEAD:$protected_branch' while local HEAD is attached to
+'$current_head'. Re-pushing '$current_head' from any worktree would
+be refused again. Move that work onto a feature branch first;
+start the new branch at the local '$current_head' tip so the
+rejected commits are preserved even if HEAD gets checked out
+elsewhere:
+
+  git switch -c <type>/<short-slug> $current_head
+                                         # branch from local '$current_head'
+  git push -u $remote_name <type>/<short-slug>
+                                         # push the feature branch by name
+EOF
+              ;;
+            DETACHED)
+              local_branch_to_reset=
+              cat >&2 <<EOF
+You pushed from detached HEAD. Attach it to a feature branch first:
+
+  git switch -c <type>/<short-slug>      # creates a branch at HEAD
+  git push -u $remote_name <type>/<short-slug>
+EOF
+              ;;
+            *)
+              local_branch_to_reset=
+              cat >&2 <<EOF
+You used 'HEAD:$protected_branch'. HEAD points to '$current_head'
+-- push that branch by name and drop the ':$protected_branch'
+override:
+
+  git push -u $remote_name $current_head
+                                         # push '$current_head' under its own name
+EOF
+              ;;
+          esac
+          ;;
+        refs/heads/main|refs/heads/master)
+          local_branch=${local_ref#refs/heads/}
+          # The cross-link names '$local_branch' (the source branch
+          # of the refspec, which is protected), not
+          # '$protected_branch' (the destination). For symmetric
+          # shapes (main:main, master:master) they coincide; for
+          # cross-protected shapes (master:main, main:master) the
+          # rejected commits live on the source. Naming the
+          # destination would rewind the wrong local branch.
+          local_branch_to_reset=$local_branch
+          cat >&2 <<EOF
+Your work is on local '$local_branch'. Move it onto a feature branch
+first; start the new branch at '$local_branch' so the rejected
+commits are preserved even if HEAD is checked out elsewhere (note
+re-pushing '$local_branch' from any worktree would be refused again):
+
+  git switch -c <type>/<short-slug> $local_branch
+                                         # branch from local '$local_branch'
+  git push -u $remote_name <type>/<short-slug>
+                                         # push the feature branch by name
+EOF
+          ;;
+        refs/heads/*)
+          local_branch=${local_ref#refs/heads/}
+          local_branch_to_reset=
+          # '--base $protected_branch' makes the PR target explicit
+          # rather than letting 'gh pr create --fill' fall through to
+          # the repository default. Without it, a 'feat:master' push
+          # silently retargets to 'main' (the default) -- the user's
+          # rejected destination of 'master' disappears, with no
+          # signal that the hook routed them somewhere else. With it,
+          # the PR target tracks the user's intent: 'feat:main'
+          # opens against 'main' (a no-op vs the default), and
+          # 'feat:master' either opens against 'master' (if the
+          # remote has it) or fails 'gh pr create' loudly (clear
+          # error rather than silent retarget).
+          cat >&2 <<EOF
+Your work is on '$local_branch'. Push that branch by name (drop the
+':$remote_ref' destination override):
+
+  git push -u $remote_name $local_branch
+                                         # push '$local_branch' under its own name
+  gh pr create --fill --base $protected_branch
+                                         # PR targets '$protected_branch' (the rejected destination)
+  gh pr merge --squash --delete-branch   # self-merge once CI is green
+EOF
+          ;;
+        *)
+          local_branch_to_reset=
+          cat >&2 <<EOF
+Your source ref is '$local_ref' (not a branch under refs/heads/).
+Push it under its own ref name rather than retargeting '$remote_ref':
+
+  git push $remote_name $local_ref
+EOF
+          ;;
+      esac
+      if [ -n "$local_branch_to_reset" ]; then
+        # The reset target is named as 'origin/$local_branch_to_reset'
+        # (the canonical reference) rather than
+        # '$remote_name/$local_branch_to_reset'. $remote_name is the
+        # *destination* of the rejected push -- on a fork it is not
+        # authoritative, and resetting against it would adopt the
+        # fork's history. The fork caveat below avoids naming
+        # '$remote_name/$local_branch_to_reset' literally so a
+        # fork-pushing contributor is not handed the wrong reset
+        # target as a string they might paste verbatim.
+        cat >&2 <<EOF
+
+See AGENTS.md, section "Branch Protection (read this before any
+'git commit')", subsection "Recovery when the rule is broken",
+for the full recipe (including resetting local '$local_branch_to_reset'
+back to its authoritative remote -- typically 'origin/$local_branch_to_reset').
+
+If you push to multiple remotes (e.g. a fork plus the canonical
+repository), the destination remote of this push is not necessarily
+authoritative; reset against whichever remote tracks the upstream
+repo, not '$remote_name'.
+EOF
+      fi
+      cat >&2 <<EOF
+
+If the remote has branch protection configured for this branch,
+it will refuse this push for non-admin contributors; admin/owner
+pushes are refused only when 'enforce_admins=true' is also set.
+This hook is the local fast-fail and does not guarantee a remote
+rejection.
+EOF
+      exit 1
+      ;;
+  esac
+done
+
+exit 0

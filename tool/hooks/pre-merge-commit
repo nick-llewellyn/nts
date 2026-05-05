@@ -1,0 +1,52 @@
+#!/bin/sh
+# Refuse merge commits on protected branches.
+#
+# `git merge` does NOT fire the pre-commit hook; it fires
+# pre-merge-commit instead, but ONLY when git is about to record
+# a real merge commit (i.e. the merge is non-fast-forward, either
+# because the branches have diverged or because `--no-ff` was
+# passed). A `git merge feature/foo` on a `main` that has no
+# local commits beyond the merge base is a fast-forward: git
+# advances the ref without creating a commit, and no hook fires.
+# Catching the fast-forward path locally would require wrapping
+# `git merge` itself; the resulting `main` is still rejected by
+# `pre-push` (destination ref `refs/heads/main`) and by GitHub
+# branch protection on the publish, so the gap is bounded.
+#
+# Activate once per clone:
+#   git config core.hooksPath tool/hooks
+#
+# Override (genuine emergency only): git merge --no-verify
+set -eu
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "DETACHED")
+
+case "$branch" in
+  main|master)
+    cat >&2 <<EOF
+ERROR: merging into '$branch' locally is forbidden by repo policy.
+
+Every change must land via a pull request from a feature branch
+that is squash-merged on GitHub. See AGENTS.md "Branch Protection"
+and DEVELOPMENT.md "Contribution workflow" for the full policy.
+
+To proceed, abort this merge and re-run it on a feature branch:
+
+  git merge --abort                      # undo the in-progress merge
+  git switch -c <type>/<short-slug>      # branch tracks current HEAD
+  git merge feature/foo                  # this hook will allow it
+                                         # (or open a PR for foo instead
+                                         # of merging it locally)
+
+Override with 'git merge --no-verify' only in genuine emergencies.
+If the remote has branch protection configured for this branch,
+the eventual push will be refused for non-admin contributors;
+admin/owner pushes are refused only when 'enforce_admins=true' is
+also set. Treat this hook as a local-first guard, not a guarantee
+of remote rejection.
+EOF
+    exit 1
+    ;;
+esac
+
+exit 0
