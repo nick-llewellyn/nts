@@ -88,9 +88,10 @@ jobs:
   build:
     # Matrix exercises both the declared SDK floor (3.38.10 -- oldest stable
     # satisfying `flutter: ^3.38.0` in pubspec.yaml, ships Dart 3.10.9) and
-    # the pinned current version (3.41.7, matches .fvmrc). Format check runs
-    # only on the pinned version because `dart format` output can shift
-    # between Dart minors and we don't want spurious failures on the floor.
+    # the latest `stable` channel (matches .fvmrc `"flutter": "stable"`).
+    # Format check runs only on the stable leg because `dart format` output
+    # can shift between Dart minors and we don't want spurious failures on
+    # the floor.
     #
     # Skipped (whole matrix) when the diff is doc-only: `**.md` is no
     # longer in trigger-level `paths-ignore` (so required status checks
@@ -122,15 +123,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flutter: ['3.38.10', '3.41.7']
+        flutter: ['3.38.10', 'stable']
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      # `subosito/flutter-action@v2` does not accept channel names as a
+      # `flutter-version` value, so the `stable` matrix entry is mapped to
+      # `any` (the action's documented "latest of channel" sentinel) while
+      # the floor leg passes its semver through unchanged. Keeping the
+      # matrix label as `stable` preserves the human-readable status-check
+      # name (`Format / analyze / Dart tests (Flutter stable)`).
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ matrix.flutter }}
+          flutter-version: ${{ matrix.flutter == 'stable' && 'any' || matrix.flutter }}
           channel: 'stable'
           cache: true
 
@@ -151,27 +158,27 @@ jobs:
         run: flutter pub get
 
       - name: Verify formatting
-        if: matrix.flutter == '3.41.7'
+        if: matrix.flutter == 'stable'
         run: dart format --output=none --set-exit-if-changed .
 
       - name: Analyze package
         run: dart analyze .
 
       # `--coverage` writes coverage/lcov.info. Generated matrix-wide so
-      # coverage gaps caused by floor-only or pin-only code paths surface
-      # on both legs; uploaded pin-only below to avoid double-counting
+      # coverage gaps caused by floor-only or stable-only code paths surface
+      # on both legs; uploaded stable-only below to avoid double-counting
       # line coverage in downstream reports.
       - name: Run Dart tests (mock-mode FRB smoke)
         run: flutter test --coverage
 
-      # Coverage upload gated on (a) the pinned Flutter leg and (b)
+      # Coverage upload gated on (a) the stable Flutter leg and (b)
       # whether the diff actually touched Dart sources, the workflow
       # itself, or was a manual rerun. Stops a Rust-only PR from
       # republishing the same Dart coverage twice (once per matrix
       # leg, once per merge).
       - name: Upload Dart coverage artifact
         if: |
-          matrix.flutter == '3.41.7' && (
+          matrix.flutter == 'stable' && (
             github.event_name == 'workflow_dispatch' ||
             needs.changes.outputs.dart == 'true' ||
             needs.changes.outputs.ci == 'true'
@@ -191,7 +198,7 @@ jobs:
       # the build (third-party SLO is not in our CI critical path).
       - name: Upload Dart coverage to Codecov
         if: |
-          matrix.flutter == '3.41.7' && (
+          matrix.flutter == 'stable' && (
             github.event_name == 'workflow_dispatch' ||
             needs.changes.outputs.dart == 'true' ||
             needs.changes.outputs.ci == 'true'
@@ -407,7 +414,6 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.7'
           channel: 'stable'
 
       - name: Resolve package dependencies
@@ -418,9 +424,11 @@ jobs:
           dart pub global activate fvm
           echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
           # Reuse the SDK already installed by subosito/flutter-action so FVM
-          # does not re-download Flutter 3.41.7 (~1.4 GB) into its own cache.
+          # does not re-download the stable channel (~1.4 GB) into its own
+          # cache. The symlink target matches `.fvmrc` (`"flutter": "stable"`)
+          # so `fvm flutter` resolves the linked SDK without a download.
           mkdir -p "$HOME/fvm/versions"
-          ln -sfn "$FLUTTER_ROOT" "$HOME/fvm/versions/3.41.7"
+          ln -sfn "$FLUTTER_ROOT" "$HOME/fvm/versions/stable"
 
       - name: Verify FVM resolves to the linked SDK
         run: fvm flutter --version

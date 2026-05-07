@@ -1,10 +1,97 @@
 # Changelog
 
-## Unreleased
+## 1.3.2
 
-Repo-policy and CI-hygiene cleanup. No public Dart API change
-(`lib/nts.dart` is byte-identical), no FFI behaviour change, no FRB
-pin movement; the Rust crate `nts_rust` is unchanged at `0.2.2`.
+Repo-policy and CI-hygiene cleanup, plus a single Rust-side
+runtime fix that closes a multi-hour recovery stall observed in
+downstream consumers (`trusted_time` in particular) when an NTS
+server rotates its master key out from under our cookie pool. No
+public Dart API change (`lib/nts.dart` is byte-identical) and no
+FRB pin movement; the Rust crate `nts_rust` is bumped to `0.2.3`
+to reflect the behavioural change in `nts_query`. Dart package
+version bumped to `1.3.2` (patch).
+
+### Fail-fast eviction of stale NTS sessions on rekey signals
+
+- `nts_query` (`rust/src/api/nts.rs`) now evicts the cached
+  `Session` for the spec on either of the two on-wire signals
+  that indicate the server has rotated keys out from under our
+  cookie pool. The next `checkout` for that host finds no entry
+  and performs a fresh NTS-KE handshake instead of draining the
+  remaining cookies through identical failures plus the caller's
+  per-source exponential backoff. Closes `nts-0jl`.
+  - **AEAD authentication failure** — local C2S seal in
+    `build_client_request` or remote S2C verify in
+    `parse_server_response` returns `NtpError::Aead`. The cached
+    keys are out of step with the server's current master key.
+  - **RFC 8915 §5.7 NTSN Kiss-of-Death with matching UID** — a
+    standards-compliant server that cannot validate the cookie
+    SHOULD respond with stratum 0 + `reference_id`=`NTSN`, and
+    that response MUST NOT carry an Authenticator (the server
+    has no usable session keys to AEAD-sign with). The
+    AEAD-only eviction path missed this shape entirely:
+    `parse_server_response` rejected it as
+    `MissingAuthenticator` so the cached session survived and
+    the same dead-pool draining symptom recurred. The new
+    `NtpError::StaleCookie` arm classifies the matching-UID
+    NTSN distinctly and routes it through the same
+    generation-guarded eviction.
+- The eviction is gated on a generation snapshot captured at
+  `checkout` time, symmetric to the guard already present in
+  `deposit_cookies`. If a concurrent `nts_warm_cookies` (or
+  another `checkout` that triggered its own re-handshake)
+  installed a fresh session under the same key while this query
+  was on the wire, the in-flight failure belongs to the old keys
+  and the new session survives untouched. Without the guard a
+  single transient signal would force every concurrent caller
+  for the same host through a redundant re-handshake.
+- Off-path-attacker scope of the NTSN path: the matching-UID
+  check is the only authenticity signal available (no AEAD), so
+  an attacker who can observe one wire packet and forge a
+  UID-matching NTSN can at worst force one extra KE handshake
+  before the next legitimate response heals the session. A
+  non-matching (or absent) UID falls through to
+  `MissingAuthenticator` and leaves the cached session intact;
+  unauthenticated non-NTSN kiss codes (`RATE`, `DENY`, …) do
+  the same so a server that AEAD-signs them (the standards
+  path) still surfaces with its kiss code, while a stripped
+  forgery cannot trigger an eviction.
+- AEAD-error mapping verified end-to-end: `From<AeadError>` routes
+  `OpenFailed` (tag mismatch — the dominant master-key-rotation
+  signal), `SealFailed`, `InvalidKeyLength`, and
+  `InvalidNonceLength` to `NtsError::Authentication` (eviction);
+  `UnsupportedAlgorithm` is only reachable from the KE path and
+  routes to `KeProtocol` (no eviction).
+  `From<NtpError>::Aead(_)` routes the same way; wire-format,
+  Kiss-of-Death, and `Unsynchronized` arms route to `NtpProtocol`
+  (no eviction — those are transient or server-attested signals,
+  not key-state failures); the new `StaleCookie` arm routes to
+  `NtpProtocol` for the Dart-facing taxonomy, with eviction
+  applied pre-conversion inside the `evict_on_rekey_signal`
+  closure so the public `NtsError` enum stays
+  byte-identical.
+- Healthy-path cost is unchanged: the trigger is a `map_err`
+  closure that only acquires the `sessions()` mutex inside the
+  `Aead`/`StaleCookie` arms, so success returns are
+  byte-identical to the pre-fix behaviour.
+- Coverage: seven new tests pin the behaviour. In
+  `rust/src/api/nts.rs::tests`: (i) matching-generation eviction
+  drops the entry, jar and keys with it; (ii) stale-generation
+  eviction is a no-op when a concurrent re-handshake has advanced
+  the cached session; (iii) eviction is a quiet no-op when the
+  entry is already absent; (iv) end-to-end via a loopback faux
+  server, an AEAD tag mismatch evicts the session; (v) end-to-end,
+  a non-AEAD protocol failure preserves it; (vi) end-to-end, a
+  matching-UID NTSN KoD evicts; (vii) end-to-end, a wrong-UID NTSN
+  preserves. In `rust/src/nts/ntp.rs::tests`: four new parser-level
+  tests cover matching-UID NTSN → `StaleCookie`, wrong-UID NTSN →
+  `MissingAuthenticator`, UID-less NTSN → `MissingAuthenticator`,
+  and unauthenticated non-NTSN kiss codes →
+  `MissingAuthenticator`.
+- The FRB-generated `lib/src/ffi/api/nts.dart` regains
+  `evict_session` in the alphabetised "ignored because not `pub`"
+  comment line; no bindings code changes (the helper is
+  intentionally crate-private).
 
 ### Branch-protection enforcement (repo policy, no runtime impact)
 
