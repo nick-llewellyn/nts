@@ -137,6 +137,29 @@ change. Dart package version bumped to `1.4.0` (minor).
   be retired in favour of the published `1.4.0` plugin and the
   stable `com.nllewellyn.nts.PlatformInit` symbol.
 
+### Non-Android upgrade path
+
+iOS, macOS, Linux, and Windows consumers are unaffected by the
+migration steps above. The `android/` plugin module and the
+`flutter: plugin: platforms: android:` key in `pubspec.yaml` are
+scoped exclusively to Android — the Flutter tool generates no
+plugin registration on other targets, no `ios/` / `macos/` /
+`linux/` / `windows/` plugin module exists to compile or link,
+and the Native Assets pipeline that delivers
+`libnts_rust.{so,dylib,dll}` is unchanged. The public Dart API
+exported from `lib/nts.dart` is unchanged, and
+`await RustLib.init()` remains the only initialization step.
+The upgrade is a single-line `pubspec.yaml` bump.
+
+The on-platform TLS validators are also unchanged: every
+non-Android target continues to use `rustls-platform-verifier`
+0.5 directly, which talks to the Security framework on
+iOS/macOS, the system trust store on Linux, and the Win32
+`Crypt*` APIs on Windows without any host-side initialization
+step. None of these paths require JVM-style bootstrap, which is
+why the "Native platform bootstrap" layer documented in the
+README is Android-only.
+
 ### Example app simplified to a vanilla `FlutterActivity`
 
 - `example/android/app/src/main/kotlin/com/nts/example/RustlsBootstrap.kt`

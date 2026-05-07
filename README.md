@@ -44,6 +44,25 @@ module on Android (since `1.4.0`), so it must be consumed from a
 Flutter app — `dart pub add nts` from a pure-Dart project will not
 resolve.
 
+### Platform support
+
+| Platform | Native bootstrap | Consumer action |
+|---|---|---|
+| Android | Auto via bundled `NtsPlugin` (since `1.4.0`) | None beyond `flutter pub add nts`. |
+| iOS | None required | None. |
+| macOS | None required | None. |
+| Linux | None required | None. |
+| Windows | None required | None. |
+
+Every platform additionally requires `await RustLib.init()` once
+during application startup before the first `ntsQuery` /
+`ntsWarmCookies` call; see "Initialization has two layers" below
+for the rationale. Web and WebAssembly are unsupported: NTS-KE
+needs a raw TCP socket on `:4460` and NTPv4 needs a raw UDP
+socket on `:123`, neither of which is reachable from a browser
+tab, and the underlying `rustls` + `ring` stack has no
+`wasm32-unknown-unknown` target.
+
 ### Use
 
 ```dart
