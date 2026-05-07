@@ -173,6 +173,22 @@ pub enum NtpError {
     /// `RATE` (rate-limited), `DENY` (access denied), `RSTR` (restricted),
     /// and the NTS-specific `NTSN` (cookie not recognised, RFC 8915 §5.7).
     KissOfDeath(String),
+    /// RFC 8915 §5.7 NTSN Kiss-o'-Death response with a matching Unique
+    /// Identifier. A standards-compliant server that cannot validate the
+    /// cookie SHOULD respond with stratum `0` and `reference_id` =
+    /// `NTSN`, and that response MUST NOT carry an Authenticator or
+    /// Encrypted Extension Fields — the server has no usable session
+    /// keys to AEAD-sign with. The matching UID echoed from the request
+    /// is the only authenticity signal available; an off-path attacker
+    /// who could observe one wire packet and forge a UID-matching NTSN
+    /// can at worst force one extra KE handshake before the next
+    /// legitimate response heals the session.
+    ///
+    /// Surfaced as a dedicated variant (rather than collapsing into the
+    /// AEAD-authenticated `KissOfDeath` arm) so the `nts_query` caller
+    /// can evict the now-stale cached session without trusting an
+    /// unauthenticated header for any other purpose.
+    StaleCookie,
     Aead(AeadError),
 }
 
@@ -198,6 +214,9 @@ impl std::fmt::Display for NtpError {
                 f.write_str("server reports unsynchronized clock (LI=3 or stratum >= 16)")
             }
             Self::KissOfDeath(code) => write!(f, "kiss-o'-death: {code}"),
+            Self::StaleCookie => f.write_str(
+                "server reports stale cookie (RFC 8915 §5.7 unauthenticated NTSN with matching UID)",
+            ),
             Self::Aead(e) => write!(f, "AEAD: {e}"),
         }
     }
@@ -418,10 +437,41 @@ pub fn parse_server_response(
     }
 
     let extensions = parse_extensions(&bytes[HEADER_LEN..])?;
-    let auth_idx = extensions
+    let auth_idx = match extensions
         .iter()
         .position(|ext| ext.field_type == ext_type::NTS_AUTHENTICATOR)
-        .ok_or(NtpError::MissingAuthenticator)?;
+    {
+        Some(idx) => idx,
+        None => {
+            // RFC 8915 §5.7: a server that cannot validate the cookie
+            // SHOULD respond with a stratum-0 NTSN Kiss-o'-Death, and
+            // that response MUST NOT include an Authenticator or
+            // Encrypted Extension Fields — the server has no usable
+            // session keys to AEAD-sign with. The matching Unique
+            // Identifier echoed from the request is the only
+            // authenticity signal we have; without it we cannot
+            // distinguish a server NAK from an off-path attacker
+            // forging a "your cookie is stale" prod, so a non-matching
+            // (or absent) UID falls through to the standard
+            // `MissingAuthenticator` rejection.
+            //
+            // This check is deliberately scoped to the no-Authenticator
+            // path: an authenticated stratum-0 reply (whether NTSN or
+            // any other kiss code) still flows through the AEAD verify
+            // below and surfaces as `KissOfDeath`, preserving the
+            // post-AEAD ordering pinned by
+            // `parse_response_rejects_post_seal_kod_tamper_as_aead_failure`.
+            if header.stratum == STRATUM_KISS_OF_DEATH
+                && header.reference_id == *b"NTSN"
+                && extensions.iter().any(|ext| {
+                    ext.field_type == ext_type::UNIQUE_IDENTIFIER && ext.body == expected_uid
+                })
+            {
+                return Err(NtpError::StaleCookie);
+            }
+            return Err(NtpError::MissingAuthenticator);
+        }
+    };
     if auth_idx + 1 != extensions.len() {
         return Err(NtpError::AuthenticatorNotLast);
     }
@@ -783,6 +833,104 @@ mod tests {
         match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
             Err(NtpError::MissingAuthenticator) => {}
             other => panic!("expected MissingAuthenticator, got {other:?}"),
+        }
+    }
+
+    /// Build a synthetic NTSN Kiss-of-Death reply per RFC 8915 §5.7:
+    /// stratum 0, `reference_id` = `b"NTSN"`, the request's Unique
+    /// Identifier echoed back (or any caller-supplied substitute for
+    /// the negative tests), and explicitly NO Authenticator or
+    /// Encrypted Extension Fields. The server has no usable session
+    /// keys to AEAD-sign with, which is the whole reason §5.7 exists.
+    fn craft_unauthenticated_ntsn(uid_extension: Option<&[u8]>) -> Vec<u8> {
+        let mut header = NtpHeader::client_request(0);
+        header.li_vn_mode = (VERSION_4 << 3) | mode::SERVER;
+        header.stratum = STRATUM_KISS_OF_DEATH;
+        header.reference_id = *b"NTSN";
+        let mut packet = header.to_bytes().to_vec();
+        if let Some(uid) = uid_extension {
+            packet.extend_from_slice(&encode_extension(ext_type::UNIQUE_IDENTIFIER, uid));
+        }
+        packet
+    }
+
+    /// RFC 8915 §5.7 NTSN reply with the request's UID echoed back and
+    /// no Authenticator. The matching UID is the only authenticity
+    /// signal available (the server cannot AEAD-authenticate the
+    /// response without the cookie it just rejected), so the parser
+    /// must surface the dedicated `StaleCookie` variant rather than
+    /// collapsing to the generic `MissingAuthenticator` arm. The
+    /// `nts_query` caller relies on this distinction to evict the
+    /// now-stale cached session and force a fresh KE handshake.
+    #[test]
+    fn parse_response_classifies_unauthenticated_ntsn_with_matching_uid() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_unauthenticated_ntsn(Some(&UID));
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::StaleCookie) => {}
+            other => panic!("expected StaleCookie for UID-matching NTSN, got {other:?}"),
+        }
+    }
+
+    /// Off-path-attacker guard: an NTSN-shaped reply that fails to
+    /// echo the client's Unique Identifier carries no trust signal.
+    /// Without UID matching, an attacker who never observed the
+    /// request could spam a host with forged NTSNs to force endless
+    /// re-handshakes. The parser must fall through to
+    /// `MissingAuthenticator` so the caller treats it as malformed
+    /// and leaves the cached session intact.
+    #[test]
+    fn parse_response_rejects_unauthenticated_ntsn_with_wrong_uid() {
+        let (_, s2c) = fresh_keys();
+        let other_uid = [0x99u8; 32];
+        let packet = craft_unauthenticated_ntsn(Some(&other_uid));
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::MissingAuthenticator) => {}
+            other => panic!(
+                "expected MissingAuthenticator for wrong-UID NTSN (no eviction trust), got {other:?}"
+            ),
+        }
+    }
+
+    /// Companion to the wrong-UID test: an NTSN-shaped reply with no
+    /// UID extension at all is also untrustworthy and must NOT
+    /// surface as `StaleCookie`. RFC 8915 §5.7 mandates the UID echo
+    /// precisely so clients have something to authenticate the NAK
+    /// against; a server that omits it (or an attacker forging a
+    /// stripped packet) gives us nothing to trust.
+    #[test]
+    fn parse_response_rejects_unauthenticated_ntsn_without_uid() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_unauthenticated_ntsn(None);
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::MissingAuthenticator) => {}
+            other => panic!(
+                "expected MissingAuthenticator for UID-less NTSN (no eviction trust), got {other:?}"
+            ),
+        }
+    }
+
+    /// Precedence pin: a non-NTSN kiss code (e.g. `RATE`) without an
+    /// Authenticator is NOT a §5.7 NAK shape — RFC 8915 only assigns
+    /// "no-auth response is acceptable" semantics to NTSN. Such a
+    /// reply must surface as `MissingAuthenticator` so an authentic
+    /// `RATE`/`DENY` (which a correctly-configured server *would*
+    /// AEAD-sign, since those don't require dropping the keys) cannot
+    /// be spoofed off-path into a session eviction.
+    #[test]
+    fn parse_response_rejects_unauthenticated_non_ntsn_kod() {
+        let (_, s2c) = fresh_keys();
+        let mut header = NtpHeader::client_request(0);
+        header.li_vn_mode = (VERSION_4 << 3) | mode::SERVER;
+        header.stratum = STRATUM_KISS_OF_DEATH;
+        header.reference_id = *b"RATE";
+        let mut packet = header.to_bytes().to_vec();
+        packet.extend_from_slice(&encode_extension(ext_type::UNIQUE_IDENTIFIER, &UID));
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::MissingAuthenticator) => {}
+            other => panic!(
+                "expected MissingAuthenticator for unauthenticated non-NTSN kiss code, got {other:?}"
+            ),
         }
     }
 

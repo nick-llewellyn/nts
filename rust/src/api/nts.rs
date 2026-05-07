@@ -227,6 +227,13 @@ impl From<NtpError> for NtsError {
             // through the catch-all arm.
             e @ NtpError::Unsynchronized => Self::NtpProtocol(e.to_string()),
             e @ NtpError::KissOfDeath(_) => Self::NtpProtocol(e.to_string()),
+            // RFC 8915 §5.7 unauthenticated NTSN with matching UID — the
+            // server-attested rekey signal that the cached cookie is no
+            // longer valid. Routed through `NtpProtocol` so the
+            // Dart-facing `NtsError` enum stays stable; the eviction-side
+            // effect is handled inside `nts_query` before this conversion
+            // happens (see the `evict_on_rekey_signal` closure).
+            e @ NtpError::StaleCookie => Self::NtpProtocol(e.to_string()),
             other => Self::NtpProtocol(other.to_string()),
         }
     }
@@ -727,19 +734,51 @@ pub fn nts_query(
     let ctx = checkout(&spec, timeout, cap)?;
     let session_generation = ctx.session_generation;
 
-    // Fail-fast recovery: if either AEAD step (the local C2S seal in
-    // `build_client_request` or the S2C verify in
-    // `parse_server_response`) reports an authentication failure, the
-    // cached session keys are stale relative to the server's current
-    // master key. Evict the entry under its captured generation so the
-    // next `checkout` performs a fresh KE handshake instead of spending
-    // the rest of the now-unusable cookie pool through identical
-    // failures and the caller's per-source exponential backoff.
-    let evict_on_auth = |err: NtsError| -> NtsError {
-        if matches!(err, NtsError::Authentication(_)) {
+    // Fail-fast recovery: two distinct on-wire signals indicate the
+    // cached session is out of step with the server and must be
+    // replaced rather than continuing to drain its now-stale cookie
+    // pool through identical failures and the caller's per-source
+    // exponential backoff (the multi-hour recovery stall observed
+    // downstream in `trusted_time` and similar consumers).
+    //
+    // 1. `NtpError::Aead` — the local C2S seal in
+    //    `build_client_request` or the S2C verify in
+    //    `parse_server_response` failed a tag check. The cached
+    //    C2S/S2C keys are out of step with the server's current
+    //    master key (the canonical master-key-rotation symptom).
+    //
+    // 2. `NtpError::StaleCookie` — RFC 8915 §5.7 NTSN Kiss-of-Death
+    //    with a matching Unique Identifier. A standards-compliant
+    //    server that cannot validate the cookie sends an NTSN reply
+    //    *without* an Authenticator (it has no usable session keys
+    //    to AEAD-sign with), so a parser that only evicted on
+    //    `Aead` would miss this shape entirely and the next call
+    //    would keep draining the same dead cookie pool. The
+    //    matching UID echoed from the request is the only
+    //    authenticity signal here; an off-path attacker who could
+    //    observe one wire packet and forge a UID-matching NTSN can
+    //    at worst force one extra KE handshake before the next
+    //    legitimate response heals the session.
+    //
+    // The closure operates on `NtpError` rather than the converted
+    // `NtsError` because `From<NtpError>` collapses both rekey
+    // signals onto distinct `NtsError` variants and we need to
+    // distinguish them from sibling `NtpProtocol` shapes
+    // (`UnexpectedMode`, `MissingAuthenticator`, etc.) that must
+    // *not* trigger an eviction.
+    //
+    // Eviction is gated on `session_generation`, the snapshot
+    // captured at `checkout` time, symmetric to the guard in
+    // `deposit_cookies`. If a concurrent `nts_warm_cookies` (or
+    // another `checkout` that triggered its own re-handshake)
+    // installed a fresh session under the same key while this
+    // query was on the wire, the in-flight failure belongs to the
+    // old keys and the new session must survive untouched.
+    let evict_on_rekey_signal = |err: NtpError| -> NtsError {
+        if matches!(err, NtpError::Aead(_) | NtpError::StaleCookie) {
             evict_session(&key, session_generation);
         }
-        err
+        NtsError::from(err)
     };
 
     let mut uid = [0u8; UID_LEN];
@@ -757,7 +796,7 @@ pub fn nts_query(
         nonce,
         transmit_timestamp,
     };
-    let packet = build_client_request(&req, &ctx.c2s_key).map_err(|e| evict_on_auth(e.into()))?;
+    let packet = build_client_request(&req, &ctx.c2s_key).map_err(evict_on_rekey_signal)?;
 
     // RFC 5905 is address-family agnostic; bind a local socket that matches
     // the family of whichever resolved address actually accepts a UDP
@@ -773,7 +812,7 @@ pub fn nts_query(
     let rtt_micros = send_at.elapsed().as_micros() as i64;
 
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
-        .map_err(|e| evict_on_auth(e.into()))?;
+        .map_err(evict_on_rekey_signal)?;
     let fresh_count = response.fresh_cookies.len() as u32;
     deposit_cookies(&key, session_generation, response.fresh_cookies);
 
@@ -1357,6 +1396,191 @@ mod tests {
         drop(guard);
 
         // Cleanup so this test does not leak global state to others.
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .remove(&key);
+    }
+
+    /// End-to-end coverage for `nts_query`'s eviction on a
+    /// standards-compliant RFC 8915 §5.7 NTSN Kiss-of-Death response.
+    /// Pre-installs a session pointing at a loopback faux server, then
+    /// has the faux server reply with a stratum-0 / `reference_id`=NTSN
+    /// packet that echoes the request's Unique Identifier and contains
+    /// no Authenticator (the shape a real server sends when its master
+    /// key has rotated and the cookie can no longer be unwrapped).
+    ///
+    /// The previous AEAD-only eviction path missed this shape entirely:
+    /// `parse_server_response` rejected it as `MissingAuthenticator`
+    /// (mapped to `NtsError::NtpProtocol`) so the cached session
+    /// survived and the caller would keep draining identical failures
+    /// through the cookie pool. The new `NtpError::StaleCookie` arm
+    /// surfaces the matching-UID NTSN distinctly and routes it through
+    /// the same generation-guarded eviction as the AEAD path.
+    #[test]
+    fn nts_query_evicts_session_on_ntsn_kod_with_matching_uid() {
+        use crate::nts::ntp::{
+            ext_type, mode, parse_extensions, NtpHeader, HEADER_LEN, STRATUM_KISS_OF_DEATH,
+            VERSION_4,
+        };
+
+        let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
+        faux_server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set faux server read timeout");
+        let server_port = faux_server.local_addr().expect("local addr").port();
+        let host = "127.0.0.1";
+        let key = format!("{host}:{server_port}");
+
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .remove(&key);
+
+        let generation = next_session_generation();
+        let mut session = make_test_session(host, server_port, generation);
+        session.jar.put_many(host, [vec![0xEF; 32]]);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .insert(key.clone(), session);
+
+        let handler = std::thread::spawn(move || {
+            let mut buf = [0u8; 2048];
+            let (n, src) = faux_server
+                .recv_from(&mut buf)
+                .expect("faux server recv_from");
+            // Recover the client's Unique Identifier so the reply can
+            // echo it (RFC 8915 §5.7's MUST). Any other UID would be
+            // treated as untrustworthy by the parser and fall through
+            // to MissingAuthenticator instead of StaleCookie.
+            let exts = parse_extensions(&buf[HEADER_LEN..n]).expect("parse client extensions");
+            let client_uid = exts
+                .iter()
+                .find(|ext| ext.field_type == ext_type::UNIQUE_IDENTIFIER)
+                .expect("client request must include a Unique Identifier")
+                .body
+                .clone();
+
+            // Build a wire-correct §5.7 NAK: stratum 0 + ref_id NTSN +
+            // server mode + echoed UID, no Authenticator and no
+            // Encrypted Extension Fields.
+            let mut header = NtpHeader::client_request(0);
+            header.li_vn_mode = (VERSION_4 << 3) | mode::SERVER;
+            header.stratum = STRATUM_KISS_OF_DEATH;
+            header.reference_id = *b"NTSN";
+            let mut reply = header.to_bytes().to_vec();
+            reply.extend_from_slice(&crate::nts::ntp::encode_extension(
+                ext_type::UNIQUE_IDENTIFIER,
+                &client_uid,
+            ));
+            faux_server
+                .send_to(&reply, src)
+                .expect("faux server send_to");
+        });
+
+        let spec = NtsServerSpec {
+            host: host.to_owned(),
+            port: server_port,
+        };
+        let result = nts_query(spec, 2_000, 64);
+        handler.join().expect("faux server thread panicked");
+
+        // The unauthenticated NTSN routes through `From<NtpError>` to
+        // `NtpProtocol` for the Dart-facing diagnostic, but eviction
+        // already fired pre-conversion inside `evict_on_rekey_signal`.
+        match result {
+            Err(NtsError::NtpProtocol(ref msg)) if msg.contains("NTSN") => {}
+            other => panic!("expected NtpProtocol(StaleCookie) for NTSN reply, got {other:?}"),
+        }
+
+        let guard = sessions().lock().expect("session table poisoned");
+        assert!(
+            guard.get(&key).is_none(),
+            "RFC 8915 §5.7 NTSN with matching UID must evict the cached session",
+        );
+    }
+
+    /// Off-path-attacker guard at the integration layer: an
+    /// NTSN-shaped reply that does NOT echo the request's Unique
+    /// Identifier carries no trust signal and must NOT evict the
+    /// session. Pinning this here (not just in the parser unit
+    /// tests) guarantees the integration path also refuses to act
+    /// on a UID-mismatched NAK.
+    #[test]
+    fn nts_query_preserves_session_on_ntsn_kod_with_wrong_uid() {
+        use crate::nts::ntp::{ext_type, mode, NtpHeader, STRATUM_KISS_OF_DEATH, VERSION_4};
+
+        let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
+        faux_server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set faux server read timeout");
+        let server_port = faux_server.local_addr().expect("local addr").port();
+        let host = "127.0.0.1";
+        let key = format!("{host}:{server_port}");
+
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .remove(&key);
+
+        let generation = next_session_generation();
+        let mut session = make_test_session(host, server_port, generation);
+        session.jar.put_many(host, [vec![0x12; 32]]);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .insert(key.clone(), session);
+
+        let handler = std::thread::spawn(move || {
+            let mut buf = [0u8; 2048];
+            let (_n, src) = faux_server
+                .recv_from(&mut buf)
+                .expect("faux server recv_from");
+            // Build an NTSN reply with a *different* UID — the shape
+            // an off-path attacker would forge if they could send to
+            // our ephemeral source port without observing our request.
+            let mut header = NtpHeader::client_request(0);
+            header.li_vn_mode = (VERSION_4 << 3) | mode::SERVER;
+            header.stratum = STRATUM_KISS_OF_DEATH;
+            header.reference_id = *b"NTSN";
+            let mut reply = header.to_bytes().to_vec();
+            let attacker_uid = [0xA5u8; 32];
+            reply.extend_from_slice(&crate::nts::ntp::encode_extension(
+                ext_type::UNIQUE_IDENTIFIER,
+                &attacker_uid,
+            ));
+            faux_server
+                .send_to(&reply, src)
+                .expect("faux server send_to");
+        });
+
+        let spec = NtsServerSpec {
+            host: host.to_owned(),
+            port: server_port,
+        };
+        let result = nts_query(spec, 2_000, 64);
+        handler.join().expect("faux server thread panicked");
+
+        // Wrong-UID NTSN falls through to `MissingAuthenticator` in
+        // the parser, which maps to `NtpProtocol` and bypasses the
+        // eviction match arm.
+        match result {
+            Err(NtsError::NtpProtocol(_)) => {}
+            other => panic!("expected NtpProtocol for wrong-UID NTSN, got {other:?}"),
+        }
+
+        let guard = sessions().lock().expect("session table poisoned");
+        assert!(
+            guard.get(&key).is_some(),
+            "wrong-UID NTSN must not evict (no authenticity signal)",
+        );
+        assert_eq!(
+            guard.get(&key).expect("entry present").generation,
+            generation,
+            "preserved session must still be the same generation",
+        );
+        drop(guard);
         sessions()
             .lock()
             .expect("session table poisoned")
