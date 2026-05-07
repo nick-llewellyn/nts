@@ -49,9 +49,10 @@ pipeline.)
 import 'package:nts/nts.dart';
 
 Future<void> main() async {
-  // 1. Initialize the native bridge exactly once, before anything else
+  // 1. Initialize the FRB bridge exactly once, before anything else
   //    in this package. This loads the bundled Rust binary that does
-  //    the actual NTS-KE handshake and AEAD-NTP exchange.
+  //    the actual NTS-KE handshake and AEAD-NTP exchange and wires
+  //    the Dart-side dispatch table. Required on every platform.
   await RustLib.init();
 
   // 2. Pick an RFC 8915 NTS-KE endpoint. Port 4460 is the IANA default.
@@ -72,13 +73,35 @@ Future<void> main() async {
 }
 ```
 
-**Why the order matters.** `RustLib.init()` loads the bundled native
-binary and wires the call table the rest of the API uses. Calling
-`ntsQuery` before `init` completes raises an error because the bridge
-isn't ready. In a Flutter app, do it right after
-`WidgetsFlutterBinding.ensureInitialized()` in `main()`; subsequent
-calls to `init` are no-ops, so it's safe to invoke from a shared
-bootstrap path.
+**Initialization has two layers.** Get them straight before deciding
+what your host code needs to do.
+
+1. **Native platform bootstrap** (Android only, automatic). On Android
+   the bundled `NtsPlugin` captures the `JavaVM` + application
+   `Context` that `rustls-platform-verifier` needs to reach the system
+   `X509TrustManager`. It runs from `GeneratedPluginRegistrant` before
+   Dart `main()` executes, so adding `nts` to your `pubspec.yaml` is
+   enough — there is no `MainActivity` shim, JNI symbol, or
+   `settings.gradle.kts` Maven entry to maintain. iOS, macOS, Linux,
+   and Windows have no equivalent step. Hosts that bypass the
+   standard Flutter activity lifecycle (custom embeddings, isolates
+   spawned ahead of plugin registration, integration tests driving
+   the dylib directly) can call
+   `com.nllewellyn.nts.PlatformInit.init(context)` from Kotlin
+   directly; see the KDoc on that class.
+
+2. **Dart/FRB initialization** (`await RustLib.init()`, every
+   platform, manual). This loads the bundled Rust dylib through the
+   Native Assets pipeline and wires the
+   [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge)
+   v2 dispatch table on the calling isolate. The Android plugin does
+   *not* subsume this step: `RustLib.init()` mutates Dart isolate
+   state, and the plugin runs on the Android platform thread before
+   the Dart isolate exists. Calling `ntsQuery` or `ntsWarmCookies`
+   before `RustLib.init()` resolves raises an error. In a Flutter
+   app, do it right after `WidgetsFlutterBinding.ensureInitialized()`
+   in `main()`; subsequent invocations are no-ops, so it is safe to
+   call from a shared bootstrap path.
 
 A complete, runnable version that demonstrates the recommended
 warm-burst-filter-compensate flow with exhaustive `NtsError` handling
@@ -136,7 +159,7 @@ burst-filter-compensate flow described above.
 
 | Symbol | Purpose |
 |--------|---------|
-| `RustLib.init()` | Load the native bridge. Await once before any other call. |
+| `RustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
 | `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
 | `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | Force a fresh NTS-KE handshake; returns cookie count. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
