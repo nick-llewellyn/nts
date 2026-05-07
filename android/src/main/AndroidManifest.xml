@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+        Minimum manifest stub required by the Android Gradle Plugin for
+        a `com.android.library` module. The `nts` plugin contributes no
+        components, permissions, or queries to the host application; the
+        runtime contract is purely a `FlutterPlugin` (`NtsPlugin`) loaded
+        by `GeneratedPluginRegistrant` and a JNI Kotlin counterpart
+        (`PlatformInit`) referenced from `rust/src/android_init.rs`.
+
+        The `INTERNET` permission required for NTS-KE (TCP/4460) and NTPv4
+        (UDP/123) is intentionally not declared here: it must be present
+        in the host application's manifest, which is also where users see
+        and audit it. Declaring it inside the plugin would cause silent
+        manifest merging into apps that have no other reason to make
+        network calls.
+    -->
+</manifest>

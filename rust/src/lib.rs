@@ -12,9 +12,11 @@ mod frb_generated;
 pub(crate) mod nts;
 
 // Android-only: exports a JNI symbol that bootstraps `rustls-platform-verifier`
-// against the Android system trust store. Called once from
-// `MainActivity.onCreate` (see `RustlsBootstrap.kt` in the example app)
-// before any FRB call can trigger a TLS handshake.
+// against the Android system trust store. The matching Kotlin caller
+// (`com.nllewellyn.nts.PlatformInit`) ships inside the `nts` Flutter
+// plugin's Android library module (`<plugin>/android/`) and is invoked
+// from `NtsPlugin.onAttachedToEngine` ahead of the Dart `main()`, before
+// any FRB call can trigger a TLS handshake.
 #[cfg(target_os = "android")]
 pub mod android_init;
 
