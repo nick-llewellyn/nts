@@ -32,8 +32,9 @@
 //! `rustls-platform-verifier-0.5.3/src/verification/android.rs`). The
 //! most common cause in the wild is R8 / ProGuard dead-code-eliminating
 //! the AAR's `org.rustls.platformverifier.*` classes when the host app
-//! ships release builds without the keep rules documented in
-//! `RustlsBootstrap.kt`. The Rust side cannot recover the AAR at
+//! ships release builds without the keep rules contributed by the
+//! `nts` plugin's `android/consumer-rules.pro`. The Rust side cannot
+//! recover the AAR at
 //! runtime, but it *can* avoid hard-failing every NTS-KE handshake by
 //! retrying against `webpki-roots` — exactly the same safety net we
 //! use for `Revoked`. We keep this fallback narrowly scoped to the
@@ -145,7 +146,7 @@ impl ServerCertVerifier for HybridVerifier {
                 let host = host_for_log(server_name);
                 log::warn!(
                     target: "nts::hybrid_verifier",
-                    "platform verifier failed via JNI for {host} ({msg}); retrying with webpki-roots (likely R8 stripped org.rustls.platformverifier.* — see RustlsBootstrap.kt for the required keep rules)",
+                    "platform verifier failed via JNI for {host} ({msg}); retrying with webpki-roots (likely R8 stripped org.rustls.platformverifier.* — see the nts plugin's android/consumer-rules.pro for the required keep rules)",
                 );
                 let fallback = self.fallback()?;
                 fallback.verify_server_cert(

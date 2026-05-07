@@ -11,25 +11,29 @@
 //! # Wire contract
 //!
 //! This module exports a single JNI symbol mangled for the Kotlin class
-//! `com.nts.example.RustlsBootstrap` declaring
+//! `com.nllewellyn.nts.PlatformInit` declaring
 //!
 //! ```kotlin
-//! external fun nativeInit(context: Context)
+//! external fun nativeInit(context: Context): Boolean
 //! ```
 //!
-//! The example app's [`RustlsBootstrap.kt`] declares that class and calls
-//! `nativeInit(applicationContext)` from `MainActivity.onCreate()` before
-//! Flutter loads. Downstream consumers must replicate the same FQDN and
-//! ensure the dylib is loaded (via `System.loadLibrary("nts_rust")`) before
-//! invoking it.
+//! The Kotlin counterpart ships inside the `nts` Flutter plugin's own
+//! Android library module (`android/src/main/kotlin/com/nllewellyn/nts/PlatformInit.kt`)
+//! and is registered on the host app automatically via the plugin's
+//! `NtsPlugin.onAttachedToEngine` hook. Consumers do not have to declare or
+//! call anything themselves — adding `nts` to `pubspec.yaml` is sufficient.
 //!
-//! [`RustlsBootstrap.kt`]: ../../example/android/app/src/main/kotlin/com/nts/example/RustlsBootstrap.kt
+//! The FQDN is intentionally neutral (under the maintainer's reverse-DNS
+//! rather than the example app's package) so the Rust crate ships a stable
+//! ABI that does not change when the example app is rebranded.
+//!
+//! [`PlatformInit.kt`]: ../../android/src/main/kotlin/com/nllewellyn/nts/PlatformInit.kt
 
 use jni::objects::{JClass, JObject};
 use jni::sys::jboolean;
 use jni::JNIEnv;
 
-/// JNI entry point invoked by `com.nts.example.RustlsBootstrap.nativeInit`.
+/// JNI entry point invoked by `com.nllewellyn.nts.PlatformInit.nativeInit`.
 ///
 /// Returns `JNI_TRUE` (1) when the verifier was initialized successfully or
 /// was already initialized by a previous call, and `JNI_FALSE` (0) when the
@@ -48,7 +52,7 @@ use jni::JNIEnv;
 /// `JObject` to a `GlobalRef` internally before the function returns, so the
 /// local reference passed in is safe to drop on return.
 #[no_mangle]
-pub extern "system" fn Java_com_nts_example_RustlsBootstrap_nativeInit<'local>(
+pub extern "system" fn Java_com_nllewellyn_nts_PlatformInit_nativeInit<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     context: JObject<'local>,

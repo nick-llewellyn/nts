@@ -28,7 +28,7 @@ class NtsLogEntry {
   /// Wall-clock UTC at the moment the entry was appended. Stored
   /// rather than computed at render time so the buffer stays a
   /// faithful timeline even if the device clock changes (which is the
-  /// whole point of a trusted-time client to begin with).
+  /// whole point of an NTS client to begin with).
   final DateTime timestamp;
 
   /// Severity tier; influences foreground colour and share-export

@@ -39,9 +39,42 @@ and cryptographic specifics.
 flutter pub add nts
 ```
 
-(Pure-Dart projects can use `dart pub add nts`; the package itself
-depends on the Flutter SDK because it ships through the Native Assets
-pipeline.)
+The package depends on the Flutter SDK and ships a Flutter plugin
+module on Android (since `1.4.0`), so it must be consumed from a
+Flutter app — `dart pub add nts` from a pure-Dart project will not
+resolve.
+
+### Platform support
+
+| Platform | Native bootstrap | Consumer action |
+|---|---|---|
+| Android | Auto via bundled `NtsPlugin` (since `1.4.0`) | None beyond `flutter pub add nts` on the default Flutter/Gradle setup. See the `FAIL_ON_PROJECT_REPOS` note below. |
+| iOS | None required | None. |
+| macOS | None required | None. |
+| Linux | None required | None. |
+| Windows | None required | None. |
+
+The Android row assumes the standard Flutter/Gradle setup. Hosts that opt
+in to `dependencyResolutionManagement.repositoriesMode =
+RepositoriesMode.FAIL_ON_PROJECT_REPOS` in `settings.gradle.kts` (uncommon
+for Flutter apps; not the `flutter create` default) reject the
+project-level Maven injection the plugin performs from
+`android/build.gradle.kts`, and must declare the on-disk
+`rustls-platform-verifier-android` repository themselves under
+`dependencyResolutionManagement.repositories` in `settings.gradle.kts`.
+The file path is the one printed by `cargo metadata --format-version 1
+--manifest-path <pub-cache>/nts-X.Y.Z/rust/Cargo.toml` and is stable for
+the lifetime of the resolved Cargo workspace; the rationale comment in
+`android/build.gradle.kts` documents the same constraint.
+
+Every platform additionally requires `await RustLib.init()` once
+during application startup before the first `ntsQuery` /
+`ntsWarmCookies` call; see "Initialization has two layers" below
+for the rationale. Web and WebAssembly are unsupported: NTS-KE
+needs a raw TCP socket on `:4460` and NTPv4 needs a raw UDP
+socket on `:123`, neither of which is reachable from a browser
+tab, and the underlying `rustls` + `ring` stack has no
+`wasm32-unknown-unknown` target.
 
 ### Use
 
@@ -49,9 +82,10 @@ pipeline.)
 import 'package:nts/nts.dart';
 
 Future<void> main() async {
-  // 1. Initialize the native bridge exactly once, before anything else
+  // 1. Initialize the FRB bridge exactly once, before anything else
   //    in this package. This loads the bundled Rust binary that does
-  //    the actual NTS-KE handshake and AEAD-NTP exchange.
+  //    the actual NTS-KE handshake and AEAD-NTP exchange and wires
+  //    the Dart-side dispatch table. Required on every platform.
   await RustLib.init();
 
   // 2. Pick an RFC 8915 NTS-KE endpoint. Port 4460 is the IANA default.
@@ -72,19 +106,71 @@ Future<void> main() async {
 }
 ```
 
-**Why the order matters.** `RustLib.init()` loads the bundled native
-binary and wires the call table the rest of the API uses. Calling
-`ntsQuery` before `init` completes raises an error because the bridge
-isn't ready. In a Flutter app, do it right after
-`WidgetsFlutterBinding.ensureInitialized()` in `main()`; subsequent
-calls to `init` are no-ops, so it's safe to invoke from a shared
-bootstrap path.
+**Initialization has two layers.** Get them straight before deciding
+what your host code needs to do.
+
+1. **Native platform bootstrap** (Android only, automatic). On Android
+   the bundled `NtsPlugin` captures the `JavaVM` + application
+   `Context` that `rustls-platform-verifier` needs to reach the system
+   `X509TrustManager`. It runs from `GeneratedPluginRegistrant` before
+   Dart `main()` executes, so adding `nts` to your `pubspec.yaml` is
+   enough — there is no `MainActivity` shim, JNI symbol, or
+   `app/build.gradle.kts` Maven entry to maintain on the default
+   Flutter/Gradle setup. (Hosts that enable
+   `dependencyResolutionManagement.repositoriesMode =
+   FAIL_ON_PROJECT_REPOS` in `settings.gradle.kts` are an exception:
+   that mode rejects the project-level Maven injection the plugin
+   does from its own `build.gradle.kts`, so those hosts must declare
+   the on-disk `rustls-platform-verifier-android` repository under
+   `dependencyResolutionManagement.repositories` themselves. See the
+   "Platform support" callout above.) iOS, macOS, Linux, and Windows
+   have no equivalent step. Hosts that bypass the standard Flutter
+   activity lifecycle (custom embeddings, isolates spawned ahead of
+   plugin registration, integration tests driving the dylib directly)
+   can call `com.nllewellyn.nts.PlatformInit.init(context)` from
+   Kotlin directly; see the KDoc on that class.
+
+2. **Dart/FRB initialization** (`await RustLib.init()`, every
+   platform, manual). This loads the bundled Rust dylib through the
+   Native Assets pipeline and wires the
+   [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge)
+   v2 dispatch table on the calling isolate. The Android plugin does
+   *not* subsume this step: `RustLib.init()` mutates Dart isolate
+   state, and the plugin runs on the Android platform thread before
+   the Dart isolate exists. Calling `ntsQuery` or `ntsWarmCookies`
+   before `RustLib.init()` resolves raises an error. In a Flutter
+   app, do it right after `WidgetsFlutterBinding.ensureInitialized()`
+   in `main()`; subsequent invocations are no-ops, so it is safe to
+   call from a shared bootstrap path.
 
 A complete, runnable version that demonstrates the recommended
 warm-burst-filter-compensate flow with exhaustive `NtsError` handling
 lives in [`example/main.dart`](example/main.dart). For valid hostnames
 to plug into `NtsServerSpec`, see the community-maintained
 [NTS server list](https://github.com/jauderho/nts-servers).
+
+### Upgrading from `1.3.x`
+
+`1.4.0` is a breaking-ABI release for the bundled Rust crate
+(`nts_rust 0.3.0`). The JNI symbol exported from
+`rust/src/android_init.rs` moved from
+`Java_com_nts_example_RustlsBootstrap_nativeInit` to
+`Java_com_nllewellyn_nts_PlatformInit_nativeInit`, and the auto-init
+plugin contributes the Android Maven repository, AAR dependency, and
+ProGuard / R8 keep rules itself. Hosts that hand-rolled the `1.3.x`
+bootstrap (an in-app `RustlsBootstrap.kt`-style JNI shim, a
+`MainActivity.onCreate` call into it, an `app/build.gradle.kts` Maven
+block, and matching keep rules) should drop that scaffolding when
+they bump `nts`; an unmodified shim's `external fun nativeInit` no
+longer resolves against the dylib's exports, so the first invocation
+crashes the host app with `UnsatisfiedLinkError`. In the documented
+`1.3.x` integration shape that bootstrap call runs from
+`MainActivity.onCreate` before `super.onCreate(...)`, so the failure
+fires at process start — well before any TLS handshake is attempted.
+See [CHANGELOG.md](CHANGELOG.md) under `1.4.0` → "Migrating from
+`1.3.x`" for the exhaustive deletion checklist and the
+`com.nllewellyn.nts.PlatformInit.init(context)` escape hatch for
+custom embeddings.
 
 ## Production Considerations
 
@@ -136,7 +222,7 @@ burst-filter-compensate flow described above.
 
 | Symbol | Purpose |
 |--------|---------|
-| `RustLib.init()` | Load the native bridge. Await once before any other call. |
+| `RustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
 | `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
 | `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | Force a fresh NTS-KE handshake; returns cookie count. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |

@@ -6,8 +6,7 @@
 //   2. The bindings carry the expected signatures and that calls dispatch
 //      through `RustLibApi` so mock implementations can intercept them.
 //   3. The bridge can be initialized in mock mode without loading the
-//      native dylib (Native Assets bundling is covered separately in
-//      `trusted_time-eg9`).
+//      native dylib (Native Assets bundling is covered separately).
 
 // This test deliberately exercises the FRB layer directly — it is the
 // contract test for the codegen pipeline, not for the hand-written

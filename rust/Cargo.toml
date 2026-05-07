@@ -1,6 +1,6 @@
 [package]
 name = "nts_rust"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2021"
 publish = false
 license = "MIT"
@@ -69,8 +69,9 @@ webpki-roots = "0.26"
 # Android system's `X509TrustManager`, which requires the Rust side to call
 # `rustls_platform_verifier::android::init_with_env(&mut JNIEnv, JObject)`
 # from a JNI entry point exactly once before the first TLS handshake. The
-# Kotlin caller for that entry point lives in the example app
-# (`RustlsBootstrap.kt`); see `src/android_init.rs` for the Rust counterpart.
+# Kotlin caller for that entry point ships inside the `nts` Flutter plugin's
+# Android library module (`android/src/main/kotlin/com/nllewellyn/nts/PlatformInit.kt`);
+# see `src/android_init.rs` for the Rust counterpart.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.21", default-features = false }
 

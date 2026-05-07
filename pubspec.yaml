@@ -1,8 +1,8 @@
 name: nts
 description: >-
-  Authenticated NTP via Network Time Security (RFC 8915) for Dart and Flutter
-  using the Native Assets pipeline.
-version: 1.3.2
+  Authenticated network time for Flutter apps, secured by Network
+  Time Security (NTS).
+version: 1.4.0
 homepage: https://github.com/nick-llewellyn/nts
 repository: https://github.com/nick-llewellyn/nts
 issue_tracker: https://github.com/nick-llewellyn/nts/issues
@@ -83,3 +83,39 @@ dev_dependencies:
   freezed: ^3.2.5
   # Required by `freezed`'s build pipeline.
   build_runner: ^2.14.1
+
+# Flutter plugin classification. Declared here so consuming Flutter apps
+# pick up the Android library module shipped under `android/`, which
+# bundles:
+#
+#   * `com.nllewellyn.nts.NtsPlugin` -- a `FlutterPlugin` that
+#     auto-initialises `rustls-platform-verifier` against the Android system
+#     trust store from `onAttachedToEngine`. Consumers do nothing beyond
+#     adding `nts` to their `pubspec.yaml`; `GeneratedPluginRegistrant`
+#     wires the call up before `main()` runs.
+#   * `com.nllewellyn.nts.PlatformInit` -- the matched JNI Kotlin class for
+#     the symbol exported from `rust/src/android_init.rs`. Also exposes a
+#     public `static init(Context)` for hosts that bypass the standard
+#     `FlutterActivity` lifecycle (e.g. add-to-app embeddings).
+#   * `consumer-rules.pro` -- ProGuard / R8 keep rules covering both the
+#     companion AAR (`org.rustls.platformverifier.**`) and our own JNI
+#     class. Auto-merged into the host app's shrinker config.
+#   * `build.gradle.kts` -- discovers the on-disk Maven repo bundled inside
+#     the `rustls-platform-verifier-android` cargo crate via `cargo
+#     metadata`, so the AAR resolves regardless of where the plugin lives
+#     on disk (source tree, pub cache, monorepo, etc.).
+#
+# Native code (the FRB-generated dylib `libnts_rust.so`) continues to be
+# delivered via the Native Assets pipeline (`hook/build.dart`); the plugin
+# module ships no `jniLibs/` and does no Cargo wiring of its own.
+#
+# Platforms other than Android remain pure Native-Assets packages with no
+# accompanying plugin module. iOS/macOS/Linux/Windows do not require
+# JVM-style runtime bootstrap; iOS observability is wired by
+# `rust/src/ios_init.rs` directly from `api::simple::init_app`.
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.nllewellyn.nts
+        pluginClass: NtsPlugin

@@ -1,6 +1,3 @@
-import groovy.json.JsonSlurper
-import java.io.File
-
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -8,43 +5,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Locate the on-disk Maven repository that ships inside the
-// `rustls-platform-verifier-android` companion crate. The crate publishes a
-// pre-built AAR (`rustls:rustls-platform-verifier`) that contains the Kotlin
-// glue `org.rustls.platformverifier.CertificateVerifier` invoked over JNI by
-// the Rust verifier on Android. We resolve the path by asking `cargo` for
-// the resolved package metadata of the `nts_rust` crate (which transitively
-// pulls in `rustls-platform-verifier-android`) and walking to the `maven/`
-// directory next to its `Cargo.toml`. Done this way so that crate version
-// bumps need no manual Gradle edit.
-fun findRustlsPlatformVerifierMaven(): String {
-    val proc = ProcessBuilder(
-        "cargo",
-        "metadata",
-        "--format-version",
-        "1",
-        "--manifest-path",
-        rootProject.layout.projectDirectory.file("../../rust/Cargo.toml").asFile.absolutePath,
-    ).redirectErrorStream(false).start()
-    val stdout = proc.inputStream.bufferedReader().readText()
-    proc.waitFor()
-    @Suppress("UNCHECKED_CAST")
-    val json = JsonSlurper().parseText(stdout) as Map<String, Any>
-    @Suppress("UNCHECKED_CAST")
-    val packages = json["packages"] as List<Map<String, Any>>
-    val pkg = packages.first { it["name"] == "rustls-platform-verifier-android" }
-    val manifestPath = pkg["manifest_path"] as String
-    return File(manifestPath).parentFile.resolve("maven").absolutePath
-}
-
-repositories {
-    maven {
-        url = uri(findRustlsPlatformVerifierMaven())
-        // The crate ships the AAR + POM but no Maven metadata index file;
-        // tell Gradle to discover artifacts directly off the filesystem.
-        metadataSources { artifact() }
-    }
-}
+// The `rustls:rustls-platform-verifier` AAR Maven repo, the AAR
+// `implementation` dep, and the matching ProGuard / R8 keep rules are
+// all contributed by the `nts` plugin's own Android module
+// (`<plugin>/android/build.gradle.kts` + `consumer-rules.pro`). Nothing
+// more is needed here: the plugin loader picks them up automatically
+// from the path `nts: { path: ../ }` declaration in `example/pubspec.yaml`.
 
 android {
     namespace = "com.nts.example"
@@ -76,14 +42,14 @@ android {
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
 
-            // R8 / shrinking is enabled to keep release APKs lean. The
-            // companion ProGuard rules in `proguard-rules.pro` preserve the
-            // `org.rustls.platformverifier.*` classes shipped by the
-            // `rustls:rustls-platform-verifier` AAR — those are reachable
-            // only via JNI lookups from the `nts` Rust crate and would
-            // otherwise be dead-code-eliminated, breaking the NTS-KE TLS
-            // handshake on every fresh install. See `proguard-rules.pro`
-            // for the full rationale.
+            // R8 / shrinking is enabled to keep release APKs lean. Keep
+            // rules covering the `rustls-platform-verifier` AAR
+            // (`org.rustls.platformverifier.**`) and the JNI shim
+            // (`com.nllewellyn.nts.PlatformInit`) are auto-merged from
+            // the `nts` plugin's `consumer-rules.pro`, so this app's
+            // `proguard-rules.pro` only needs to carry rules specific
+            // to the example itself (currently none beyond the default
+            // optimize file).
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -92,18 +58,6 @@ android {
             )
         }
     }
-}
-
-dependencies {
-    // Companion AAR for `rustls-platform-verifier`. Provides the Kotlin
-    // glue (`org.rustls.platformverifier.*`) that the Rust crate invokes
-    // over JNI to delegate X.509 chain validation to Android's
-    // `X509TrustManager`. Pinned to the version that ships alongside
-    // `rustls-platform-verifier 0.5.3` in our `Cargo.lock`. The `@aar`
-    // classifier is required because the on-disk Maven layout produced
-    // by `rustls-platform-verifier-android` only ships the AAR + POM and
-    // Gradle defaults to looking for a JAR otherwise.
-    implementation("rustls:rustls-platform-verifier:0.1.1@aar")
 }
 
 flutter {

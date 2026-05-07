@@ -1,15 +1,213 @@
 # Changelog
 
+## 1.4.0
+
+Converts `nts` from a pure Dart package using the Native Assets pipeline
+into a full Flutter plugin so that downstream consumers can use the
+package on Android without having to replicate the Rust ↔ Kotlin JNI
+bootstrap, the `rustls-platform-verifier-android` Maven repository
+discovery, or the R8 keep-rule contract by hand. No Dart API surface
+change (public exports unchanged; only dartdoc was updated to document
+the two-layer initialization model) and no FRB pin movement; the Rust
+crate `nts_rust` is bumped to `0.3.0` to reflect a breaking JNI ABI
+change. Dart package version bumped to `1.4.0` (minor).
+
+### Auto-initialised Android `rustls-platform-verifier` bootstrap
+
+- New plugin module under the package root at `android/`. It ships:
+  - `com.nllewellyn.nts.NtsPlugin` — a `FlutterPlugin` that calls
+    `PlatformInit.init(applicationContext)` from `onAttachedToEngine`.
+    `GeneratedPluginRegistrant.registerWith` runs that hook before
+    Dart `main()` in any host using `FlutterActivity`,
+    `FlutterFragmentActivity`, or the Flutter add-to-app
+    `FlutterEngine` lifecycle, so the `rustls-platform-verifier`
+    panic (`Expect rustls-platform-verifier to be initialized…`) is
+    no longer reachable through the standard integration path.
+  - `com.nllewellyn.nts.PlatformInit` — the matched JNI Kotlin
+    counterpart for the Rust symbol exported from
+    `rust/src/android_init.rs`. Also exposes a public
+    `static init(Context)` for hosts that bypass
+    `GeneratedPluginRegistrant` (rare; mainly bespoke add-to-app
+    embeddings or tests that drive the dylib directly).
+  - `consumer-rules.pro` — ProGuard / R8 keep rules covering both the
+    `rustls-platform-verifier` companion AAR
+    (`org.rustls.platformverifier.**`) and our own JNI shim
+    (`com.nllewellyn.nts.PlatformInit`). Auto-merged into the host
+    app's shrinker config; consumers do not have to copy keep rules.
+  - `build.gradle.kts` — discovers the on-disk Maven repository
+    bundled inside the `rustls-platform-verifier-android` cargo crate
+    via `cargo metadata`, so the AAR resolves regardless of whether
+    `nts` is installed from a path dependency, the pub cache, or a
+    monorepo, on hosts that use the default Flutter/Gradle repository
+    setup. Replaces the brittle `../../rust/Cargo.toml` traversal that
+    previously lived in `example/android/app/build.gradle.kts` and
+    only worked from the example tree. Hosts that enable
+    `dependencyResolutionManagement.repositoriesMode =
+    FAIL_ON_PROJECT_REPOS` in `settings.gradle.kts` are the documented
+    exception: that mode rejects the project-level Maven injection
+    the plugin performs through `rootProject.allprojects { ... }`, so
+    those hosts must declare the on-disk repository themselves under
+    `dependencyResolutionManagement.repositories` in
+    `settings.gradle.kts`. The cargo-metadata path is stable and can
+    be reused verbatim; the rationale comment in
+    `android/build.gradle.kts` carries the full constraint.
+
+  Native code (`libnts_rust.so`) continues to be delivered by the
+  Native Assets pipeline (`hook/build.dart`); the plugin module ships
+  no `jniLibs/` and does no Cargo wiring of its own. Platforms other
+  than Android are untouched: iOS / macOS / Linux / Windows remain
+  pure Native-Assets packages with no accompanying plugin module.
+
+### Stable JNI symbol under reverse-DNS namespace (BREAKING ABI)
+
+- The JNI entry point exported from `rust/src/android_init.rs` is
+  renamed from
+  `Java_com_nts_example_RustlsBootstrap_nativeInit` to
+  `Java_com_nllewellyn_nts_PlatformInit_nativeInit`. The previous
+  symbol was mangled for the example app's package name, which is
+  not a contract any downstream consumer can reasonably satisfy
+  (renaming the symbol locally would diverge from upstream releases
+  on every pull). The new FQDN is under the maintainer's reverse-DNS
+  namespace and is documented as the stable public ABI.
+  - **Impact**: any host application that previously hand-rolled a
+    matching `com.nts.example.RustlsBootstrap` Kotlin class plus
+    keep rules (i.e. only the example app shipped in this
+    repository, given the `1.3.x` contract was effectively
+    unconsumable) must drop that class. The plugin's auto-init
+    replaces the manual wiring; `flutter pub upgrade` plus
+    `flutter clean` is sufficient.
+
+### Migrating from `1.3.x`
+
+- Out-of-tree consumers that hand-rolled the `1.3.x` Android contract
+  must drop the manual scaffolding when bumping to `1.4.0`. The JNI
+  symbol moved to the maintainer's reverse-DNS namespace
+  (`Java_com_nllewellyn_nts_PlatformInit_nativeInit`), so the legacy
+  `external fun nativeInit` declaration on a host-app shim no longer
+  resolves against the dylib's exports. `System.loadLibrary("nts_rust")`
+  still succeeds (the library itself loads), but the first invocation
+  of the unbound declaration throws
+  `UnsatisfiedLinkError: No implementation found for void
+  com.<host>.RustlsBootstrap.nativeInit(android.content.Context)`. In
+  the documented `1.3.x` integration shape that fires from
+  `MainActivity.onCreate` before `super.onCreate(...)`, so the host
+  app crashes at process start, well before any TLS handshake is
+  attempted. The plugin contributes equivalent functionality; one
+  round of `flutter pub upgrade` + `flutter clean` is sufficient once
+  the items below are removed.
+- **Host-app `RustlsBootstrap.kt`** (or any equivalent class whose
+  FQDN was used to mangle the `Java_*_nativeInit` symbol exported
+  from `rust/src/android_init.rs`). Delete the file. The plugin
+  ships `com.nllewellyn.nts.PlatformInit` as the new stable
+  counterpart; nothing in the host app needs to know its name.
+- **`MainActivity.onCreate` shim** that called
+  `RustlsBootstrap.init(this)` ahead of `super.onCreate(...)`.
+  Revert `MainActivity` to a no-body `FlutterActivity`. The
+  plugin's `onAttachedToEngine` runs from
+  `GeneratedPluginRegistrant` before Dart `main()` executes, so
+  any code path that reached the bootstrap before reaches it now
+  without the manual call.
+- **`app/build.gradle.kts`** entries that wired up the
+  `rustls-platform-verifier-android` Maven repository: the
+  `findRustlsPlatformVerifierMaven()` helper (or whichever shape
+  it took locally), the `repositories { maven { url = uri(...) }
+  metadataSources { artifact() } }` block, and the
+  `implementation("rustls:rustls-platform-verifier:0.1.1@aar")`
+  dependency. All three are contributed by the plugin's own
+  `android/build.gradle.kts`. Leaving them in place resolves the
+  AAR twice; harmless at runtime but it wastes Gradle resolution
+  time and pins the consumer to a version the plugin will move
+  out from under them.
+- **`proguard-rules.pro`** keep rules covering
+  `org.rustls.platformverifier.**` and the host-app's own
+  `RustlsBootstrap` JNI class. Both are now in the plugin's
+  `consumer-rules.pro` and auto-merged into the host's R8 config.
+  The `RustlsBootstrap`-flavoured rule is doubly stale because the
+  symbol name has changed; an unmodified rule keeps a class that
+  no longer exists and produces no shrinker warning either way.
+- **`settings.gradle.kts`** does not change. The
+  `dev.flutter.flutter-plugin-loader` block is the standard
+  Flutter wiring that picks up the new plugin module
+  automatically; no manual `include`, `pluginManagement`, or
+  Maven entry is required.
+- **Custom embeddings.** Hosts that legitimately bypass
+  `GeneratedPluginRegistrant` — bespoke add-to-app integrations,
+  integration tests driving the dylib directly, isolates spawned
+  ahead of plugin registration — should call
+  `com.nllewellyn.nts.PlatformInit.init(context)` from Kotlin in
+  place of the deleted `RustlsBootstrap.init(...)`. The signature
+  and idempotency contract are identical; only the FQDN moves.
+- **Hosts that did not hand-roll the `1.3.x` Android contract**
+  have nothing to do beyond `flutter pub upgrade` + `flutter
+  clean`. The previous JNI symbol was mangled for the example
+  app's package name and could not be satisfied without forking
+  the Rust crate, so the realistic pre-`1.4.0` integration path
+  for any out-of-tree consumer was a vendored copy of this
+  repository with the symbol renamed locally — that fork should
+  be retired in favour of the published `1.4.0` plugin and the
+  stable `com.nllewellyn.nts.PlatformInit` symbol.
+
+### Non-Android upgrade path
+
+iOS, macOS, Linux, and Windows consumers are unaffected by the
+migration steps above. The `android/` plugin module and the
+`flutter: plugin: platforms: android:` key in `pubspec.yaml` are
+scoped exclusively to Android — the Flutter tool generates no
+plugin registration on other targets, no `ios/` / `macos/` /
+`linux/` / `windows/` plugin module exists to compile or link,
+and the Native Assets pipeline that delivers
+`libnts_rust.{so,dylib,dll}` is unchanged. The public Dart API
+exported from `lib/nts.dart` is unchanged, and
+`await RustLib.init()` remains the only initialization step.
+The upgrade is a single-line `pubspec.yaml` bump.
+
+The on-platform TLS validators are also unchanged: every
+non-Android target continues to use `rustls-platform-verifier`
+0.5 directly, which talks to the Security framework on
+iOS/macOS, the system trust store on Linux, and the Win32
+`Crypt*` APIs on Windows without any host-side initialization
+step. None of these paths require JVM-style bootstrap, which is
+why the "Native platform bootstrap" layer documented in the
+README is Android-only.
+
+### Example app simplified to a vanilla `FlutterActivity`
+
+- `example/android/app/src/main/kotlin/com/nts/example/RustlsBootstrap.kt`
+  removed. Its responsibilities are now split between the plugin's
+  `NtsPlugin` (registration-time auto-init) and `PlatformInit`
+  (manual fallback).
+- `example/android/app/src/main/kotlin/com/nts/example/MainActivity.kt`
+  reverted to a no-body `FlutterActivity`. The Android trust-store
+  bootstrap happens before `super.onCreate()` runs.
+- `example/android/app/build.gradle.kts` no longer carries the
+  `findRustlsPlatformVerifierMaven()` helper, the
+  `rustls:rustls-platform-verifier:0.1.1@aar` `implementation` dep,
+  or the local Maven repository declaration. All three now live in
+  the plugin's own `android/build.gradle.kts`.
+- `example/android/app/proguard-rules.pro` reduced to a stub
+  comment. The keep rules previously declared here are merged in
+  from the plugin's `consumer-rules.pro`.
+
+### Internal documentation refresh
+
+- `rust/src/lib.rs`, `rust/src/android_init.rs`, and
+  `rust/src/nts/hybrid_verifier.rs` updated to reference the new
+  Kotlin FQDN and the plugin's `consumer-rules.pro` rather than the
+  decommissioned `RustlsBootstrap.kt` in the example app. The
+  `hybrid_verifier` warn-level fallback message that fires when R8
+  has stripped `org.rustls.platformverifier.*` now points operators
+  at the plugin's keep-rule file.
+
 ## 1.3.2
 
 Repo-policy and CI-hygiene cleanup, plus a single Rust-side
 runtime fix that closes a multi-hour recovery stall observed in
-downstream consumers (`trusted_time` in particular) when an NTS
-server rotates its master key out from under our cookie pool. No
-public Dart API change (`lib/nts.dart` is byte-identical) and no
-FRB pin movement; the Rust crate `nts_rust` is bumped to `0.2.3`
-to reflect the behavioural change in `nts_query`. Dart package
-version bumped to `1.3.2` (patch).
+downstream consumers when an NTS server rotates its master key
+out from under our cookie pool. No public Dart API change
+(`lib/nts.dart` is byte-identical) and no FRB pin movement; the
+Rust crate `nts_rust` is bumped to `0.2.3` to reflect the
+behavioural change in `nts_query`. Dart package version bumped
+to `1.3.2` (patch).
 
 ### Fail-fast eviction of stale NTS sessions on rekey signals
 

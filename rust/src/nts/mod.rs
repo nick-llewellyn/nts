@@ -9,9 +9,9 @@
 // - `ntp`     — NTPv4 packet codec with NTS extension fields (RFC 8915 §5).
 // - `cookies` — per-host LRU cookie store fed by KE responses and NTP replies.
 //
-// Phase 1 (`trusted_time-6a6`) landed `records` + `ke`.
-// Phase 2 (`trusted_time-rp1`) added `aead` + `ntp` + `cookies` alongside.
-// Phase 3 (`trusted_time-4lb`) wires the whole stack through `crate::api::nts`.
+// Phase 1 landed `records` + `ke`.
+// Phase 2 added `aead` + `ntp` + `cookies` alongside.
+// Phase 3 wires the whole stack through `crate::api::nts`.
 //
 // `dead_code` stays allowed crate-locally because the API surface only
 // consumes a subset of the protocol primitives (e.g. `records::aead::*` IDs
