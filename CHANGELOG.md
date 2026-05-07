@@ -198,6 +198,41 @@ version bumped to `1.3.2` (patch).
   `flutter_rust_bridge_codegen 2.12.0` and committed clean against
   the drift gate.
 
+### CI: Flutter `stable` channel migration
+
+- Switch the Flutter SDK reference from the pinned `3.41.7` release
+  to the `stable` channel across the five loci that named it:
+  `.fvmrc` (`"flutter": "stable"`), `.github/workflows/ci.yml`
+  (matrix entry renamed `3.41.7` → `stable`), `pubspec.yaml`,
+  `DEVELOPMENT.md`, and `.github/pull_request_template.md`. The
+  pinned-semver references are rewritten to describe the channel
+  rather than a specific version. The compatibility-floor matrix
+  leg (`3.38.10`, the lowest Flutter satisfying `flutter: ^3.38.0`
+  in `pubspec.yaml`) is unchanged so the floor remains pinned.
+- `subosito/flutter-action` receives `flutter-version: any` for the
+  `stable` leg (the action's documented channel-latest sentinel,
+  since the action does not accept channel names as
+  `flutter-version` values); the format / coverage / Codecov
+  upload gates are retargeted from `matrix.flutter == '3.41.7'`
+  to `matrix.flutter == 'stable'`. `rust-bridge-sync` drops its
+  `flutter-version` pin and points the FVM symlink at
+  `$HOME/fvm/versions/stable` to match `.fvmrc`.
+- Branch-protection continuity is preserved: the matrix-leg job
+  names (`Format / analyze / Dart tests (Flutter ${{ matrix.flutter }})`)
+  are *not* required status checks. The `Dart tests gate`
+  aggregator job (`needs: [changes, build]`, `if: always()`) is
+  the entry on `main`'s `required_status_checks` list and rolls
+  up the matrix outcome under a name that does not move with the
+  channel rename, so the rule continues to gate merges without
+  any branch-protection edit. The five other required contexts
+  (`Detect changed paths`, `Verify FRB bindings are in sync`,
+  `Rust build + tests + coverage`, `Hooks shell-syntax check`,
+  `Hooks behaviour check`) are also untouched by this rename.
+- The historical `3.41.7` mention inside the `## 1.0.0` release
+  entry below is intentionally left in place — it is a
+  published-release entry and pub.dev archives the changelog at
+  publish time.
+
 ## 1.3.1
 
 Documentation-only patch on the 1.3.0 observability surface. No code,
