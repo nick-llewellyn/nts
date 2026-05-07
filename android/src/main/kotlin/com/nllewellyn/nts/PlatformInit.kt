@@ -31,11 +31,18 @@ object PlatformInit {
     private const val TAG = "nts.PlatformInit"
 
     /**
-     * Whether the Rust dylib has been loaded and `nativeInit` invoked. The
-     * underlying Rust initializer is itself idempotent (guarded by a
-     * `OnceCell`), but tracking this flag here lets us skip a redundant
-     * `System.loadLibrary` round-trip when the activity is recreated or
-     * when the plugin is re-attached after a configuration change.
+     * Whether the Rust dylib has been loaded and `nativeInit` returned
+     * success. The underlying Rust initializer is itself idempotent
+     * (guarded by a `OnceCell`), but tracking this flag here lets us
+     * skip a redundant `System.loadLibrary` round-trip and re-entry
+     * into the JNI bootstrap when the activity is recreated or when
+     * the plugin is re-attached after a configuration change.
+     *
+     * Set only on the success path: a `nativeInit` failure (e.g. the
+     * supplied `Context` did not implement `getClassLoader`) leaves
+     * the flag false so a later [init] call with a valid context can
+     * retry. `System.loadLibrary` is itself idempotent at the JVM
+     * level, so the retry path re-runs cheaply.
      */
     @Volatile private var initialized = false
 
@@ -44,14 +51,17 @@ object PlatformInit {
      * Native Assets pipeline) and hands the application context to the
      * Rust verifier bootstrap.
      *
-     * Idempotent: subsequent calls are no-ops. Safe to call from any
-     * thread; a `synchronized` block guards the one-shot initialization.
+     * Idempotent on success: once `nativeInit` has reported success
+     * subsequent calls are no-ops. Safe to call from any thread; a
+     * `synchronized` block guards the one-shot initialization.
      *
      * Failures are logged and swallowed: when initialization fails the
      * `nts` Rust code falls back to the `webpki-roots` static trust
      * bundle (see `nts/ke.rs::build_tls_config`), which still produces a
      * working NTS-KE handshake against the major public NTS providers
-     * but loses enterprise/MDM-managed root visibility.
+     * but loses enterprise/MDM-managed root visibility. Failed attempts
+     * do not latch the no-op gate, so a later call with a valid
+     * application `Context` will retry the JNI bootstrap.
      */
     @JvmStatic
     fun init(context: Context) {
@@ -75,9 +85,12 @@ object PlatformInit {
                 Log.w(
                     TAG,
                     "rustls-platform-verifier nativeInit returned false; " +
-                        "verifier may be unusable. Falling back to " +
-                        "webpki-roots inside the Rust crate.",
+                        "verifier may be unusable on this attempt. " +
+                        "Falling back to webpki-roots inside the Rust " +
+                        "crate. A later init(context) call with a valid " +
+                        "Context will retry.",
                 )
+                return
             }
             initialized = true
         }

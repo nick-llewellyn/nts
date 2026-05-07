@@ -39,8 +39,9 @@
 
 # Our `FlutterPlugin` is loaded reflectively by the host app's
 # `GeneratedPluginRegistrant` based on the `pluginClass` declared in
-# `pubspec.yaml`. Keep the class so R8 does not eliminate it; the
-# `keepclasseswithmembers` rule covering native methods on
-# `com.nllewellyn.nts.**` is intentionally narrow to avoid masking
-# unrelated dead code.
+# `pubspec.yaml`. Keep the class so R8 does not eliminate it. We do
+# not add a wildcard rule on `com.nllewellyn.nts.**`: the only members
+# that need protecting from R8 are the JNI shim above and the
+# `FlutterPlugin` entry point here, both kept by their own explicit
+# `-keep` rules to avoid masking unrelated dead code in this package.
 -keep class com.nllewellyn.nts.NtsPlugin { *; }
