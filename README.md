@@ -122,9 +122,13 @@ ProGuard / R8 keep rules itself. Hosts that hand-rolled the `1.3.x`
 bootstrap (an in-app `RustlsBootstrap.kt`-style JNI shim, a
 `MainActivity.onCreate` call into it, an `app/build.gradle.kts` Maven
 block, and matching keep rules) should drop that scaffolding when
-they bump `nts`; an unmodified shim no longer matches the new symbol
-name and silently does nothing on first TLS handshake. See
-[CHANGELOG.md](CHANGELOG.md) under `1.4.0` → "Migrating from
+they bump `nts`; an unmodified shim's `external fun nativeInit` no
+longer resolves against the dylib's exports, so the first invocation
+crashes the host app with `UnsatisfiedLinkError`. In the documented
+`1.3.x` integration shape that bootstrap call runs from
+`MainActivity.onCreate` before `super.onCreate(...)`, so the failure
+fires at process start — well before any TLS handshake is attempted.
+See [CHANGELOG.md](CHANGELOG.md) under `1.4.0` → "Migrating from
 `1.3.x`" for the exhaustive deletion checklist and the
 `com.nllewellyn.nts.PlatformInit.init(context)` escape hatch for
 custom embeddings.

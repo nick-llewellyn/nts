@@ -7,9 +7,10 @@ into a full Flutter plugin so that downstream consumers can use the
 package on Android without having to replicate the Rust ↔ Kotlin JNI
 bootstrap, the `rustls-platform-verifier-android` Maven repository
 discovery, or the R8 keep-rule contract by hand. No Dart API surface
-change (`lib/nts.dart` is byte-identical) and no FRB pin movement; the
-Rust crate `nts_rust` is bumped to `0.3.0` to reflect a breaking JNI
-ABI change. Dart package version bumped to `1.4.0` (minor).
+change (public exports unchanged; only dartdoc was updated to document
+the two-layer initialization model) and no FRB pin movement; the Rust
+crate `nts_rust` is bumped to `0.3.0` to reflect a breaking JNI ABI
+change. Dart package version bumped to `1.4.0` (minor).
 
 ### Auto-initialised Android `rustls-platform-verifier` bootstrap
 
@@ -71,12 +72,19 @@ ABI change. Dart package version bumped to `1.4.0` (minor).
 - Out-of-tree consumers that hand-rolled the `1.3.x` Android contract
   must drop the manual scaffolding when bumping to `1.4.0`. The JNI
   symbol moved to the maintainer's reverse-DNS namespace
-  (`Java_com_nllewellyn_nts_PlatformInit_nativeInit`), so an
-  unmodified host-side shim no longer matches the Rust export and
-  silently does nothing on first TLS handshake. The plugin
-  contributes equivalent functionality; one round of `flutter pub
-  upgrade` + `flutter clean` is sufficient once the items below are
-  removed.
+  (`Java_com_nllewellyn_nts_PlatformInit_nativeInit`), so the legacy
+  `external fun nativeInit` declaration on a host-app shim no longer
+  resolves against the dylib's exports. `System.loadLibrary("nts_rust")`
+  still succeeds (the library itself loads), but the first invocation
+  of the unbound declaration throws
+  `UnsatisfiedLinkError: No implementation found for void
+  com.<host>.RustlsBootstrap.nativeInit(android.content.Context)`. In
+  the documented `1.3.x` integration shape that fires from
+  `MainActivity.onCreate` before `super.onCreate(...)`, so the host
+  app crashes at process start, well before any TLS handshake is
+  attempted. The plugin contributes equivalent functionality; one
+  round of `flutter pub upgrade` + `flutter clean` is sufficient once
+  the items below are removed.
 - **Host-app `RustlsBootstrap.kt`** (or any equivalent class whose
   FQDN was used to mangle the `Java_*_nativeInit` symbol exported
   from `rust/src/android_init.rs`). Delete the file. The plugin

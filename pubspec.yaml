@@ -1,7 +1,7 @@
 name: nts
 description: >-
-  Authenticated NTP via Network Time Security (RFC 8915) for Dart and Flutter
-  using the Native Assets pipeline.
+  Authenticated network time for Flutter apps, secured by Network
+  Time Security (NTS).
 version: 1.4.0
 homepage: https://github.com/nick-llewellyn/nts
 repository: https://github.com/nick-llewellyn/nts
