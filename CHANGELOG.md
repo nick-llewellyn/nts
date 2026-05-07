@@ -66,6 +66,69 @@ ABI change. Dart package version bumped to `1.4.0` (minor).
     replaces the manual wiring; `flutter pub upgrade` plus
     `flutter clean` is sufficient.
 
+### Migrating from `1.3.x`
+
+- Out-of-tree consumers that hand-rolled the `1.3.x` Android contract
+  must drop the manual scaffolding when bumping to `1.4.0`. The JNI
+  symbol moved to the maintainer's reverse-DNS namespace
+  (`Java_com_nllewellyn_nts_PlatformInit_nativeInit`), so an
+  unmodified host-side shim no longer matches the Rust export and
+  silently does nothing on first TLS handshake. The plugin
+  contributes equivalent functionality; one round of `flutter pub
+  upgrade` + `flutter clean` is sufficient once the items below are
+  removed.
+- **Host-app `RustlsBootstrap.kt`** (or any equivalent class whose
+  FQDN was used to mangle the `Java_*_nativeInit` symbol exported
+  from `rust/src/android_init.rs`). Delete the file. The plugin
+  ships `com.nllewellyn.nts.PlatformInit` as the new stable
+  counterpart; nothing in the host app needs to know its name.
+- **`MainActivity.onCreate` shim** that called
+  `RustlsBootstrap.init(this)` ahead of `super.onCreate(...)`.
+  Revert `MainActivity` to a no-body `FlutterActivity`. The
+  plugin's `onAttachedToEngine` runs from
+  `GeneratedPluginRegistrant` before Dart `main()` executes, so
+  any code path that reached the bootstrap before reaches it now
+  without the manual call.
+- **`app/build.gradle.kts`** entries that wired up the
+  `rustls-platform-verifier-android` Maven repository: the
+  `findRustlsPlatformVerifierMaven()` helper (or whichever shape
+  it took locally), the `repositories { maven { url = uri(...) }
+  metadataSources { artifact() } }` block, and the
+  `implementation("rustls:rustls-platform-verifier:0.1.1@aar")`
+  dependency. All three are contributed by the plugin's own
+  `android/build.gradle.kts`. Leaving them in place resolves the
+  AAR twice; harmless at runtime but it wastes Gradle resolution
+  time and pins the consumer to a version the plugin will move
+  out from under them.
+- **`proguard-rules.pro`** keep rules covering
+  `org.rustls.platformverifier.**` and the host-app's own
+  `RustlsBootstrap` JNI class. Both are now in the plugin's
+  `consumer-rules.pro` and auto-merged into the host's R8 config.
+  The `RustlsBootstrap`-flavoured rule is doubly stale because the
+  symbol name has changed; an unmodified rule keeps a class that
+  no longer exists and produces no shrinker warning either way.
+- **`settings.gradle.kts`** does not change. The
+  `dev.flutter.flutter-plugin-loader` block is the standard
+  Flutter wiring that picks up the new plugin module
+  automatically; no manual `include`, `pluginManagement`, or
+  Maven entry is required.
+- **Custom embeddings.** Hosts that legitimately bypass
+  `GeneratedPluginRegistrant` — bespoke add-to-app integrations,
+  integration tests driving the dylib directly, isolates spawned
+  ahead of plugin registration — should call
+  `com.nllewellyn.nts.PlatformInit.init(context)` from Kotlin in
+  place of the deleted `RustlsBootstrap.init(...)`. The signature
+  and idempotency contract are identical; only the FQDN moves.
+- **Hosts that did not hand-roll the `1.3.x` Android contract**
+  have nothing to do beyond `flutter pub upgrade` + `flutter
+  clean`. The previous JNI symbol was mangled for the example
+  app's package name and could not be satisfied without forking
+  the Rust crate, so the realistic pre-`1.4.0` integration path
+  for any out-of-tree consumer was a vendored copy of this
+  repository with the symbol renamed locally — that fork should
+  be retired in favour of the published `1.4.0` plugin and the
+  stable `com.nllewellyn.nts.PlatformInit` symbol.
+
 ### Example app simplified to a vanilla `FlutterActivity`
 
 - `example/android/app/src/main/kotlin/com/nts/example/RustlsBootstrap.kt`

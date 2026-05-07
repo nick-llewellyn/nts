@@ -39,9 +39,10 @@ and cryptographic specifics.
 flutter pub add nts
 ```
 
-(Pure-Dart projects can use `dart pub add nts`; the package itself
-depends on the Flutter SDK because it ships through the Native Assets
-pipeline.)
+The package depends on the Flutter SDK and ships a Flutter plugin
+module on Android (since `1.4.0`), so it must be consumed from a
+Flutter app — `dart pub add nts` from a pure-Dart project will not
+resolve.
 
 ### Use
 
@@ -82,7 +83,7 @@ what your host code needs to do.
    `X509TrustManager`. It runs from `GeneratedPluginRegistrant` before
    Dart `main()` executes, so adding `nts` to your `pubspec.yaml` is
    enough — there is no `MainActivity` shim, JNI symbol, or
-   `settings.gradle.kts` Maven entry to maintain. iOS, macOS, Linux,
+   `app/build.gradle.kts` Maven entry to maintain. iOS, macOS, Linux,
    and Windows have no equivalent step. Hosts that bypass the
    standard Flutter activity lifecycle (custom embeddings, isolates
    spawned ahead of plugin registration, integration tests driving
@@ -108,6 +109,25 @@ warm-burst-filter-compensate flow with exhaustive `NtsError` handling
 lives in [`example/main.dart`](example/main.dart). For valid hostnames
 to plug into `NtsServerSpec`, see the community-maintained
 [NTS server list](https://github.com/jauderho/nts-servers).
+
+### Upgrading from `1.3.x`
+
+`1.4.0` is a breaking-ABI release for the bundled Rust crate
+(`nts_rust 0.3.0`). The JNI symbol exported from
+`rust/src/android_init.rs` moved from
+`Java_com_nts_example_RustlsBootstrap_nativeInit` to
+`Java_com_nllewellyn_nts_PlatformInit_nativeInit`, and the auto-init
+plugin contributes the Android Maven repository, AAR dependency, and
+ProGuard / R8 keep rules itself. Hosts that hand-rolled the `1.3.x`
+bootstrap (an in-app `RustlsBootstrap.kt`-style JNI shim, a
+`MainActivity.onCreate` call into it, an `app/build.gradle.kts` Maven
+block, and matching keep rules) should drop that scaffolding when
+they bump `nts`; an unmodified shim no longer matches the new symbol
+name and silently does nothing on first TLS handshake. See
+[CHANGELOG.md](CHANGELOG.md) under `1.4.0` → "Migrating from
+`1.3.x`" for the exhaustive deletion checklist and the
+`com.nllewellyn.nts.PlatformInit.init(context)` escape hatch for
+custom embeddings.
 
 ## Production Considerations
 
