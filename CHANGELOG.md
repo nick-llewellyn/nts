@@ -228,9 +228,10 @@ version bumped to `1.3.2` (patch).
   (`Detect changed paths`, `Verify FRB bindings are in sync`,
   `Rust build + tests + coverage`, `Hooks shell-syntax check`,
   `Hooks behaviour check`) are also untouched by this rename.
-- The historical `CHANGELOG.md:1015` reference to `3.41.7` is
-  intentionally left in place — it is a published-release entry
-  and pub.dev archives the changelog at publish time.
+- The historical `3.41.7` mention inside the `## 1.0.0` release
+  entry below is intentionally left in place — it is a
+  published-release entry and pub.dev archives the changelog at
+  publish time.
 
 ## 1.3.1
 
