@@ -38,9 +38,19 @@ change. Dart package version bumped to `1.4.0` (minor).
     bundled inside the `rustls-platform-verifier-android` cargo crate
     via `cargo metadata`, so the AAR resolves regardless of whether
     `nts` is installed from a path dependency, the pub cache, or a
-    monorepo. Replaces the brittle `../../rust/Cargo.toml` traversal
-    that previously lived in `example/android/app/build.gradle.kts`
-    and only worked from the example tree.
+    monorepo, on hosts that use the default Flutter/Gradle repository
+    setup. Replaces the brittle `../../rust/Cargo.toml` traversal that
+    previously lived in `example/android/app/build.gradle.kts` and
+    only worked from the example tree. Hosts that enable
+    `dependencyResolutionManagement.repositoriesMode =
+    FAIL_ON_PROJECT_REPOS` in `settings.gradle.kts` are the documented
+    exception: that mode rejects the project-level Maven injection
+    the plugin performs through `rootProject.allprojects { ... }`, so
+    those hosts must declare the on-disk repository themselves under
+    `dependencyResolutionManagement.repositories` in
+    `settings.gradle.kts`. The cargo-metadata path is stable and can
+    be reused verbatim; the rationale comment in
+    `android/build.gradle.kts` carries the full constraint.
 
   Native code (`libnts_rust.so`) continues to be delivered by the
   Native Assets pipeline (`hook/build.dart`); the plugin module ships

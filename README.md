@@ -48,11 +48,24 @@ resolve.
 
 | Platform | Native bootstrap | Consumer action |
 |---|---|---|
-| Android | Auto via bundled `NtsPlugin` (since `1.4.0`) | None beyond `flutter pub add nts`. |
+| Android | Auto via bundled `NtsPlugin` (since `1.4.0`) | None beyond `flutter pub add nts` on the default Flutter/Gradle setup. See the `FAIL_ON_PROJECT_REPOS` note below. |
 | iOS | None required | None. |
 | macOS | None required | None. |
 | Linux | None required | None. |
 | Windows | None required | None. |
+
+The Android row assumes the standard Flutter/Gradle setup. Hosts that opt
+in to `dependencyResolutionManagement.repositoriesMode =
+RepositoriesMode.FAIL_ON_PROJECT_REPOS` in `settings.gradle.kts` (uncommon
+for Flutter apps; not the `flutter create` default) reject the
+project-level Maven injection the plugin performs from
+`android/build.gradle.kts`, and must declare the on-disk
+`rustls-platform-verifier-android` repository themselves under
+`dependencyResolutionManagement.repositories` in `settings.gradle.kts`.
+The file path is the one printed by `cargo metadata --format-version 1
+--manifest-path <pub-cache>/nts-X.Y.Z/rust/Cargo.toml` and is stable for
+the lifetime of the resolved Cargo workspace; the rationale comment in
+`android/build.gradle.kts` documents the same constraint.
 
 Every platform additionally requires `await RustLib.init()` once
 during application startup before the first `ntsQuery` /
@@ -102,13 +115,20 @@ what your host code needs to do.
    `X509TrustManager`. It runs from `GeneratedPluginRegistrant` before
    Dart `main()` executes, so adding `nts` to your `pubspec.yaml` is
    enough — there is no `MainActivity` shim, JNI symbol, or
-   `app/build.gradle.kts` Maven entry to maintain. iOS, macOS, Linux,
-   and Windows have no equivalent step. Hosts that bypass the
-   standard Flutter activity lifecycle (custom embeddings, isolates
-   spawned ahead of plugin registration, integration tests driving
-   the dylib directly) can call
-   `com.nllewellyn.nts.PlatformInit.init(context)` from Kotlin
-   directly; see the KDoc on that class.
+   `app/build.gradle.kts` Maven entry to maintain on the default
+   Flutter/Gradle setup. (Hosts that enable
+   `dependencyResolutionManagement.repositoriesMode =
+   FAIL_ON_PROJECT_REPOS` in `settings.gradle.kts` are an exception:
+   that mode rejects the project-level Maven injection the plugin
+   does from its own `build.gradle.kts`, so those hosts must declare
+   the on-disk `rustls-platform-verifier-android` repository under
+   `dependencyResolutionManagement.repositories` themselves. See the
+   "Platform support" callout above.) iOS, macOS, Linux, and Windows
+   have no equivalent step. Hosts that bypass the standard Flutter
+   activity lifecycle (custom embeddings, isolates spawned ahead of
+   plugin registration, integration tests driving the dylib directly)
+   can call `com.nllewellyn.nts.PlatformInit.init(context)` from
+   Kotlin directly; see the KDoc on that class.
 
 2. **Dart/FRB initialization** (`await RustLib.init()`, every
    platform, manual). This loads the bundled Rust dylib through the
