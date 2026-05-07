@@ -18,7 +18,7 @@ dependencies:
     path: ../
   # Pinned to the same major as the parent package; used here only so
   # the example can call RustLib.initMock with a hand-rolled fake api
-  # when the native dylib has not been bundled yet (trusted_time-eg9).
+  # when the native dylib has not been bundled yet.
   flutter_rust_bridge: 2.12.0
   cupertino_icons: ^1.0.8
   signals: ^6.3.0

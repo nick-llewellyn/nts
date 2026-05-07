@@ -745,7 +745,7 @@ pub fn nts_query(
     // replaced rather than continuing to drain its now-stale cookie
     // pool through identical failures and the caller's per-source
     // exponential backoff (the multi-hour recovery stall observed
-    // downstream in `trusted_time` and similar consumers).
+    // downstream in consumers).
     //
     // 1. `NtpError::Aead` — the local C2S seal in
     //    `build_client_request` or the S2C verify in
@@ -1266,8 +1266,7 @@ mod tests {
     /// fresh KE handshake instead of draining the rest of the
     /// now-stale cookie pool through identical failures and the
     /// per-source exponential backoff that produces the multi-hour
-    /// recovery stall downstream consumers like `trusted_time`
-    /// observed.
+    /// recovery stall downstream consumers observed.
     #[test]
     fn nts_query_evicts_session_on_aead_authentication_failure() {
         let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");

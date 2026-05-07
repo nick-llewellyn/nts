@@ -3,14 +3,13 @@
 ## 1.4.0
 
 Converts `nts` from a pure Dart package using the Native Assets pipeline
-into a full Flutter plugin so that downstream consumers (e.g.
-`trusted_time`) can use the package on Android without having to
-replicate the Rust ↔ Kotlin JNI bootstrap, the
-`rustls-platform-verifier-android` Maven repository discovery, or the
-R8 keep-rule contract by hand. No Dart API surface change
-(`lib/nts.dart` is byte-identical) and no FRB pin movement; the Rust
-crate `nts_rust` is bumped to `0.3.0` to reflect a breaking JNI ABI
-change. Dart package version bumped to `1.4.0` (minor).
+into a full Flutter plugin so that downstream consumers can use the
+package on Android without having to replicate the Rust ↔ Kotlin JNI
+bootstrap, the `rustls-platform-verifier-android` Maven repository
+discovery, or the R8 keep-rule contract by hand. No Dart API surface
+change (`lib/nts.dart` is byte-identical) and no FRB pin movement; the
+Rust crate `nts_rust` is bumped to `0.3.0` to reflect a breaking JNI
+ABI change. Dart package version bumped to `1.4.0` (minor).
 
 ### Auto-initialised Android `rustls-platform-verifier` bootstrap
 
@@ -99,12 +98,12 @@ change. Dart package version bumped to `1.4.0` (minor).
 
 Repo-policy and CI-hygiene cleanup, plus a single Rust-side
 runtime fix that closes a multi-hour recovery stall observed in
-downstream consumers (`trusted_time` in particular) when an NTS
-server rotates its master key out from under our cookie pool. No
-public Dart API change (`lib/nts.dart` is byte-identical) and no
-FRB pin movement; the Rust crate `nts_rust` is bumped to `0.2.3`
-to reflect the behavioural change in `nts_query`. Dart package
-version bumped to `1.3.2` (patch).
+downstream consumers when an NTS server rotates its master key
+out from under our cookie pool. No public Dart API change
+(`lib/nts.dart` is byte-identical) and no FRB pin movement; the
+Rust crate `nts_rust` is bumped to `0.2.3` to reflect the
+behavioural change in `nts_query`. Dart package version bumped
+to `1.3.2` (patch).
 
 ### Fail-fast eviction of stale NTS sessions on rekey signals
 
