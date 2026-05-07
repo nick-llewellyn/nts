@@ -53,7 +53,7 @@ version = "1.4.0"
 // `Cargo.toml` of the parent crate sits at `<plugin>/rust/Cargo.toml`.
 // `projectDir` here is `<plugin>/android/`, so the relative path is
 // stable regardless of where the plugin is installed.
-fun findRustlsPlatformVerifierMaven(): String {
+fun resolveRustlsPlatformVerifierMaven(): String {
     val manifest = projectDir.resolve("../rust/Cargo.toml").canonicalFile
     require(manifest.isFile) {
         "Expected nts Rust crate at $manifest. Has the plugin layout changed?"
@@ -65,11 +65,23 @@ fun findRustlsPlatformVerifierMaven(): String {
         "1",
         "--manifest-path",
         manifest.absolutePath,
-    ).redirectErrorStream(false).start()
+    ).start()
+    // Drain stderr concurrently so a verbose `cargo metadata` failure cannot
+    // deadlock the build by filling the OS-level stderr pipe buffer
+    // (typically 64 KiB on Linux) while we block on `waitFor()` reading
+    // stdout. The captured text is folded into the `require` message below
+    // so a non-zero exit surfaces actionable diagnostics rather than just
+    // the bare exit code.
+    val stderrBuf = StringBuilder()
+    val stderrThread = Thread {
+        proc.errorStream.bufferedReader().forEachLine { stderrBuf.appendLine(it) }
+    }.apply { isDaemon = true; start() }
     val stdout = proc.inputStream.bufferedReader().readText()
     val rc = proc.waitFor()
+    stderrThread.join()
     require(rc == 0) {
-        "cargo metadata exited with $rc while resolving rustls-platform-verifier-android"
+        "cargo metadata exited with $rc while resolving " +
+            "rustls-platform-verifier-android. stderr:\n$stderrBuf"
     }
     @Suppress("UNCHECKED_CAST")
     val json = JsonSlurper().parseText(stdout) as Map<String, Any>
@@ -79,6 +91,17 @@ fun findRustlsPlatformVerifierMaven(): String {
     val manifestPath = pkg["manifest_path"] as String
     return File(manifestPath).parentFile.resolve("maven").absolutePath
 }
+
+// Cache the resolved Maven path for the duration of the Gradle build.
+// `rootProject.allprojects { repositories { ... } }` below evaluates its
+// closure once per project visited (root + `:app` + every plugin module
+// in a typical Flutter app), so without this `by lazy` the `cargo metadata`
+// subprocess would fork once per project. `cargo metadata` walks the entire
+// resolved dependency graph and is multi-second on a cold cache, so the
+// per-project fan-out was a measurable configuration-time regression for
+// multi-module hosts. The path is a pure function of the on-disk Cargo
+// workspace, which does not move during a single Gradle run.
+val rustlsPlatformVerifierMavenPath: String by lazy { resolveRustlsPlatformVerifierMaven() }
 
 // Inject the on-disk `rustls:rustls-platform-verifier` Maven repository
 // into every project in the host build, not just `:nts`. Gradle resolves
@@ -104,7 +127,7 @@ fun findRustlsPlatformVerifierMaven(): String {
 rootProject.allprojects {
     repositories {
         maven {
-            url = uri(findRustlsPlatformVerifierMaven())
+            url = uri(rustlsPlatformVerifierMavenPath)
             // The crate ships the AAR + POM but no Maven metadata index
             // file; tell Gradle to discover artifacts directly off the
             // filesystem.
@@ -121,6 +144,14 @@ repositories {
 
 android {
     namespace = "com.nllewellyn.nts"
+    // Pinned to the AGP 8.x / Flutter 3.38 stable default. The plugin
+    // module itself only consumes platform APIs available since API 24
+    // (see `minSdk` below), but the AAR companion of
+    // `rustls-platform-verifier` and the `FlutterPlugin` lifecycle hooks
+    // we register against require building with the current SDK. Hosts
+    // on older Flutter or AGP toolchains will need to upgrade in lockstep
+    // with this floor; making it configurable would let a stale host
+    // silently miss compile-time API checks the plugin relies on.
     compileSdk = 35
 
     compileOptions {

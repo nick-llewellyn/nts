@@ -18,7 +18,7 @@
 //! ```
 //!
 //! The Kotlin counterpart ships inside the `nts` Flutter plugin's own
-//! Android library module (`packages/nts/android/src/main/kotlin/com/nllewellyn/nts/PlatformInit.kt`)
+//! Android library module (`android/src/main/kotlin/com/nllewellyn/nts/PlatformInit.kt`)
 //! and is registered on the host app automatically via the plugin's
 //! `NtsPlugin.onAttachedToEngine` hook. Consumers do not have to declare or
 //! call anything themselves — adding `nts` to `pubspec.yaml` is sufficient.

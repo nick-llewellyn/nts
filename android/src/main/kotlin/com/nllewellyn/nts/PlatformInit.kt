@@ -8,7 +8,7 @@ import android.util.Log
  *
  * The Rust crate cannot reach the system `X509TrustManager` until it has
  * captured a `JavaVM` handle and an `android.content.Context`. The Rust
- * counterpart (`packages/nts/rust/src/android_init.rs`) exports a single
+ * counterpart (`rust/src/android_init.rs`) exports a single
  * JNI symbol — mangled for `com.nllewellyn.nts.PlatformInit` — that
  * takes the application context and feeds it to
  * `rustls_platform_verifier::android::init_with_env`. Once that call
