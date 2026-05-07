@@ -466,6 +466,35 @@ fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8
     }
 }
 
+/// Drop the cached session for `spec_key` when the in-flight query that
+/// produced the AEAD failure was drawn from generation
+/// `expected_generation`.
+///
+/// Called by [`nts_query`] on `NtsError::Authentication` (typically a
+/// tag mismatch in `parse_server_response` after the server rotated its
+/// master key out from under our cookie pool). Removing the entry
+/// rather than just clearing the jar ensures the now-unusable C2S/S2C
+/// keys are also released; the next [`checkout`] sees no entry and
+/// performs a fresh KE handshake immediately, instead of draining 7
+/// more stale cookies through `NtsError::Authentication` returns and
+/// the caller's exponential backoff over multiple hours.
+///
+/// The generation guard is symmetric with [`deposit_cookies`]: if a
+/// concurrent `nts_warm_cookies` (or another `checkout` that triggered
+/// its own re-handshake) installed a fresh session under the same key
+/// while this query was on the wire, the failure belongs to the old
+/// keys and the new session must not be evicted. Without the guard a
+/// single transient auth error would force every concurrent caller for
+/// the same host through a redundant re-handshake.
+fn evict_session(spec_key: &str, expected_generation: u64) {
+    let mut guard = sessions().lock().expect("session table poisoned");
+    if let Some(session) = guard.get(spec_key) {
+        if session.generation == expected_generation {
+            guard.remove(spec_key);
+        }
+    }
+}
+
 /// Resolve `(host, port)` and return a UDP socket bound to the local
 /// wildcard address of the matching family, already `connect()`ed to the
 /// first remote candidate that accepts the binding.
@@ -696,6 +725,22 @@ pub fn nts_query(
     let key = session_key(&spec);
 
     let ctx = checkout(&spec, timeout, cap)?;
+    let session_generation = ctx.session_generation;
+
+    // Fail-fast recovery: if either AEAD step (the local C2S seal in
+    // `build_client_request` or the S2C verify in
+    // `parse_server_response`) reports an authentication failure, the
+    // cached session keys are stale relative to the server's current
+    // master key. Evict the entry under its captured generation so the
+    // next `checkout` performs a fresh KE handshake instead of spending
+    // the rest of the now-unusable cookie pool through identical
+    // failures and the caller's per-source exponential backoff.
+    let evict_on_auth = |err: NtsError| -> NtsError {
+        if matches!(err, NtsError::Authentication(_)) {
+            evict_session(&key, session_generation);
+        }
+        err
+    };
 
     let mut uid = [0u8; UID_LEN];
     let mut nonce = vec![0u8; ctx.c2s_key.nonce_len()];
@@ -712,7 +757,7 @@ pub fn nts_query(
         nonce,
         transmit_timestamp,
     };
-    let packet = build_client_request(&req, &ctx.c2s_key)?;
+    let packet = build_client_request(&req, &ctx.c2s_key).map_err(|e| evict_on_auth(e.into()))?;
 
     // RFC 5905 is address-family agnostic; bind a local socket that matches
     // the family of whichever resolved address actually accepts a UDP
@@ -727,9 +772,10 @@ pub fn nts_query(
     let n = socket.recv(&mut buf)?;
     let rtt_micros = send_at.elapsed().as_micros() as i64;
 
-    let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)?;
+    let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
+        .map_err(|e| evict_on_auth(e.into()))?;
     let fresh_count = response.fresh_cookies.len() as u32;
-    deposit_cookies(&key, ctx.session_generation, response.fresh_cookies);
+    deposit_cookies(&key, session_generation, response.fresh_cookies);
 
     Ok(NtsTimeSample {
         utc_unix_micros: ntp64_to_unix_micros(response.header.transmit_timestamp),
@@ -1066,6 +1112,98 @@ mod tests {
         deposit_cookies(key, 1, vec![vec![1, 2, 3]]);
         // No assertion needed beyond "did not panic"; verify the table
         // really is empty for this key.
+        let guard = sessions().lock().expect("session table poisoned");
+        assert!(guard.get(key).is_none());
+    }
+
+    /// Happy path for the fail-fast eviction: when the cached session's
+    /// generation matches the in-flight query's snapshot, a tag-mismatch
+    /// failure removes the entry so the next `checkout` performs a
+    /// fresh KE handshake instead of draining the rest of the now-stale
+    /// cookie pool through identical authentication failures.
+    #[test]
+    fn evict_session_drops_entry_when_generation_matches() {
+        let key = "evict-match.invalid:4460";
+        let gen = next_session_generation();
+        let mut session = make_test_session("evict-match.invalid", 123, gen);
+        // Pre-seed the jar so we can assert the *whole* entry is gone,
+        // not just its cookie queue.
+        let host = session.ntpv4_host.clone();
+        session
+            .jar
+            .put_many(&host, [vec![1u8; 16], vec![2; 16], vec![3; 16]]);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .insert(key.to_owned(), session);
+
+        evict_session(key, gen);
+
+        let guard = sessions().lock().expect("session table poisoned");
+        assert!(
+            guard.get(key).is_none(),
+            "matching-generation eviction must drop the entry, jar and keys with it",
+        );
+    }
+
+    /// Race-fix invariant: if a concurrent re-handshake replaced the
+    /// cached session between checkout and the failed exchange, the
+    /// in-flight failure belongs to the *old* keys; the freshly-rotated
+    /// session must survive. Without this guard a single transient
+    /// authentication error would force every concurrent caller for
+    /// the same host through a redundant re-handshake.
+    #[test]
+    fn evict_session_preserves_entry_on_generation_mismatch() {
+        let key = "evict-mismatch.invalid:4460";
+        let stale_generation = next_session_generation();
+        // The in-flight query thinks it's still on this generation.
+        sessions().lock().expect("session table poisoned").insert(
+            key.to_owned(),
+            make_test_session("evict-mismatch.invalid", 123, stale_generation),
+        );
+        // Concurrent re-handshake lands while the original query was on
+        // the wire: replace the entry with one whose generation has
+        // advanced.
+        let fresh_generation = next_session_generation();
+        assert_ne!(
+            stale_generation, fresh_generation,
+            "generation oracle must hand out distinct values",
+        );
+        sessions().lock().expect("session table poisoned").insert(
+            key.to_owned(),
+            make_test_session("evict-mismatch.invalid", 123, fresh_generation),
+        );
+
+        // The stale-generation eviction must be a no-op.
+        evict_session(key, stale_generation);
+
+        let guard = sessions().lock().expect("session table poisoned");
+        let s = guard.get(key).expect("fresh session must survive");
+        assert_eq!(
+            s.generation, fresh_generation,
+            "stale-generation eviction must not drop the freshly-rotated session",
+        );
+        drop(guard);
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .remove(key);
+    }
+
+    /// A late eviction against an already-evicted (or never-installed)
+    /// entry is a quiet no-op rather than a panic. Companion to the
+    /// `deposit_cookies_is_noop_when_session_missing` regression guard;
+    /// pins the same property for the symmetric eviction path.
+    #[test]
+    fn evict_session_is_noop_when_session_missing() {
+        let key = "evict-missing.invalid:4460";
+        // Ensure no leftover from another test.
+        sessions()
+            .lock()
+            .expect("session table poisoned")
+            .remove(key);
+        // Any generation ID will do — the entry is absent.
+        evict_session(key, 1);
         let guard = sessions().lock().expect("session table poisoned");
         assert!(guard.get(key).is_none());
     }

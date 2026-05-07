@@ -2,9 +2,61 @@
 
 ## Unreleased
 
-Repo-policy and CI-hygiene cleanup. No public Dart API change
-(`lib/nts.dart` is byte-identical), no FFI behaviour change, no FRB
-pin movement; the Rust crate `nts_rust` is unchanged at `0.2.2`.
+Repo-policy and CI-hygiene cleanup, plus a single Rust-side
+runtime fix that closes a multi-hour recovery stall observed in
+downstream consumers (`trusted_time` in particular) when an NTS
+server rotates its master key out from under our cookie pool. No
+public Dart API change (`lib/nts.dart` is byte-identical) and no
+FRB pin movement; the Rust crate `nts_rust` is bumped to `0.2.3`
+to reflect the behavioural change in `nts_query`. Dart package
+version bumped to `1.3.2` (patch).
+
+### Fail-fast eviction of stale NTS sessions on AEAD authentication failure
+
+- `nts_query` (`rust/src/api/nts.rs`) now evicts the cached
+  `Session` for the spec when either AEAD step returns
+  `NtsError::Authentication`: the local C2S seal in
+  `build_client_request` or the S2C verify in
+  `parse_server_response`. The next `checkout` for that host
+  finds no entry and performs a fresh NTS-KE handshake instead of
+  draining the remaining cookies through identical
+  `Authentication` returns plus the caller's per-source
+  exponential backoff. Closes `nts-0jl`.
+- The eviction is gated on a generation snapshot captured at
+  `checkout` time, symmetric to the guard already present in
+  `deposit_cookies`. If a concurrent `nts_warm_cookies` (or
+  another `checkout` that triggered its own re-handshake)
+  installed a fresh session under the same key while this query
+  was on the wire, the in-flight failure belongs to the old keys
+  and the new session survives untouched. Without the guard a
+  single transient auth error would force every concurrent caller
+  for the same host through a redundant re-handshake.
+- AEAD-error mapping verified end-to-end: `From<AeadError>` routes
+  `OpenFailed` (tag mismatch — the dominant master-key-rotation
+  signal), `SealFailed`, `InvalidKeyLength`, and
+  `InvalidNonceLength` to `NtsError::Authentication` (eviction);
+  `UnsupportedAlgorithm` is only reachable from the KE path and
+  routes to `KeProtocol` (no eviction).
+  `From<NtpError>::Aead(_)` routes the same way; wire-format,
+  Kiss-of-Death, and `Unsynchronized` arms route to `NtpProtocol`
+  (no eviction — those are transient or server-attested signals,
+  not key-state failures).
+- Healthy-path cost is unchanged: the trigger is a `map_err`
+  closure that only acquires the `sessions()` mutex inside the
+  `Authentication` arm, so success returns are byte-identical
+  to the pre-fix behaviour.
+- Coverage: three new unit tests in `rust/src/api/nts.rs::tests`
+  pin (i) matching-generation eviction drops the entry, jar and
+  keys with it; (ii) stale-generation eviction is a no-op when a
+  concurrent re-handshake has advanced the cached session; and
+  (iii) eviction is a quiet no-op when the entry is already
+  absent (companion to the existing
+  `deposit_cookies_is_noop_when_session_missing` regression
+  guard).
+- The FRB-generated `lib/src/ffi/api/nts.dart` regains
+  `evict_session` in the alphabetised "ignored because not `pub`"
+  comment line; no bindings code changes (the helper is
+  intentionally crate-private).
 
 ### Branch-protection enforcement (repo policy, no runtime impact)
 
