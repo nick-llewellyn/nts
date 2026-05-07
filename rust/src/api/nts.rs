@@ -474,17 +474,19 @@ fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8
 }
 
 /// Drop the cached session for `spec_key` when the in-flight query that
-/// produced the AEAD failure was drawn from generation
+/// produced the rekey signal was drawn from generation
 /// `expected_generation`.
 ///
-/// Called by [`nts_query`] on `NtsError::Authentication` (typically a
-/// tag mismatch in `parse_server_response` after the server rotated its
-/// master key out from under our cookie pool). Removing the entry
-/// rather than just clearing the jar ensures the now-unusable C2S/S2C
-/// keys are also released; the next [`checkout`] sees no entry and
-/// performs a fresh KE handshake immediately, instead of draining 7
-/// more stale cookies through `NtsError::Authentication` returns and
-/// the caller's exponential backoff over multiple hours.
+/// Called by [`nts_query`] on either rekey signal: `NtpError::Aead`
+/// (tag mismatch in `parse_server_response`, typically after the
+/// server rotated its master key out from under our cookie pool) or
+/// `NtpError::StaleCookie` (RFC 8915 §5.7 unauthenticated `NTSN`
+/// Kiss-of-Death with a matching Unique Identifier). Removing the
+/// entry rather than just clearing the jar ensures the now-unusable
+/// C2S/S2C keys are also released; the next [`checkout`] sees no
+/// entry and performs a fresh KE handshake immediately, instead of
+/// draining 7 more stale cookies through identical failures and the
+/// caller's exponential backoff over multiple hours.
 ///
 /// The generation guard is symmetric with [`deposit_cookies`]: if a
 /// concurrent `nts_warm_cookies` (or another `checkout` that triggered
@@ -775,7 +777,7 @@ pub fn nts_query(
     // query was on the wire, the in-flight failure belongs to the
     // old keys and the new session must survive untouched.
     let evict_on_rekey_signal = |err: NtpError| -> NtsError {
-        if matches!(err, NtpError::Aead(_) | NtpError::StaleCookie) {
+        if matches!(&err, NtpError::Aead(_) | NtpError::StaleCookie) {
             evict_session(&key, session_generation);
         }
         NtsError::from(err)
@@ -1255,7 +1257,7 @@ mod tests {
     /// passes, but the AEAD-sealed AAD covers the *original* byte,
     /// so `s2c_key.open_packet` fails on a tag mismatch — surfaced
     /// as `NtsError::Authentication` and routed through
-    /// `evict_on_auth`. The cached entry must be gone after the
+    /// `evict_on_rekey_signal`. The cached entry must be gone after the
     /// call returns so the caller's next `checkout` performs a
     /// fresh KE handshake instead of draining the rest of the
     /// now-stale cookie pool through identical failures and the
