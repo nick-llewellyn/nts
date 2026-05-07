@@ -85,7 +85,7 @@ object PlatformInit {
 
     /**
      * JNI counterpart of `Java_com_nllewellyn_nts_PlatformInit_nativeInit`
-     * defined in `packages/nts/rust/src/android_init.rs`. Returns `true`
+     * defined in `rust/src/android_init.rs`. Returns `true`
      * on success, `false` when the Rust initializer reports a JNI error
      * (e.g. the supplied object did not implement `getClassLoader`).
      */

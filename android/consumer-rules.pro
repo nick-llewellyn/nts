@@ -29,7 +29,7 @@
 # Our own JNI shim. `com.nllewellyn.nts.PlatformInit.nativeInit` is matched
 # at JVM load time to the Rust symbol
 # `Java_com_nllewellyn_nts_PlatformInit_nativeInit` exported from
-# `packages/nts/rust/src/android_init.rs`. Keep the class and its
+# `rust/src/android_init.rs`. Keep the class and its
 # `nativeInit` member so neither the JVM-side `external fun` nor the
 # Rust-side `#[no_mangle]` symbol gets renamed or stripped under
 # aggressive shrinking.
