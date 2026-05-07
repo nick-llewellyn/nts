@@ -28,9 +28,9 @@ this resolves one: `Closes nts-xxx`.
 
 <!--
 List the gates run locally. Cross out anything that doesn't apply.
-The CI matrix re-runs the Dart legs on Flutter 3.41.7 (.fvmrc pin)
-and 3.38.10 (declared SDK floor) -- if a leg fails only on the
-floor, that's a real signal, not a flake.
+The CI matrix re-runs the Dart legs on the latest Flutter `stable`
+channel (matches `.fvmrc`) and 3.38.10 (declared SDK floor) -- if a
+leg fails only on the floor, that's a real signal, not a flake.
 -->
 
 - [ ] `dart format --output=none --set-exit-if-changed .`

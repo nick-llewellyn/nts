@@ -143,7 +143,7 @@ that push events don't have:
 | Job | Cost | Purpose |
 |-----|------|---------|
 | `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, `docs`, and `hooks` flags consumed by the gates below (`docs` is informational — no job gates on it; `hooks` gates the two hook jobs). Always runs. |
-| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the SDK floor (3.38.10) and the pinned current (3.41.7). Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Pin-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
+| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the SDK floor (3.38.10) and the latest `stable` channel (matches `.fvmrc`). Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Stable-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
 | `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: [changes, build]` + `if: always()` so it runs whether the matrix executed, was skipped, or failed. Passes when `needs.changes.result == 'success'` AND `needs.build.result` is `success` or `skipped`; fails otherwise. The `changes`-success precondition discriminates a legitimate doc-only matrix skip from a `changes`-failure cascade-skip — without it, a transient paths-filter failure would silently green-light branch protection. Required-status-check entry on `main` for the Dart side. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated on `rust`/`bindings`/`ci`. |
@@ -455,7 +455,8 @@ remote layer.
 ### Local quality gates before opening a PR
 
 Mirrors what CI runs; failing locally is faster than waiting for
-the runner. The pinned Flutter version is `3.41.7` (see `.fvmrc`).
+the runner. The local Flutter SDK tracks the `stable` channel (see
+`.fvmrc`).
 The hook commands below mirror the `Hooks shell-syntax check` and
 `Hooks behaviour check` CI jobs and are required for any change
 under `tool/hooks/**` so a hook-only PR does not rely on CI as the
