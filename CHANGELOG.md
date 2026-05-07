@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.2
 
 Repo-policy and CI-hygiene cleanup, plus a single Rust-side
 runtime fix that closes a multi-hour recovery stall observed in

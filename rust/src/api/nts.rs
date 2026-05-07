@@ -227,9 +227,13 @@ impl From<NtpError> for NtsError {
             // through the catch-all arm.
             e @ NtpError::Unsynchronized => Self::NtpProtocol(e.to_string()),
             e @ NtpError::KissOfDeath(_) => Self::NtpProtocol(e.to_string()),
-            // RFC 8915 §5.7 unauthenticated NTSN with matching UID — the
-            // server-attested rekey signal that the cached cookie is no
-            // longer valid. Routed through `NtpProtocol` so the
+            // RFC 8915 §5.7 unauthenticated NTSN with matching UID — a
+            // request-correlated rekey signal that the cached cookie is
+            // no longer valid. The matching UID echoed from the request
+            // is the only authenticity check available (the response
+            // carries no Authenticator), so this is *not* cryptographically
+            // server-attested; it is unauthenticated and guarded only by
+            // UID correlation. Routed through `NtpProtocol` so the
             // Dart-facing `NtsError` enum stays stable; the eviction-side
             // effect is handled inside `nts_query` before this conversion
             // happens (see the `evict_on_rekey_signal` closure).
