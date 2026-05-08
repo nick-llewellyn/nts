@@ -2078,6 +2078,71 @@ mod tests {
         }
     }
 
+    /// Pins the `From<KePhaseTimings> for PhaseTimings` mapping.
+    /// The Dart-facing struct is reconstructed inside `nts_query` and
+    /// `nts_warm_cookies` from the KE-side breakdown; if a future
+    /// edit drops or reorders one of the four micro fields the
+    /// caller-visible timing dashboard would silently lose a phase.
+    #[test]
+    fn from_ke_phase_timings_for_phase_timings_preserves_all_micro_fields() {
+        let ke = KePhaseTimings {
+            dns_micros: 11,
+            connect_micros: 22,
+            tls_handshake_micros: 33,
+            ke_record_io_micros: 44,
+        };
+        let pt: PhaseTimings = ke.into();
+        assert_eq!(pt.dns_micros, 11);
+        assert_eq!(pt.connect_micros, 22);
+        assert_eq!(pt.tls_handshake_micros, 33);
+        assert_eq!(pt.ke_record_io_micros, 44);
+    }
+
+    /// `Display for NtsError` is the format consumers see when an
+    /// error escapes the public API as a string. The `Timeout` arm
+    /// must include the phase tag verbatim — without it the new
+    /// taxonomy is invisible to anything reading
+    /// `format!("{e}")` rather than matching the enum directly.
+    #[test]
+    fn display_renders_timeout_with_phase_tag() {
+        for phase in [
+            TimeoutPhase::DnsSaturation,
+            TimeoutPhase::DnsTimeout,
+            TimeoutPhase::Connect,
+            TimeoutPhase::Tls,
+            TimeoutPhase::KeRecordIo,
+            TimeoutPhase::Ntp,
+        ] {
+            let rendered = format!("{}", NtsError::Timeout(phase));
+            let tag = format!("{phase:?}");
+            assert!(
+                rendered.contains(&tag),
+                "Display for Timeout({phase:?}) was {rendered:?}; \
+                 expected to contain {tag:?}",
+            );
+        }
+    }
+
+    /// Pins the non-timeout half of `From<KeError> for NtsError`:
+    /// `KeError::Io` must surface as `NtsError::Network` with the
+    /// underlying diagnostic preserved, not collapsed into a
+    /// timeout. The phase-timeout half is exhausted by
+    /// `ke_phase_timeout_maps_to_nts_timeout_for_every_phase`; this
+    /// one guards against a future edit that mistakenly routes a
+    /// real I/O failure (NXDOMAIN, ECONNREFUSED, …) through the
+    /// timeout taxonomy.
+    #[test]
+    fn from_ke_error_io_routes_to_network_with_diagnostic() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "kex-refused");
+        match NtsError::from(KeError::Io(io)) {
+            NtsError::Network(msg) => assert!(
+                msg.contains("kex-refused"),
+                "Network message {msg:?} dropped the underlying diagnostic",
+            ),
+            other => panic!("KeError::Io mapped to {other:?}; expected NtsError::Network",),
+        }
+    }
+
     /// Pins the call-wide budget contract `nts_query` enforces
     /// between the KE phases and the UDP-setup leg. Once `elapsed`
     /// reaches or exceeds `total`, the helper short-circuits with

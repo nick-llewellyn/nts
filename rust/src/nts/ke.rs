@@ -1321,6 +1321,188 @@ mod tests {
         );
     }
 
+    /// Phase-aware variant of `apply_to`. Translates an expired
+    /// budget directly to `KeError::PhaseTimeout(phase)` so the
+    /// phase tag survives without round-tripping through
+    /// `io::ErrorKind::TimedOut`. Pinning every supported phase here
+    /// ensures a future edit that hard-codes a single phase can't
+    /// silently regress the attribution.
+    #[test]
+    fn deadline_apply_to_with_phase_returns_phase_timeout_when_expired() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        for phase in [
+            KeTimeoutPhase::DnsSaturation,
+            KeTimeoutPhase::DnsTimeout,
+            KeTimeoutPhase::Connect,
+            KeTimeoutPhase::Tls,
+            KeTimeoutPhase::KeRecordIo,
+        ] {
+            let d = Deadline::new(Duration::from_micros(1));
+            std::thread::sleep(Duration::from_millis(10));
+            let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            match d.apply_to_with_phase(&tcp, phase) {
+                Err(KeError::PhaseTimeout(got)) => assert_eq!(got, phase),
+                other => panic!(
+                    "expired apply_to_with_phase({phase:?}) yielded {other:?}; \
+                     expected KeError::PhaseTimeout({phase:?})",
+                ),
+            }
+        }
+    }
+
+    /// Non-expired companion to the test above: when budget remains,
+    /// `apply_to_with_phase` must shrink the socket's read+write
+    /// timeouts to a strictly-positive value bounded above by the
+    /// configured budget. Same shape as
+    /// `deadline_apply_to_sets_socket_timeouts_within_remaining_budget`
+    /// but exercising the phase-aware entry point.
+    #[test]
+    fn deadline_apply_to_with_phase_sets_socket_timeouts_within_remaining() {
+        let budget = Duration::from_millis(500);
+        let d = Deadline::new(budget);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        d.apply_to_with_phase(&tcp, KeTimeoutPhase::Tls)
+            .expect("non-zero remaining");
+        let read_t = tcp.read_timeout().unwrap().expect("read timeout set");
+        let write_t = tcp.write_timeout().unwrap().expect("write timeout set");
+        assert!(
+            read_t > Duration::ZERO && read_t <= budget,
+            "read timeout {read_t:?} must be in (0, {budget:?}]",
+        );
+        assert!(
+            write_t > Duration::ZERO && write_t <= budget,
+            "write timeout {write_t:?} must be in (0, {budget:?}]",
+        );
+    }
+
+    /// `check_or_timeout` is the funnel `connect_with_deadline_using`
+    /// consults before each blocking step. An expired budget must
+    /// short-circuit with the supplied phase tag; a live budget must
+    /// hand back the remaining slack so the caller can pass it to
+    /// `connect_timeout` / `resolve_with_global` unchanged.
+    #[test]
+    fn deadline_check_or_timeout_short_circuits_after_expiry() {
+        let d = Deadline::new(Duration::from_micros(1));
+        std::thread::sleep(Duration::from_millis(10));
+        match d.check_or_timeout(KeTimeoutPhase::DnsTimeout) {
+            Err(KeError::PhaseTimeout(KeTimeoutPhase::DnsTimeout)) => {}
+            other => panic!(
+                "expired check_or_timeout yielded {other:?}; \
+                 expected KeError::PhaseTimeout(DnsTimeout)",
+            ),
+        }
+
+        let live = Deadline::new(Duration::from_millis(500));
+        let remaining = live
+            .check_or_timeout(KeTimeoutPhase::Connect)
+            .expect("non-zero remaining");
+        assert!(
+            remaining > Duration::ZERO && remaining <= Duration::from_millis(500),
+            "live check_or_timeout returned {remaining:?}; \
+             expected (0, 500ms]",
+        );
+    }
+
+    /// Pins the three branches of `dns_error_to_ke`. The
+    /// bounded-DNS resolver surfaces three distinct `io::Error`
+    /// kinds and each must route to a distinct `KeError` shape so
+    /// the `From<KeError> for NtsError` mapping in `api/nts.rs`
+    /// preserves the difference between pool saturation, deadline
+    /// expiry, and a real lookup failure.
+    #[test]
+    fn dns_error_to_ke_translates_each_io_kind() {
+        match dns_error_to_ke(std::io::Error::from(std::io::ErrorKind::WouldBlock)) {
+            KeError::PhaseTimeout(KeTimeoutPhase::DnsSaturation) => {}
+            other => panic!("WouldBlock -> {other:?}; expected DnsSaturation"),
+        }
+        match dns_error_to_ke(std::io::Error::from(std::io::ErrorKind::TimedOut)) {
+            KeError::PhaseTimeout(KeTimeoutPhase::DnsTimeout) => {}
+            other => panic!("TimedOut -> {other:?}; expected DnsTimeout"),
+        }
+        let raw = std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "nxdomain");
+        match dns_error_to_ke(raw) {
+            KeError::Io(e) => assert!(
+                e.to_string().contains("nxdomain"),
+                "Io passthrough lost diagnostic: {e}",
+            ),
+            other => panic!("AddrNotAvailable -> {other:?}; expected KeError::Io"),
+        }
+    }
+
+    /// Companion to `dns_error_to_ke_translates_each_io_kind` for the
+    /// per-address connect leg. `TimedOut` is the only deadline
+    /// signal `TcpStream::connect_timeout` raises; non-timeout
+    /// kinds (`ConnectionRefused`, `NetworkUnreachable`, …) must
+    /// reach Dart as `NtsError::Network` with the diagnostic
+    /// preserved.
+    #[test]
+    fn connect_error_to_ke_translates_io_kinds() {
+        match connect_error_to_ke(std::io::Error::from(std::io::ErrorKind::TimedOut)) {
+            KeError::PhaseTimeout(KeTimeoutPhase::Connect) => {}
+            other => panic!("TimedOut -> {other:?}; expected Connect"),
+        }
+        let raw = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "ECONNREFUSED");
+        match connect_error_to_ke(raw) {
+            KeError::Io(e) => assert!(
+                e.to_string().contains("ECONNREFUSED"),
+                "Io passthrough lost diagnostic: {e}",
+            ),
+            other => panic!("ConnectionRefused -> {other:?}; expected KeError::Io"),
+        }
+    }
+
+    /// Companion translator for the TLS / record I/O legs. A stalled
+    /// rustls Stream surfaces `TimedOut`/`WouldBlock` from the
+    /// underlying socket and must inherit the caller-supplied phase
+    /// tag (`Tls` or `KeRecordIo`); other kinds stay as
+    /// `KeError::Io` so a real I/O error doesn't get mislabelled as
+    /// a budget exhaustion.
+    #[test]
+    fn phase_io_to_ke_translates_each_io_kind() {
+        for phase in [KeTimeoutPhase::Tls, KeTimeoutPhase::KeRecordIo] {
+            for kind in [std::io::ErrorKind::TimedOut, std::io::ErrorKind::WouldBlock] {
+                let io = std::io::Error::from(kind);
+                match phase_io_to_ke(io, phase) {
+                    KeError::PhaseTimeout(got) => assert_eq!(got, phase),
+                    other => panic!(
+                        "{kind:?} for {phase:?} -> {other:?}; \
+                         expected PhaseTimeout({phase:?})",
+                    ),
+                }
+            }
+            let raw = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof");
+            match phase_io_to_ke(raw, phase) {
+                KeError::Io(e) => assert!(e.to_string().contains("eof")),
+                other => panic!("UnexpectedEof for {phase:?} -> {other:?}; expected Io"),
+            }
+        }
+    }
+
+    /// `Display for KeError` is the string the public API surfaces
+    /// when a non-timeout shape escapes via `KeProtocol(format!("{e}"))`.
+    /// The `PhaseTimeout` arm must include the phase tag verbatim
+    /// so a log line still distinguishes "budget elapsed during
+    /// connect" from "budget elapsed during TLS handshake".
+    #[test]
+    fn ke_error_display_renders_phase_timeout_with_phase_tag() {
+        for phase in [
+            KeTimeoutPhase::DnsSaturation,
+            KeTimeoutPhase::DnsTimeout,
+            KeTimeoutPhase::Connect,
+            KeTimeoutPhase::Tls,
+            KeTimeoutPhase::KeRecordIo,
+        ] {
+            let rendered = format!("{}", KeError::PhaseTimeout(phase));
+            let tag = format!("{phase:?}");
+            assert!(
+                rendered.contains(&tag),
+                "Display for PhaseTimeout({phase:?}) was {rendered:?}; \
+                 expected to contain {tag:?}",
+            );
+        }
+    }
+
     /// Companion to the `Deadline` unit tests: drives the same
     /// blackholed-IP scenario as
     /// `connect_with_timeout_respects_budget_for_unroutable_ip`,
