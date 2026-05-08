@@ -1,8 +1,10 @@
 // Local equivalent of the CI `Verify FRB bindings are in sync` job. Runs
 // `flutter_rust_bridge_codegen generate`, applies the lint-suppression
 // patches FRB cannot emit on its own (see `_lintIgnorePatches`), formats
-// the regenerated Dart bindings, and fails non-zero if `lib/src/ffi/` or
-// `rust/src/frb_generated.rs` differ from the committed state.
+// the regenerated Dart bindings, checks for orphaned generated modules
+// (see `_checkForOrphanedApiModules`), and fails non-zero if
+// `lib/src/ffi/` or `rust/src/frb_generated.rs` differ from the committed
+// state.
 //
 // Usage:
 //
@@ -10,16 +12,44 @@
 //
 // Exit codes:
 //   0  bindings are in sync
-//   1  drift detected (or precondition failure: missing tool / wrong version)
+//   1  drift detected, an orphaned generated module was found, or a
+//      precondition failed (missing tool / wrong version)
 //
 // The pinned FRB version is read from `pubspec.yaml` so this script and the
 // CI workflow stay in lockstep with the runtime crate.
+//
+// Orphaned-module check
+// ---------------------
+// `flutter_rust_bridge_codegen generate` regenerates
+// `lib/src/ffi/api/<basename>.dart` from `rust/src/api/<basename>.rs`,
+// but only if that Rust source still exposes at least one FRB-visible
+// item. When the last `pub` item is removed from a Rust source (or the
+// source itself is deleted), FRB drops the wire impls from
+// `frb_generated.{rs,dart}` but leaves the previously-emitted Dart
+// module on disk. The stale module then references symbols that no
+// longer exist in the dispatcher, which surfaces as an opaque "symbol
+// not found in `RustLibApi`" build break under `flutter analyze` /
+// `flutter test` rather than at codegen time.
+//
+// `_checkForOrphanedApiModules` flags any `lib/src/ffi/api/*.dart` that
+// the regenerated `lib/src/ffi/frb_generated.dart` does not import,
+// using the dispatcher import set as a stand-in for "this module
+// contributed FRB-visible items on the most recent codegen run".
+// Removal is left to the developer so an unintended deletion surfaces
+// loudly rather than being papered over.
 
 import 'dart:io';
 
 // Paths watched for drift. Mirrors `dart_output` and `rust_output` in
 // `flutter_rust_bridge.yaml`.
 const _watchedPaths = <String>['lib/src/ffi', 'rust/src/frb_generated.rs'];
+
+// Directory holding the per-Rust-module generated Dart bindings, and the
+// dispatcher that imports them. Used by `_checkForOrphanedApiModules` to
+// flag stale modules whose contributing Rust source no longer exposes
+// any FRB-visible items.
+const _generatedDartApiDir = 'lib/src/ffi/api';
+const _frbGeneratedDispatcher = 'lib/src/ffi/frb_generated.dart';
 
 // Lint-suppression patches applied after codegen. Each entry adds the
 // listed lint names to the file's `// ignore_for_file:` directive.
@@ -70,6 +100,11 @@ Future<void> main(List<String> args) async {
   // drift only -- not formatter noise that CI's `dart format` step would
   // otherwise re-flag. (FRB already runs rustfmt on `frb_generated.rs`.)
   await _run('dart', const ['format', 'lib/src/ffi']);
+
+  // Detect generated modules left behind after FRB stopped contributing
+  // them. Runs before the drift check so the diagnostic is the
+  // dedicated orphan message rather than a generic "files differ".
+  _checkForOrphanedApiModules();
 
   if (await _hasDrift()) {
     stderr.writeln(
@@ -178,6 +213,74 @@ Future<bool> _hasDrift() async {
   ]);
   stdout.write(stat.stdout);
   return true;
+}
+
+// Walk `lib/src/ffi/api/*.dart` and flag any primary module file that
+// the regenerated dispatcher does not import. FRB writes one `import
+// 'api/<basename>.dart';` line into `frb_generated.dart` for every
+// Rust source under `rust/src/api/` that contributed at least one
+// FRB-visible item on the most recent codegen run, so the dispatcher's
+// import set is the authoritative "still contributing" stand-in.
+//
+// `*.freezed.dart` and `*.g.dart` companions are intentionally ignored
+// by this check: they're emitted by other generators driven from the
+// primary file's `part 'X.freezed.dart';` / `part 'X.g.dart';`
+// directives, and the dispatcher does not import them directly. When
+// the primary file is reported as orphaned, any companions next to it
+// must be removed manually alongside it (the remediation message below
+// names them explicitly); the check does not flag a stray companion on
+// its own.
+//
+// Detection is read-only on purpose. Auto-deleting risks papering over
+// a removal that wasn't intended; the diagnostic instructs the
+// developer to remove the file explicitly.
+void _checkForOrphanedApiModules() {
+  final apiDir = Directory(_generatedDartApiDir);
+  if (!apiDir.existsSync()) return;
+
+  final dispatcher = File(_frbGeneratedDispatcher);
+  if (!dispatcher.existsSync()) {
+    stderr.writeln(
+      '${_errorPrefix}expected dispatcher file not found: '
+      '$_frbGeneratedDispatcher (post-codegen orphan check cannot run)',
+    );
+    exit(1);
+  }
+  final dispatcherSource = dispatcher.readAsStringSync();
+
+  final orphans = <String>[];
+  for (final entity in apiDir.listSync()) {
+    if (entity is! File) continue;
+    final basename = entity.uri.pathSegments.last;
+    if (!basename.endsWith('.dart')) continue;
+    if (basename.endsWith('.freezed.dart') || basename.endsWith('.g.dart')) {
+      continue;
+    }
+    final importLine = "import 'api/$basename';";
+    if (!dispatcherSource.contains(importLine)) {
+      orphans.add(entity.path);
+    }
+  }
+  if (orphans.isEmpty) return;
+  // Sort so CI logs and local runs report orphans in a deterministic
+  // order regardless of `Directory.listSync`'s filesystem-dependent
+  // iteration order.
+  orphans.sort();
+
+  stderr.writeln(
+    "${_errorPrefix}orphaned generated module(s) under "
+    '$_generatedDartApiDir/:',
+  );
+  for (final path in orphans) {
+    stderr.writeln('       $path');
+  }
+  stderr.writeln(
+    "       The corresponding rust/src/api/<basename>.rs no longer exposes\n"
+    '       any FRB-visible items (or has been deleted), so codegen did not\n'
+    "       regenerate the file. Remove it (and any *.freezed.dart /\n"
+    "       *.g.dart companions) and rerun this script.",
+  );
+  exit(1);
 }
 
 // Append the given lint names to the `// ignore_for_file:` directive of
