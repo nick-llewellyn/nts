@@ -35,15 +35,18 @@ Future<void> main() async {
   try {
     // Phase 1 — warm the cookie jar. Forces a fresh TLS 1.3 NTS-KE
     // handshake against `spec`, ingests the delivered cookie pool, and
-    // returns how many cookies the server handed out. RFC 8915 §4
-    // leaves that count to server policy, so the burst below is sized
-    // off this return value rather than any fixed constant. Replaces
-    // any cached session for that `spec`, so subsequent `ntsQuery`
-    // calls skip the KE leg until the jar drains. Useful at startup or
-    // whenever the NTS-KE cost should be amortized away from a
-    // time-critical path. `timeoutMs` and `dnsConcurrencyCap` are
-    // omitted here so the package's tuned defaults
-    // (`kDefaultTimeoutMs`, `kDefaultDnsConcurrencyCap`) apply.
+    // returns an `NtsWarmCookiesOutcome` whose `freshCookies` field
+    // reports how many cookies the server handed out alongside a
+    // `phaseTimings` breakdown of the handshake's wall-clock cost.
+    // RFC 8915 §4 leaves that count to server policy, so the burst
+    // below is sized off this return value rather than any fixed
+    // constant. Replaces any cached session for that `spec`, so
+    // subsequent `ntsQuery` calls skip the KE leg until the jar
+    // drains. Useful at startup or whenever the NTS-KE cost should be
+    // amortized away from a time-critical path. `timeoutMs` and
+    // `dnsConcurrencyCap` are omitted here so the package's tuned
+    // defaults (`kDefaultTimeoutMs`, `kDefaultDnsConcurrencyCap`)
+    // apply.
     final warmed = await ntsWarmCookies(spec: spec);
     print('warmed   = ${warmed.freshCookies} cookies');
 

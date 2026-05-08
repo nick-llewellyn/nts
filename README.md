@@ -186,8 +186,9 @@ logic to wall-clock time should add two cheap layers on top:
    packet. Calling `ntsWarmCookies` once and then `ntsQuery` several
    times in quick succession — one query per cookie the server
    delivered, since RFC 8915 §4 leaves the pool size to server policy
-   and `ntsWarmCookies` returns the actual count — produces a small
-   distribution you can reason about statistically. Pick the sample
+   and the returned `NtsWarmCookiesOutcome.freshCookies` reports the
+   actual count — produces a small distribution you can reason about
+   statistically. Pick the sample
    with the smallest
    `roundTripMicros`; on a low-RTT path the symmetric-path assumption
    below holds tightest, so that sample carries the smallest residual
@@ -224,14 +225,17 @@ burst-filter-compensate flow described above.
 |--------|---------|
 | `RustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
 | `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
-| `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | Force a fresh NTS-KE handshake; returns cookie count. |
+| `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | Force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
 | `kDefaultTimeoutMs` | Package default for `timeoutMs` (5000). |
 | `kDefaultDnsConcurrencyCap` | Package default for `dnsConcurrencyCap` (`0`, the sentinel that selects the Rust-side default). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
-| `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`. |
+| `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`. |
+| `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`. The UDP phase does not run on this path, so only KE-pipeline timings are populated. |
+| `PhaseTimings` | `dnsMicros`, `connectMicros`, `tlsHandshakeMicros`, `keRecordIoMicros`. Microsecond-resolution wall-clock breakdown of the four pre-NTP phases of an `ntsQuery` / `ntsWarmCookies` call. Phases that did not run report `0`. See ARCHITECTURE.md's "Phase attribution and timings" section. |
+| `TimeoutPhase` | `dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`, `ntp`. Carried as the payload of `NtsError.timeout` so callers can attribute a budget exhaustion to a specific phase without parsing diagnostic strings. |
 | `NtsDnsPoolStats` | `inFlight`, `highWaterMark`, `recovered`, `refused`. Process-wide pool counters; relaxed-atomic snapshot. |
-| `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout`, `noCookies`, `internal`. |
+| `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout(TimeoutPhase)`, `noCookies`, `internal`. |
 
 `ntsQuery` and `ntsWarmCookies` ship as a hand-written wrapper around
 the bundled FFI surface; consumers can omit `timeoutMs` and
