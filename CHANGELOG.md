@@ -65,6 +65,55 @@ in the FFI signatures and the `NtsError::Timeout` payload (closes
   the KE phases now short-circuits with `Timeout(Ntp)` immediately
   rather than entering the UDP-setup leg at all.
 
+### Tooling: orphan detection in the FRB drift check (no runtime impact)
+
+- `tool/check_bindings.dart` now runs `_checkForOrphanedApiModules`
+  after codegen + lint patches + format and before the trailing
+  `git diff` drift check. The check walks `lib/src/ffi/api/*.dart`
+  (skipping `*.freezed.dart` and `*.g.dart` companions, which are
+  emitted from `part` directives in the primary file rather than
+  referenced from the dispatcher) and flags any primary module file
+  the regenerated `lib/src/ffi/frb_generated.dart` does not import.
+  Closes the FRB stale-module footgun: when the last `pub` item is
+  removed from a `rust/src/api/<module>.rs`, FRB drops the wire
+  impls from `frb_generated.{rs,dart}` but leaves the previously
+  emitted `lib/src/ffi/api/<module>.dart` on disk. The stale module
+  then references symbols that no longer exist in the dispatcher
+  and surfaces as an opaque "symbol not found in `RustLibApi`"
+  build break under `flutter analyze` / `flutter test` rather than
+  at codegen time. The dispatcher's `import 'api/<basename>.dart';`
+  line set is the authoritative "still contributing" stand-in: FRB
+  writes one such import for every Rust source under `rust/src/api/`
+  that contributed at least one FRB-visible item on the most recent
+  codegen run, so running the check after codegen guarantees the
+  import set is current regardless of what is committed.
+- Detection is read-only on purpose. Auto-deleting risks papering
+  over a removal that wasn't intended; the diagnostic instructs
+  the developer to remove the orphan (and any `*.freezed.dart` /
+  `*.g.dart` companions) explicitly. The orphan list is sorted
+  before printing so the diagnostic renders deterministically
+  across filesystems with different `Directory.listSync` iteration
+  orders (APFS, ext4, etc. differ). Local invocation produces
+  `error: ` prefixed lines; CI invocation under `GITHUB_ACTIONS=true`
+  emits the same body with `::error::` so the `rust-bridge-sync`
+  job surfaces it as a workflow annotation. Exit code is `1` on
+  the orphan path, failing the job explicitly on the orphan
+  diagnostic rather than implicitly via trailing drift. Header
+  comment in `tool/check_bindings.dart` is rewritten to document
+  the orphan check and its rationale (closes `nts-lmf`).
+
+### Coverage artefact ignore at any depth
+
+- `.gitignore` gains an unanchored `coverage/` entry. `flutter test
+  --coverage` writes `coverage/lcov.info` at the package root, and
+  `cargo tarpaulin --output-dir coverage` (configured in
+  `rust/tarpaulin.toml`) writes `rust/coverage/lcov.info`. Both are
+  local artefacts: each CI run regenerates them and uploads to
+  Codecov directly from `.github/workflows/ci.yml`, so the in-tree
+  copies are never consumed by anything downstream. The unanchored
+  pattern catches both paths above; `example/coverage/` was already
+  covered by `example/.gitignore:34`, so no duplication.
+
 ## 1.4.0
 
 Converts `nts` from a pure Dart package using the Native Assets pipeline
