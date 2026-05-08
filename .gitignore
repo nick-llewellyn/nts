@@ -21,6 +21,15 @@ example/macos/Podfile.lock
 example/ios/Pods/
 example/macos/Pods/
 
+# Coverage artefacts. Both `flutter test --coverage` (Dart) and
+# `cargo tarpaulin --output-dir coverage` (Rust, configured in
+# `rust/tarpaulin.toml`) write `lcov.info` into a sibling `coverage/`
+# directory. Each CI run regenerates and uploads the file to Codecov
+# directly from the workflow (see `.github/workflows/ci.yml` →
+# `Upload Dart coverage to Codecov` / `Upload Rust coverage to
+# Codecov`); the in-tree copy is purely a local artefact.
+coverage/
+
 # FRB-generated bindings ARE committed (`lib/src/ffi/`, `rust/src/frb_generated.rs`)
 # so that `flutter pub get` works without requiring the FRB CLI to be installed.
 # Regenerate with: flutter_rust_bridge_codegen generate
