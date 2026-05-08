@@ -264,8 +264,9 @@ class NtsTimeSample {
   final int freshCookies;
 
   /// Microsecond-resolution wall-clock breakdown of the pre-NTP
-  /// phases of this call. Combined with [`Self::round_trip_micros`]
-  /// it accounts for the entire wall-clock cost of [`nts_query`].
+  /// phases of this call. Combined with `round_trip_micros`
+  /// (Dart: `roundTripMicros`) it accounts for the entire
+  /// wall-clock cost of `nts_query` (Dart: `ntsQuery`).
   final PhaseTimings phaseTimings;
 
   const NtsTimeSample({
@@ -309,9 +310,9 @@ class NtsWarmCookiesOutcome {
   final int freshCookies;
 
   /// Microsecond-resolution wall-clock breakdown of the handshake
-  /// that produced the cookies. The UDP NTP exchange is not part of
-  /// this call, so [`PhaseTimings::dns_micros`] reflects only the
-  /// KE-host lookup.
+  /// that produced the cookies. The UDP NTP exchange is not part
+  /// of this call, so `dns_micros` (Dart: `dnsMicros`) reflects
+  /// only the KE-host lookup.
   final PhaseTimings phaseTimings;
 
   const NtsWarmCookiesOutcome({
@@ -353,12 +354,13 @@ class NtsWarmCookiesOutcome {
 /// run; their costs are summed into a single `dns_micros` value so
 /// callers do not have to reason about which path contributed.
 class PhaseTimings {
-  /// Sum of wall-clock microseconds spent in
-  /// [`crate::nts::dns::resolve_with_global`] across both the
-  /// KE-host lookup (when a handshake runs) and the NTPv4-host
-  /// lookup. Combined into a single field because callers
-  /// diagnosing slow DNS care about the host-level cost regardless
-  /// of which leg consumed it.
+  /// Sum of wall-clock microseconds spent in the bounded DNS
+  /// resolver across both the KE-host lookup (when a handshake
+  /// runs) and the NTPv4-host lookup. Combined into a single
+  /// field because callers diagnosing slow DNS care about the
+  /// host-level cost regardless of which leg consumed it. See
+  /// `ARCHITECTURE.md`'s "Timeout budget and bounded DNS"
+  /// section for the resolver semantics.
   final PlatformInt64 dnsMicros;
 
   /// Wall-clock microseconds spent in the per-address
