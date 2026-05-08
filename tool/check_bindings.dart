@@ -222,11 +222,14 @@ Future<bool> _hasDrift() async {
 // FRB-visible item on the most recent codegen run, so the dispatcher's
 // import set is the authoritative "still contributing" stand-in.
 //
-// `*.freezed.dart` and `*.g.dart` companions are skipped: they're
-// emitted by other generators driven from the primary file's
-// `part 'X.freezed.dart';` / `part 'X.g.dart';` directives, and the
-// dispatcher does not import them directly. If the primary file goes
-// orphan, the companion would be reported under it once removed.
+// `*.freezed.dart` and `*.g.dart` companions are intentionally ignored
+// by this check: they're emitted by other generators driven from the
+// primary file's `part 'X.freezed.dart';` / `part 'X.g.dart';`
+// directives, and the dispatcher does not import them directly. When
+// the primary file is reported as orphaned, any companions next to it
+// must be removed manually alongside it (the remediation message below
+// names them explicitly); the check does not flag a stray companion on
+// its own.
 //
 // Detection is read-only on purpose. Auto-deleting risks papering over
 // a removal that wasn't intended; the diagnostic instructs the
@@ -238,7 +241,7 @@ void _checkForOrphanedApiModules() {
   final dispatcher = File(_frbGeneratedDispatcher);
   if (!dispatcher.existsSync()) {
     stderr.writeln(
-      '$_errorPrefix expected dispatcher file not found: '
+      '${_errorPrefix}expected dispatcher file not found: '
       '$_frbGeneratedDispatcher (post-codegen orphan check cannot run)',
     );
     exit(1);
@@ -259,6 +262,10 @@ void _checkForOrphanedApiModules() {
     }
   }
   if (orphans.isEmpty) return;
+  // Sort so CI logs and local runs report orphans in a deterministic
+  // order regardless of `Directory.listSync`'s filesystem-dependent
+  // iteration order.
+  orphans.sort();
 
   stderr.writeln(
     "${_errorPrefix}orphaned generated module(s) under "
