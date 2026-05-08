@@ -791,10 +791,7 @@ where
     let connect_started = Instant::now();
     let mut last_err: Option<std::io::Error> = None;
     for addr in addrs {
-        let remaining = match deadline.check_or_timeout(KeTimeoutPhase::Connect) {
-            Ok(r) => r,
-            Err(e) => return Err(e),
-        };
+        let remaining = deadline.check_or_timeout(KeTimeoutPhase::Connect)?;
         match TcpStream::connect_timeout(&addr, remaining) {
             Ok(stream) => {
                 let connect_micros = connect_started.elapsed().as_micros() as i64;

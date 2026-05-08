@@ -54,6 +54,16 @@ in the FFI signatures and the `NtsError::Timeout` payload (closes
 - `nts_warm_cookies` exposes the same KE-phase breakdown via
   `NtsWarmCookiesOutcome.phase_timings`. The UDP NTP exchange does not
   run on this path, so the `Ntp` phase is implicitly zero.
+- `nts_query` now anchors a single call-wide wall-clock at the top of
+  the call and subtracts the time consumed by the KE phases before
+  arming the UDP-setup deadline. Restores the documented "single
+  global wall-clock budget" contract on `timeout_ms`; previously a
+  cold query whose KE phases consumed most of `timeout_ms` would
+  re-anchor a fresh `timeout_ms`-long window for the UDP leg, letting
+  the total wall-clock reach roughly 2x the caller's budget before
+  surfacing as `Timeout(Ntp)`. A budget that was already exhausted by
+  the KE phases now short-circuits with `Timeout(Ntp)` immediately
+  rather than entering the UDP-setup leg at all.
 
 ## 1.4.0
 

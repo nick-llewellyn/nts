@@ -497,6 +497,30 @@ fn effective_timeout(timeout_ms: u32) -> Duration {
     Duration::from_millis(ms.into())
 }
 
+/// Compute the budget left for the UDP-setup leg of [`nts_query`]
+/// given the call-wide `total` and the wall-clock already consumed by
+/// the KE phases (`elapsed`). Returns
+/// `NtsError::Timeout(TimeoutPhase::Ntp)` when the call-wide budget
+/// has already been exhausted, since the next blocking syscall after
+/// this point is the AEAD-NTPv4 `send`/`recv` round-trip — the same
+/// phase tag `bind_connected_udp_using` would emit post-DNS once it
+/// detected a zero remaining slice.
+///
+/// Extracted from the inline subtraction in [`nts_query`] purely so
+/// the saturating arithmetic is unit-testable without standing up a
+/// live KE responder; the regression this guards against is the
+/// fresh-`timeout` re-arm that allowed a cold query's wall-clock to
+/// reach ~2x the caller's budget before returning a timeout.
+fn remaining_budget_or_ntp_timeout(
+    total: Duration,
+    elapsed: Duration,
+) -> Result<Duration, NtsError> {
+    total
+        .checked_sub(elapsed)
+        .filter(|d| !d.is_zero())
+        .ok_or(NtsError::Timeout(TimeoutPhase::Ntp))
+}
+
 /// Resolve the FFI `dns_concurrency_cap` argument into a `usize`,
 /// substituting [`DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`] when the caller
 /// passes `0`. The default is sized for mobile (see the constant's
@@ -924,6 +948,14 @@ pub fn nts_query(
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
     let key = session_key(&spec);
 
+    // Anchor the call-wide wall-clock budget *before* `checkout` so a
+    // KE handshake that consumes most of `timeout` cannot re-arm a
+    // fresh `timeout`-long window for the UDP setup leg below. Without
+    // this anchor a cold query could overshoot the caller's budget by
+    // up to 2x (KE: ~`timeout` then UDP: another fresh `timeout`),
+    // which contradicts the documented "single global wall-clock
+    // budget" contract on `timeout_ms`.
+    let started = Instant::now();
     let (ctx, ke_timings) = checkout(&spec, timeout, cap)?;
     let session_generation = ctx.session_generation;
 
@@ -995,10 +1027,20 @@ pub fn nts_query(
     // the family of whichever resolved address actually accepts a UDP
     // connection. The previous hard-coded `0.0.0.0:0` bind silently broke
     // every IPv6-only NTS endpoint (Netnod and several PTB hosts).
+    //
+    // Subtract the wall-clock already spent in `checkout` (DNS +
+    // connect + TLS + KE record I/O on a cold query, microseconds on
+    // a warm cache hit) from the caller's budget so the UDP-setup
+    // deadline shares the same anchor. An already-elapsed budget
+    // short-circuits with `Timeout(Ntp)` here — the next blocking
+    // syscall after this point is the AEAD-NTPv4 `send`/`recv`,
+    // which is the same phase `bind_connected_udp_using` would tag
+    // post-DNS (see its `remaining_or_timeout` comment).
+    let udp_budget = remaining_budget_or_ntp_timeout(timeout, started.elapsed())?;
     let UdpBindOutcome {
         socket,
         dns_micros: udp_dns_micros,
-    } = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, timeout, cap)?;
+    } = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, udp_budget, cap)?;
 
     let send_at = Instant::now();
     socket.send(&packet)?;
@@ -1927,6 +1969,153 @@ mod tests {
             "write_timeout {write_t:?} must be in (0, {upper_bound:?}); \
              original budget was {budget:?} and DNS consumed ~{dns_consumes:?}",
         );
+    }
+
+    /// Pins `From<KeError> for NtsError` for every variant of the
+    /// `KeTimeoutPhase` taxonomy. The mapping is the load-bearing
+    /// hand-off between the KE layer's phase-tagged failure shape and
+    /// the public Dart-facing `NtsError::Timeout(TimeoutPhase)`
+    /// surface; a regression that drops one of the variants would
+    /// silently re-route the failure through `KeProtocol` (the
+    /// catch-all arm) and lose the attribution. The pre-existing
+    /// `connect_with_timeout_*` and `bind_connected_udp_*` tests cover
+    /// `Connect` and `DnsTimeout` end-to-end; this mapping test
+    /// closes the residual gap on `DnsSaturation`, `Tls`, and
+    /// `KeRecordIo`, and pins the full set together so the taxonomy
+    /// is checked exhaustively in one place.
+    #[test]
+    fn ke_phase_timeout_maps_to_nts_timeout_for_every_phase() {
+        let cases = [
+            (KeTimeoutPhase::DnsSaturation, TimeoutPhase::DnsSaturation),
+            (KeTimeoutPhase::DnsTimeout, TimeoutPhase::DnsTimeout),
+            (KeTimeoutPhase::Connect, TimeoutPhase::Connect),
+            (KeTimeoutPhase::Tls, TimeoutPhase::Tls),
+            (KeTimeoutPhase::KeRecordIo, TimeoutPhase::KeRecordIo),
+        ];
+        for (ke_phase, expected) in cases {
+            let mapped = NtsError::from(KeError::PhaseTimeout(ke_phase));
+            match mapped {
+                NtsError::Timeout(got) => assert_eq!(
+                    got, expected,
+                    "KeTimeoutPhase::{ke_phase:?} mapped to NtsError::Timeout({got:?}); \
+                     expected NtsError::Timeout({expected:?})",
+                ),
+                other => panic!(
+                    "KeTimeoutPhase::{ke_phase:?} produced {other:?}; \
+                     expected NtsError::Timeout({expected:?})",
+                ),
+            }
+        }
+    }
+
+    /// Pins `From<io::Error> for NtsError` for the UDP send/recv
+    /// path. Both `TimedOut` (the standard read/write-timeout
+    /// signal) and `WouldBlock` (the socket-non-blocking edge case
+    /// some platforms surface for an expired SO_RCVTIMEO) must land
+    /// on `Timeout(Ntp)` — that conversion site is reached only by
+    /// `socket.send` / `socket.recv` in `nts_query` (the KE pipeline
+    /// has its own phase-aware funnel, see the rustdoc on the
+    /// `From<io::Error>` impl), so `Ntp` is the only correct tag.
+    #[test]
+    fn io_error_timed_out_or_would_block_maps_to_timeout_ntp() {
+        for kind in [std::io::ErrorKind::TimedOut, std::io::ErrorKind::WouldBlock] {
+            let io_err = std::io::Error::from(kind);
+            match NtsError::from(io_err) {
+                NtsError::Timeout(TimeoutPhase::Ntp) => {}
+                other => panic!(
+                    "io::Error of {kind:?} mapped to {other:?}; \
+                     expected NtsError::Timeout(Ntp)",
+                ),
+            }
+        }
+    }
+
+    /// End-to-end UDP send/recv-timeout regression. Binds a real
+    /// `UdpSocket` against an unbound loopback port, arms a tight
+    /// `SO_RCVTIMEO`, and proves that the `io::Error` the kernel
+    /// returns from `recv` flows through `From<io::Error> for
+    /// NtsError` as `Timeout(Ntp)`. This is the integration-level
+    /// counterpart to the mapping unit test above and pins the
+    /// "actual UDP send/recv timeout" path the public API surfaces
+    /// to callers diagnosing a stalled NTPv4 round-trip.
+    #[test]
+    fn udp_recv_timeout_surfaces_as_timeout_ntp() {
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("bind UDP socket");
+        // Connect to a port we own but never read from, so any send
+        // is silently absorbed and the recv has nothing to read.
+        let absorber = UdpSocket::bind("127.0.0.1:0").expect("bind absorber");
+        let absorber_addr = absorber.local_addr().expect("absorber local_addr");
+        socket.connect(absorber_addr).expect("connect to absorber");
+        socket
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .expect("set_read_timeout");
+
+        let mut buf = [0u8; 16];
+        let started = Instant::now();
+        let io_err = socket
+            .recv(&mut buf)
+            .expect_err("recv with no peer must time out");
+        let elapsed = started.elapsed();
+        assert!(
+            matches!(
+                io_err.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock,
+            ),
+            "recv produced {:?} (kind {:?}); expected TimedOut/WouldBlock",
+            io_err,
+            io_err.kind(),
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "recv took {elapsed:?}; SO_RCVTIMEO did not fire",
+        );
+        match NtsError::from(io_err) {
+            NtsError::Timeout(TimeoutPhase::Ntp) => {}
+            other => panic!(
+                "UDP recv timeout mapped to {other:?}; \
+                 expected NtsError::Timeout(Ntp)",
+            ),
+        }
+    }
+
+    /// Pins the call-wide budget contract `nts_query` enforces
+    /// between the KE phases and the UDP-setup leg. Once `elapsed`
+    /// reaches or exceeds `total`, the helper short-circuits with
+    /// `Timeout(Ntp)` rather than handing back `Duration::ZERO`
+    /// (which would let `bind_connected_udp_using` re-anchor a
+    /// near-zero deadline and emit a misleading `DnsTimeout` tag for
+    /// what is in fact a post-KE budget exhaustion). A non-zero
+    /// remainder propagates through unchanged, including the
+    /// boundary case where the slack is exactly one nanosecond.
+    /// Regression for the "single global wall-clock budget" claim
+    /// in the `nts_query` rustdoc; without this helper a cold query
+    /// could overshoot the caller's budget by up to 2x by re-arming
+    /// a fresh `timeout` for the UDP leg.
+    #[test]
+    fn remaining_budget_or_ntp_timeout_short_circuits_when_elapsed_meets_total() {
+        let total = Duration::from_millis(100);
+        // Slack remaining: helper hands the difference back unchanged.
+        let r = remaining_budget_or_ntp_timeout(total, Duration::from_millis(40))
+            .expect("non-zero slack must propagate");
+        assert_eq!(r, Duration::from_millis(60));
+
+        // Budget exactly consumed: short-circuit with Timeout(Ntp).
+        match remaining_budget_or_ntp_timeout(total, total) {
+            Err(NtsError::Timeout(TimeoutPhase::Ntp)) => {}
+            other => panic!("elapsed == total must yield Timeout(Ntp), got {other:?}"),
+        }
+
+        // Budget overrun: same short-circuit, no panic on saturating sub.
+        match remaining_budget_or_ntp_timeout(total, total + Duration::from_millis(50)) {
+            Err(NtsError::Timeout(TimeoutPhase::Ntp)) => {}
+            other => panic!("elapsed > total must yield Timeout(Ntp), got {other:?}"),
+        }
+
+        // Sub-microsecond slack still propagates as Ok.
+        let nearly = total - Duration::from_nanos(1);
+        let r = remaining_budget_or_ntp_timeout(total, nearly)
+            .expect("one-nanosecond slack must propagate");
+        assert_eq!(r, Duration::from_nanos(1));
     }
 
     /// Live integration probe — performs a real NTS-KE handshake and
