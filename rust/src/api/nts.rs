@@ -21,7 +21,9 @@ use std::time::{Duration, Instant};
 use crate::nts::aead::{AeadError, AeadKey};
 use crate::nts::cookies::CookieJar;
 use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
-use crate::nts::ke::{perform_handshake, KeError, KeOutcome, KeRequest};
+use crate::nts::ke::{
+    perform_handshake, KeError, KeOutcome, KePhaseTimings, KeRequest, KeTimeoutPhase,
+};
 use crate::nts::ntp::{build_client_request, parse_server_response, ClientRequest, NtpError};
 use crate::nts::records::aead as aead_ids;
 
@@ -50,6 +52,118 @@ pub struct NtsServerSpec {
     pub port: u16,
 }
 
+/// Phase of an [`nts_query`] / [`nts_warm_cookies`] call whose
+/// wall-clock budget elapsed.
+///
+/// Carried as the payload of [`NtsError::Timeout`] so callers can
+/// attribute a failure to a specific pre-NTP step instead of inspecting
+/// free-form diagnostic strings. The Rust-side [`KeTimeoutPhase`] for
+/// the KE pipeline maps onto this enum via `From`; the `Ntp` variant is
+/// added at this layer for the UDP send/recv phase, and the two `Dns*`
+/// variants distinguish saturation (cap full) from timeout (resolver
+/// slow). See `ARCHITECTURE.md`'s "Phase attribution and timings"
+/// section for the full diagnostic shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeoutPhase {
+    /// Bounded DNS resolver pool was already at capacity when the call
+    /// arrived, so admission was refused without spawning a worker.
+    /// Distinct from [`Self::DnsTimeout`]: raising
+    /// `dns_concurrency_cap` or waiting for the in-flight pool to
+    /// drain is the appropriate remediation, not lengthening
+    /// `timeout_ms`.
+    DnsSaturation,
+    /// System resolver took longer than the remaining budget.
+    /// Lengthening `timeout_ms` *or* swapping in a faster recursive
+    /// resolver are the appropriate remediations; raising the
+    /// concurrency cap would only allow more threads to wedge in the
+    /// same lookup.
+    DnsTimeout,
+    /// Per-address `TcpStream::connect_timeout` budget elapsed before
+    /// any KE-host candidate accepted, or the global deadline expired
+    /// before the connect loop could try the next address.
+    Connect,
+    /// TLS handshake / initial NTS-KE request write tripped the
+    /// deadline. In TLS 1.3 the first write is what completes the
+    /// ClientHello/ServerHello/Finished round-trip.
+    Tls,
+    /// Read of the NTS-KE response records exceeded the remaining
+    /// budget — the server completed TLS but is now drip-feeding (or
+    /// has stalled completely on) the record exchange.
+    KeRecordIo,
+    /// AEAD-NTPv4 UDP `send` / `recv` exceeded the remaining budget.
+    /// Either the destination is unreachable or the wire round-trip
+    /// time was too long for the configured budget.
+    Ntp,
+}
+
+impl From<KeTimeoutPhase> for TimeoutPhase {
+    fn from(p: KeTimeoutPhase) -> Self {
+        match p {
+            KeTimeoutPhase::DnsSaturation => Self::DnsSaturation,
+            KeTimeoutPhase::DnsTimeout => Self::DnsTimeout,
+            KeTimeoutPhase::Connect => Self::Connect,
+            KeTimeoutPhase::Tls => Self::Tls,
+            KeTimeoutPhase::KeRecordIo => Self::KeRecordIo,
+        }
+    }
+}
+
+/// Microsecond-resolution wall-clock breakdown of a successful
+/// [`nts_query`] or [`nts_warm_cookies`] call, surfaced on
+/// [`NtsTimeSample::phase_timings`] / [`NtsWarmCookiesOutcome::phase_timings`].
+///
+/// Field semantics match [`KePhaseTimings`] for the four KE-pipeline
+/// phases. The UDP send/recv phase has no field of its own; the
+/// existing [`NtsTimeSample::round_trip_micros`] already covers it
+/// (kept for backward-compatibility on the Dart side and to avoid
+/// publishing the same fact in two fields). Callers who want a
+/// "preNtp" wall-clock view can sum
+/// `dns_micros + connect_micros + tls_handshake_micros +
+/// ke_record_io_micros`; the per-call total wall-clock is that sum
+/// plus `round_trip_micros`.
+///
+/// Phases that did not run are reported as `0` rather than absent —
+/// e.g. on a cache-hit query (no KE handshake), `connect_micros`,
+/// `tls_handshake_micros`, and `ke_record_io_micros` are all `0` and
+/// `dns_micros` reflects only the UDP-path lookup of the NTPv4 host.
+/// On a fresh-session query both KE-path and UDP-path DNS lookups
+/// run; their costs are summed into a single `dns_micros` value so
+/// callers do not have to reason about which path contributed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PhaseTimings {
+    /// Sum of wall-clock microseconds spent in
+    /// [`crate::nts::dns::resolve_with_global`] across both the
+    /// KE-host lookup (when a handshake runs) and the NTPv4-host
+    /// lookup. Combined into a single field because callers
+    /// diagnosing slow DNS care about the host-level cost regardless
+    /// of which leg consumed it.
+    pub dns_micros: i64,
+    /// Wall-clock microseconds spent in the per-address
+    /// `TcpStream::connect_timeout` loop during the KE handshake.
+    /// `0` on cache-hit queries.
+    pub connect_micros: i64,
+    /// Wall-clock microseconds spent on the rustls
+    /// `Stream::write_all` + `flush` window during the KE handshake.
+    /// In TLS 1.3 this includes the ClientHello/ServerHello/Finished
+    /// round-trip plus the initial NTS-KE request write. `0` on
+    /// cache-hit queries.
+    pub tls_handshake_micros: i64,
+    /// Wall-clock microseconds spent in the chunked record-read loop
+    /// reading the server's NTS-KE response. `0` on cache-hit queries.
+    pub ke_record_io_micros: i64,
+}
+
+impl From<KePhaseTimings> for PhaseTimings {
+    fn from(t: KePhaseTimings) -> Self {
+        Self {
+            dns_micros: t.dns_micros,
+            connect_micros: t.connect_micros,
+            tls_handshake_micros: t.tls_handshake_micros,
+            ke_record_io_micros: t.ke_record_io_micros,
+        }
+    }
+}
+
 /// Successful authenticated NTPv4 sample.
 ///
 /// This is the raw output of one protocol exchange, not a synchronized
@@ -63,7 +177,11 @@ pub struct NtsTimeSample {
     /// `round_trip_micros / 2` to estimate the server's clock at the
     /// moment the reply arrived.
     pub utc_unix_micros: i64,
-    /// Wall-clock microseconds elapsed between client send and client receive.
+    /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
+    /// `send` and the matching `recv`. This *is* the UDP-phase
+    /// wall-clock cost — there is no separate `udp_send_recv_micros`
+    /// in [`PhaseTimings`] because that would publish the same fact
+    /// in two fields.
     pub round_trip_micros: i64,
     /// NTP stratum reported by the server (RFC 5905 §7.3).
     pub server_stratum: u8,
@@ -71,6 +189,26 @@ pub struct NtsTimeSample {
     pub aead_id: u16,
     /// Number of fresh cookies recovered from the encrypted reply.
     pub fresh_cookies: u32,
+    /// Microsecond-resolution wall-clock breakdown of the pre-NTP
+    /// phases of this call. Combined with [`Self::round_trip_micros`]
+    /// it accounts for the entire wall-clock cost of [`nts_query`].
+    pub phase_timings: PhaseTimings,
+}
+
+/// Successful outcome of [`nts_warm_cookies`].
+///
+/// Replaces the prior bare `u32` return so the same phase-attribution
+/// view available on [`NtsTimeSample`] is also available for the
+/// handshake-only path callers use to refill an empty cookie pool.
+#[derive(Debug, Clone)]
+pub struct NtsWarmCookiesOutcome {
+    /// Number of fresh cookies the server delivered with the KE response.
+    pub fresh_cookies: u32,
+    /// Microsecond-resolution wall-clock breakdown of the handshake
+    /// that produced the cookies. The UDP NTP exchange is not part of
+    /// this call, so [`PhaseTimings::dns_micros`] reflects only the
+    /// KE-host lookup.
+    pub phase_timings: PhaseTimings,
 }
 
 /// Snapshot of the bounded DNS resolver pool counters.
@@ -170,8 +308,14 @@ pub enum NtsError {
     NtpProtocol(String),
     /// AEAD seal/open failed (tag mismatch, malformed input).
     Authentication(String),
-    /// UDP receive timed out.
-    Timeout,
+    /// Wall-clock budget elapsed inside one of the call's pre-NTP or
+    /// NTP phases. The [`TimeoutPhase`] payload identifies which
+    /// phase tripped the deadline so callers can choose the right
+    /// remediation (raise the resolver cap on `DnsSaturation`,
+    /// lengthen `timeout_ms` on `DnsTimeout` / `Connect` / `Tls` /
+    /// `KeRecordIo` / `Ntp`, etc.). See [`TimeoutPhase`] for the full
+    /// taxonomy.
+    Timeout(TimeoutPhase),
     /// Cookie jar empty after a handshake (server delivered none).
     NoCookies,
     /// Bug guard for unreachable internal states.
@@ -186,7 +330,7 @@ impl std::fmt::Display for NtsError {
             Self::KeProtocol(m) => write!(f, "NTS-KE: {m}"),
             Self::NtpProtocol(m) => write!(f, "NTPv4: {m}"),
             Self::Authentication(m) => write!(f, "AEAD: {m}"),
-            Self::Timeout => f.write_str("operation timed out"),
+            Self::Timeout(p) => write!(f, "operation timed out in phase {p:?}"),
             Self::NoCookies => f.write_str("server delivered no cookies"),
             Self::Internal(m) => write!(f, "internal: {m}"),
         }
@@ -198,14 +342,13 @@ impl std::error::Error for NtsError {}
 impl From<KeError> for NtsError {
     fn from(e: KeError) -> Self {
         match e {
-            // Funnel through `From<std::io::Error>` so `TimedOut` /
-            // `WouldBlock` (the kinds produced by `connect_timeout` and
-            // by socket read/write deadlines) surface as `Timeout`
-            // rather than being flattened into `Network`. Without this,
-            // a blackholed TCP/4460 destination would arrive on the
-            // Dart side as a generic network error after the connect
-            // deadline fired.
-            KeError::Io(io) => Self::from(io),
+            // Phase-tagged timeouts surface verbatim so callers can
+            // distinguish DNS saturation from a slow record read
+            // without parsing the diagnostic string. Non-timeout I/O
+            // failures (NXDOMAIN, ECONNREFUSED, …) reach Dart as
+            // `Network` with the underlying message preserved.
+            KeError::PhaseTimeout(p) => Self::Timeout(p.into()),
+            KeError::Io(io) => Self::Network(io.to_string()),
             KeError::Tls(t) => Self::KeProtocol(format!("TLS: {t}")),
             KeError::NoCookies => Self::NoCookies,
             other => Self::KeProtocol(other.to_string()),
@@ -259,10 +402,22 @@ impl From<AeadError> for NtsError {
     }
 }
 
+/// `?`-driven conversion used by the AEAD-NTPv4 UDP exchange in
+/// [`nts_query`] (`socket.send` / `socket.recv` propagate
+/// `io::Error` directly). The KE pipeline never reaches this impl —
+/// it routes through `From<KeError>` which carries
+/// [`KeTimeoutPhase`] via [`KeError::PhaseTimeout`] — and
+/// [`bind_connected_udp_using`] does its own phase-aware translation
+/// for the UDP setup leg, so the only `io::Error` shapes that
+/// actually flow through here are the NTP `send`/`recv` ones. That
+/// makes [`TimeoutPhase::Ntp`] the correct (and only) timeout tag
+/// at this conversion site.
 impl From<std::io::Error> for NtsError {
     fn from(e: std::io::Error) -> Self {
         match e.kind() {
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => Self::Timeout,
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+                Self::Timeout(TimeoutPhase::Ntp)
+            }
             _ => Self::Network(e.to_string()),
         }
     }
@@ -362,11 +517,17 @@ fn effective_dns_concurrency_cap(dns_concurrency_cap: u32) -> usize {
 /// every public NTS server we tested actually picks today; GCM-SIV is added
 /// purely so a server that prefers nonce-misuse-resistant GCM still resolves
 /// to a usable AEAD instead of `UnsupportedAead`.
+///
+/// Returns the `Session` together with the per-phase wall-clock
+/// breakdown reported by [`perform_handshake`] so callers
+/// ([`checkout`], [`nts_warm_cookies`]) can fold the KE timings into
+/// the [`PhaseTimings`] surface without re-instrumenting the
+/// handshake.
 fn establish_session(
     spec: &NtsServerSpec,
     timeout: Duration,
     dns_concurrency_cap: usize,
-) -> Result<Session, NtsError> {
+) -> Result<(Session, KePhaseTimings), NtsError> {
     let req = KeRequest {
         host: spec.host.clone(),
         port: spec.port,
@@ -384,7 +545,7 @@ fn establish_session(
         return Err(NtsError::NoCookies);
     }
     jar.put_many(&outcome.ntpv4_host, outcome.cookies);
-    Ok(Session {
+    let session = Session {
         generation: next_session_generation(),
         aead_id: outcome.aead_id,
         c2s_key,
@@ -392,7 +553,8 @@ fn establish_session(
         ntpv4_host: outcome.ntpv4_host,
         ntpv4_port: outcome.ntpv4_port,
         jar,
-    })
+    };
+    Ok((session, outcome.phase_timings))
 }
 
 /// Snapshot of the data a single NTPv4 exchange needs once the lock is released.
@@ -411,22 +573,29 @@ struct QueryContext {
 
 /// Acquire (or establish) a session and pop one cookie. The returned context
 /// owns the cookie and key clones so the network exchange runs lock-free.
+///
+/// Also returns the per-phase wall-clock breakdown of the KE
+/// handshake when one ran. On a cache-hit (the common case once the
+/// session is warm) every phase is reported as `0` because no
+/// handshake was performed.
 fn checkout(
     spec: &NtsServerSpec,
     timeout: Duration,
     dns_concurrency_cap: usize,
-) -> Result<QueryContext, NtsError> {
+) -> Result<(QueryContext, KePhaseTimings), NtsError> {
     let key = session_key(spec);
     let mut guard = sessions().lock().expect("session table poisoned");
     let need_handshake = match guard.get(&key) {
         Some(s) => s.cookies_remaining() == 0,
         None => true,
     };
+    let mut ke_timings = KePhaseTimings::default();
     if need_handshake {
         // Drop the lock across the multi-RTT KE handshake so other queries
         // against unrelated hosts aren't serialized behind it.
         drop(guard);
-        let session = establish_session(spec, timeout, dns_concurrency_cap)?;
+        let (session, timings) = establish_session(spec, timeout, dns_concurrency_cap)?;
+        ke_timings = timings;
         let mut g = sessions().lock().expect("session table poisoned");
         g.insert(key.clone(), session);
         guard = g;
@@ -438,7 +607,7 @@ fn checkout(
         .jar
         .take(&session.ntpv4_host)
         .ok_or(NtsError::NoCookies)?;
-    Ok(QueryContext {
+    let ctx = QueryContext {
         session_generation: session.generation,
         cookie,
         c2s_key: session.c2s_key.clone(),
@@ -446,7 +615,8 @@ fn checkout(
         ntpv4_host: session.ntpv4_host.clone(),
         ntpv4_port: session.ntpv4_port,
         aead_id: session.aead_id,
-    })
+    };
+    Ok((ctx, ke_timings))
 }
 
 /// Deposit fresh cookies harvested from a verified server reply.
@@ -576,19 +746,33 @@ impl UdpDeadline {
     }
 
     /// Convenience wrapper that yields the remaining budget when there
-    /// is still time on the clock and `NtsError::Timeout` once the
-    /// deadline has elapsed. Callers use this immediately before a
+    /// is still time on the clock and `NtsError::Timeout(phase)` once
+    /// the deadline has elapsed. Callers use this immediately before a
     /// blocking step so an already-blown budget short-circuits cleanly
     /// instead of re-arming a zero-length socket timeout (which the
     /// platform may reject with `EINVAL`) or making a doomed
-    /// `resolve_with_global` call.
-    fn remaining_or_timeout(&self) -> Result<Duration, NtsError> {
+    /// `resolve_with_global` call. The `phase` argument identifies
+    /// which step *would* have consumed the elapsed window — the
+    /// pre-DNS callsite tags `DnsTimeout`, the post-DNS / pre-NTP
+    /// callsite tags `Ntp` (the next blocking step is the AEAD-NTPv4
+    /// `send`/`recv` round-trip).
+    fn remaining_or_timeout(&self, phase: TimeoutPhase) -> Result<Duration, NtsError> {
         let remaining = self.remaining();
         if remaining.is_zero() {
-            return Err(NtsError::Timeout);
+            return Err(NtsError::Timeout(phase));
         }
         Ok(remaining)
     }
+}
+
+/// UDP socket plus the wall-clock microseconds the bounded DNS lookup
+/// consumed during setup. Returned by [`bind_connected_udp_using`] so
+/// callers can fold the UDP-path DNS cost into [`PhaseTimings`]
+/// without re-instrumenting the resolver.
+#[derive(Debug)]
+struct UdpBindOutcome {
+    socket: UdpSocket,
+    dns_micros: i64,
 }
 
 fn bind_connected_udp(
@@ -596,7 +780,7 @@ fn bind_connected_udp(
     port: u16,
     timeout: Duration,
     dns_concurrency_cap: usize,
-) -> Result<UdpSocket, NtsError> {
+) -> Result<UdpBindOutcome, NtsError> {
     bind_connected_udp_using(host, port, timeout, dns_concurrency_cap, system_lookup)
 }
 
@@ -616,36 +800,36 @@ fn bind_connected_udp_using<F>(
     timeout: Duration,
     dns_concurrency_cap: usize,
     lookup: F,
-) -> Result<UdpSocket, NtsError>
+) -> Result<UdpBindOutcome, NtsError>
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
     let deadline = UdpDeadline::new(timeout);
-    let dns_budget = deadline.remaining_or_timeout()?;
+    // Pre-DNS budget exhaustion is tagged as `DnsTimeout` because
+    // that is the next phase the call would have entered — see the
+    // `remaining_or_timeout` rustdoc.
+    let dns_budget = deadline.remaining_or_timeout(TimeoutPhase::DnsTimeout)?;
+    let dns_started = Instant::now();
     let candidates: Vec<SocketAddr> =
         match resolve_with_global(host, port, dns_budget, dns_concurrency_cap, lookup) {
             Ok(v) => v,
-            // `WouldBlock` means the bounded resolver pool was saturated
-            // when the call arrived (see `nts::dns`); from the caller's
-            // perspective that is still a "would have to wait, retry
-            // later" condition, so we surface it the same way as a
-            // `TimedOut` resolution rather than as a generic `Network`
-            // error. Matches the canonical `From<io::Error> for NtsError`
-            // mapping used by the KE-side path.
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
-                return Err(NtsError::Timeout)
-            }
             Err(e) => {
-                return Err(NtsError::Network(format!(
-                    "DNS lookup failed for {host}:{port}: {e}"
-                )))
+                // Distinguish saturation (pool already full, no worker
+                // dispatched) from a slow resolver (worker dispatched
+                // but `recv_timeout` fired) so callers can pick the
+                // right remediation. Other I/O kinds are real lookup
+                // failures and surface as `Network` with the
+                // diagnostic preserved.
+                return Err(match e.kind() {
+                    std::io::ErrorKind::WouldBlock => {
+                        NtsError::Timeout(TimeoutPhase::DnsSaturation)
+                    }
+                    std::io::ErrorKind::TimedOut => NtsError::Timeout(TimeoutPhase::DnsTimeout),
+                    _ => NtsError::Network(format!("DNS lookup failed for {host}:{port}: {e}")),
+                });
             }
         };
+    let dns_micros = dns_started.elapsed().as_micros() as i64;
     if candidates.is_empty() {
         return Err(NtsError::Network(format!(
             "no addresses resolved for {host}:{port}"
@@ -676,7 +860,10 @@ where
         // deadline. Re-arming the original `timeout` here is exactly
         // the regression nts-zf2 fixes — it allowed the UDP phase to
         // overshoot the caller's budget by up to 2x.
-        let socket_budget = deadline.remaining_or_timeout()?;
+        //
+        // Tag a post-DNS budget exhaustion as `Ntp` because the next
+        // blocking syscall after this point is the NTP `send`/`recv`.
+        let socket_budget = deadline.remaining_or_timeout(TimeoutPhase::Ntp)?;
         if let Err(e) = socket.set_read_timeout(Some(socket_budget)) {
             errors.push(format!("set_read_timeout for {addr}: {e}"));
             continue;
@@ -686,7 +873,7 @@ where
             continue;
         }
         match socket.connect(addr) {
-            Ok(()) => return Ok(socket),
+            Ok(()) => return Ok(UdpBindOutcome { socket, dns_micros }),
             Err(e) => errors.push(format!("connect {addr}: {e}")),
         }
     }
@@ -737,7 +924,7 @@ pub fn nts_query(
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
     let key = session_key(&spec);
 
-    let ctx = checkout(&spec, timeout, cap)?;
+    let (ctx, ke_timings) = checkout(&spec, timeout, cap)?;
     let session_generation = ctx.session_generation;
 
     // Fail-fast recovery: two distinct on-wire signals indicate the
@@ -808,7 +995,10 @@ pub fn nts_query(
     // the family of whichever resolved address actually accepts a UDP
     // connection. The previous hard-coded `0.0.0.0:0` bind silently broke
     // every IPv6-only NTS endpoint (Netnod and several PTB hosts).
-    let socket = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, timeout, cap)?;
+    let UdpBindOutcome {
+        socket,
+        dns_micros: udp_dns_micros,
+    } = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, timeout, cap)?;
 
     let send_at = Instant::now();
     socket.send(&packet)?;
@@ -822,34 +1012,51 @@ pub fn nts_query(
     let fresh_count = response.fresh_cookies.len() as u32;
     deposit_cookies(&key, session_generation, response.fresh_cookies);
 
+    // Combine KE-path DNS time (zero on cache hits) with the UDP-path
+    // DNS time so the surface field reflects the full DNS cost of
+    // this call, not just one leg. See `PhaseTimings::dns_micros` for
+    // the rationale.
+    let mut phase_timings = PhaseTimings::from(ke_timings);
+    phase_timings.dns_micros = phase_timings.dns_micros.saturating_add(udp_dns_micros);
+
     Ok(NtsTimeSample {
         utc_unix_micros: ntp64_to_unix_micros(response.header.transmit_timestamp),
         round_trip_micros: rtt_micros,
         server_stratum: response.header.stratum,
         aead_id: ctx.aead_id,
         fresh_cookies: fresh_count,
+        phase_timings,
     })
 }
 
-/// Force a fresh NTS-KE handshake against `spec` and return the number of
-/// cookies the server delivered. Replaces any cached session for that spec.
+/// Force a fresh NTS-KE handshake against `spec` and return the
+/// cookie count along with the per-phase wall-clock breakdown.
+/// Replaces any cached session for that spec.
 ///
 /// `timeout_ms` and `dns_concurrency_cap` carry the same semantics as on
 /// [`nts_query`]; pass `0` for either to inherit the built-in default.
+///
+/// The returned [`NtsWarmCookiesOutcome::phase_timings`] only covers
+/// the KE handshake (DNS, connect, TLS, KE record I/O) — there is no
+/// UDP NTP exchange on this path, so the `Ntp` phase is implicitly
+/// zero and not represented.
 pub fn nts_warm_cookies(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
-) -> Result<u32, NtsError> {
+) -> Result<NtsWarmCookiesOutcome, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
-    let session = establish_session(&spec, timeout, cap)?;
+    let (session, ke_timings) = establish_session(&spec, timeout, cap)?;
     let count = session.cookies_remaining() as u32;
     let key = session_key(&spec);
     let mut guard = sessions().lock().expect("session table poisoned");
     guard.insert(key, session);
-    Ok(count)
+    Ok(NtsWarmCookiesOutcome {
+        fresh_cookies: count,
+        phase_timings: PhaseTimings::from(ke_timings),
+    })
 }
 
 /// Convert `std::time::SystemTime::now()` to an NTPv4 64-bit timestamp.
@@ -976,8 +1183,9 @@ mod tests {
         // (which leak detached workers for ~2 s) cannot saturate the
         // global pool out from under this test. Pool-cap behaviour
         // itself is covered by `dns::tests::cap_reached_returns_would_block`.
-        let socket = bind_connected_udp("127.0.0.1", echo_port, Duration::from_secs(2), 64)
-            .expect("bind_connected_udp");
+        let UdpBindOutcome { socket, .. } =
+            bind_connected_udp("127.0.0.1", echo_port, Duration::from_secs(2), 64)
+                .expect("bind_connected_udp");
         assert!(matches!(
             socket.local_addr().expect("local addr"),
             SocketAddr::V4(_)
@@ -1005,8 +1213,9 @@ mod tests {
         };
         let echo_port = echo.local_addr().expect("local addr").port();
 
-        let socket = bind_connected_udp("::1", echo_port, Duration::from_secs(2), 64)
-            .expect("bind_connected_udp");
+        let UdpBindOutcome { socket, .. } =
+            bind_connected_udp("::1", echo_port, Duration::from_secs(2), 64)
+                .expect("bind_connected_udp");
         assert!(matches!(
             socket.local_addr().expect("local addr"),
             SocketAddr::V6(_)
@@ -1613,8 +1822,12 @@ mod tests {
 
     /// Slow-DNS regression guard for [`bind_connected_udp`]. Injects a
     /// resolver that blocks past the budget and asserts the call
-    /// returns `NtsError::Timeout` (not `NtsError::Network`) well
-    /// inside the cap. Companion to `dns::tests::slow_resolver_*` and
+    /// returns `NtsError::Timeout(TimeoutPhase::DnsTimeout)` (not
+    /// `NtsError::Network`) well inside the cap. Pinning the phase
+    /// tag here is what consumers of the post-`nts-r2l` API rely on
+    /// to attribute the failure to a stalled `getaddrinfo` rather
+    /// than to a downstream NTP or KE step. Companion to
+    /// `dns::tests::slow_resolver_*` and
     /// `nts::ke::tests::connect_with_timeout_surfaces_slow_dns_*`; see
     /// `nts-6ka` for the full set of injection points.
     #[test]
@@ -1628,8 +1841,8 @@ mod tests {
         let elapsed = started.elapsed();
 
         match result {
-            Err(NtsError::Timeout) => {}
-            other => panic!("slow-DNS path must surface as NtsError::Timeout, got {other:?}",),
+            Err(NtsError::Timeout(TimeoutPhase::DnsTimeout)) => {}
+            other => panic!("slow-DNS path must surface as Timeout(DnsTimeout), got {other:?}",),
         }
         let cap = budget * 5;
         assert!(
@@ -1641,19 +1854,20 @@ mod tests {
 
     /// Pins the `UdpDeadline::remaining_or_timeout` contract: once the
     /// anchored instant has passed, the helper short-circuits with
-    /// `NtsError::Timeout` rather than handing back a zero-length
+    /// `NtsError::Timeout(_)` rather than handing back a zero-length
     /// `Duration` (which the platform would reject when fed to
     /// `set_read_timeout`). The connect/bind path in
     /// `bind_connected_udp_using` relies on this to surface budget
-    /// exhaustion as `NtsError::Timeout` instead of `NtsError::Network`.
+    /// exhaustion as a phase-tagged `Timeout` instead of
+    /// `NtsError::Network`.
     #[test]
     fn udp_deadline_remaining_or_timeout_after_expiry() {
         let d = UdpDeadline::new(Duration::from_micros(1));
         std::thread::sleep(Duration::from_millis(10));
         assert!(d.remaining().is_zero(), "expired deadline must saturate");
-        match d.remaining_or_timeout() {
-            Err(NtsError::Timeout) => {}
-            other => panic!("expired deadline must yield NtsError::Timeout, got {other:?}"),
+        match d.remaining_or_timeout(TimeoutPhase::Ntp) {
+            Err(NtsError::Timeout(TimeoutPhase::Ntp)) => {}
+            other => panic!("expired deadline must yield Timeout(Ntp), got {other:?}"),
         }
     }
 
@@ -1674,7 +1888,7 @@ mod tests {
 
         let budget = Duration::from_millis(500);
         let dns_consumes = Duration::from_millis(200);
-        let socket = bind_connected_udp_using(
+        let UdpBindOutcome { socket, .. } = bind_connected_udp_using(
             "ignored.invalid",
             echo_port,
             budget,

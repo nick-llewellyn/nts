@@ -25,6 +25,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   NtsServerSpec dco_decode_box_autoadd_nts_server_spec(dynamic raw);
 
   @protected
+  int dco_decode_i_32(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
@@ -41,6 +44,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw);
+
+  @protected
+  NtsWarmCookiesOutcome dco_decode_nts_warm_cookies_outcome(dynamic raw);
+
+  @protected
+  PhaseTimings dco_decode_phase_timings(dynamic raw);
+
+  @protected
+  TimeoutPhase dco_decode_timeout_phase(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -66,6 +78,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int sse_decode_i_32(SseDeserializer deserializer);
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
@@ -84,6 +99,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   NtsTimeSample sse_decode_nts_time_sample(SseDeserializer deserializer);
 
   @protected
+  NtsWarmCookiesOutcome sse_decode_nts_warm_cookies_outcome(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  PhaseTimings sse_decode_phase_timings(SseDeserializer deserializer);
+
+  @protected
+  TimeoutPhase sse_decode_timeout_phase(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_u_16(SseDeserializer deserializer);
 
   @protected
@@ -99,9 +125,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer);
-
-  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
@@ -112,6 +135,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     NtsServerSpec self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
@@ -138,6 +164,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_nts_time_sample(NtsTimeSample self, SseSerializer serializer);
 
   @protected
+  void sse_encode_nts_warm_cookies_outcome(
+    NtsWarmCookiesOutcome self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_phase_timings(PhaseTimings self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_timeout_phase(TimeoutPhase self, SseSerializer serializer);
+
+  @protected
   void sse_encode_u_16(int self, SseSerializer serializer);
 
   @protected
@@ -151,9 +189,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);

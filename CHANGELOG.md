@@ -1,5 +1,60 @@
 # Changelog
 
+## 2.0.0
+
+Adds first-class phase attribution to the public NTS surface so callers
+diagnosing a slow or refused query can distinguish DNS saturation, a
+slow `getaddrinfo`, a stalled TCP connect, a slow TLS handshake, a
+trickled NTS-KE record exchange, and a slow UDP NTP round-trip without
+inspecting free-form diagnostic strings or bolting a Dart-side
+`Stopwatch` around `ntsQuery`. The Rust crate `nts_rust` is bumped to
+`0.4.0` to reflect a breaking change in the public NTS API surface;
+the Dart package is bumped to `2.0.0` for the matching breaking change
+in the FFI signatures and the `NtsError::Timeout` payload (closes
+`nts-r2l`).
+
+### Breaking changes
+
+- `NtsError::Timeout` now carries a `TimeoutPhase` payload identifying
+  which phase of the call hit the budget. Existing pattern matches on
+  `NtsError::Timeout` (Rust) or `NtsError_Timeout()` (Dart) need to
+  bind the new field; pre-2.0 consumers that ignored the variant data
+  with `()` will not compile against this release.
+- `nts_warm_cookies` now returns `NtsWarmCookiesOutcome { fresh_cookies,
+  phase_timings }` instead of a bare `u32` (Rust) / `int` (Dart). The
+  cookie count is still available via `outcome.fresh_cookies`; the new
+  `phase_timings` field exposes the same per-phase wall-clock breakdown
+  as `NtsTimeSample.phase_timings`.
+- `NtsTimeSample` gains a required `phase_timings: PhaseTimings` field.
+  Constructors that named every existing field will need to supply the
+  new field; the Dart-side equivalent applies to any test fixture or
+  mock that builds an `NtsTimeSample` by hand.
+
+### Phase attribution and timings
+
+- New `TimeoutPhase` enum tags `NtsError::Timeout`. Variants
+  `DnsSaturation` (resolver pool full, raise `dns_concurrency_cap`),
+  `DnsTimeout` (resolver slow, lengthen `timeout_ms` or replace the
+  recursive resolver), `Connect`, `Tls`, `KeRecordIo`, and `Ntp` cover
+  every blocking phase of `nts_query` / `nts_warm_cookies`.
+- New `PhaseTimings` struct exposes microsecond-resolution wall-clock
+  costs for the four pre-NTP phases (`dns_micros`, `connect_micros`,
+  `tls_handshake_micros`, `ke_record_io_micros`); the existing
+  `NtsTimeSample::round_trip_micros` is the UDP-phase equivalent and
+  is intentionally not duplicated. `dns_micros` is summed across the
+  KE-host and NTPv4-host lookups; phases that did not run in this call
+  are reported as `0` rather than absent. See the new "Phase
+  attribution and timings" section in `ARCHITECTURE.md` for the full
+  diagnostic shape.
+- `nts_query` instruments the KE pipeline (DNS, connect, TLS, KE
+  record I/O) inside `perform_handshake` and threads the timings out
+  through a refactored `KeOutcome.phase_timings`; the UDP-path DNS
+  cost is captured in `bind_connected_udp_using` and folded into the
+  same `dns_micros` field on the returned sample.
+- `nts_warm_cookies` exposes the same KE-phase breakdown via
+  `NtsWarmCookiesOutcome.phase_timings`. The UDP NTP exchange does not
+  run on this path, so the `Ntp` phase is implicitly zero.
+
 ## 1.4.0
 
 Converts `nts` from a pure Dart package using the Native Assets pipeline

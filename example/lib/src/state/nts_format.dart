@@ -80,7 +80,8 @@ String describeError(NtsError err) => switch (err) {
   NtsError_KeProtocol(:final field0) => 'KeProtocol: $field0',
   NtsError_NtpProtocol(:final field0) => 'NtpProtocol: $field0',
   NtsError_Authentication(:final field0) => 'Authentication: $field0',
-  NtsError_Timeout() => 'Timeout (UDP recv deadline expired)',
+  NtsError_Timeout(:final field0) =>
+    'Timeout (deadline expired in phase ${field0.name})',
   NtsError_NoCookies() =>
     'NoCookies (server completed KE but issued zero cookies)',
   NtsError_Internal(:final field0) => 'Internal: $field0',

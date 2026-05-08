@@ -10,7 +10,13 @@ import 'dart:math';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
 import 'package:nts/src/ffi/frb_generated.dart' show RustLibApi;
-import 'package:nts/nts.dart' show NtsError, NtsServerSpec, NtsTimeSample;
+import 'package:nts/nts.dart'
+    show
+        NtsError,
+        NtsServerSpec,
+        NtsTimeSample,
+        NtsWarmCookiesOutcome,
+        PhaseTimings;
 
 /// In-memory `RustLibApi` implementation used by the example app and the
 /// widget smoke test as an explicit alternative to the bundled Rust dylib.
@@ -51,21 +57,36 @@ class MockNtsApi implements RustLibApi {
       serverStratum: 1,
       aeadId: 15,
       freshCookies: 1,
+      phaseTimings: _mockPhaseTimings(),
     );
   }
 
   @override
-  Future<int> crateApiNtsNtsWarmCookies({
+  Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 80));
-    return 8;
+    return NtsWarmCookiesOutcome(
+      freshCookies: 8,
+      phaseTimings: _mockPhaseTimings(),
+    );
   }
+
+  @override
+  Future<PhaseTimings> crateApiNtsPhaseTimingsDefault() async =>
+      _mockPhaseTimings();
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
     'MockNtsApi: ${invocation.memberName} not stubbed',
   );
 }
+
+PhaseTimings _mockPhaseTimings() => PhaseTimings(
+  dnsMicros: PlatformInt64Util.from(0),
+  connectMicros: PlatformInt64Util.from(0),
+  tlsHandshakeMicros: PlatformInt64Util.from(0),
+  keRecordIoMicros: PlatformInt64Util.from(0),
+);

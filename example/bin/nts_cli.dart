@@ -246,7 +246,7 @@ Future<void> _runQuery(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
 Future<void> _runWarm(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
   ctx.start('nts_warm_cookies', spec.host, 'Starting warm');
   try {
-    final n = await ntsWarmCookies(
+    final outcome = await ntsWarmCookies(
       spec: spec,
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: 0,
@@ -254,8 +254,8 @@ Future<void> _runWarm(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
     ctx.success(
       'nts_warm_cookies',
       spec.host,
-      text: formatWarmSuccess(n),
-      jsonPayload: jsonWarmSuccess(n),
+      text: formatWarmSuccess(outcome.freshCookies),
+      jsonPayload: jsonWarmSuccess(outcome.freshCookies),
     );
   } on NtsError catch (err) {
     ctx.failure('nts_warm_cookies', spec.host, err);

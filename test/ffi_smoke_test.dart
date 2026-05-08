@@ -19,7 +19,14 @@
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nts/nts.dart' show NtsError, NtsServerSpec, NtsTimeSample;
+import 'package:nts/nts.dart'
+    show
+        NtsError,
+        NtsServerSpec,
+        NtsTimeSample,
+        NtsWarmCookiesOutcome,
+        PhaseTimings,
+        TimeoutPhase;
 import 'package:nts/src/ffi/api/nts.dart' show ntsQuery, ntsWarmCookies;
 import 'package:nts/src/ffi/frb_generated.dart';
 
@@ -38,19 +45,32 @@ class _FakeRustLibApi implements RustLibApi {
     serverStratum: 1,
     aeadId: 15,
     freshCookies: 1,
+    phaseTimings: _zeroPhaseTimings(),
   );
 
   @override
-  Future<int> crateApiNtsNtsWarmCookies({
+  Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
-  }) async => 8;
+  }) async =>
+      NtsWarmCookiesOutcome(freshCookies: 8, phaseTimings: _zeroPhaseTimings());
+
+  @override
+  Future<PhaseTimings> crateApiNtsPhaseTimingsDefault() async =>
+      _zeroPhaseTimings();
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('mock api: ${invocation.memberName} not stubbed');
 }
+
+PhaseTimings _zeroPhaseTimings() => PhaseTimings(
+  dnsMicros: PlatformInt64Util.from(0),
+  connectMicros: PlatformInt64Util.from(0),
+  tlsHandshakeMicros: PlatformInt64Util.from(0),
+  keRecordIoMicros: PlatformInt64Util.from(0),
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -75,20 +95,23 @@ void main() {
 
     test('ntsWarmCookies() dispatches through the mock api', () async {
       const spec = NtsServerSpec(host: 'time.example', port: 4460);
-      final count = await ntsWarmCookies(
+      final outcome = await ntsWarmCookies(
         spec: spec,
         timeoutMs: 5000,
         dnsConcurrencyCap: 0,
       );
-      expect(count, 8);
+      expect(outcome.freshCookies, 8);
+      expect(outcome.phaseTimings, isA<PhaseTimings>());
     });
 
     test('NtsError variants construct and equality is value-based', () {
-      const a = NtsError.timeout();
-      const b = NtsError.timeout();
+      const a = NtsError.timeout(TimeoutPhase.ntp);
+      const b = NtsError.timeout(TimeoutPhase.ntp);
       const c = NtsError.invalidSpec('host empty');
+      const d = NtsError.timeout(TimeoutPhase.dnsSaturation);
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
+      expect(a, isNot(equals(d)));
       expect(c.toString(), contains('host empty'));
     });
   });

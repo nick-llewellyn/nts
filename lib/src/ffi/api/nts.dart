@@ -9,8 +9,8 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `bind_connected_udp_using`, `bind_connected_udp`, `checkout`, `cookies_remaining`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `remaining_or_timeout`, `remaining`, `session_key`, `sessions`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `QueryContext`, `Session`, `UdpDeadline`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `QueryContext`, `Session`, `UdpBindOutcome`, `UdpDeadline`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
 /// with `Relaxed` ordering; the snapshot is intended for
@@ -66,12 +66,18 @@ Future<NtsTimeSample> ntsQuery({
   dnsConcurrencyCap: dnsConcurrencyCap,
 );
 
-/// Force a fresh NTS-KE handshake against `spec` and return the number of
-/// cookies the server delivered. Replaces any cached session for that spec.
+/// Force a fresh NTS-KE handshake against `spec` and return the
+/// cookie count along with the per-phase wall-clock breakdown.
+/// Replaces any cached session for that spec.
 ///
 /// `timeout_ms` and `dns_concurrency_cap` carry the same semantics as on
 /// [`nts_query`]; pass `0` for either to inherit the built-in default.
-Future<int> ntsWarmCookies({
+///
+/// The returned [`NtsWarmCookiesOutcome::phase_timings`] only covers
+/// the KE handshake (DNS, connect, TLS, KE record I/O) — there is no
+/// UDP NTP exchange on this path, so the `Ntp` phase is implicitly
+/// zero and not represented.
+Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
@@ -189,8 +195,14 @@ sealed class NtsError with _$NtsError implements FrbException {
   const factory NtsError.authentication(String field0) =
       NtsError_Authentication;
 
-  /// UDP receive timed out.
-  const factory NtsError.timeout() = NtsError_Timeout;
+  /// Wall-clock budget elapsed inside one of the call's pre-NTP or
+  /// NTP phases. The [`TimeoutPhase`] payload identifies which
+  /// phase tripped the deadline so callers can choose the right
+  /// remediation (raise the resolver cap on `DnsSaturation`,
+  /// lengthen `timeout_ms` on `DnsTimeout` / `Connect` / `Tls` /
+  /// `KeRecordIo` / `Ntp`, etc.). See [`TimeoutPhase`] for the full
+  /// taxonomy.
+  const factory NtsError.timeout(TimeoutPhase field0) = NtsError_Timeout;
 
   /// Cookie jar empty after a handshake (server delivered none).
   const factory NtsError.noCookies() = NtsError_NoCookies;
@@ -235,7 +247,11 @@ class NtsTimeSample {
   /// moment the reply arrived.
   final PlatformInt64 utcUnixMicros;
 
-  /// Wall-clock microseconds elapsed between client send and client receive.
+  /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
+  /// `send` and the matching `recv`. This *is* the UDP-phase
+  /// wall-clock cost — there is no separate `udp_send_recv_micros`
+  /// in [`PhaseTimings`] because that would publish the same fact
+  /// in two fields.
   final PlatformInt64 roundTripMicros;
 
   /// NTP stratum reported by the server (RFC 5905 §7.3).
@@ -247,12 +263,18 @@ class NtsTimeSample {
   /// Number of fresh cookies recovered from the encrypted reply.
   final int freshCookies;
 
+  /// Microsecond-resolution wall-clock breakdown of the pre-NTP
+  /// phases of this call. Combined with [`Self::round_trip_micros`]
+  /// it accounts for the entire wall-clock cost of [`nts_query`].
+  final PhaseTimings phaseTimings;
+
   const NtsTimeSample({
     required this.utcUnixMicros,
     required this.roundTripMicros,
     required this.serverStratum,
     required this.aeadId,
     required this.freshCookies,
+    required this.phaseTimings,
   });
 
   @override
@@ -261,7 +283,8 @@ class NtsTimeSample {
       roundTripMicros.hashCode ^
       serverStratum.hashCode ^
       aeadId.hashCode ^
-      freshCookies.hashCode;
+      freshCookies.hashCode ^
+      phaseTimings.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -272,5 +295,160 @@ class NtsTimeSample {
           roundTripMicros == other.roundTripMicros &&
           serverStratum == other.serverStratum &&
           aeadId == other.aeadId &&
-          freshCookies == other.freshCookies;
+          freshCookies == other.freshCookies &&
+          phaseTimings == other.phaseTimings;
+}
+
+/// Successful outcome of [`nts_warm_cookies`].
+///
+/// Replaces the prior bare `u32` return so the same phase-attribution
+/// view available on [`NtsTimeSample`] is also available for the
+/// handshake-only path callers use to refill an empty cookie pool.
+class NtsWarmCookiesOutcome {
+  /// Number of fresh cookies the server delivered with the KE response.
+  final int freshCookies;
+
+  /// Microsecond-resolution wall-clock breakdown of the handshake
+  /// that produced the cookies. The UDP NTP exchange is not part of
+  /// this call, so [`PhaseTimings::dns_micros`] reflects only the
+  /// KE-host lookup.
+  final PhaseTimings phaseTimings;
+
+  const NtsWarmCookiesOutcome({
+    required this.freshCookies,
+    required this.phaseTimings,
+  });
+
+  @override
+  int get hashCode => freshCookies.hashCode ^ phaseTimings.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NtsWarmCookiesOutcome &&
+          runtimeType == other.runtimeType &&
+          freshCookies == other.freshCookies &&
+          phaseTimings == other.phaseTimings;
+}
+
+/// Microsecond-resolution wall-clock breakdown of a successful
+/// [`nts_query`] or [`nts_warm_cookies`] call, surfaced on
+/// [`NtsTimeSample::phase_timings`] / [`NtsWarmCookiesOutcome::phase_timings`].
+///
+/// Field semantics match [`KePhaseTimings`] for the four KE-pipeline
+/// phases. The UDP send/recv phase has no field of its own; the
+/// existing [`NtsTimeSample::round_trip_micros`] already covers it
+/// (kept for backward-compatibility on the Dart side and to avoid
+/// publishing the same fact in two fields). Callers who want a
+/// "preNtp" wall-clock view can sum
+/// `dns_micros + connect_micros + tls_handshake_micros +
+/// ke_record_io_micros`; the per-call total wall-clock is that sum
+/// plus `round_trip_micros`.
+///
+/// Phases that did not run are reported as `0` rather than absent —
+/// e.g. on a cache-hit query (no KE handshake), `connect_micros`,
+/// `tls_handshake_micros`, and `ke_record_io_micros` are all `0` and
+/// `dns_micros` reflects only the UDP-path lookup of the NTPv4 host.
+/// On a fresh-session query both KE-path and UDP-path DNS lookups
+/// run; their costs are summed into a single `dns_micros` value so
+/// callers do not have to reason about which path contributed.
+class PhaseTimings {
+  /// Sum of wall-clock microseconds spent in
+  /// [`crate::nts::dns::resolve_with_global`] across both the
+  /// KE-host lookup (when a handshake runs) and the NTPv4-host
+  /// lookup. Combined into a single field because callers
+  /// diagnosing slow DNS care about the host-level cost regardless
+  /// of which leg consumed it.
+  final PlatformInt64 dnsMicros;
+
+  /// Wall-clock microseconds spent in the per-address
+  /// `TcpStream::connect_timeout` loop during the KE handshake.
+  /// `0` on cache-hit queries.
+  final PlatformInt64 connectMicros;
+
+  /// Wall-clock microseconds spent on the rustls
+  /// `Stream::write_all` + `flush` window during the KE handshake.
+  /// In TLS 1.3 this includes the ClientHello/ServerHello/Finished
+  /// round-trip plus the initial NTS-KE request write. `0` on
+  /// cache-hit queries.
+  final PlatformInt64 tlsHandshakeMicros;
+
+  /// Wall-clock microseconds spent in the chunked record-read loop
+  /// reading the server's NTS-KE response. `0` on cache-hit queries.
+  final PlatformInt64 keRecordIoMicros;
+
+  const PhaseTimings({
+    required this.dnsMicros,
+    required this.connectMicros,
+    required this.tlsHandshakeMicros,
+    required this.keRecordIoMicros,
+  });
+
+  static Future<PhaseTimings> default_() =>
+      RustLib.instance.api.crateApiNtsPhaseTimingsDefault();
+
+  @override
+  int get hashCode =>
+      dnsMicros.hashCode ^
+      connectMicros.hashCode ^
+      tlsHandshakeMicros.hashCode ^
+      keRecordIoMicros.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PhaseTimings &&
+          runtimeType == other.runtimeType &&
+          dnsMicros == other.dnsMicros &&
+          connectMicros == other.connectMicros &&
+          tlsHandshakeMicros == other.tlsHandshakeMicros &&
+          keRecordIoMicros == other.keRecordIoMicros;
+}
+
+/// Phase of an [`nts_query`] / [`nts_warm_cookies`] call whose
+/// wall-clock budget elapsed.
+///
+/// Carried as the payload of [`NtsError::Timeout`] so callers can
+/// attribute a failure to a specific pre-NTP step instead of inspecting
+/// free-form diagnostic strings. The Rust-side [`KeTimeoutPhase`] for
+/// the KE pipeline maps onto this enum via `From`; the `Ntp` variant is
+/// added at this layer for the UDP send/recv phase, and the two `Dns*`
+/// variants distinguish saturation (cap full) from timeout (resolver
+/// slow). See `ARCHITECTURE.md`'s "Phase attribution and timings"
+/// section for the full diagnostic shape.
+enum TimeoutPhase {
+  /// Bounded DNS resolver pool was already at capacity when the call
+  /// arrived, so admission was refused without spawning a worker.
+  /// Distinct from [`Self::DnsTimeout`]: raising
+  /// `dns_concurrency_cap` or waiting for the in-flight pool to
+  /// drain is the appropriate remediation, not lengthening
+  /// `timeout_ms`.
+  dnsSaturation,
+
+  /// System resolver took longer than the remaining budget.
+  /// Lengthening `timeout_ms` *or* swapping in a faster recursive
+  /// resolver are the appropriate remediations; raising the
+  /// concurrency cap would only allow more threads to wedge in the
+  /// same lookup.
+  dnsTimeout,
+
+  /// Per-address `TcpStream::connect_timeout` budget elapsed before
+  /// any KE-host candidate accepted, or the global deadline expired
+  /// before the connect loop could try the next address.
+  connect,
+
+  /// TLS handshake / initial NTS-KE request write tripped the
+  /// deadline. In TLS 1.3 the first write is what completes the
+  /// ClientHello/ServerHello/Finished round-trip.
+  tls,
+
+  /// Read of the NTS-KE response records exceeded the remaining
+  /// budget — the server completed TLS but is now drip-feeding (or
+  /// has stalled completely on) the record exchange.
+  keRecordIo,
+
+  /// AEAD-NTPv4 UDP `send` / `recv` exceeded the remaining budget.
+  /// Either the destination is unreachable or the wire round-trip
+  /// time was too long for the configured budget.
+  ntp,
 }

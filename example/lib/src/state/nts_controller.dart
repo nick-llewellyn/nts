@@ -107,14 +107,14 @@ class NtsController {
   Future<void> warmCookies(NtsServerEntry entry) async {
     state.log.info('nts_warm_cookies', 'Starting warm', host: entry.hostname);
     try {
-      final n = await ntsWarmCookies(
+      final outcome = await ntsWarmCookies(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
         dnsConcurrencyCap: 0,
       );
       state.log.info(
         'nts_warm_cookies',
-        formatWarmSuccess(n),
+        formatWarmSuccess(outcome.freshCookies),
         host: entry.hostname,
       );
     } on NtsError catch (err) {

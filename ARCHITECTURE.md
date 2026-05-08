@@ -96,6 +96,65 @@ of "libc is timing out internally as expected"; flat `recovered` with
 operators should alert on (the system resolver is wedged and raising
 the cap would only push more threads into the same wedge).
 
+## Phase attribution and timings
+
+The shared deadline accounts for *when* a budget elapses but not for
+*which step inside the call* consumed it. `NtsError::Timeout` and
+`NtsTimeSample` close that gap by carrying a per-phase tag on the
+failure side and a microsecond-resolution wall-clock breakdown on the
+success side, so a caller diagnosing a slow or refused query can
+distinguish DNS saturation from a slow record exchange without
+inspecting free-form diagnostic strings.
+
+`TimeoutPhase` is the failure-side surface. It tags the
+single-payload `NtsError::Timeout(TimeoutPhase)` with one of
+`DnsSaturation`, `DnsTimeout`, `Connect`, `Tls`, `KeRecordIo`, or
+`Ntp`. The two `Dns*` variants intentionally split the bounded
+resolver pool's two refusal modes — `DnsSaturation` is the
+`io::ErrorKind::WouldBlock` path published by `try_acquire_slot`
+(cap reached, no worker dispatched) and points operators at
+raising `dns_concurrency_cap`, whereas `DnsTimeout` is the
+`recv_timeout` shape (worker dispatched, resolver slow) and points
+operators at lengthening `timeout_ms` or replacing the recursive
+resolver. `Connect`, `Tls`, and `KeRecordIo` correspond one-for-one
+with the three blocking phases inside `perform_handshake` — the
+per-address `connect_timeout` loop, the rustls `Stream::write_all` /
+`flush` window (which in TLS 1.3 contains the
+ClientHello/ServerHello/Finished round-trip), and the chunked record
+read loop. `Ntp` is added at the `api/nts.rs` layer for the
+AEAD-NTPv4 UDP `send` / `recv` round-trip; the KE pipeline never
+reaches it. Mapping to a phase happens at the I/O boundary inside
+`nts::ke` (via `dns_error_to_ke`, `connect_error_to_ke`, and
+`phase_io_to_ke`) and the `From<KeError> for NtsError` conversion,
+so deeper callers do not need to know about the taxonomy.
+
+`PhaseTimings` is the success-side surface, exposed on
+`NtsTimeSample::phase_timings` and `NtsWarmCookiesOutcome::phase_timings`.
+Four `i64` microsecond fields cover the pre-NTP phases —
+`dns_micros`, `connect_micros`, `tls_handshake_micros`,
+`ke_record_io_micros`. The UDP send/recv phase has no field of its
+own because the existing `NtsTimeSample::round_trip_micros` already
+covers it; publishing the same fact twice would be a documentation
+hazard, so the doc on `round_trip_micros` calls out that it *is*
+the UDP-phase wall-clock cost. `dns_micros` is summed across both
+the KE-host lookup (when a handshake runs) and the NTPv4-host
+lookup, because callers diagnosing slow DNS care about the
+host-level cost regardless of which leg consumed it. Phases that
+did not run in this call are reported as `0` rather than absent —
+e.g. on a cache-hit query (no KE handshake), `connect_micros`,
+`tls_handshake_micros`, and `ke_record_io_micros` are all zero and
+`dns_micros` reflects only the UDP-path lookup.
+
+A caller who wants the same "preNtp" view earlier integrators
+constructed from a Dart-side `Stopwatch` can sum the four
+`PhaseTimings` fields; the per-call total wall-clock is that sum
+plus `round_trip_micros`. The breakdown does not need to add up
+exactly to the externally-observed wall-clock — `Instant::elapsed`
+boundaries are sampled inline with the phases they bracket and a
+few microseconds of inter-phase bookkeeping fall outside any
+field — but the discrepancy is bounded by call-site overhead, not
+by hidden I/O.
+
 ## Public API stability layer
 
 `lib/nts.dart` is the package's stable public contract. It is a thin,

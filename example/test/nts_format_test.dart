@@ -6,7 +6,8 @@ import 'dart:convert';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nts/nts.dart' show NtsError, NtsTimeSample;
+import 'package:nts/nts.dart'
+    show NtsError, NtsTimeSample, PhaseTimings, TimeoutPhase;
 import 'package:nts_example/src/state/nts_format.dart';
 
 void main() {
@@ -45,6 +46,7 @@ void main() {
         serverStratum: 1,
         aeadId: 15,
         freshCookies: 2,
+        phaseTimings: _zeroPhaseTimings(),
       );
       final out = formatQuerySuccess(sample);
       final lines = out.split('\n');
@@ -75,14 +77,20 @@ void main() {
 
     test('network / timeout / spec / no-cookies errors are warn-severity', () {
       expect(isErrorSeverity(const NtsError.network('x')), isFalse);
-      expect(isErrorSeverity(const NtsError.timeout()), isFalse);
+      expect(
+        isErrorSeverity(const NtsError.timeout(TimeoutPhase.ntp)),
+        isFalse,
+      );
       expect(isErrorSeverity(const NtsError.invalidSpec('x')), isFalse);
       expect(isErrorSeverity(const NtsError.noCookies()), isFalse);
     });
 
     test('describe round-trips the variant payload', () {
       expect(describeError(const NtsError.network('boom')), 'Network: boom');
-      expect(describeError(const NtsError.timeout()), startsWith('Timeout'));
+      expect(
+        describeError(const NtsError.timeout(TimeoutPhase.dnsTimeout)),
+        startsWith('Timeout'),
+      );
       expect(
         describeError(const NtsError.noCookies()),
         startsWith('NoCookies'),
@@ -100,7 +108,10 @@ void main() {
         errorTypeName(const NtsError.authentication('x')),
         'Authentication',
       );
-      expect(errorTypeName(const NtsError.timeout()), 'Timeout');
+      expect(
+        errorTypeName(const NtsError.timeout(TimeoutPhase.ntp)),
+        'Timeout',
+      );
       expect(errorTypeName(const NtsError.noCookies()), 'NoCookies');
       expect(errorTypeName(const NtsError.internal('x')), 'Internal');
     });
@@ -126,6 +137,7 @@ void main() {
         serverStratum: 3,
         aeadId: 15,
         freshCookies: 2,
+        phaseTimings: _zeroPhaseTimings(),
       );
 
       expect(jsonQuerySuccess(sample), {
@@ -146,6 +158,7 @@ void main() {
         serverStratum: 1,
         aeadId: 30,
         freshCookies: 8,
+        phaseTimings: _zeroPhaseTimings(),
       );
 
       final encoded = jsonEncode(jsonQuerySuccess(sample));
@@ -170,7 +183,7 @@ void main() {
         'message': 'Network: boom',
         'severity': 'warn',
       });
-      expect(jsonError(const NtsError.timeout()), {
+      expect(jsonError(const NtsError.timeout(TimeoutPhase.ntp)), {
         'error_type': 'Timeout',
         'message': startsWith('Timeout'),
         'severity': 'warn',
@@ -199,3 +212,10 @@ void main() {
     });
   });
 }
+
+PhaseTimings _zeroPhaseTimings() => PhaseTimings(
+  dnsMicros: PlatformInt64Util.from(0),
+  connectMicros: PlatformInt64Util.from(0),
+  tlsHandshakeMicros: PlatformInt64Util.from(0),
+  keRecordIoMicros: PlatformInt64Util.from(0),
+);

@@ -72,12 +72,12 @@ impl Deadline {
     /// Refresh `tcp`'s read+write timeouts so the *next* blocking
     /// syscall on that socket fires no later than the global deadline.
     /// Returns `io::ErrorKind::TimedOut` when the deadline has already
-    /// elapsed; the `From<KeError> for NtsError` mapping in
-    /// `api/nts.rs` translates that to `NtsError::Timeout` rather than
-    /// `NtsError::Network`. Re-applied between phases (post-connect,
-    /// before each write/flush, and once per iteration of the chunked
-    /// read loop) so a slow trickle from the server cannot extend the
-    /// total wall-clock cost past `req.timeout`.
+    /// elapsed; callers that want phase-attributed errors should use
+    /// [`Deadline::apply_to_with_phase`] instead. Re-applied between
+    /// phases (post-connect, before each write/flush, and once per
+    /// iteration of the chunked read loop) so a slow trickle from the
+    /// server cannot extend the total wall-clock cost past
+    /// `req.timeout`.
     fn apply_to(&self, tcp: &TcpStream) -> std::io::Result<()> {
         let remaining = self.remaining();
         if remaining.is_zero() {
@@ -89,6 +89,77 @@ impl Deadline {
         tcp.set_read_timeout(Some(remaining))?;
         tcp.set_write_timeout(Some(remaining))?;
         Ok(())
+    }
+
+    /// Phase-aware variant of [`Deadline::apply_to`]. Translates a
+    /// budget-exhausted result directly into `KeError::PhaseTimeout`
+    /// so the caller does not have to rely on the
+    /// `io::ErrorKind::TimedOut → NtsError::Timeout` round-trip
+    /// (which loses phase attribution).
+    fn apply_to_with_phase(&self, tcp: &TcpStream, phase: KeTimeoutPhase) -> Result<(), KeError> {
+        let remaining = self.remaining();
+        if remaining.is_zero() {
+            return Err(KeError::PhaseTimeout(phase));
+        }
+        tcp.set_read_timeout(Some(remaining)).map_err(KeError::Io)?;
+        tcp.set_write_timeout(Some(remaining))
+            .map_err(KeError::Io)?;
+        Ok(())
+    }
+
+    /// Yield the remaining budget when there is still time on the
+    /// clock and `KeError::PhaseTimeout(phase)` once it has elapsed.
+    /// Used immediately before a blocking step so an already-blown
+    /// budget short-circuits with the phase that *would* have
+    /// consumed it, rather than producing a generic timeout.
+    fn check_or_timeout(&self, phase: KeTimeoutPhase) -> Result<Duration, KeError> {
+        let remaining = self.remaining();
+        if remaining.is_zero() {
+            return Err(KeError::PhaseTimeout(phase));
+        }
+        Ok(remaining)
+    }
+}
+
+/// Translate an `io::Error` raised inside the bounded DNS resolver
+/// into the matching [`KeError::PhaseTimeout`] tag. `WouldBlock` is
+/// the cap-saturation signal published by
+/// [`crate::nts::dns::try_acquire_slot`]; `TimedOut` is the
+/// budget-exceeded signal from `recv_timeout`. Anything else is a
+/// real lookup failure (NXDOMAIN, network unreachable, …) and stays
+/// as `KeError::Io` so the `From<KeError> for NtsError` mapping can
+/// route it onto `NtsError::Network` with the diagnostic preserved.
+fn dns_error_to_ke(e: std::io::Error) -> KeError {
+    match e.kind() {
+        std::io::ErrorKind::WouldBlock => KeError::PhaseTimeout(KeTimeoutPhase::DnsSaturation),
+        std::io::ErrorKind::TimedOut => KeError::PhaseTimeout(KeTimeoutPhase::DnsTimeout),
+        _ => KeError::Io(e),
+    }
+}
+
+/// Translate an `io::Error` raised during per-address TCP connect
+/// into the matching [`KeError`]. `TimedOut` (the deadline-driven
+/// shape) becomes `KeError::PhaseTimeout(Connect)`; non-timeout
+/// failures (`ConnectionRefused`, `NetworkUnreachable`, …) stay as
+/// `KeError::Io` so they reach Dart as `NtsError::Network`.
+fn connect_error_to_ke(e: std::io::Error) -> KeError {
+    match e.kind() {
+        std::io::ErrorKind::TimedOut => KeError::PhaseTimeout(KeTimeoutPhase::Connect),
+        _ => KeError::Io(e),
+    }
+}
+
+/// Translate an `io::Error` from the TLS / record I/O phases. The
+/// rustls Stream surfaces a stalled TCP read/write as
+/// `io::ErrorKind::TimedOut` from the underlying socket; that is the
+/// phase-tag we want. Other shapes are real I/O failures and stay
+/// as [`KeError::Io`].
+fn phase_io_to_ke(e: std::io::Error, phase: KeTimeoutPhase) -> KeError {
+    match e.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
+            KeError::PhaseTimeout(phase)
+        }
+        _ => KeError::Io(e),
     }
 }
 
@@ -112,6 +183,68 @@ pub struct KeRequest {
     pub dns_concurrency_cap: usize,
 }
 
+/// Phase of an NTS-KE handshake whose budget elapsed.
+///
+/// Carried by [`KeError::PhaseTimeout`] so the `From<KeError> for NtsError`
+/// mapping in `api/nts.rs` can attribute a failure to a specific
+/// pre-handshake step rather than collapsing every wall-clock-bound
+/// failure onto an opaque `Timeout`. See `ARCHITECTURE.md`'s "Phase
+/// attribution and timings" section for the diagnostic shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeTimeoutPhase {
+    /// Bounded DNS resolver pool was already at capacity when the call
+    /// arrived. Surfaces as `io::ErrorKind::WouldBlock` from
+    /// [`crate::nts::dns::resolve_with_global`].
+    DnsSaturation,
+    /// Resolver took longer than the remaining budget. Surfaces as
+    /// `io::ErrorKind::TimedOut` from the bounded resolver.
+    DnsTimeout,
+    /// Per-address `TcpStream::connect_timeout` budget elapsed before
+    /// any candidate accepted, or the global deadline expired before
+    /// the connect loop could try the next address.
+    Connect,
+    /// TLS handshake / initial request write tripped the deadline.
+    /// Covers the rustls `Stream::write_all` + `flush` window inside
+    /// [`perform_handshake`]; in TLS 1.3 the first write completes the
+    /// ClientHello/ServerHello/Finished round-trip.
+    Tls,
+    /// Read of the NTS-KE response records exceeded the remaining
+    /// budget — the server completed TLS but is now drip-feeding (or
+    /// has stalled completely on) the record exchange.
+    KeRecordIo,
+}
+
+/// Microsecond-resolution wall-clock breakdown of a successful
+/// NTS-KE handshake. Populated by [`perform_handshake`] and exposed
+/// to the FFI as `PhaseTimings` once a query returns an
+/// `NtsTimeSample` (the on-success companion to
+/// [`KeError::PhaseTimeout`] for failure attribution).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KePhaseTimings {
+    /// Time spent inside [`crate::nts::dns::resolve_with_global`] for
+    /// the KE host. `0` for callers that pass `req.timeout = None`
+    /// because the un-bounded path bypasses the resolver helper.
+    pub dns_micros: i64,
+    /// Time spent in the per-address `TcpStream::connect_timeout`
+    /// loop. Cumulative across attempts when the first address fails.
+    pub connect_micros: i64,
+    /// Time spent on the rustls `Stream::write_all` + `flush` window.
+    /// In TLS 1.3 this includes the ClientHello/ServerHello/Finished
+    /// round-trip plus the initial NTS-KE request write.
+    pub tls_handshake_micros: i64,
+    /// Time spent in the chunked record read loop reading the server's
+    /// NTS-KE response.
+    pub ke_record_io_micros: i64,
+}
+
+/// TCP connection and the timing breakdown that produced it.
+#[derive(Debug)]
+struct ConnectedTcp {
+    stream: TcpStream,
+    dns_micros: i64,
+    connect_micros: i64,
+}
+
 /// All artifacts negotiated during a successful handshake.
 #[derive(Debug, Clone)]
 pub struct KeOutcome {
@@ -129,11 +262,23 @@ pub struct KeOutcome {
     pub cookies: Vec<Vec<u8>>,
     /// Non-fatal warning codes (RFC 8915 §4.1.5 record type 3).
     pub warnings: Vec<u16>,
+    /// Microsecond-resolution per-phase wall-clock breakdown of the
+    /// handshake. `0` for any phase the call did not enter (e.g.
+    /// `req.timeout = None` short-circuits the bounded DNS resolver,
+    /// leaving `dns_micros` at zero).
+    pub phase_timings: KePhaseTimings,
 }
 
 #[derive(Debug)]
 pub enum KeError {
     Io(std::io::Error),
+    /// A timeout-shaped failure (`io::ErrorKind::TimedOut` or
+    /// `WouldBlock`) tagged with the handshake phase it tripped.
+    /// `From<KeError> for NtsError` maps this to
+    /// `NtsError::Timeout(TimeoutPhase)` so callers can distinguish
+    /// DNS saturation from a slow record I/O without inspecting
+    /// free-form strings.
+    PhaseTimeout(KeTimeoutPhase),
     Tls(rustls::Error),
     InvalidServerName,
     Codec(CodecError),
@@ -166,6 +311,7 @@ impl std::fmt::Display for KeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::PhaseTimeout(p) => write!(f, "NTS-KE timeout in phase {p:?}"),
             Self::Tls(e) => write!(f, "TLS error: {e}"),
             Self::InvalidServerName => f.write_str("hostname is not a valid TLS SNI value"),
             Self::Codec(e) => write!(f, "NTS-KE codec error: {e}"),
@@ -457,30 +603,51 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     let mut conn = ClientConnection::new(cfg, server_name)?;
 
     let deadline = req.timeout.map(Deadline::new);
-    let mut tcp = connect_with_deadline_using(
+    let connected = connect_with_deadline_using(
         req.host.as_str(),
         req.port,
         deadline,
         req.dns_concurrency_cap,
         system_lookup,
     )?;
+    let ConnectedTcp {
+        stream: mut tcp,
+        dns_micros,
+        connect_micros,
+    } = connected;
     if let Some(d) = deadline.as_ref() {
-        d.apply_to(&tcp)?;
+        d.apply_to_with_phase(&tcp, KeTimeoutPhase::Tls)?;
     }
 
     let request = build_request(&req.aead_algorithms);
+    // Time the TLS handshake + initial request write. In TLS 1.3,
+    // rustls drives the ClientHello/ServerHello/Finished round-trip
+    // lazily on the first `write_all`, so the wall-clock cost of the
+    // handshake is folded into the write/flush window. The subsequent
+    // record-read loop is timed separately so callers can attribute a
+    // stalled record exchange to `KeRecordIo` rather than to TLS.
+    let tls_started = Instant::now();
     let response = {
         let mut stream = Stream::new(&mut conn, &mut tcp);
         if let Some(d) = deadline.as_ref() {
-            d.apply_to(stream.sock)?;
+            d.apply_to_with_phase(stream.sock, KeTimeoutPhase::Tls)?;
         }
-        stream.write_all(&request)?;
+        stream
+            .write_all(&request)
+            .map_err(|e| phase_io_to_ke(e, KeTimeoutPhase::Tls))?;
         if let Some(d) = deadline.as_ref() {
-            d.apply_to(stream.sock)?;
+            d.apply_to_with_phase(stream.sock, KeTimeoutPhase::Tls)?;
         }
-        stream.flush()?;
-        read_to_end_capped(&mut stream, deadline.as_ref())?
+        stream
+            .flush()
+            .map_err(|e| phase_io_to_ke(e, KeTimeoutPhase::Tls))?;
+        let tls_handshake_micros = tls_started.elapsed().as_micros() as i64;
+        let record_started = Instant::now();
+        let response = read_to_end_capped(&mut stream, deadline.as_ref())?;
+        let ke_record_io_micros = record_started.elapsed().as_micros() as i64;
+        (response, tls_handshake_micros, ke_record_io_micros)
     };
+    let (response, tls_handshake_micros, ke_record_io_micros) = response;
 
     let records = parse_message(&response)?;
     let partial = validate_response(&req.host, &req.aead_algorithms, &records)?;
@@ -504,6 +671,12 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
         s2c_key,
         cookies: partial.cookies,
         warnings: partial.warnings,
+        phase_timings: KePhaseTimings {
+            dns_micros,
+            connect_micros,
+            tls_handshake_micros,
+            ke_record_io_micros,
+        },
     })
 }
 
@@ -524,11 +697,12 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
 ///
 /// When `timeout` is `None` (no caller deadline), falls through to
 /// [`TcpStream::connect`] for parity with the previous behaviour.
+#[cfg(test)]
 fn connect_with_timeout(
     host: &str,
     port: u16,
     timeout: Option<Duration>,
-) -> Result<TcpStream, KeError> {
+) -> Result<ConnectedTcp, KeError> {
     connect_with_timeout_using(
         host,
         port,
@@ -546,13 +720,14 @@ fn connect_with_timeout(
 /// exercised deterministically without standing up an adversarial
 /// nameserver. Behaviour is otherwise identical to
 /// [`connect_with_timeout`].
+#[cfg(test)]
 fn connect_with_timeout_using<F>(
     host: &str,
     port: u16,
     timeout: Option<Duration>,
     dns_concurrency_cap: usize,
     lookup: F,
-) -> Result<TcpStream, KeError>
+) -> Result<ConnectedTcp, KeError>
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
@@ -578,46 +753,61 @@ where
 /// through both this connect step and the subsequent socket-timeout
 /// refreshes during TLS I/O — the previous duration-per-phase API
 /// allowed each phase to consume up to `req.timeout` in isolation.
+///
+/// Returns the connected `TcpStream` together with the wall-clock time
+/// spent inside DNS resolution and the per-address connect loop, so
+/// [`perform_handshake`] can populate
+/// [`KeOutcome::phase_timings`] without re-instrumenting each call
+/// site. When `deadline` is `None` (un-bounded path) both fields are
+/// reported as `0` since the un-bounded `TcpStream::connect` does its
+/// own internal lookup that is not separately measurable.
 fn connect_with_deadline_using<F>(
     host: &str,
     port: u16,
     deadline: Option<Deadline>,
     dns_concurrency_cap: usize,
     lookup: F,
-) -> Result<TcpStream, KeError>
+) -> Result<ConnectedTcp, KeError>
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
     let Some(deadline) = deadline else {
-        return Ok(TcpStream::connect((host, port))?);
+        let stream = TcpStream::connect((host, port))?;
+        return Ok(ConnectedTcp {
+            stream,
+            dns_micros: 0,
+            connect_micros: 0,
+        });
     };
-    let initial = deadline.remaining();
-    if initial.is_zero() {
-        return Err(KeError::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "NTS-KE deadline elapsed before DNS lookup",
-        )));
-    }
+    let initial = deadline.check_or_timeout(KeTimeoutPhase::DnsTimeout)?;
     // Bound the resolver by the live remaining budget rather than the
     // caller's original duration. A stalled getaddrinfo would otherwise
     // consume the entire budget before the first connect attempt could
     // even start.
-    let addrs = resolve_with_global(host, port, initial, dns_concurrency_cap, lookup)?;
+    let dns_started = Instant::now();
+    let addrs = resolve_with_global(host, port, initial, dns_concurrency_cap, lookup)
+        .map_err(dns_error_to_ke)?;
+    let dns_micros = dns_started.elapsed().as_micros() as i64;
+    let connect_started = Instant::now();
     let mut last_err: Option<std::io::Error> = None;
     for addr in addrs {
-        let remaining = deadline.remaining();
-        if remaining.is_zero() {
-            return Err(KeError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "connect timed out",
-            )));
-        }
+        let remaining = match deadline.check_or_timeout(KeTimeoutPhase::Connect) {
+            Ok(r) => r,
+            Err(e) => return Err(e),
+        };
         match TcpStream::connect_timeout(&addr, remaining) {
-            Ok(s) => return Ok(s),
+            Ok(stream) => {
+                let connect_micros = connect_started.elapsed().as_micros() as i64;
+                return Ok(ConnectedTcp {
+                    stream,
+                    dns_micros,
+                    connect_micros,
+                });
+            }
             Err(e) => last_err = Some(e),
         }
     }
-    Err(KeError::Io(last_err.unwrap_or_else(|| {
+    Err(connect_error_to_ke(last_err.unwrap_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::AddrNotAvailable,
             format!("no addresses resolved for {host}:{port}"),
@@ -630,7 +820,9 @@ where
 /// Servers terminate the NTS-KE message with a record-level End-of-Message
 /// followed by a TLS `close_notify`; rustls surfaces that as a clean EOF on
 /// the next read. A `WouldBlock` from the underlying TCP socket is mapped to
-/// the I/O timeout the caller configured.
+/// `KeError::PhaseTimeout(KeRecordIo)` so callers can attribute the
+/// failure to the record-read phase rather than to a generic
+/// `Network` error.
 ///
 /// When `deadline` is `Some`, the loop refreshes the underlying
 /// `TcpStream`'s read/write timeouts before every `stream.read` call so
@@ -638,8 +830,8 @@ where
 /// `set_read_timeout` would re-arm a fresh `remaining` window for every
 /// chunk and a slow trickle from the server could extend the total
 /// wall-clock cost past the caller's `req.timeout`. A deadline already
-/// expired before the next read is surfaced as `KeError::Io` with
-/// `ErrorKind::TimedOut`.
+/// expired before the next read is surfaced as
+/// `KeError::PhaseTimeout(KeRecordIo)`.
 fn read_to_end_capped(
     stream: &mut Stream<'_, ClientConnection, TcpStream>,
     deadline: Option<&Deadline>,
@@ -648,7 +840,7 @@ fn read_to_end_capped(
     let mut chunk = [0u8; 4096];
     loop {
         if let Some(d) = deadline {
-            d.apply_to(stream.sock)?;
+            d.apply_to_with_phase(stream.sock, KeTimeoutPhase::KeRecordIo)?;
         }
         match stream.read(&mut chunk) {
             Ok(0) => return Ok(buf),
@@ -659,7 +851,7 @@ fn read_to_end_capped(
                 buf.extend_from_slice(&chunk[..n]);
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(KeError::Io(e)),
+            Err(e) => return Err(phase_io_to_ke(e, KeTimeoutPhase::KeRecordIo)),
         }
     }
 }
@@ -1000,10 +1192,11 @@ mod tests {
     /// satisfy the contract — what we assert is that the call returns
     /// well inside the OS-default ~75 s connect window, which is the
     /// regression this helper exists to prevent. When the deadline
-    /// itself fires, the resulting `io::Error` must carry
-    /// `ErrorKind::TimedOut` so the `From<KeError> for NtsError`
-    /// mapping in `api/nts.rs` produces `NtsError::Timeout` rather
-    /// than `NtsError::Network`.
+    /// itself fires, the result must be
+    /// `KeError::PhaseTimeout(KeTimeoutPhase::Connect)` so the
+    /// `From<KeError> for NtsError` mapping produces
+    /// `NtsError::Timeout(TimeoutPhase::Connect)` rather than a
+    /// generic `Network` error.
     #[test]
     fn connect_with_timeout_respects_budget_for_unroutable_ip() {
         let budget = Duration::from_millis(500);
@@ -1012,9 +1205,6 @@ mod tests {
         let elapsed = started.elapsed();
 
         let err = result.expect_err("connecting to 192.0.2.1:4460 must fail");
-        let KeError::Io(io) = err else {
-            panic!("expected KeError::Io, got {err:?}");
-        };
 
         // The cap is generous enough to absorb scheduling jitter on slow
         // CI runners while still being orders of magnitude tighter than
@@ -1023,40 +1213,37 @@ mod tests {
         assert!(
             elapsed < cap,
             "connect took {elapsed:?} (> {cap:?}); OS-default connect \
-             timeout is leaking through (io kind = {:?}, msg = {io})",
-            io.kind(),
+             timeout is leaking through (err = {err:?})",
         );
 
         // When the deadline elapsed (rather than the OS rejecting
-        // immediately), the kind must be TimedOut so downstream error
-        // mapping produces NtsError::Timeout.
+        // immediately), the variant must be PhaseTimeout(Connect) so
+        // downstream error mapping produces NtsError::Timeout(Connect).
         if elapsed >= budget {
-            assert_eq!(
-                io.kind(),
-                std::io::ErrorKind::TimedOut,
-                "deadline elapsed after {elapsed:?} but io kind was \
-                 {:?} ({io}); would surface as NtsError::Network",
-                io.kind(),
+            assert!(
+                matches!(err, KeError::PhaseTimeout(KeTimeoutPhase::Connect)),
+                "deadline elapsed after {elapsed:?} but error was \
+                 {err:?}; would not surface as NtsError::Timeout(Connect)",
             );
         }
     }
 
     /// Slow-DNS regression guard for [`connect_with_timeout`]. Injects a
     /// resolver that blocks past the budget and asserts the call returns
-    /// a `KeError::Io` with `ErrorKind::TimedOut` well inside the cap.
-    /// Pinning the kind here is what the `From<KeError> for NtsError`
-    /// mapping in `api/nts.rs` relies on to surface stalled
-    /// `getaddrinfo` as `NtsError::Timeout` rather than as a generic
-    /// network error. Companion to `dns::tests::slow_resolver_*` and
-    /// `api::nts::tests::bind_connected_udp_surfaces_slow_dns_*`; see
-    /// `nts-6ka` for the full set of injection points.
+    /// `KeError::PhaseTimeout(DnsTimeout)` well inside the cap.
+    /// Pinning the variant here is what the `From<KeError> for
+    /// NtsError` mapping in `api/nts.rs` relies on to surface stalled
+    /// `getaddrinfo` as `NtsError::Timeout(DnsTimeout)` rather than as
+    /// a generic network error. Companion to `dns::tests::slow_resolver_*`
+    /// and `api::nts::tests::bind_connected_udp_surfaces_slow_dns_*`;
+    /// see `nts-6ka` for the full set of injection points.
     #[test]
     fn connect_with_timeout_surfaces_slow_dns_as_timed_out() {
         let budget = Duration::from_millis(50);
         let started = Instant::now();
         // Generous cap so this test stays isolated from any other
         // test in the suite that holds slots in the global resolver
-        // pool. The test is pinning the slow-DNS → TimedOut mapping,
+        // pool. The test is pinning the slow-DNS → DnsTimeout mapping,
         // not the cap-exhaustion path (which has dedicated coverage in
         // `dns::tests::cap_reached_returns_would_block`).
         let result =
@@ -1067,13 +1254,9 @@ mod tests {
         let elapsed = started.elapsed();
 
         let err = result.expect_err("slow resolver must trip the deadline");
-        let KeError::Io(io) = err else {
-            panic!("expected KeError::Io, got {err:?}");
-        };
-        assert_eq!(
-            io.kind(),
-            std::io::ErrorKind::TimedOut,
-            "slow-DNS path must surface as TimedOut, got {io:?}",
+        assert!(
+            matches!(err, KeError::PhaseTimeout(KeTimeoutPhase::DnsTimeout)),
+            "slow-DNS path must surface as PhaseTimeout(DnsTimeout), got {err:?}",
         );
         let cap = budget * 5;
         assert!(
