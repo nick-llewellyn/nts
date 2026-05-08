@@ -70,13 +70,15 @@ Future<NtsTimeSample> ntsQuery({
 /// cookie count along with the per-phase wall-clock breakdown.
 /// Replaces any cached session for that spec.
 ///
-/// `timeout_ms` and `dns_concurrency_cap` carry the same semantics as on
-/// [`nts_query`]; pass `0` for either to inherit the built-in default.
+/// `timeout_ms` and `dns_concurrency_cap` carry the same semantics
+/// as on `nts_query` (Dart: `ntsQuery`); pass `0` for either to
+/// inherit the built-in default.
 ///
-/// The returned [`NtsWarmCookiesOutcome::phase_timings`] only covers
-/// the KE handshake (DNS, connect, TLS, KE record I/O) — there is no
-/// UDP NTP exchange on this path, so the `Ntp` phase is implicitly
-/// zero and not represented.
+/// The returned `phase_timings` (Dart: `phaseTimings`) on
+/// [`NtsWarmCookiesOutcome`] only covers the KE handshake (DNS,
+/// connect, TLS, KE record I/O) — there is no UDP NTP exchange on
+/// this path, so the `Ntp` phase is implicitly zero and not
+/// represented.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   required int timeoutMs,
@@ -237,8 +239,8 @@ class NtsServerSpec {
 /// Successful authenticated NTPv4 sample.
 ///
 /// This is the raw output of one protocol exchange, not a synchronized
-/// clock. See [`nts_query`] for the recommended burst-and-RTT-compensation
-/// pattern callers should layer on top.
+/// clock. See `nts_query` (Dart: `ntsQuery`) for the recommended
+/// burst-and-RTT-compensation pattern callers should layer on top.
 class NtsTimeSample {
   /// Server transmit time as microseconds since the Unix epoch, taken
   /// directly from the NTPv4 reply. No correction for the one-way
@@ -300,7 +302,7 @@ class NtsTimeSample {
           phaseTimings == other.phaseTimings;
 }
 
-/// Successful outcome of [`nts_warm_cookies`].
+/// Successful outcome of `nts_warm_cookies` (Dart: `ntsWarmCookies`).
 ///
 /// Replaces the prior bare `u32` return so the same phase-attribution
 /// view available on [`NtsTimeSample`] is also available for the
@@ -333,13 +335,16 @@ class NtsWarmCookiesOutcome {
 }
 
 /// Microsecond-resolution wall-clock breakdown of a successful
-/// [`nts_query`] or [`nts_warm_cookies`] call, surfaced on
-/// [`NtsTimeSample::phase_timings`] / [`NtsWarmCookiesOutcome::phase_timings`].
+/// `nts_query` (Dart: `ntsQuery`) or `nts_warm_cookies`
+/// (Dart: `ntsWarmCookies`) call, surfaced on the `phase_timings`
+/// field of [`NtsTimeSample`] / [`NtsWarmCookiesOutcome`] (Dart:
+/// `phaseTimings`).
 ///
-/// Field semantics match [`KePhaseTimings`] for the four KE-pipeline
-/// phases. The UDP send/recv phase has no field of its own; the
-/// existing [`NtsTimeSample::round_trip_micros`] already covers it
-/// (kept for backward-compatibility on the Dart side and to avoid
+/// Field semantics match the internal `KePhaseTimings` for the
+/// four KE-pipeline phases. The UDP send/recv phase has no field
+/// of its own; `round_trip_micros` (Dart: `roundTripMicros`) on
+/// [`NtsTimeSample`] already covers it (kept for
+/// backward-compatibility on the Dart side and to avoid
 /// publishing the same fact in two fields). Callers who want a
 /// "preNtp" wall-clock view can sum
 /// `dns_micros + connect_micros + tls_handshake_micros +
@@ -407,21 +412,23 @@ class PhaseTimings {
           keRecordIoMicros == other.keRecordIoMicros;
 }
 
-/// Phase of an [`nts_query`] / [`nts_warm_cookies`] call whose
-/// wall-clock budget elapsed.
+/// Phase of an `nts_query` (Dart: `ntsQuery`) or `nts_warm_cookies`
+/// (Dart: `ntsWarmCookies`) call whose wall-clock budget elapsed.
 ///
-/// Carried as the payload of [`NtsError::Timeout`] so callers can
-/// attribute a failure to a specific pre-NTP step instead of inspecting
-/// free-form diagnostic strings. The Rust-side [`KeTimeoutPhase`] for
-/// the KE pipeline maps onto this enum via `From`; the `Ntp` variant is
-/// added at this layer for the UDP send/recv phase, and the two `Dns*`
-/// variants distinguish saturation (cap full) from timeout (resolver
-/// slow). See `ARCHITECTURE.md`'s "Phase attribution and timings"
-/// section for the full diagnostic shape.
+/// Carried as the payload of [`NtsError`]'s `Timeout` variant so
+/// callers can attribute a failure to a specific pre-NTP step
+/// instead of inspecting free-form diagnostic strings. The
+/// Rust-side KE-pipeline taxonomy (`KeTimeoutPhase`, internal to
+/// the crate) maps onto this enum via `From`; the `Ntp` variant
+/// is added at this layer for the UDP send/recv phase, and the
+/// two `Dns*` variants distinguish saturation (cap full) from
+/// timeout (resolver slow). See `ARCHITECTURE.md`'s "Phase
+/// attribution and timings" section for the full diagnostic
+/// shape.
 enum TimeoutPhase {
   /// Bounded DNS resolver pool was already at capacity when the call
   /// arrived, so admission was refused without spawning a worker.
-  /// Distinct from [`Self::DnsTimeout`]: raising
+  /// Distinct from `DnsTimeout`: raising
   /// `dns_concurrency_cap` or waiting for the in-flight pool to
   /// drain is the appropriate remediation, not lengthening
   /// `timeout_ms`.
