@@ -223,7 +223,7 @@ pub enum KeTimeoutPhase {
 pub struct KePhaseTimings {
     /// Time spent inside [`crate::nts::dns::resolve_with_global`] for
     /// the KE host. `0` for callers that pass `req.timeout = None`
-    /// because the un-bounded path bypasses the resolver helper.
+    /// because the unbounded path bypasses the resolver helper.
     pub dns_micros: i64,
     /// Time spent in the per-address `TcpStream::connect_timeout`
     /// loop. Cumulative across attempts when the first address fails.
@@ -590,7 +590,7 @@ fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {
 /// underlying `TcpStream`'s read/write timeouts before each phase, so
 /// the wall-clock cost cannot exceed the caller's budget regardless of
 /// how time is distributed across phases. `req.timeout = None` keeps
-/// the prior un-bounded behaviour for callers that opt out of timeout
+/// the prior unbounded behaviour for callers that opt out of timeout
 /// enforcement entirely.
 pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     if req.aead_algorithms.is_empty() {
@@ -758,8 +758,8 @@ where
 /// spent inside DNS resolution and the per-address connect loop, so
 /// [`perform_handshake`] can populate
 /// [`KeOutcome::phase_timings`] without re-instrumenting each call
-/// site. When `deadline` is `None` (un-bounded path) both fields are
-/// reported as `0` since the un-bounded `TcpStream::connect` does its
+/// site. When `deadline` is `None` (unbounded path) both fields are
+/// reported as `0` since the unbounded `TcpStream::connect` does its
 /// own internal lookup that is not separately measurable.
 fn connect_with_deadline_using<F>(
     host: &str,
