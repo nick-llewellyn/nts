@@ -521,6 +521,37 @@ fn remaining_budget_or_ntp_timeout(
         .ok_or(NtsError::Timeout(TimeoutPhase::Ntp))
 }
 
+/// Re-arm a connected UDP socket's read timeout against the
+/// call-wide wall-clock budget anchored at the start of
+/// [`nts_query`]. The bind-time timeout written by
+/// [`bind_connected_udp_using`] is anchored at bind completion, so
+/// without this re-arm a slow `send` or scheduling delay between
+/// bind and the blocking `recv` lets the `recv` block for that
+/// full bind-time budget on top of the time already spent —
+/// overshooting the caller's `timeout_ms` contract even though the
+/// `recv` itself respects its own (now stale) socket-level value.
+///
+/// Returns the re-armed remaining budget on success (also written
+/// onto the socket) so callers can reuse it for diagnostics.
+/// Short-circuits with `Timeout(Ntp)` when the call-wide budget has
+/// already been consumed before `recv` even starts; surfaces a
+/// failure to apply the timeout (extremely rare on a bound, connected
+/// UDP socket) as `NtsError::Network`. On the short-circuit arm the
+/// socket is left untouched so the caller-visible failure carries
+/// the same phase tag whether the budget was exhausted just before
+/// or just after the syscall would have been made.
+fn arm_recv_against_call_deadline(
+    socket: &UdpSocket,
+    total: Duration,
+    elapsed: Duration,
+) -> Result<Duration, NtsError> {
+    let remaining = remaining_budget_or_ntp_timeout(total, elapsed)?;
+    socket
+        .set_read_timeout(Some(remaining))
+        .map_err(|e| NtsError::Network(format!("set_read_timeout for recv: {e}")))?;
+    Ok(remaining)
+}
+
 /// Resolve the FFI `dns_concurrency_cap` argument into a `usize`,
 /// substituting [`DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`] when the caller
 /// passes `0`. The default is sized for mobile (see the constant's
@@ -1044,6 +1075,18 @@ pub fn nts_query(
 
     let send_at = Instant::now();
     socket.send(&packet)?;
+
+    // Re-arm the socket's read timeout against the call-wide deadline
+    // before the only blocking syscall on this leg. The bind-time
+    // value written by `bind_connected_udp_using` was anchored at bind
+    // completion; without this re-arm a slow `send` or scheduling
+    // delay between bind and recv lets the AEAD-NTPv4 `recv` block
+    // for that full bind-time budget on top of the time already
+    // spent, overshooting the documented single wall-clock budget on
+    // `timeout_ms`. Short-circuits to `Timeout(Ntp)` if the call-wide
+    // budget is already exhausted by the time we get here. See
+    // `arm_recv_against_call_deadline` for the full rationale.
+    arm_recv_against_call_deadline(&socket, timeout, started.elapsed())?;
 
     let mut buf = [0u8; 2048];
     let n = socket.recv(&mut buf)?;
@@ -1968,6 +2011,86 @@ mod tests {
             write_t > Duration::ZERO && write_t < upper_bound,
             "write_timeout {write_t:?} must be in (0, {upper_bound:?}); \
              original budget was {budget:?} and DNS consumed ~{dns_consumes:?}",
+        );
+    }
+
+    /// Companion to `bind_connected_udp_socket_timeouts_reflect_remaining_budget`
+    /// for the post-bind portion of `nts_query`. The UDP socket
+    /// emerges from `bind_connected_udp` with a read timeout sized to
+    /// the budget remaining at *bind* completion; without re-arming
+    /// before recv, a slow `send` or scheduling delay between bind
+    /// and recv would let recv block for that full bind-time budget
+    /// on top of the time already spent, overshooting the documented
+    /// single wall-clock budget on `timeout_ms`. Drives the helper
+    /// directly with a UDP socket pre-armed to a wide read_timeout
+    /// (mirroring the bind-time value) and asserts the re-arm
+    /// shrinks the timeout to track the call-wide deadline anchor.
+    #[test]
+    fn arm_recv_against_call_deadline_shrinks_read_timeout_against_call_anchor() {
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        let bind_time_value = Duration::from_secs(5);
+        socket
+            .set_read_timeout(Some(bind_time_value))
+            .expect("seed initial read_timeout");
+
+        let total = Duration::from_millis(500);
+        let elapsed = Duration::from_millis(200);
+        let remaining = arm_recv_against_call_deadline(&socket, total, elapsed)
+            .expect("non-zero remaining must yield Ok");
+
+        let read_t = socket
+            .read_timeout()
+            .expect("read_timeout call ok")
+            .expect("read timeout still set");
+        assert_eq!(
+            read_t, remaining,
+            "set_read_timeout must reflect the helper's returned remaining",
+        );
+        assert!(
+            read_t < bind_time_value,
+            "re-armed read_timeout {read_t:?} must be strictly less than \
+             the seeded bind-time value {bind_time_value:?}",
+        );
+        assert!(
+            read_t < total,
+            "re-armed read_timeout {read_t:?} must be strictly less than \
+             the call-wide budget {total:?} once {elapsed:?} has elapsed",
+        );
+        assert!(
+            read_t > Duration::ZERO,
+            "non-zero remaining must yield a strictly positive timeout, \
+             got {read_t:?}",
+        );
+    }
+
+    /// Expired-budget arm of `arm_recv_against_call_deadline`. Once
+    /// the call-wide deadline has lapsed, the helper must
+    /// short-circuit with `Timeout(Ntp)` rather than handing back a
+    /// zero-length `Duration` (which `set_read_timeout` would reject
+    /// on most platforms) or letting the socket be re-armed at all —
+    /// the latter would drop the phase-tagged failure shape callers
+    /// rely on for attribution.
+    #[test]
+    fn arm_recv_against_call_deadline_short_circuits_after_expiry() {
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        let initial = Duration::from_secs(5);
+        socket
+            .set_read_timeout(Some(initial))
+            .expect("seed initial read_timeout");
+
+        let total = Duration::from_millis(100);
+        let elapsed = Duration::from_millis(150);
+        match arm_recv_against_call_deadline(&socket, total, elapsed) {
+            Err(NtsError::Timeout(TimeoutPhase::Ntp)) => {}
+            other => panic!("expired call-wide deadline must yield Timeout(Ntp), got {other:?}",),
+        }
+        let read_t = socket
+            .read_timeout()
+            .expect("read_timeout call ok")
+            .expect("read timeout still set");
+        assert_eq!(
+            read_t, initial,
+            "expired short-circuit must not re-arm the socket; got {read_t:?}",
         );
     }
 

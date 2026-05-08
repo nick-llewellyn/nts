@@ -123,8 +123,16 @@ Map<String, Object?> jsonWarmSuccess(int cookies) => {'cookies': cookies};
 /// JSON-shaped failure payload for an [NtsError]. Pairs the variant
 /// tag with the same human-readable description used in text output
 /// and the warn/error severity classification.
+///
+/// `Timeout` failures additionally carry a structured `phase` field
+/// holding the [TimeoutPhase] variant name (`dnsSaturation`,
+/// `dnsTimeout`, `connect`, `tls`, `keRecordIo`, `ntp`) so
+/// machine-readable consumers can switch on the attribution without
+/// re-parsing the human message — the whole point of carrying the
+/// phase tag through the API surface in the first place.
 Map<String, Object?> jsonError(NtsError err) => {
   'error_type': errorTypeName(err),
   'message': describeError(err),
   'severity': isErrorSeverity(err) ? 'error' : 'warn',
+  if (err is NtsError_Timeout) 'phase': err.field0.name,
 };
