@@ -6,7 +6,8 @@ import 'dart:convert';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nts/nts.dart' show NtsError, NtsTimeSample;
+import 'package:nts/nts.dart'
+    show NtsError, NtsTimeSample, PhaseTimings, TimeoutPhase;
 import 'package:nts_example/src/state/nts_format.dart';
 
 void main() {
@@ -45,6 +46,7 @@ void main() {
         serverStratum: 1,
         aeadId: 15,
         freshCookies: 2,
+        phaseTimings: _zeroPhaseTimings(),
       );
       final out = formatQuerySuccess(sample);
       final lines = out.split('\n');
@@ -75,14 +77,20 @@ void main() {
 
     test('network / timeout / spec / no-cookies errors are warn-severity', () {
       expect(isErrorSeverity(const NtsError.network('x')), isFalse);
-      expect(isErrorSeverity(const NtsError.timeout()), isFalse);
+      expect(
+        isErrorSeverity(const NtsError.timeout(TimeoutPhase.ntp)),
+        isFalse,
+      );
       expect(isErrorSeverity(const NtsError.invalidSpec('x')), isFalse);
       expect(isErrorSeverity(const NtsError.noCookies()), isFalse);
     });
 
     test('describe round-trips the variant payload', () {
       expect(describeError(const NtsError.network('boom')), 'Network: boom');
-      expect(describeError(const NtsError.timeout()), startsWith('Timeout'));
+      expect(
+        describeError(const NtsError.timeout(TimeoutPhase.dnsTimeout)),
+        startsWith('Timeout'),
+      );
       expect(
         describeError(const NtsError.noCookies()),
         startsWith('NoCookies'),
@@ -100,7 +108,10 @@ void main() {
         errorTypeName(const NtsError.authentication('x')),
         'Authentication',
       );
-      expect(errorTypeName(const NtsError.timeout()), 'Timeout');
+      expect(
+        errorTypeName(const NtsError.timeout(TimeoutPhase.ntp)),
+        'Timeout',
+      );
       expect(errorTypeName(const NtsError.noCookies()), 'NoCookies');
       expect(errorTypeName(const NtsError.internal('x')), 'Internal');
     });
@@ -126,6 +137,7 @@ void main() {
         serverStratum: 3,
         aeadId: 15,
         freshCookies: 2,
+        phaseTimings: _zeroPhaseTimings(),
       );
 
       expect(jsonQuerySuccess(sample), {
@@ -146,6 +158,7 @@ void main() {
         serverStratum: 1,
         aeadId: 30,
         freshCookies: 8,
+        phaseTimings: _zeroPhaseTimings(),
       );
 
       final encoded = jsonEncode(jsonQuerySuccess(sample));
@@ -170,16 +183,52 @@ void main() {
         'message': 'Network: boom',
         'severity': 'warn',
       });
-      expect(jsonError(const NtsError.timeout()), {
-        'error_type': 'Timeout',
-        'message': startsWith('Timeout'),
-        'severity': 'warn',
-      });
       expect(jsonError(const NtsError.noCookies()), {
         'error_type': 'NoCookies',
-        'message': startsWith('NoCookies'),
+        'message': 'NoCookies (server completed KE but issued zero cookies)',
         'severity': 'warn',
       });
+    });
+
+    test('Timeout failures expose the phase as a structured field', () {
+      // Pinning `phase` exactly (rather than `startsWith('Timeout')`
+      // on `message`) is the whole point of carrying the phase tag
+      // through to JSON: machine-readable consumers must be able to
+      // switch on the attribution without re-parsing the human
+      // message. The two probes below cover both a non-default phase
+      // (dnsTimeout — chosen because it's a frequent operator-action
+      // signal in the field) and the post-bind variant (ntp) so a
+      // future edit that hard-codes one phase is caught.
+      expect(jsonError(const NtsError.timeout(TimeoutPhase.dnsTimeout)), {
+        'error_type': 'Timeout',
+        'message': 'Timeout (deadline expired in phase dnsTimeout)',
+        'severity': 'warn',
+        'phase': 'dnsTimeout',
+      });
+      expect(jsonError(const NtsError.timeout(TimeoutPhase.ntp)), {
+        'error_type': 'Timeout',
+        'message': 'Timeout (deadline expired in phase ntp)',
+        'severity': 'warn',
+        'phase': 'ntp',
+      });
+    });
+
+    test('non-Timeout failures do not carry a phase key', () {
+      // Guards against an accidental copy-paste that would surface
+      // `phase: null` (or a stale phase from a previous error) on a
+      // non-Timeout shape. Strict containsPair / isNot ensures the
+      // key is *absent*, not just falsy.
+      for (final err in <NtsError>[
+        const NtsError.network('x'),
+        const NtsError.noCookies(),
+        const NtsError.invalidSpec('x'),
+        const NtsError.authentication('x'),
+        const NtsError.keProtocol('x'),
+        const NtsError.ntpProtocol('x'),
+        const NtsError.internal('x'),
+      ]) {
+        expect(jsonError(err), isNot(contains('phase')));
+      }
     });
 
     test('error-severity errors carry severity=error', () {
@@ -199,3 +248,10 @@ void main() {
     });
   });
 }
+
+PhaseTimings _zeroPhaseTimings() => PhaseTimings(
+  dnsMicros: PlatformInt64Util.from(0),
+  connectMicros: PlatformInt64Util.from(0),
+  tlsHandshakeMicros: PlatformInt64Util.from(0),
+  keRecordIoMicros: PlatformInt64Util.from(0),
+);

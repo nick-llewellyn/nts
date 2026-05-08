@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 429583194;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1960228737;
 
 // Section: executor
 
@@ -187,6 +187,38 @@ fn wire__crate__api__nts__nts_warm_cookies_impl(
         },
     )
 }
+fn wire__crate__api__nts__phase_timings_default_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "phase_timings_default",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok(crate::api::nts::PhaseTimings::default())?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 
 // Section: dart2rust
 
@@ -195,6 +227,13 @@ impl SseDecode for String {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut inner = <Vec<u8>>::sse_decode(deserializer);
         return String::from_utf8(inner).unwrap();
+    }
+}
+
+impl SseDecode for i32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i32::<NativeEndian>().unwrap()
     }
 }
 
@@ -259,7 +298,8 @@ impl SseDecode for crate::api::nts::NtsError {
                 return crate::api::nts::NtsError::Authentication(var_field0);
             }
             5 => {
-                return crate::api::nts::NtsError::Timeout;
+                let mut var_field0 = <crate::api::nts::TimeoutPhase>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::Timeout(var_field0);
             }
             6 => {
                 return crate::api::nts::NtsError::NoCookies;
@@ -295,12 +335,58 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
         let mut var_serverStratum = <u8>::sse_decode(deserializer);
         let mut var_aeadId = <u16>::sse_decode(deserializer);
         let mut var_freshCookies = <u32>::sse_decode(deserializer);
+        let mut var_phaseTimings = <crate::api::nts::PhaseTimings>::sse_decode(deserializer);
         return crate::api::nts::NtsTimeSample {
             utc_unix_micros: var_utcUnixMicros,
             round_trip_micros: var_roundTripMicros,
             server_stratum: var_serverStratum,
             aead_id: var_aeadId,
             fresh_cookies: var_freshCookies,
+            phase_timings: var_phaseTimings,
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::NtsWarmCookiesOutcome {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_freshCookies = <u32>::sse_decode(deserializer);
+        let mut var_phaseTimings = <crate::api::nts::PhaseTimings>::sse_decode(deserializer);
+        return crate::api::nts::NtsWarmCookiesOutcome {
+            fresh_cookies: var_freshCookies,
+            phase_timings: var_phaseTimings,
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::PhaseTimings {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_dnsMicros = <i64>::sse_decode(deserializer);
+        let mut var_connectMicros = <i64>::sse_decode(deserializer);
+        let mut var_tlsHandshakeMicros = <i64>::sse_decode(deserializer);
+        let mut var_keRecordIoMicros = <i64>::sse_decode(deserializer);
+        return crate::api::nts::PhaseTimings {
+            dns_micros: var_dnsMicros,
+            connect_micros: var_connectMicros,
+            tls_handshake_micros: var_tlsHandshakeMicros,
+            ke_record_io_micros: var_keRecordIoMicros,
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::TimeoutPhase {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::nts::TimeoutPhase::DnsSaturation,
+            1 => crate::api::nts::TimeoutPhase::DnsTimeout,
+            2 => crate::api::nts::TimeoutPhase::Connect,
+            3 => crate::api::nts::TimeoutPhase::Tls,
+            4 => crate::api::nts::TimeoutPhase::KeRecordIo,
+            5 => crate::api::nts::TimeoutPhase::Ntp,
+            _ => unreachable!("Invalid variant for TimeoutPhase: {}", inner),
         };
     }
 }
@@ -338,13 +424,6 @@ impl SseDecode for () {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {}
 }
 
-impl SseDecode for i32 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        deserializer.cursor.read_i32::<NativeEndian>().unwrap()
-    }
-}
-
 impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -364,6 +443,7 @@ fn pde_ffi_dispatcher_primary_impl(
         1 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
         3 => wire__crate__api__nts__nts_query_impl(port, ptr, rust_vec_len, data_len),
         4 => wire__crate__api__nts__nts_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__nts__phase_timings_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -425,7 +505,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsError {
             crate::api::nts::NtsError::Authentication(field0) => {
                 [4.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::nts::NtsError::Timeout => [5.into_dart()].into_dart(),
+            crate::api::nts::NtsError::Timeout(field0) => {
+                [5.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            }
             crate::api::nts::NtsError::NoCookies => [6.into_dart()].into_dart(),
             crate::api::nts::NtsError::Internal(field0) => {
                 [7.into_dart(), field0.into_into_dart().into_dart()].into_dart()
@@ -472,6 +554,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTimeSample {
             self.server_stratum.into_into_dart().into_dart(),
             self.aead_id.into_into_dart().into_dart(),
             self.fresh_cookies.into_into_dart().into_dart(),
+            self.phase_timings.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -487,11 +570,81 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsTimeSample>
         self
     }
 }
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsWarmCookiesOutcome {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.fresh_cookies.into_into_dart().into_dart(),
+            self.phase_timings.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::nts::NtsWarmCookiesOutcome
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsWarmCookiesOutcome>
+    for crate::api::nts::NtsWarmCookiesOutcome
+{
+    fn into_into_dart(self) -> crate::api::nts::NtsWarmCookiesOutcome {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::PhaseTimings {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.dns_micros.into_into_dart().into_dart(),
+            self.connect_micros.into_into_dart().into_dart(),
+            self.tls_handshake_micros.into_into_dart().into_dart(),
+            self.ke_record_io_micros.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::nts::PhaseTimings {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::PhaseTimings>
+    for crate::api::nts::PhaseTimings
+{
+    fn into_into_dart(self) -> crate::api::nts::PhaseTimings {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::TimeoutPhase {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::DnsSaturation => 0.into_dart(),
+            Self::DnsTimeout => 1.into_dart(),
+            Self::Connect => 2.into_dart(),
+            Self::Tls => 3.into_dart(),
+            Self::KeRecordIo => 4.into_dart(),
+            Self::Ntp => 5.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::nts::TimeoutPhase {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::TimeoutPhase>
+    for crate::api::nts::TimeoutPhase
+{
+    fn into_into_dart(self) -> crate::api::nts::TimeoutPhase {
+        self
+    }
+}
 
 impl SseEncode for String {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<u8>>::sse_encode(self.into_bytes(), serializer);
+    }
+}
+
+impl SseEncode for i32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
     }
 }
 
@@ -546,8 +699,9 @@ impl SseEncode for crate::api::nts::NtsError {
                 <i32>::sse_encode(4, serializer);
                 <String>::sse_encode(field0, serializer);
             }
-            crate::api::nts::NtsError::Timeout => {
+            crate::api::nts::NtsError::Timeout(field0) => {
                 <i32>::sse_encode(5, serializer);
+                <crate::api::nts::TimeoutPhase>::sse_encode(field0, serializer);
             }
             crate::api::nts::NtsError::NoCookies => {
                 <i32>::sse_encode(6, serializer);
@@ -579,6 +733,45 @@ impl SseEncode for crate::api::nts::NtsTimeSample {
         <u8>::sse_encode(self.server_stratum, serializer);
         <u16>::sse_encode(self.aead_id, serializer);
         <u32>::sse_encode(self.fresh_cookies, serializer);
+        <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
+    }
+}
+
+impl SseEncode for crate::api::nts::NtsWarmCookiesOutcome {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u32>::sse_encode(self.fresh_cookies, serializer);
+        <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
+    }
+}
+
+impl SseEncode for crate::api::nts::PhaseTimings {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i64>::sse_encode(self.dns_micros, serializer);
+        <i64>::sse_encode(self.connect_micros, serializer);
+        <i64>::sse_encode(self.tls_handshake_micros, serializer);
+        <i64>::sse_encode(self.ke_record_io_micros, serializer);
+    }
+}
+
+impl SseEncode for crate::api::nts::TimeoutPhase {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::nts::TimeoutPhase::DnsSaturation => 0,
+                crate::api::nts::TimeoutPhase::DnsTimeout => 1,
+                crate::api::nts::TimeoutPhase::Connect => 2,
+                crate::api::nts::TimeoutPhase::Tls => 3,
+                crate::api::nts::TimeoutPhase::KeRecordIo => 4,
+                crate::api::nts::TimeoutPhase::Ntp => 5,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
@@ -613,13 +806,6 @@ impl SseEncode for u8 {
 impl SseEncode for () {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {}
-}
-
-impl SseEncode for i32 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        serializer.cursor.write_i32::<NativeEndian>(self).unwrap();
-    }
 }
 
 impl SseEncode for bool {

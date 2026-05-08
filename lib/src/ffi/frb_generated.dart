@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 429583194;
+  int get rustContentHash => -1960228737;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -88,11 +88,13 @@ abstract class RustLibApi extends BaseApi {
     required int dnsConcurrencyCap,
   });
 
-  Future<int> crateApiNtsNtsWarmCookies({
+  Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
   });
+
+  Future<PhaseTimings> crateApiNtsPhaseTimingsDefault();
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -189,7 +191,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
-  Future<int> crateApiNtsNtsWarmCookies({
+  Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
@@ -209,7 +211,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_u_32,
+          decodeSuccessData: sse_decode_nts_warm_cookies_outcome,
           decodeErrorData: sse_decode_nts_error,
         ),
         constMeta: kCrateApiNtsNtsWarmCookiesConstMeta,
@@ -224,6 +226,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     argNames: ["spec", "timeoutMs", "dnsConcurrencyCap"],
   );
 
+  @override
+  Future<PhaseTimings> crateApiNtsPhaseTimingsDefault() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 5,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_phase_timings,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNtsPhaseTimingsDefaultConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsPhaseTimingsDefaultConstMeta =>
+      const TaskConstMeta(debugName: "phase_timings_default", argNames: []);
+
   @protected
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -234,6 +263,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   NtsServerSpec dco_decode_box_autoadd_nts_server_spec(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_nts_server_spec(raw);
+  }
+
+  @protected
+  int dco_decode_i_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -277,7 +312,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 4:
         return NtsError_Authentication(dco_decode_String(raw[1]));
       case 5:
-        return const NtsError_Timeout();
+        return NtsError_Timeout(dco_decode_timeout_phase(raw[1]));
       case 6:
         return const NtsError_NoCookies();
       case 7:
@@ -303,15 +338,48 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 5)
-      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return NtsTimeSample(
       utcUnixMicros: dco_decode_i_64(arr[0]),
       roundTripMicros: dco_decode_i_64(arr[1]),
       serverStratum: dco_decode_u_8(arr[2]),
       aeadId: dco_decode_u_16(arr[3]),
       freshCookies: dco_decode_u_32(arr[4]),
+      phaseTimings: dco_decode_phase_timings(arr[5]),
     );
+  }
+
+  @protected
+  NtsWarmCookiesOutcome dco_decode_nts_warm_cookies_outcome(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return NtsWarmCookiesOutcome(
+      freshCookies: dco_decode_u_32(arr[0]),
+      phaseTimings: dco_decode_phase_timings(arr[1]),
+    );
+  }
+
+  @protected
+  PhaseTimings dco_decode_phase_timings(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return PhaseTimings(
+      dnsMicros: dco_decode_i_64(arr[0]),
+      connectMicros: dco_decode_i_64(arr[1]),
+      tlsHandshakeMicros: dco_decode_i_64(arr[2]),
+      keRecordIoMicros: dco_decode_i_64(arr[3]),
+    );
+  }
+
+  @protected
+  TimeoutPhase dco_decode_timeout_phase(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return TimeoutPhase.values[raw as int];
   }
 
   @protected
@@ -357,6 +425,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_nts_server_spec(deserializer));
+  }
+
+  @protected
+  int sse_decode_i_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt32();
   }
 
   @protected
@@ -409,7 +483,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final var_field0 = sse_decode_String(deserializer);
         return NtsError_Authentication(var_field0);
       case 5:
-        return const NtsError_Timeout();
+        final var_field0 = sse_decode_timeout_phase(deserializer);
+        return NtsError_Timeout(var_field0);
       case 6:
         return const NtsError_NoCookies();
       case 7:
@@ -436,13 +511,50 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     final var_serverStratum = sse_decode_u_8(deserializer);
     final var_aeadId = sse_decode_u_16(deserializer);
     final var_freshCookies = sse_decode_u_32(deserializer);
+    final var_phaseTimings = sse_decode_phase_timings(deserializer);
     return NtsTimeSample(
       utcUnixMicros: var_utcUnixMicros,
       roundTripMicros: var_roundTripMicros,
       serverStratum: var_serverStratum,
       aeadId: var_aeadId,
       freshCookies: var_freshCookies,
+      phaseTimings: var_phaseTimings,
     );
+  }
+
+  @protected
+  NtsWarmCookiesOutcome sse_decode_nts_warm_cookies_outcome(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final var_freshCookies = sse_decode_u_32(deserializer);
+    final var_phaseTimings = sse_decode_phase_timings(deserializer);
+    return NtsWarmCookiesOutcome(
+      freshCookies: var_freshCookies,
+      phaseTimings: var_phaseTimings,
+    );
+  }
+
+  @protected
+  PhaseTimings sse_decode_phase_timings(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final var_dnsMicros = sse_decode_i_64(deserializer);
+    final var_connectMicros = sse_decode_i_64(deserializer);
+    final var_tlsHandshakeMicros = sse_decode_i_64(deserializer);
+    final var_keRecordIoMicros = sse_decode_i_64(deserializer);
+    return PhaseTimings(
+      dnsMicros: var_dnsMicros,
+      connectMicros: var_connectMicros,
+      tlsHandshakeMicros: var_tlsHandshakeMicros,
+      keRecordIoMicros: var_keRecordIoMicros,
+    );
+  }
+
+  @protected
+  TimeoutPhase sse_decode_timeout_phase(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final inner = sse_decode_i_32(deserializer);
+    return TimeoutPhase.values[inner];
   }
 
   @protected
@@ -475,12 +587,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getInt32();
-  }
-
-  @protected
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
@@ -499,6 +605,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_nts_server_spec(self, serializer);
+  }
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt32(self);
   }
 
   @protected
@@ -548,8 +660,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case NtsError_Authentication(field0: final field0):
         sse_encode_i_32(4, serializer);
         sse_encode_String(field0, serializer);
-      case NtsError_Timeout():
+      case NtsError_Timeout(field0: final field0):
         sse_encode_i_32(5, serializer);
+        sse_encode_timeout_phase(field0, serializer);
       case NtsError_NoCookies():
         sse_encode_i_32(6, serializer);
       case NtsError_Internal(field0: final field0):
@@ -579,6 +692,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_8(self.serverStratum, serializer);
     sse_encode_u_16(self.aeadId, serializer);
     sse_encode_u_32(self.freshCookies, serializer);
+    sse_encode_phase_timings(self.phaseTimings, serializer);
+  }
+
+  @protected
+  void sse_encode_nts_warm_cookies_outcome(
+    NtsWarmCookiesOutcome self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_u_32(self.freshCookies, serializer);
+    sse_encode_phase_timings(self.phaseTimings, serializer);
+  }
+
+  @protected
+  void sse_encode_phase_timings(PhaseTimings self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_64(self.dnsMicros, serializer);
+    sse_encode_i_64(self.connectMicros, serializer);
+    sse_encode_i_64(self.tlsHandshakeMicros, serializer);
+    sse_encode_i_64(self.keRecordIoMicros, serializer);
+  }
+
+  @protected
+  void sse_encode_timeout_phase(TimeoutPhase self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
   }
 
   @protected
@@ -608,12 +747,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_unit(void self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-  }
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putInt32(self);
   }
 
   @protected

@@ -11,13 +11,17 @@
 // full rationale.
 
 import '../ffi/api/nts.dart' as ffi;
-import '../ffi/api/nts.dart' show NtsDnsPoolStats, NtsServerSpec, NtsTimeSample;
+import '../ffi/api/nts.dart'
+    show NtsDnsPoolStats, NtsServerSpec, NtsTimeSample, NtsWarmCookiesOutcome;
 
 export '../ffi/api/nts.dart'
     show
         NtsDnsPoolStats,
         NtsServerSpec,
         NtsTimeSample,
+        NtsWarmCookiesOutcome,
+        PhaseTimings,
+        TimeoutPhase,
         NtsError,
         // The `NtsError_*` variant subclasses are part of the public API:
         // they are the runtime types produced by the FRB-generated
@@ -134,14 +138,18 @@ Future<NtsTimeSample> ntsQuery({
 ///   alert on.
 NtsDnsPoolStats ntsDnsPoolStats() => ffi.ntsDnsPoolStats();
 
-/// Force a fresh NTS-KE handshake against `spec` and return the number
-/// of cookies the server delivered. Replaces any cached session for that
-/// spec.
+/// Force a fresh NTS-KE handshake against `spec` and return the cookie
+/// count along with the per-phase wall-clock breakdown of the handshake.
+/// Replaces any cached session for that spec.
 ///
 /// `timeoutMs` and `dnsConcurrencyCap` carry the same semantics as on
 /// [ntsQuery] and default to [kDefaultTimeoutMs] /
 /// [kDefaultDnsConcurrencyCap] when omitted.
-Future<int> ntsWarmCookies({
+///
+/// The returned [NtsWarmCookiesOutcome.phaseTimings] only covers the KE
+/// pipeline (DNS, connect, TLS, KE record I/O); there is no UDP NTP
+/// exchange on this path, so the `Ntp` phase is implicitly zero.
+Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   int timeoutMs = kDefaultTimeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,

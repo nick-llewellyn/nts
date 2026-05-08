@@ -59,19 +59,27 @@ class _RecordingApi implements RustLibApi {
       serverStratum: 1,
       aeadId: 15,
       freshCookies: 1,
+      phaseTimings: _zeroPhaseTimings(),
     );
   }
 
   @override
-  Future<int> crateApiNtsNtsWarmCookies({
+  Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
   }) async {
     lastWarmTimeoutMs = timeoutMs;
     lastWarmDnsCap = dnsConcurrencyCap;
-    return 0;
+    return NtsWarmCookiesOutcome(
+      freshCookies: 0,
+      phaseTimings: _zeroPhaseTimings(),
+    );
   }
+
+  @override
+  Future<PhaseTimings> crateApiNtsPhaseTimingsDefault() async =>
+      _zeroPhaseTimings();
 
   @override
   NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
@@ -86,6 +94,13 @@ class _RecordingApi implements RustLibApi {
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('mock api: ${invocation.memberName} not stubbed');
 }
+
+PhaseTimings _zeroPhaseTimings() => PhaseTimings(
+  dnsMicros: PlatformInt64Util.from(0),
+  connectMicros: PlatformInt64Util.from(0),
+  tlsHandshakeMicros: PlatformInt64Util.from(0),
+  keRecordIoMicros: PlatformInt64Util.from(0),
+);
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

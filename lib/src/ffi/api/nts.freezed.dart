@@ -137,7 +137,7 @@ return internal(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String field0)?  invalidSpec,TResult Function( String field0)?  network,TResult Function( String field0)?  keProtocol,TResult Function( String field0)?  ntpProtocol,TResult Function( String field0)?  authentication,TResult Function()?  timeout,TResult Function()?  noCookies,TResult Function( String field0)?  internal,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String field0)?  invalidSpec,TResult Function( String field0)?  network,TResult Function( String field0)?  keProtocol,TResult Function( String field0)?  ntpProtocol,TResult Function( String field0)?  authentication,TResult Function( TimeoutPhase field0)?  timeout,TResult Function()?  noCookies,TResult Function( String field0)?  internal,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
 return invalidSpec(_that.field0);case NtsError_Network() when network != null:
@@ -145,7 +145,7 @@ return network(_that.field0);case NtsError_KeProtocol() when keProtocol != null:
 return keProtocol(_that.field0);case NtsError_NtpProtocol() when ntpProtocol != null:
 return ntpProtocol(_that.field0);case NtsError_Authentication() when authentication != null:
 return authentication(_that.field0);case NtsError_Timeout() when timeout != null:
-return timeout();case NtsError_NoCookies() when noCookies != null:
+return timeout(_that.field0);case NtsError_NoCookies() when noCookies != null:
 return noCookies();case NtsError_Internal() when internal != null:
 return internal(_that.field0);case _:
   return orElse();
@@ -165,7 +165,7 @@ return internal(_that.field0);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String field0)  invalidSpec,required TResult Function( String field0)  network,required TResult Function( String field0)  keProtocol,required TResult Function( String field0)  ntpProtocol,required TResult Function( String field0)  authentication,required TResult Function()  timeout,required TResult Function()  noCookies,required TResult Function( String field0)  internal,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String field0)  invalidSpec,required TResult Function( String field0)  network,required TResult Function( String field0)  keProtocol,required TResult Function( String field0)  ntpProtocol,required TResult Function( String field0)  authentication,required TResult Function( TimeoutPhase field0)  timeout,required TResult Function()  noCookies,required TResult Function( String field0)  internal,}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec():
 return invalidSpec(_that.field0);case NtsError_Network():
@@ -173,7 +173,7 @@ return network(_that.field0);case NtsError_KeProtocol():
 return keProtocol(_that.field0);case NtsError_NtpProtocol():
 return ntpProtocol(_that.field0);case NtsError_Authentication():
 return authentication(_that.field0);case NtsError_Timeout():
-return timeout();case NtsError_NoCookies():
+return timeout(_that.field0);case NtsError_NoCookies():
 return noCookies();case NtsError_Internal():
 return internal(_that.field0);}
 }
@@ -189,7 +189,7 @@ return internal(_that.field0);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String field0)?  invalidSpec,TResult? Function( String field0)?  network,TResult? Function( String field0)?  keProtocol,TResult? Function( String field0)?  ntpProtocol,TResult? Function( String field0)?  authentication,TResult? Function()?  timeout,TResult? Function()?  noCookies,TResult? Function( String field0)?  internal,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String field0)?  invalidSpec,TResult? Function( String field0)?  network,TResult? Function( String field0)?  keProtocol,TResult? Function( String field0)?  ntpProtocol,TResult? Function( String field0)?  authentication,TResult? Function( TimeoutPhase field0)?  timeout,TResult? Function()?  noCookies,TResult? Function( String field0)?  internal,}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
 return invalidSpec(_that.field0);case NtsError_Network() when network != null:
@@ -197,7 +197,7 @@ return network(_that.field0);case NtsError_KeProtocol() when keProtocol != null:
 return keProtocol(_that.field0);case NtsError_NtpProtocol() when ntpProtocol != null:
 return ntpProtocol(_that.field0);case NtsError_Authentication() when authentication != null:
 return authentication(_that.field0);case NtsError_Timeout() when timeout != null:
-return timeout();case NtsError_NoCookies() when noCookies != null:
+return timeout(_that.field0);case NtsError_NoCookies() when noCookies != null:
 return noCookies();case NtsError_Internal() when internal != null:
 return internal(_that.field0);case _:
   return null;
@@ -541,33 +541,67 @@ as String,
 
 
 class NtsError_Timeout extends NtsError {
-  const NtsError_Timeout(): super._();
+  const NtsError_Timeout(this.field0): super._();
   
 
+ final  TimeoutPhase field0;
 
-
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsError_TimeoutCopyWith<NtsError_Timeout> get copyWith => _$NtsError_TimeoutCopyWithImpl<NtsError_Timeout>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Timeout);
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Timeout&&(identical(other.field0, field0) || other.field0 == field0));
 }
 
 
 @override
-int get hashCode => runtimeType.hashCode;
+int get hashCode => Object.hash(runtimeType,field0);
 
 @override
 String toString() {
-  return 'NtsError.timeout()';
+  return 'NtsError.timeout(field0: $field0)';
 }
 
 
 }
 
+/// @nodoc
+abstract mixin class $NtsError_TimeoutCopyWith<$Res> implements $NtsErrorCopyWith<$Res> {
+  factory $NtsError_TimeoutCopyWith(NtsError_Timeout value, $Res Function(NtsError_Timeout) _then) = _$NtsError_TimeoutCopyWithImpl;
+@useResult
+$Res call({
+ TimeoutPhase field0
+});
 
 
+
+
+}
+/// @nodoc
+class _$NtsError_TimeoutCopyWithImpl<$Res>
+    implements $NtsError_TimeoutCopyWith<$Res> {
+  _$NtsError_TimeoutCopyWithImpl(this._self, this._then);
+
+  final NtsError_Timeout _self;
+  final $Res Function(NtsError_Timeout) _then;
+
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+  return _then(NtsError_Timeout(
+null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
+as TimeoutPhase,
+  ));
+}
+
+
+}
 
 /// @nodoc
 
