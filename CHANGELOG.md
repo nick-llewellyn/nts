@@ -21,7 +21,9 @@ sharing one cached session table the way they always have.
 remains a direct snapshot of the process-wide bounded DNS resolver
 counters (which live in `nts::dns`, not in the per-host session
 table that `NtsClient` owns) and stays a synchronous, free-standing
-function. There is no SemVer-affecting change.
+function. The 3.0 → 3.1 bump is the additive minor that the new
+`NtsClient` surface justifies under SemVer; no breaking change.
+The Rust crate (`nts_rust`) version is unchanged at 0.4.0.
 
 ### Added
 

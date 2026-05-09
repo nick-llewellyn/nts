@@ -9,12 +9,12 @@
 //!   delivered cookie pool without sending any NTP traffic.
 //!
 //! Both entry points delegate to a process-wide default [`NtsClient`] via
-//! [`default_nts_client`]; callers that need scoped session ownership
-//! construct their own [`NtsClient`] and call its `query` /
-//! `warm_cookies` methods directly. Each [`NtsClient`] owns one
-//! [`SessionTable`] — a `Mutex<HashMap<String, Session>>` keyed by
-//! `host:port` — and that table is the only persistent state the
-//! bridge maintains. Two [`NtsClient`] instances never share table
+//! a private `default_nts_client()` accessor; callers that need scoped
+//! session ownership construct their own [`NtsClient`] and call its
+//! `query` / `warm_cookies` methods directly. Each [`NtsClient`] owns
+//! one private `SessionTable` — a `Mutex<HashMap<String, Session>>`
+//! keyed by `host:port` — and that table is the only persistent state
+//! the bridge maintains. Two [`NtsClient`] instances never share table
 //! state with each other or with the process-wide default; see
 //! [`NtsClient`] for the per-instance lifecycle methods (`invalidate`,
 //! `clear`).
@@ -472,7 +472,7 @@ impl Session {
 /// Mint a fresh, monotonically-increasing session generation ID.
 ///
 /// `Relaxed` is sufficient because the value is only ever compared for
-/// equality against a snapshot taken under the same [`SessionTable`]
+/// equality against a snapshot taken under the same `SessionTable`
 /// mutex that gates every read/write of the table. The mutex provides
 /// the cross-thread happens-before relationship; the atomic is here
 /// purely to give us a cheap uniqueness oracle without having to widen
@@ -487,20 +487,22 @@ fn next_session_generation() -> u64 {
 ///
 /// Each [`NtsClient`] owns one `SessionTable`; the convenience
 /// top-level entry points ([`nts_query`], [`nts_warm_cookies`])
-/// delegate to a process-wide default client whose table is exposed
-/// internally via [`default_session_table`]. The `Mutex` provides
-/// interior mutability so client methods take `&self` rather than
-/// `&mut self` and concurrent calls against the same client serialize
-/// only for the brief window each cache lookup needs.
+/// delegate to a process-wide default client, and the cache-layer
+/// unit tests in this module reach that same default table through
+/// a `#[cfg(test)]`-gated `default_session_table()` shim (private to
+/// the crate; not part of the documented surface). The `Mutex`
+/// provides interior mutability so client methods take `&self`
+/// rather than `&mut self` and concurrent calls against the same
+/// client serialize only for the brief window each cache lookup
+/// needs.
 ///
 /// `pub(crate)` so the FRB-generated dispatcher in
 /// `rust/src/frb_generated.rs` (a sibling module of `crate::api::nts`)
 /// can name the type, but not `pub` so downstream Rust crates do not
 /// see it. Marked `#[flutter_rust_bridge::frb(ignore)]` so FRB does
-/// not emit a public Dart binding for the type — it is reachable
-/// through the (private) `NtsClient.table` field, which is otherwise
-/// enough to make FRB's parser consider it part of the bindable
-/// surface.
+/// not emit a public Dart binding for the type — without the ignore,
+/// the private `NtsClient.table` field is enough to make FRB's parser
+/// pull `SessionTable` into the bindable surface.
 #[flutter_rust_bridge::frb(ignore)]
 pub(crate) struct SessionTable {
     map: Mutex<HashMap<String, Session>>,
