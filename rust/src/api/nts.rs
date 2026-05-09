@@ -2,21 +2,23 @@
 //!
 //! Two synchronous entry points are exposed across the FRB v2 worker pool:
 //!
-//! - [`nts_query`] runs a full Authenticated NTPv4 exchange and returns a
-//!   [`NtsTimeSample`]. It performs an NTS-KE handshake on demand if no
-//!   cached session exists or the cookie pool is exhausted.
-//! - [`nts_warm_cookies`] forces a fresh NTS-KE handshake and ingests the
-//!   delivered cookie pool without sending any NTP traffic.
+//! - `nts_query` (`ntsQuery` on the Dart side) runs a full
+//!   Authenticated NTPv4 exchange and returns a `NtsTimeSample`. It
+//!   performs an NTS-KE handshake on demand if no cached session
+//!   exists or the cookie pool is exhausted.
+//! - `nts_warm_cookies` (`ntsWarmCookies` on the Dart side) forces a
+//!   fresh NTS-KE handshake and ingests the delivered cookie pool
+//!   without sending any NTP traffic.
 //!
-//! Both entry points delegate to a process-wide default [`NtsClient`] via
+//! Both entry points delegate to a process-wide default `NtsClient` via
 //! a private `default_nts_client()` accessor; callers that need scoped
-//! session ownership construct their own [`NtsClient`] and call its
-//! `query` / `warm_cookies` methods directly. Each [`NtsClient`] owns
+//! session ownership construct their own `NtsClient` and call its
+//! `query` / `warm_cookies` methods directly. Each `NtsClient` owns
 //! one private `SessionTable` — a `Mutex<HashMap<String, Session>>`
 //! keyed by `host:port` — and that table is the only persistent state
-//! the bridge maintains. Two [`NtsClient`] instances never share table
+//! the bridge maintains. Two `NtsClient` instances never share table
 //! state with each other or with the process-wide default; see
-//! [`NtsClient`] for the per-instance lifecycle methods (`invalidate`,
+//! `NtsClient` for the per-instance lifecycle methods (`invalidate`,
 //! `clear`).
 
 use std::collections::HashMap;
@@ -524,16 +526,18 @@ impl SessionTable {
 /// methods take `&self`, so a single `NtsClient` can be shared by
 /// reference (or via `Arc`) across the application.
 ///
-/// The convenience top-level functions [`nts_query`] and
-/// [`nts_warm_cookies`] delegate to a process-wide default client.
-/// Construct an explicit `NtsClient` when you need test isolation,
-/// the ability to drop cached sessions on demand via
-/// [`NtsClient::invalidate`] / [`NtsClient::clear`], or scope-bounded
-/// session ownership.
+/// The convenience top-level functions `nts_query` and
+/// `nts_warm_cookies` (`ntsQuery` / `ntsWarmCookies` on the Dart
+/// side) delegate to a process-wide default client. Construct an
+/// explicit `NtsClient` when you need test isolation, the ability
+/// to drop cached sessions on demand via `invalidate` / `clear`,
+/// or scope-bounded session ownership.
 ///
 /// `Default` is intentionally not derived so FRB does not surface a
 /// `default_()` static factory in the generated Dart bindings;
-/// [`NtsClient::new`] is the canonical constructor on both sides.
+/// `new` (which becomes the synchronous `NtsClient()` default
+/// constructor on the Dart side) is the canonical constructor on
+/// both sides.
 pub struct NtsClient {
     table: SessionTable,
 }
@@ -552,7 +556,8 @@ impl NtsClient {
         }
     }
 
-    /// Per-client equivalent of the top-level [`nts_query`].
+    /// Per-client equivalent of the top-level `nts_query`
+    /// (`ntsQuery` on the Dart side).
     pub fn query(
         &self,
         spec: NtsServerSpec,
@@ -562,7 +567,8 @@ impl NtsClient {
         nts_query_inner(&self.table, spec, timeout_ms, dns_concurrency_cap)
     }
 
-    /// Per-client equivalent of the top-level [`nts_warm_cookies`].
+    /// Per-client equivalent of the top-level `nts_warm_cookies`
+    /// (`ntsWarmCookies` on the Dart side).
     pub fn warm_cookies(
         &self,
         spec: NtsServerSpec,
@@ -574,9 +580,9 @@ impl NtsClient {
 
     /// Drop the cached session for `spec`'s `host:port`, if any.
     /// Returns `true` if an entry was removed, `false` if no session
-    /// was cached for that key. The next [`query`](Self::query) or
-    /// [`warm_cookies`](Self::warm_cookies) for that spec triggers a
-    /// fresh NTS-KE handshake.
+    /// was cached for that key. The next `query` or `warm_cookies`
+    /// (`query` / `warmCookies` on the Dart side) for that spec
+    /// triggers a fresh NTS-KE handshake.
     ///
     /// Does not validate `spec`. An invalid spec (empty host or zero
     /// port) trivially has no cached session and returns `false`.
@@ -595,8 +601,8 @@ impl NtsClient {
     /// resetting the cache between work batches.
     ///
     /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
-    /// reason as [`invalidate`](Self::invalidate): one mutex
-    /// acquisition and one `HashMap::clear`.
+    /// reason as `invalidate`: one mutex acquisition and one
+    /// `HashMap::clear`.
     #[flutter_rust_bridge::frb(sync)]
     pub fn clear(&self) {
         self.table.clear()

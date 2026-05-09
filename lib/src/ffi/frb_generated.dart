@@ -1110,15 +1110,15 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
   /// resetting the cache between work batches.
   ///
   /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
-  /// reason as [`invalidate`](Self::invalidate): one mutex
-  /// acquisition and one `HashMap::clear`.
+  /// reason as `invalidate`: one mutex acquisition and one
+  /// `HashMap::clear`.
   void clear() => RustLib.instance.api.crateApiNtsNtsClientClear(that: this);
 
   /// Drop the cached session for `spec`'s `host:port`, if any.
   /// Returns `true` if an entry was removed, `false` if no session
-  /// was cached for that key. The next [`query`](Self::query) or
-  /// [`warm_cookies`](Self::warm_cookies) for that spec triggers a
-  /// fresh NTS-KE handshake.
+  /// was cached for that key. The next `query` or `warm_cookies`
+  /// (`query` / `warmCookies` on the Dart side) for that spec
+  /// triggers a fresh NTS-KE handshake.
   ///
   /// Does not validate `spec`. An invalid spec (empty host or zero
   /// port) trivially has no cached session and returns `false`.
@@ -1130,7 +1130,8 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
   bool invalidate({required NtsServerSpec spec}) => RustLib.instance.api
       .crateApiNtsNtsClientInvalidate(that: this, spec: spec);
 
-  /// Per-client equivalent of the top-level [`nts_query`].
+  /// Per-client equivalent of the top-level `nts_query`
+  /// (`ntsQuery` on the Dart side).
   Future<NtsTimeSample> query({
     required NtsServerSpec spec,
     required int timeoutMs,
@@ -1142,7 +1143,8 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
     dnsConcurrencyCap: dnsConcurrencyCap,
   );
 
-  /// Per-client equivalent of the top-level [`nts_warm_cookies`].
+  /// Per-client equivalent of the top-level `nts_warm_cookies`
+  /// (`ntsWarmCookies` on the Dart side).
   Future<NtsWarmCookiesOutcome> warmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
