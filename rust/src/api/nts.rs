@@ -2705,6 +2705,142 @@ mod tests {
         );
     }
 
+    /// `validate` rejects an empty host / zero port before any cache
+    /// or network work happens, on both the per-client surface
+    /// (`NtsClient::query`, `NtsClient::warm_cookies`) and the
+    /// top-level free function (`nts_warm_cookies`). Companions to
+    /// the existing pre-3.1 validation tests for `nts_query`.
+    ///
+    /// Operationally redundant because the four delegation paths all
+    /// land in the same `validate(&spec)?` line in the `_inner`
+    /// helpers; pinning each call site individually is what gives
+    /// codecov a covered patch line on the per-client method bodies
+    /// and on the top-level `nts_warm_cookies` 1-line delegation,
+    /// which would otherwise stay uncovered until the first happy-
+    /// path Rust unit test (currently only the live integration
+    /// probes against real NTS endpoints, gated behind `--ignored`).
+    #[test]
+    fn nts_client_query_rejects_invalid_spec_via_validate() {
+        let client = NtsClient::new();
+        let spec = NtsServerSpec {
+            host: String::new(),
+            port: 4460,
+        };
+        match client.query(spec, 1000, 1) {
+            Err(NtsError::InvalidSpec(_)) => {}
+            other => panic!("expected InvalidSpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nts_client_warm_cookies_rejects_invalid_spec_via_validate() {
+        let client = NtsClient::new();
+        let spec = NtsServerSpec {
+            host: "ok.invalid".to_owned(),
+            port: 0,
+        };
+        match client.warm_cookies(spec, 1000, 1) {
+            Err(NtsError::InvalidSpec(_)) => {}
+            other => panic!("expected InvalidSpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nts_warm_cookies_top_level_rejects_invalid_spec_via_validate() {
+        let spec = NtsServerSpec {
+            host: String::new(),
+            port: 4460,
+        };
+        match nts_warm_cookies(spec, 1000, 1) {
+            Err(NtsError::InvalidSpec(_)) => {}
+            other => panic!("expected InvalidSpec, got {other:?}"),
+        }
+    }
+
+    /// End-to-end fail-fast eviction routed through `NtsClient::query`
+    /// rather than the top-level `nts_query`. Mirrors the shape of
+    /// `nts_query_evicts_session_on_aead_authentication_failure`
+    /// (which exercises the same path through the process-wide
+    /// default client) but pre-installs the session in the
+    /// per-client table and asserts the eviction happened on
+    /// *this* client's table — not the default. Pins:
+    ///
+    /// 1. `NtsClient::query` actually delegates to `nts_query_inner`
+    ///    against `self.table` rather than against the default
+    ///    table.
+    /// 2. The fail-fast eviction landed on the per-client table:
+    ///    after the call, the entry is gone from the client's
+    ///    table, and the default table still does not see one for
+    ///    this `host:port`.
+    #[test]
+    fn nts_client_query_evicts_session_on_aead_failure_in_client_table() {
+        let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
+        faux_server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set faux server read timeout");
+        let server_port = faux_server.local_addr().expect("local addr").port();
+        let host = "127.0.0.1";
+        let key = format!("{host}:{server_port}");
+
+        let client = NtsClient::new();
+        let generation = next_session_generation();
+        let mut session = make_test_session(host, server_port, generation);
+        session.jar.put_many(host, [vec![0xAB; 32]]);
+        client
+            .table
+            .map
+            .lock()
+            .expect("client table poisoned")
+            .insert(key.clone(), session);
+
+        let handler = std::thread::spawn(move || {
+            let mut buf = [0u8; 2048];
+            let (n, src) = faux_server
+                .recv_from(&mut buf)
+                .expect("faux server recv_from");
+            // Same mode-bit flip as the default-client test: forces
+            // the AEAD verify in `parse_server_response` to trip a
+            // tag mismatch and raise `NtpError::Aead`, which is the
+            // canonical rekey signal `nts_query_inner` evicts on.
+            buf[0] = (buf[0] & !0b0000_0111) | 0b0000_0100;
+            faux_server
+                .send_to(&buf[..n], src)
+                .expect("faux server send_to");
+        });
+
+        let spec = NtsServerSpec {
+            host: host.to_owned(),
+            port: server_port,
+        };
+        let result = client.query(spec.clone(), 2_000, 64);
+        handler.join().expect("faux server thread panicked");
+
+        match result {
+            Err(NtsError::Authentication(_)) => {}
+            other => panic!("expected NtsError::Authentication, got {other:?}"),
+        }
+
+        // Eviction landed on the client's own table.
+        let g = client.table.map.lock().expect("client table poisoned");
+        assert!(
+            g.get(&key).is_none(),
+            "fail-fast eviction must remove the entry from the per-client table",
+        );
+        drop(g);
+
+        // And the default table was not touched (we never installed
+        // anything there for this `host:port`, and the per-client
+        // call should not have leaked into it).
+        let g = default_session_table()
+            .map
+            .lock()
+            .expect("default session table poisoned");
+        assert!(
+            g.get(&key).is_none(),
+            "per-client query must not touch the default table",
+        );
+    }
+
     /// Live integration probe — performs a real NTS-KE handshake and
     /// authenticated NTPv4 exchange against Cloudflare's public endpoint.
     /// Gated behind `--ignored` so the standard CI run never touches the
