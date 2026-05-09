@@ -101,7 +101,9 @@ sealed class NtsError implements Exception {
   const factory NtsError.internal(String field0) = NtsErrorInternal;
 }
 
-/// Variant: `spec` was rejected by the wrapper-side validator.
+/// Variant: `spec` was rejected before any I/O happened. The check
+/// runs in the Rust API entry point (`rust/src/api/nts.rs::validate`),
+/// not in the Dart wrapper, which forwards `spec` verbatim.
 final class NtsErrorInvalidSpec extends NtsError {
   /// Reason the spec was rejected.
   final String field0;

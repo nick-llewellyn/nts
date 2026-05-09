@@ -36,12 +36,7 @@ class _RecordingApi implements RustLibApi {
   // wrapper converts these into the matching public DTOs.
   ffi.NtsTimeSample nextSample = _ffiSample();
   ffi.NtsWarmCookiesOutcome nextWarm = _ffiWarm(0);
-  ffi.NtsDnsPoolStats nextDnsPoolStats = ffi.NtsDnsPoolStats(
-    inFlight: 0,
-    highWaterMark: 0,
-    recovered: BigInt.zero,
-    refused: BigInt.zero,
-  );
+  ffi.NtsDnsPoolStats nextDnsPoolStats = _zeroFfiDnsPoolStats();
   Object? nextThrow;
 
   void reset() {
@@ -52,6 +47,7 @@ class _RecordingApi implements RustLibApi {
     dnsPoolStatsCalls = 0;
     nextSample = _ffiSample();
     nextWarm = _ffiWarm(0);
+    nextDnsPoolStats = _zeroFfiDnsPoolStats();
     nextThrow = null;
   }
 
@@ -125,6 +121,13 @@ ffi.NtsTimeSample _ffiSample({
 ffi.NtsWarmCookiesOutcome _ffiWarm(int cookies) => ffi.NtsWarmCookiesOutcome(
   freshCookies: cookies,
   phaseTimings: _zeroFfiPhaseTimings(),
+);
+
+ffi.NtsDnsPoolStats _zeroFfiDnsPoolStats() => ffi.NtsDnsPoolStats(
+  inFlight: 0,
+  highWaterMark: 0,
+  recovered: BigInt.zero,
+  refused: BigInt.zero,
 );
 
 void main() {

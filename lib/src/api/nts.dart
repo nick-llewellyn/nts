@@ -95,8 +95,11 @@ Future<NtsTimeSample> ntsQuery({
       dnsConcurrencyCap: dnsConcurrencyCap,
     );
     return _publicSample(ffiSample);
-  } on ffi.NtsError catch (err) {
-    throw _publicError(err);
+  } on ffi.NtsError catch (err, stack) {
+    // Preserve the original FFI-side stack trace through the
+    // conversion so debuggers point at the FRB dispatcher / Rust
+    // boundary where the error originated, not at this catch site.
+    Error.throwWithStackTrace(_publicError(err), stack);
   }
 }
 
@@ -125,8 +128,10 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
       dnsConcurrencyCap: dnsConcurrencyCap,
     );
     return _publicWarm(ffiOutcome);
-  } on ffi.NtsError catch (err) {
-    throw _publicError(err);
+  } on ffi.NtsError catch (err, stack) {
+    // Preserve the original FFI-side stack trace; see the comment in
+    // `ntsQuery` above.
+    Error.throwWithStackTrace(_publicError(err), stack);
   }
 }
 
