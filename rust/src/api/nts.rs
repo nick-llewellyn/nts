@@ -587,19 +587,36 @@ impl<'a> LeaderGuard<'a> {
         }
     }
 
-    /// Remove the inflight slot and signal waiters with `result`. After
-    /// this call the `Drop` impl is a no-op, so the leader can safely
-    /// return without re-completing.
+    /// Atomically (with respect to phase-B role election) publish
+    /// `result` to the slot and remove the inflight registration.
+    /// After this call the `Drop` impl is a no-op, so the leader can
+    /// safely return without re-completing.
+    ///
+    /// The publish-then-remove sequence runs under one critical
+    /// section on `inflight` so no new caller arriving in phase B can
+    /// observe the transient state where the slot has *already been
+    /// published* but the inflight entry is *still registered*. If
+    /// that observation were possible the new caller would become a
+    /// waiter on the now-stale slot, immediately receive the
+    /// published result, loop back to phase A, find the cookie pool
+    /// already drained by faster siblings, re-enter phase B, and find
+    /// the same stale slot still there — busy-spinning until the
+    /// leader's `inflight.remove` finally lands. Holding `inflight`
+    /// across the slot publish (`HandshakeSlot::complete`'s own slot
+    /// mutex is acquired briefly inside) collapses both transitions
+    /// into a single atomic step against any phase-B observer. Lock
+    /// order is `inflight` outer → slot mutex inner; no other call
+    /// site acquires both, so this is the only site that fixes the
+    /// ordering and there is no deadlock risk against the waiter
+    /// path (which releases `inflight` before parking on the slot).
     fn complete(&mut self, result: Result<(), NtsError>) {
-        {
-            let mut g = self
-                .table
-                .inflight
-                .lock()
-                .expect("inflight singleflight map poisoned");
-            g.remove(&self.key);
-        }
+        let mut g = self
+            .table
+            .inflight
+            .lock()
+            .expect("inflight singleflight map poisoned");
         self.slot.complete(result);
+        g.remove(&self.key);
         self.completed = true;
     }
 }
@@ -612,17 +629,22 @@ impl<'a> Drop for LeaderGuard<'a> {
             // up the inflight slot and surface a sentinel error so
             // waiters can unpark immediately rather than spinning on
             // their per-call deadline against a stale slot.
-            {
-                let mut g = self
-                    .table
-                    .inflight
-                    .lock()
-                    .expect("inflight singleflight map poisoned");
-                g.remove(&self.key);
-            }
+            //
+            // Same publish-then-remove-under-`inflight` discipline as
+            // `complete` above: the two transitions must be atomic
+            // against any phase-B observer or a new caller could
+            // become a waiter on a slot whose result is already
+            // published-but-not-yet-cleared and busy-spin until the
+            // remove lands.
+            let mut g = self
+                .table
+                .inflight
+                .lock()
+                .expect("inflight singleflight map poisoned");
             self.slot.complete(Err(NtsError::Internal(
                 "singleflight leader aborted before publishing a result".into(),
             )));
+            g.remove(&self.key);
         }
     }
 }
@@ -1062,7 +1084,26 @@ impl SessionTable {
             match role {
                 Role::Leader(slot) => {
                     let mut guard = LeaderGuard::new(self, key.clone(), slot);
-                    let outcome = do_handshake(spec, timeout, dns_concurrency_cap);
+                    // Derive the *remaining* slice of the caller's
+                    // wall-clock budget for this handshake attempt.
+                    // Re-leader cases — a thread that wakes as a waiter,
+                    // finds the cookie pool drained, and elects itself
+                    // as the next leader — must not start a fresh
+                    // `timeout`-long window; otherwise a single
+                    // `checkout_with` call could overshoot the caller's
+                    // documented budget by up to N rounds × `timeout`
+                    // in the worst case. If the budget is already
+                    // exhausted, surface the same `KeRecordIo` timeout
+                    // a waiter that hit its deadline would have
+                    // surfaced.
+                    let remaining = match timeout.checked_sub(started.elapsed()) {
+                        Some(d) if !d.is_zero() => d,
+                        _ => {
+                            guard.complete(Err(NtsError::Timeout(TimeoutPhase::KeRecordIo)));
+                            return Err(NtsError::Timeout(TimeoutPhase::KeRecordIo));
+                        }
+                    };
+                    let outcome = do_handshake(spec, remaining, dns_concurrency_cap);
                     match outcome {
                         Ok((session, ke_timings)) => {
                             // Refuse to install a 0-cookie session: the
@@ -3234,6 +3275,43 @@ mod tests {
         s
     }
 
+    /// Spin until `predicate` returns true, polling the singleflight
+    /// state at 1ms intervals up to `timeout`. Replaces the
+    /// `thread::sleep(50ms)` heuristics the singleflight tests
+    /// originally used to wait for "leader has registered" or "all
+    /// waiters have grabbed a slot reference" — those are deterministic
+    /// signals the test can read off `table.inflight` directly, so
+    /// there's no need for a fixed-duration sleep that flakes on slow
+    /// or contended CI runners. Panics with a descriptive message if
+    /// the predicate never becomes true; that is a real test failure
+    /// (a regression that prevents the singleflight from registering
+    /// or that loses waiter references) rather than a hang.
+    fn await_singleflight_state<F>(table: &SessionTable, key: &str, timeout: Duration, predicate: F)
+    where
+        F: Fn(Option<&Arc<HandshakeSlot>>) -> bool,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            {
+                let g = table
+                    .inflight
+                    .lock()
+                    .expect("inflight singleflight map poisoned in test");
+                if predicate(g.get(key)) {
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "singleflight state did not converge for key {key:?} within {timeout:?}; \
+                     this almost certainly means the leader never registered an inflight \
+                     slot or the waiters never grabbed their slot references",
+                );
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// Acceptance criterion 1: N concurrent cold checkouts against the
     /// same host collapse onto exactly one `establish_session` call.
     /// Pre-singleflight, every concurrent caller would have run its own
@@ -3285,9 +3363,20 @@ mod tests {
             })
             .collect();
 
-        // Give every spawned thread a chance to enter checkout and elect
-        // a single leader before we release the leader's handshake.
-        thread::sleep(Duration::from_millis(50));
+        // Wait until every spawned thread has reached phase B and one
+        // has elected itself as the leader (registered the inflight
+        // slot) and N-1 have elected as waiters (each holding a clone
+        // of the slot Arc). The slot's `Arc::strong_count` reaches
+        // `1 (inflight map) + 1 (LeaderGuard) + (N-1) (waiters)` =
+        // `N + 1` exactly when every concurrent caller has made its
+        // role-election decision; polling against that count
+        // replaces the original `thread::sleep(50ms)` with a
+        // deterministic singleflight-state signal that does not flake
+        // under CI scheduling jitter.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == N + 1)
+        });
         barrier.wait();
 
         let mut ok_count = 0;
@@ -3400,9 +3489,15 @@ mod tests {
             })
         };
 
-        // Give the leader a beat to enter checkout and register the
-        // inflight slot before the waiter arrives.
-        thread::sleep(Duration::from_millis(50));
+        // Wait until the leader has actually registered an inflight
+        // slot before spawning the waiter. Without this gate the
+        // waiter could enter checkout *first*, become the leader
+        // itself, and run a handshake — which would fail the test
+        // (waiter expected to see Timeout, would instead see Ok or
+        // a leader-failure shape). Replaces the original
+        // `thread::sleep(50ms)` with a deterministic state signal.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| slot.is_some());
 
         // Waiter has a tight 100ms call budget; leader is parked, so
         // the waiter must surface a Timeout once 100ms elapse.
@@ -3477,10 +3572,20 @@ mod tests {
             })
             .collect();
 
-        // Same release pattern as criterion-1: give every spawned
-        // thread time to enter checkout and elect the leader's slot
-        // before the leader is allowed to finish (with a failure).
-        thread::sleep(Duration::from_millis(50));
+        // Same deterministic release pattern as criterion-1: wait
+        // until every spawned thread has reached phase B, with one
+        // leader (registered the inflight slot) and N-1 waiters
+        // (each holding a clone of the slot Arc), before allowing
+        // the leader to finish with a failure. Otherwise late
+        // arrivals would observe an empty inflight after the
+        // leader's `complete` and start their own (now-real)
+        // handshakes, which would fail the `handshake_count == 1`
+        // assertion below for reasons unrelated to the singleflight
+        // fan-out semantic this test is verifying.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == N + 1)
+        });
         release.wait();
 
         for h in handles {
