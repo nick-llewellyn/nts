@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::nts::aead::{AeadError, AeadKey};
@@ -495,6 +495,160 @@ fn next_session_generation() -> u64 {
     GEN.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Per-key singleflight slot. One slot exists per `host:port` while a
+/// leader is mid-handshake, so concurrent `checkout` calls against the
+/// same key park on the slot rather than each running their own
+/// duplicate KE handshake. The leader publishes a `Result<(), NtsError>`
+/// when it finishes; waiters receive a `Clone` of that result. Errors
+/// propagate to every waiter so a leader's KE failure does not
+/// silently retry — followers see the same error semantics they would
+/// have observed had they run the handshake themselves.
+///
+/// The slot does *not* carry the `Session` itself; the leader installs
+/// the session into `SessionTable::map` and the waiters re-acquire
+/// `map`, look up the freshly installed session, and pop a cookie of
+/// their own. This naturally handles the "cookie pool exhausted"
+/// case: if more waiters wake than the pool has cookies, the extras
+/// simply re-enter the role-election loop and elect a new leader for
+/// the next handshake. Each successful KE handshake adds N fresh
+/// cookies (typically 8 per RFC 8915) so the loop converges in
+/// `ceil(waiters / N)` handshake rounds, not infinitely.
+struct HandshakeSlot {
+    /// `None` while the leader is mid-handshake; `Some(...)` once the
+    /// leader publishes a result. Waiters block on `cv` until this is
+    /// non-empty or their per-call deadline elapses.
+    result: Mutex<Option<Result<(), NtsError>>>,
+    cv: Condvar,
+}
+
+impl HandshakeSlot {
+    fn new() -> Self {
+        Self {
+            result: Mutex::new(None),
+            cv: Condvar::new(),
+        }
+    }
+
+    /// Park until the leader publishes a result or `deadline` elapses.
+    /// Returns `Some(result_clone)` when a result is available, `None`
+    /// on deadline expiry. Each waiter receives an independent
+    /// `Clone` of the leader's `Result`.
+    fn wait_until(&self, deadline: Instant) -> Option<Result<(), NtsError>> {
+        let mut g = self.result.lock().expect("singleflight slot poisoned");
+        loop {
+            if let Some(r) = g.as_ref() {
+                return Some(r.clone());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let (next_g, _) = self
+                .cv
+                .wait_timeout(g, deadline - now)
+                .expect("singleflight slot poisoned");
+            g = next_g;
+        }
+    }
+
+    /// Publish the leader's result and wake every parked waiter. Idempotent;
+    /// a second `complete` is silently ignored so the LeaderGuard's Drop
+    /// path can fire after a normal explicit completion without
+    /// clobbering the published value.
+    fn complete(&self, result: Result<(), NtsError>) {
+        let mut g = self.result.lock().expect("singleflight slot poisoned");
+        if g.is_none() {
+            *g = Some(result);
+            self.cv.notify_all();
+        }
+    }
+}
+
+/// RAII cleanup for the leader path. Removes the `inflight` slot when
+/// the leader finishes (success or failure) and, if the leader's
+/// `establish_session` panics or the leader returns early without
+/// calling `complete`, signals waiters with an `Internal` error so
+/// they unpark and surface a meaningful failure rather than blocking
+/// against the slot until their per-call deadline elapses.
+struct LeaderGuard<'a> {
+    table: &'a SessionTable,
+    key: String,
+    slot: Arc<HandshakeSlot>,
+    completed: bool,
+}
+
+impl<'a> LeaderGuard<'a> {
+    fn new(table: &'a SessionTable, key: String, slot: Arc<HandshakeSlot>) -> Self {
+        Self {
+            table,
+            key,
+            slot,
+            completed: false,
+        }
+    }
+
+    /// Atomically (with respect to phase-B role election) publish
+    /// `result` to the slot and remove the inflight registration.
+    /// After this call the `Drop` impl is a no-op, so the leader can
+    /// safely return without re-completing.
+    ///
+    /// The publish-then-remove sequence runs under one critical
+    /// section on `inflight` so no new caller arriving in phase B can
+    /// observe the transient state where the slot has *already been
+    /// published* but the inflight entry is *still registered*. If
+    /// that observation were possible the new caller would become a
+    /// waiter on the now-stale slot, immediately receive the
+    /// published result, loop back to phase A, find the cookie pool
+    /// already drained by faster siblings, re-enter phase B, and find
+    /// the same stale slot still there — busy-spinning until the
+    /// leader's `inflight.remove` finally lands. Holding `inflight`
+    /// across the slot publish (`HandshakeSlot::complete`'s own slot
+    /// mutex is acquired briefly inside) collapses both transitions
+    /// into a single atomic step against any phase-B observer. Lock
+    /// order is `inflight` outer → slot mutex inner; no other call
+    /// site acquires both, so this is the only site that fixes the
+    /// ordering and there is no deadlock risk against the waiter
+    /// path (which releases `inflight` before parking on the slot).
+    fn complete(&mut self, result: Result<(), NtsError>) {
+        let mut g = self
+            .table
+            .inflight
+            .lock()
+            .expect("inflight singleflight map poisoned");
+        self.slot.complete(result);
+        g.remove(&self.key);
+        self.completed = true;
+    }
+}
+
+impl<'a> Drop for LeaderGuard<'a> {
+    fn drop(&mut self) {
+        if !self.completed {
+            // Leader path aborted before publishing (panic in
+            // `establish_session`, early `?` propagation, etc.). Clean
+            // up the inflight slot and surface a sentinel error so
+            // waiters can unpark immediately rather than spinning on
+            // their per-call deadline against a stale slot.
+            //
+            // Same publish-then-remove-under-`inflight` discipline as
+            // `complete` above: the two transitions must be atomic
+            // against any phase-B observer or a new caller could
+            // become a waiter on a slot whose result is already
+            // published-but-not-yet-cleared and busy-spin until the
+            // remove lands.
+            let mut g = self
+                .table
+                .inflight
+                .lock()
+                .expect("inflight singleflight map poisoned");
+            self.slot.complete(Err(NtsError::Internal(
+                "singleflight leader aborted before publishing a result".into(),
+            )));
+            g.remove(&self.key);
+        }
+    }
+}
+
 /// Per-host session table keyed by `host:port` so two specs with
 /// different KE ports stay isolated even when they share a hostname.
 ///
@@ -519,12 +673,22 @@ fn next_session_generation() -> u64 {
 #[flutter_rust_bridge::frb(ignore)]
 pub(crate) struct SessionTable {
     map: Mutex<HashMap<String, Session>>,
+    /// Per-key singleflight registry. Holds an `Arc<HandshakeSlot>` for
+    /// every `host:port` whose handshake is currently in flight, so
+    /// concurrent `checkout` calls against the same key park on the
+    /// existing slot instead of each running their own duplicate KE
+    /// handshake. The inflight slot is removed atomically with the
+    /// leader's `complete` step (see `LeaderGuard`); the `map` and
+    /// `inflight` mutexes are deliberately *not* held simultaneously
+    /// to avoid lock-order discipline.
+    inflight: Mutex<HashMap<String, Arc<HandshakeSlot>>>,
 }
 
 impl SessionTable {
     fn new() -> Self {
         Self {
             map: Mutex::new(HashMap::new()),
+            inflight: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -801,6 +965,39 @@ struct QueryContext {
     aead_id: u16,
 }
 
+/// Outcome of `checkout`'s role-election step. The leader will run the
+/// handshake and publish its result; the waiter parks on the slot
+/// bounded by its own per-call deadline. See `checkout_with` for the
+/// full state machine.
+enum Role {
+    Leader(Arc<HandshakeSlot>),
+    Waiter(Arc<HandshakeSlot>),
+}
+
+/// The handshake callback `checkout_with` invokes from the leader path.
+/// Mirrors `establish_session`'s signature; production callers pass
+/// `establish_session`, cache-layer unit tests pass a controllable
+/// closure (count invocations, block until released, fail
+/// deterministically) so the singleflight role-election state machine
+/// is exercisable without a faux NTS-KE responder.
+type HandshakeFn =
+    dyn Fn(&NtsServerSpec, Duration, usize) -> Result<(Session, KePhaseTimings), NtsError>;
+
+/// Build a [`QueryContext`] from a session and a freshly-popped cookie.
+/// Extracted so both the cache-hit and post-handshake branches in
+/// `checkout_with` share the same construction shape.
+fn build_query_context(s: &Session, cookie: Vec<u8>) -> QueryContext {
+    QueryContext {
+        session_generation: s.generation,
+        cookie,
+        c2s_key: s.c2s_key.clone(),
+        s2c_key: s.s2c_key.clone(),
+        ntpv4_host: s.ntpv4_host.clone(),
+        ntpv4_port: s.ntpv4_port,
+        aead_id: s.aead_id,
+    }
+}
+
 impl SessionTable {
     /// Acquire (or establish) a session and pop one cookie. The returned
     /// context owns the cookie and key clones so the network exchange runs
@@ -809,47 +1006,195 @@ impl SessionTable {
     /// Also returns the per-phase wall-clock breakdown of the KE
     /// handshake when one ran. On a cache-hit (the common case once the
     /// session is warm) every phase is reported as `0` because no
-    /// handshake was performed.
+    /// handshake was performed; the same `0` is reported to a *waiter*
+    /// that parked on a concurrent leader's singleflight slot — only
+    /// the leader observes its own handshake's phase timings.
+    ///
+    /// Concurrent cold queries against the same `host:port` collapse
+    /// onto one `establish_session` call: the first caller becomes
+    /// the singleflight leader, runs the handshake without holding
+    /// any lock, and publishes the result; concurrent callers park
+    /// on the slot bounded by their own per-call `timeout` budget,
+    /// then re-enter the cookie-take phase against the freshly
+    /// installed session. Concurrent callers against *different*
+    /// `host:port` keys remain fully parallel — the singleflight
+    /// keys off `session_key(spec)`, not off the table itself.
     fn checkout(
         &self,
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
+        self.checkout_with(spec, timeout, dns_concurrency_cap, &|s, t, c| {
+            establish_session(s, t, c)
+        })
+    }
+
+    /// Singleflight-aware checkout parameterised over the handshake
+    /// callback. Production callers go through `checkout`, which binds
+    /// the callback to the real `establish_session`; cache-layer unit
+    /// tests pass a controllable closure so they can drive the leader
+    /// path (count invocations, block until released, fail
+    /// deterministically) without standing up a faux NTS-KE responder.
+    /// The closure signature mirrors `establish_session`.
+    fn checkout_with(
+        &self,
+        spec: &NtsServerSpec,
+        timeout: Duration,
+        dns_concurrency_cap: usize,
+        do_handshake: &HandshakeFn,
+    ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         let key = session_key(spec);
-        let mut guard = self.map.lock().expect("session table poisoned");
-        let need_handshake = match guard.get(&key) {
-            Some(s) => s.cookies_remaining() == 0,
-            None => true,
-        };
-        let mut ke_timings = KePhaseTimings::default();
-        if need_handshake {
-            // Drop the lock across the multi-RTT KE handshake so other queries
-            // against unrelated hosts aren't serialized behind it.
-            drop(guard);
-            let (session, timings) = establish_session(spec, timeout, dns_concurrency_cap)?;
-            ke_timings = timings;
-            let mut g = self.map.lock().expect("session table poisoned");
-            g.insert(key.clone(), session);
-            guard = g;
+        let started = Instant::now();
+        loop {
+            // Phase A: try the cache. Return immediately on a hit with
+            // at least one cookie. Drop the `map` lock before any
+            // singleflight work so a slow leader cannot serialize
+            // unrelated cache hits behind itself.
+            {
+                let mut g = self.map.lock().expect("session table poisoned");
+                if let Some(s) = g.get_mut(&key) {
+                    if s.cookies_remaining() > 0 {
+                        // `cookies_remaining > 0` implies `take` returns
+                        // `Some` (both read the same per-host queue
+                        // under the same `map` lock), so this should
+                        // not surface in practice. Defend against the
+                        // invariant being silently violated by a
+                        // future `CookieJar` refactor: return
+                        // `NoCookies` rather than panicking with
+                        // `expect`. The pre-singleflight code surfaced
+                        // the same shape on this path.
+                        match s.jar.take(&s.ntpv4_host) {
+                            Some(cookie) => {
+                                let ctx = build_query_context(s, cookie);
+                                return Ok((ctx, KePhaseTimings::default()));
+                            }
+                            None => return Err(NtsError::NoCookies),
+                        }
+                    }
+                }
+            }
+
+            // Phase B: leader-or-waiter election. Holding only the
+            // `inflight` lock; never the `map` lock at the same time.
+            let role = {
+                let mut g = self
+                    .inflight
+                    .lock()
+                    .expect("inflight singleflight map poisoned");
+                if let Some(slot) = g.get(&key) {
+                    Role::Waiter(slot.clone())
+                } else {
+                    let slot = Arc::new(HandshakeSlot::new());
+                    g.insert(key.clone(), slot.clone());
+                    Role::Leader(slot)
+                }
+            };
+
+            match role {
+                Role::Leader(slot) => {
+                    let mut guard = LeaderGuard::new(self, key.clone(), slot);
+                    // Derive the *remaining* slice of the caller's
+                    // wall-clock budget for this handshake attempt.
+                    // Re-leader cases — a thread that wakes as a waiter,
+                    // finds the cookie pool drained, and elects itself
+                    // as the next leader — must not start a fresh
+                    // `timeout`-long window; otherwise a single
+                    // `checkout_with` call could overshoot the caller's
+                    // documented budget by up to N rounds × `timeout`
+                    // in the worst case. If the budget is already
+                    // exhausted, surface the same `KeRecordIo` timeout
+                    // a waiter that hit its deadline would have
+                    // surfaced.
+                    let remaining = match timeout.checked_sub(started.elapsed()) {
+                        Some(d) if !d.is_zero() => d,
+                        _ => {
+                            guard.complete(Err(NtsError::Timeout(TimeoutPhase::KeRecordIo)));
+                            return Err(NtsError::Timeout(TimeoutPhase::KeRecordIo));
+                        }
+                    };
+                    let outcome = do_handshake(spec, remaining, dns_concurrency_cap);
+                    match outcome {
+                        Ok((session, ke_timings)) => {
+                            // Refuse to install a 0-cookie session: the
+                            // leader plus every waiter would immediately
+                            // fall through to NoCookies, and the next
+                            // round of leaders would loop on the same
+                            // (still useless) handshake outcome. Drop the
+                            // session, signal NoCookies, return NoCookies
+                            // — same observable shape as the pre-singleflight
+                            // path, which already collapsed this case onto
+                            // NoCookies for every concurrent caller.
+                            if session.cookies_remaining() == 0 {
+                                guard.complete(Err(NtsError::NoCookies));
+                                return Err(NtsError::NoCookies);
+                            }
+                            // Same defensive `take`-shape as the
+                            // cache-hit branch: the leader's
+                            // `cookies_remaining() == 0` check above
+                            // guarantees the just-installed jar is
+                            // non-empty, so `take` should return
+                            // `Some` here. Defend against a future
+                            // `CookieJar` refactor silently breaking
+                            // that invariant by surfacing
+                            // `NoCookies` (and signalling the
+                            // singleflight slot with the same shape
+                            // so waiters fail-fast on the same
+                            // error) rather than panicking with
+                            // `expect`.
+                            let cookie_opt = {
+                                let mut g = self.map.lock().expect("session table poisoned");
+                                g.insert(key.clone(), session);
+                                let s = g.get_mut(&key).expect("just inserted under this key");
+                                s.jar
+                                    .take(&s.ntpv4_host)
+                                    .map(|cookie| (build_query_context(s, cookie), ()))
+                            };
+                            match cookie_opt {
+                                Some((ctx, ())) => {
+                                    guard.complete(Ok(()));
+                                    return Ok((ctx, ke_timings));
+                                }
+                                None => {
+                                    guard.complete(Err(NtsError::NoCookies));
+                                    return Err(NtsError::NoCookies);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            guard.complete(Err(e.clone()));
+                            return Err(e);
+                        }
+                    }
+                }
+                Role::Waiter(slot) => {
+                    // Bound the wait by the caller's per-call wall-clock
+                    // budget. `started` was captured at the top of this
+                    // checkout call, so even if a slow leader runs longer
+                    // than `timeout`, the waiter unparks once *its own*
+                    // budget elapses and surfaces a Timeout against the
+                    // KE record-IO phase (the most accurate single
+                    // taxonomy bucket for "stuck waiting on a KE
+                    // handshake we did not run ourselves").
+                    let deadline = started + timeout;
+                    match slot.wait_until(deadline) {
+                        // Leader installed a session; loop back to phase
+                        // A and pop a cookie. If the new session was
+                        // already drained by other concurrently waking
+                        // waiters, we fall through to phase B again and
+                        // either become the next leader or wait on the
+                        // next leader's handshake — `ceil(waiters / N)`
+                        // handshake rounds in the worst case, where N is
+                        // the cookie-pool size per handshake.
+                        Some(Ok(())) => continue,
+                        Some(Err(e)) => return Err(e),
+                        None => {
+                            return Err(NtsError::Timeout(TimeoutPhase::KeRecordIo));
+                        }
+                    }
+                }
+            }
         }
-        let session = guard
-            .get_mut(&key)
-            .ok_or_else(|| NtsError::Internal("session vanished after install".into()))?;
-        let cookie = session
-            .jar
-            .take(&session.ntpv4_host)
-            .ok_or(NtsError::NoCookies)?;
-        let ctx = QueryContext {
-            session_generation: session.generation,
-            cookie,
-            c2s_key: session.c2s_key.clone(),
-            s2c_key: session.s2c_key.clone(),
-            ntpv4_host: session.ntpv4_host.clone(),
-            ntpv4_port: session.ntpv4_port,
-            aead_id: session.aead_id,
-        };
-        Ok((ctx, ke_timings))
     }
 
     /// Deposit fresh cookies harvested from a verified server reply.
@@ -2927,5 +3272,528 @@ mod tests {
             }
             Err(other) => panic!("unexpected non-network failure: {other:?}"),
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Singleflight: concurrent cold queries against the same host
+    // collapse onto one handshake; concurrent queries against different
+    // hosts run their handshakes in parallel; per-call deadlines are
+    // honoured by waiters; leader failures propagate to every waiter as
+    // a cloned `NtsError`. See `nts-o8u` for the full design.
+    // ------------------------------------------------------------------
+
+    use std::sync::atomic::AtomicUsize;
+    use std::thread;
+
+    /// Build a `Session` with `cookie_count` cookies in the jar so the
+    /// post-handshake cookie-take phase succeeds without standing up a
+    /// real KE responder. Cookies are 8-byte sentinels; the singleflight
+    /// tests never seal or open them.
+    fn make_test_session_with_cookies(
+        host: &str,
+        ntpv4_port: u16,
+        generation: u64,
+        cookie_count: usize,
+    ) -> Session {
+        let mut s = make_test_session(host, ntpv4_port, generation);
+        let cookies: Vec<Vec<u8>> = (0..cookie_count)
+            .map(|i| (i as u64).to_le_bytes().to_vec())
+            .collect();
+        s.jar.put_many(host, cookies);
+        s
+    }
+
+    /// Spin until `predicate` returns true, polling the singleflight
+    /// state at 1ms intervals up to `timeout`. Replaces the
+    /// `thread::sleep(50ms)` heuristics the singleflight tests
+    /// originally used to wait for "leader has registered" or "all
+    /// waiters have grabbed a slot reference" — those are deterministic
+    /// signals the test can read off `table.inflight` directly, so
+    /// there's no need for a fixed-duration sleep that flakes on slow
+    /// or contended CI runners. Panics with a descriptive message if
+    /// the predicate never becomes true; that is a real test failure
+    /// (a regression that prevents the singleflight from registering
+    /// or that loses waiter references) rather than a hang.
+    fn await_singleflight_state<F>(table: &SessionTable, key: &str, timeout: Duration, predicate: F)
+    where
+        F: Fn(Option<&Arc<HandshakeSlot>>) -> bool,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            {
+                let g = table
+                    .inflight
+                    .lock()
+                    .expect("inflight singleflight map poisoned in test");
+                if predicate(g.get(key)) {
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "singleflight state did not converge for key {key:?} within {timeout:?}; \
+                     this almost certainly means the leader never registered an inflight \
+                     slot or the waiters never grabbed their slot references",
+                );
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// One-shot release primitive used by the singleflight tests to
+    /// park a leader handshake closure until the assertion-side
+    /// preconditions are met. Replaces `Barrier::new(2)` for these
+    /// cases because `std::sync::Barrier::wait` has no built-in
+    /// timeout — if the test thread panics before reaching the
+    /// matching `wait` (for example because `await_singleflight_state`
+    /// times out on a regression), the leader thread parks forever
+    /// and `cargo test` would have to rely on Rust's process exit to
+    /// reclaim it.
+    ///
+    /// Two layers of safety net:
+    ///
+    /// 1. `ReleaseHandle::wait_release` is bounded by a per-call
+    ///    `timeout` so even a leader running with a torn-down test
+    ///    thread cannot park indefinitely; on timeout it returns
+    ///    `Err(())` and the closure can surface a synthetic error.
+    /// 2. `BoundedRelease`'s `Drop` impl signals release as part of
+    ///    stack unwind. When the test panics, the local
+    ///    `BoundedRelease` is dropped, which fires `release()`,
+    ///    which unparks the leader closure immediately rather than
+    ///    making it ride out the full `wait_release` deadline. The
+    ///    `Arc<(Mutex, Condvar)>` survives long enough for the
+    ///    closure to wake (it is held independently by every
+    ///    `ReleaseHandle`) so the wakeup path is sound even when
+    ///    the original is mid-drop.
+    struct BoundedRelease {
+        state: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    /// Cloneable handle to a `BoundedRelease`'s shared state. The
+    /// handle is what the leader handshake closure captures and
+    /// parks on; the test thread retains the `BoundedRelease`
+    /// itself so its `Drop` can wake every parked handle on panic.
+    #[derive(Clone)]
+    struct ReleaseHandle {
+        state: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl BoundedRelease {
+        fn new() -> Self {
+            Self {
+                state: Arc::new((Mutex::new(false), Condvar::new())),
+            }
+        }
+
+        fn handle(&self) -> ReleaseHandle {
+            ReleaseHandle {
+                state: self.state.clone(),
+            }
+        }
+
+        /// Signal release. Idempotent — calling release twice (e.g.
+        /// once explicitly from the test, once again from `Drop`)
+        /// is a no-op the second time. Wakes every handle parked
+        /// on `wait_release`.
+        fn release(&self) {
+            let (lock, cv) = &*self.state;
+            *lock.lock().expect("BoundedRelease state poisoned") = true;
+            cv.notify_all();
+        }
+    }
+
+    impl Drop for BoundedRelease {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
+    impl ReleaseHandle {
+        /// Park until released or `timeout` elapses. Returns `Ok(())`
+        /// when released, `Err(())` on timeout. The handshake closure
+        /// translates `Err(())` into a synthetic `NtsError::Internal`
+        /// so a stuck test (released-via-Drop or genuinely timed out)
+        /// surfaces as a test failure rather than as a leader thread
+        /// that completes successfully.
+        fn wait_release(&self, timeout: Duration) -> Result<(), ()> {
+            let (lock, cv) = &*self.state;
+            let mut released = lock.lock().expect("BoundedRelease state poisoned");
+            let deadline = Instant::now() + timeout;
+            while !*released {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(());
+                }
+                let (next, _) = cv
+                    .wait_timeout(released, deadline - now)
+                    .expect("BoundedRelease state poisoned");
+                released = next;
+            }
+            Ok(())
+        }
+    }
+
+    /// Acceptance criterion 1: N concurrent cold checkouts against the
+    /// same host collapse onto exactly one `establish_session` call.
+    /// Pre-singleflight, every concurrent caller would have run its own
+    /// handshake — verified by the same test against the pre-refactor
+    /// path would observe `handshake_count == N`.
+    #[test]
+    fn checkout_collapses_concurrent_cold_queries_onto_one_handshake() {
+        const N: usize = 6;
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "singleflight-collapse.test".into(),
+            port: 4460,
+        };
+        let handshake_count = Arc::new(AtomicUsize::new(0));
+        // Park the leader's handshake until the test confirms every
+        // follower has reached phase B and elected the leader's slot,
+        // then release. Without the park, a fast leader could complete
+        // before the followers ever entered checkout. `BoundedRelease`
+        // (in place of `Barrier::new(2)`) is bounded by a per-call
+        // wait timeout *and* by a `Drop`-on-panic release, so a test
+        // that panics in `await_singleflight_state` cannot strand the
+        // leader thread.
+        let release = BoundedRelease::new();
+        let release_handle = release.handle();
+        let do_handshake = {
+            let handshake_count = handshake_count.clone();
+            move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+                handshake_count.fetch_add(1, Ordering::SeqCst);
+                release_handle
+                    .wait_release(Duration::from_secs(10))
+                    .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+                Ok((
+                    make_test_session_with_cookies(
+                        &spec.host,
+                        123,
+                        next_session_generation(),
+                        N + 2,
+                    ),
+                    KePhaseTimings::default(),
+                ))
+            }
+        };
+
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                let table = table.clone();
+                let spec = spec.clone();
+                let do_handshake = do_handshake.clone();
+                thread::spawn(move || {
+                    table
+                        .checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                        .map(|(ctx, _)| ctx)
+                })
+            })
+            .collect();
+
+        // Wait until every spawned thread has reached phase B and one
+        // has elected itself as the leader (registered the inflight
+        // slot) and N-1 have elected as waiters (each holding a clone
+        // of the slot Arc). The slot's `Arc::strong_count` reaches
+        // `1 (inflight map) + 1 (LeaderGuard) + (N-1) (waiters)` =
+        // `N + 1` exactly when every concurrent caller has made its
+        // role-election decision; polling against that count
+        // replaces the original `thread::sleep(50ms)` with a
+        // deterministic singleflight-state signal that does not flake
+        // under CI scheduling jitter.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == N + 1)
+        });
+        release.release();
+
+        let mut ok_count = 0;
+        for h in handles {
+            let result = h.join().expect("checkout thread panicked");
+            if let Err(e) = result {
+                panic!("checkout failed: {e:?}");
+            }
+            ok_count += 1;
+        }
+        assert_eq!(ok_count, N, "every concurrent checkout returned a context");
+        assert_eq!(
+            handshake_count.load(Ordering::SeqCst),
+            1,
+            "exactly one handshake ran across {N} concurrent cold checkouts",
+        );
+    }
+
+    /// Acceptance criterion 2: concurrent checkouts against *different*
+    /// hosts continue to run their handshakes in parallel. The
+    /// singleflight is keyed by `session_key(spec)` (i.e. `host:port`),
+    /// so two different keys must each elect their own leader and the
+    /// two handshakes must be in-flight simultaneously. Verified by
+    /// gating the per-host handshakes on a shared rendezvous counter
+    /// with a bounded deadline: each leader increments
+    /// `arrived_count`, then polls until it sees `arrived_count == 2`.
+    /// If singleflight regresses and serialises the two handshakes,
+    /// the second leader never arrives, the first leader's poll
+    /// deadline elapses, and the closure surfaces a synthetic
+    /// `NtsError::Internal` so the test fails fast instead of
+    /// hanging the CI job indefinitely (cargo test has no built-in
+    /// per-test timeout and CI runs `cargo test --lib` without an
+    /// external timeout wrapper).
+    #[test]
+    fn checkout_does_not_serialize_handshakes_across_distinct_hosts() {
+        let table = Arc::new(SessionTable::new());
+        let spec_a = NtsServerSpec {
+            host: "singleflight-host-a.test".into(),
+            port: 4460,
+        };
+        let spec_b = NtsServerSpec {
+            host: "singleflight-host-b.test".into(),
+            port: 4460,
+        };
+        let arrived_count = Arc::new(AtomicUsize::new(0));
+        let do_handshake = {
+            let arrived_count = arrived_count.clone();
+            move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+                // Prove both handshakes are in flight at the same
+                // time: each leader announces its arrival, then
+                // polls until the partner has also announced.
+                // Bounded by a 10s deadline so a regression that
+                // serialises the leaders surfaces as a test
+                // failure rather than as a hang against cargo's
+                // per-test timeout.
+                arrived_count.fetch_add(1, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while arrived_count.load(Ordering::SeqCst) < 2 {
+                    if Instant::now() >= deadline {
+                        return Err(NtsError::Internal(
+                            "parallel-hosts rendezvous never reached 2 leaders".into(),
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Ok((
+                    make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                    KePhaseTimings::default(),
+                ))
+            }
+        };
+
+        let h_a = {
+            let table = table.clone();
+            let spec_a = spec_a.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.checkout_with(&spec_a, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+        let h_b = {
+            let table = table.clone();
+            let spec_b = spec_b.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.checkout_with(&spec_b, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+
+        if let Err(e) = h_a.join().expect("host-a thread panicked") {
+            panic!("host-a checkout failed: {e:?}");
+        }
+        if let Err(e) = h_b.join().expect("host-b thread panicked") {
+            panic!("host-b checkout failed: {e:?}");
+        }
+    }
+
+    /// Acceptance criterion 3: a waiter whose per-call deadline expires
+    /// before the leader finishes returns `NtsError::Timeout`, *not*
+    /// `NtsError::Internal` and not an indefinite block. The leader
+    /// here parks against a release channel so the test owns when (or
+    /// whether) it ever completes.
+    #[test]
+    fn checkout_waiter_returns_timeout_when_leader_outlasts_deadline() {
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "singleflight-waiter-timeout.test".into(),
+            port: 4460,
+        };
+        let leader_release = BoundedRelease::new();
+        let leader_release_handle = leader_release.handle();
+        let do_handshake = move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+            leader_release_handle
+                .wait_release(Duration::from_secs(10))
+                .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                KePhaseTimings::default(),
+            ))
+        };
+
+        // Spawn the leader. It will park inside `do_handshake` until
+        // we release `leader_release` at the end of the test.
+        let leader = {
+            let table = table.clone();
+            let spec = spec.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+
+        // Wait until the leader has actually registered an inflight
+        // slot before spawning the waiter. Without this gate the
+        // waiter could enter checkout *first*, become the leader
+        // itself, and run a handshake — which would fail the test
+        // (waiter expected to see Timeout, would instead see Ok or
+        // a leader-failure shape). Replaces the original
+        // `thread::sleep(50ms)` with a deterministic state signal.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| slot.is_some());
+
+        // Waiter has a tight 100ms call budget; leader is parked, so
+        // the waiter must surface a Timeout once 100ms elapse.
+        let waiter_started = Instant::now();
+        let waiter_outcome = table.checkout_with(
+            &spec,
+            Duration::from_millis(100),
+            4,
+            &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+                panic!("waiter should never run a handshake; it must park on the leader's slot")
+            },
+        );
+        let waiter_elapsed = waiter_started.elapsed();
+
+        match waiter_outcome {
+            Err(NtsError::Timeout(TimeoutPhase::KeRecordIo)) => {}
+            Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
+            Ok(_) => panic!("waiter returned Ok despite a parked leader"),
+        }
+        assert!(
+            waiter_elapsed >= Duration::from_millis(100),
+            "waiter returned before its 100ms budget elapsed: {waiter_elapsed:?}",
+        );
+        assert!(
+            waiter_elapsed < Duration::from_millis(2_000),
+            "waiter overshot its budget by >2s; deadline plumbing is broken: {waiter_elapsed:?}",
+        );
+
+        // Release the leader so its thread joins cleanly.
+        leader_release.release();
+        if let Err(e) = leader.join().expect("leader thread panicked") {
+            panic!("leader checkout failed: {e:?}");
+        }
+    }
+
+    /// Acceptance criterion 4: when the leader's handshake fails,
+    /// every waiter receives a cloned `NtsError` with the *same*
+    /// variant/payload as the leader. Waiters must not silently retry
+    /// (which would amplify load against a server that just rejected
+    /// the leader's handshake) and must not see `NtsError::Internal`
+    /// (which would mask the real failure shape under a sentinel).
+    #[test]
+    fn checkout_propagates_leader_failure_to_every_waiter() {
+        const N: usize = 4;
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "singleflight-leader-fail.test".into(),
+            port: 4460,
+        };
+        let handshake_count = Arc::new(AtomicUsize::new(0));
+        let release = BoundedRelease::new();
+        let release_handle = release.handle();
+        let do_handshake = {
+            let handshake_count = handshake_count.clone();
+            move |_: &NtsServerSpec, _t: Duration, _c: usize| {
+                handshake_count.fetch_add(1, Ordering::SeqCst);
+                release_handle
+                    .wait_release(Duration::from_secs(10))
+                    .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+                Err(NtsError::KeProtocol(
+                    "synthetic leader-failure for singleflight test".into(),
+                ))
+            }
+        };
+
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                let table = table.clone();
+                let spec = spec.clone();
+                let do_handshake = do_handshake.clone();
+                thread::spawn(move || {
+                    table.checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                })
+            })
+            .collect();
+
+        // Same deterministic release pattern as criterion-1: wait
+        // until every spawned thread has reached phase B, with one
+        // leader (registered the inflight slot) and N-1 waiters
+        // (each holding a clone of the slot Arc), before allowing
+        // the leader to finish with a failure. Otherwise late
+        // arrivals would observe an empty inflight after the
+        // leader's `complete` and start their own (now-real)
+        // handshakes, which would fail the `handshake_count == 1`
+        // assertion below for reasons unrelated to the singleflight
+        // fan-out semantic this test is verifying.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == N + 1)
+        });
+        release.release();
+
+        for h in handles {
+            let result = h.join().expect("thread panicked");
+            match result {
+                Err(NtsError::KeProtocol(msg)) => {
+                    assert_eq!(msg, "synthetic leader-failure for singleflight test");
+                }
+                Err(other) => {
+                    panic!("expected the leader's KeProtocol; got {other:?}")
+                }
+                Ok(_) => panic!("checkout returned Ok despite the leader failing"),
+            }
+        }
+        assert_eq!(
+            handshake_count.load(Ordering::SeqCst),
+            1,
+            "exactly one handshake ran; waiters did not silently retry",
+        );
+    }
+
+    /// Acceptance criterion 5 (and a regression guard): the existing
+    /// session-generation invariant — every install mints a *distinct*
+    /// generation, even when multiple leaders run back-to-back through
+    /// the singleflight loop — survives the refactor. Without this,
+    /// `deposit_cookies` could silently accept stale cookies from a
+    /// superseded session, which is exactly the race the generation
+    /// counter exists to prevent. A failing assertion here would mean
+    /// the singleflight is sharing generation values across handshakes,
+    /// not that the singleflight is broken per se.
+    #[test]
+    fn checkout_consecutive_handshakes_get_distinct_generations() {
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "singleflight-generations.test".into(),
+            port: 4460,
+        };
+        // Each handshake delivers exactly 1 cookie, so the next caller
+        // re-enters phase B and triggers another handshake.
+        let do_handshake = move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 1),
+                KePhaseTimings::default(),
+            ))
+        };
+
+        let mut generations = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let (ctx, _) = table
+                .checkout_with(&spec, Duration::from_secs(5), 4, &do_handshake)
+                .unwrap_or_else(|e| panic!("checkout failed: {e:?}"));
+            generations.push(ctx.session_generation);
+        }
+        // All three must be distinct: each handshake mints its own
+        // generation via `next_session_generation()`, and each
+        // checkout drains the just-installed jar of its single cookie,
+        // forcing the next call to re-handshake.
+        assert_eq!(generations.len(), 3);
+        assert_ne!(generations[0], generations[1]);
+        assert_ne!(generations[1], generations[2]);
+        assert_ne!(generations[0], generations[2]);
     }
 }

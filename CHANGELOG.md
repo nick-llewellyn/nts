@@ -1,5 +1,94 @@
 # Changelog
 
+## 3.2.0
+
+Adds per-host singleflight to the cache-layer `checkout` path so
+concurrent cold queries against the same `host:port` collapse onto
+a single in-flight NTS-KE handshake instead of each running their
+own duplicate one. Pre-3.2 the cache layer dropped the session-table
+mutex across the multi-RTT handshake — correct for tail-latency on
+unrelated hosts, but a resource-waste bug in the common cold-start
+shape where a UI fires several queries against the same time source
+in parallel: every concurrent caller saw `need_handshake = true`,
+each ran a full TLS + NTS-KE handshake, and whichever
+`establish_session` finished last won the install while the others'
+sessions (and all their cookies) were dropped on the floor. The
+per-call session-generation guard prevented stale-cookie poisoning
+across the race, so this was never a *correctness* bug — but N
+concurrent cold callers caused N TLS handshakes, N DNS lookups, and
+N bursts of network activity against the same server. Closes
+`nts-o8u`.
+
+This release is **purely additive** — every pre-3.2 caller keeps
+working unchanged. The collapse is internal to `SessionTable`;
+no public API changed and no documented timing contract was tightened.
+The Rust crate (`nts_rust`) version is unchanged at 0.4.0.
+
+### Added
+
+- Per-key singleflight in `SessionTable::checkout` (Rust internal):
+  - The first concurrent checkout against a given `host:port`
+    becomes the *leader* and runs `establish_session` without
+    holding any lock.
+  - Concurrent checkouts against the same key become *waiters*: they
+    park on a per-key slot until the leader publishes a result,
+    bounded by their own per-call `timeoutMs` budget so a slow
+    leader cannot stretch a follower's wall-clock past its caller's
+    budget.
+  - On leader success the waiters re-take the cookie jar of the
+    freshly installed session; if more waiters wake than the new
+    pool has cookies, the extras simply re-enter the role-election
+    loop and elect a new leader for the next handshake. Each
+    successful handshake delivers ~8 cookies (RFC 8915 default), so
+    the loop converges in `ceil(waiters / pool_size)` handshake
+    rounds in the worst case, never spinning indefinitely.
+  - On leader failure each waiter receives a *cloned* `NtsError`
+    matching the leader's variant and payload — waiters do not
+    silently retry (which would amplify load against a server that
+    just rejected the leader's handshake) and do not see
+    `NtsError::Internal` (which would mask the real failure shape).
+  - Leader-path RAII cleanup (`LeaderGuard`) ensures the inflight
+    slot is removed even when the leader panics or returns early
+    without explicit completion; in that case waiters unpark on a
+    sentinel `NtsError::Internal` rather than blocking against the
+    stale slot until their per-call deadline elapses.
+
+### Changed
+
+- Concurrent `ntsQuery` calls against the same `host:port` during a
+  cold cache (or when the cookie pool was exhausted) now share one
+  KE handshake instead of running N. The visible-from-Dart effect is
+  faster cold-start and lower rate-limit pressure on the upstream
+  server. Per-call timing semantics are unchanged: the leader
+  reports its own KE phase timings; waiters report zero phase
+  timings (same as cache hits — "no handshake ran in this thread"),
+  matching the existing convention.
+- The singleflight is keyed by `session_key(spec)` (i.e.
+  `host:port`), so concurrent queries against *different* hosts
+  continue to run their handshakes fully in parallel — the
+  pre-3.2 "don't serialise unrelated hosts" property is preserved.
+- Per-`NtsClient` scoping from 3.1 is preserved: the singleflight
+  registry lives on `SessionTable`, so two `NtsClient` instances
+  never collide with each other's leader-election state, and the
+  process-wide default client's singleflight is independent of any
+  bespoke `NtsClient` a caller mints.
+
+### Out of scope
+
+- `nts_warm_cookies` does *not* participate in the singleflight in
+  this release. It always runs its own `establish_session`,
+  matching its documented "force a fresh handshake" contract — a
+  manual refresh gesture should not be silently coalesced with an
+  unrelated `ntsQuery`'s handshake. A concurrent `nts_warm_cookies`
+  + `ntsQuery` against the same host therefore still races the
+  install (same race as pre-3.2; the singleflight does not make it
+  worse). If real call patterns surface a need to coalesce
+  warm-cookies traffic, a follow-up can extend the singleflight to
+  span both flows.
+- Cache-eviction policy (LRU / max-size / TTL) and per-host
+  singleflight metrics remain follow-ups under their own tickets;
+  this release does not change cache lifetime semantics.
+
 ## 3.1.0
 
 Adds an explicit, owned `NtsClient` handle so the per-host session

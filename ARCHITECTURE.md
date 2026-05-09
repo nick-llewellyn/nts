@@ -199,6 +199,84 @@ applies to both surfaces without duplication. The `SessionTable`
 itself is `pub(crate)` and FRB-ignored — Dart only ever sees
 `NtsClient`.
 
+## Singleflight: collapsing concurrent cold queries
+
+Each `SessionTable` carries a per-key singleflight registry
+(`inflight: Mutex<HashMap<String, Arc<HandshakeSlot>>>`) alongside
+the session map. The registry guarantees that concurrent
+`SessionTable::checkout` calls against the same `host:port` collapse
+onto exactly one in-flight `establish_session` call rather than
+each running their own duplicate KE handshake.
+
+The role-election loop in `checkout_with` runs three phases per
+iteration:
+
+1. **Cache hit (`map` lock briefly).** If the table holds a session
+   for `host:port` with at least one cookie remaining, pop a cookie
+   and return immediately. The `map` lock is dropped before any
+   singleflight bookkeeping so a slow leader on another key cannot
+   serialise unrelated cache hits behind itself.
+2. **Leader-or-waiter election (`inflight` lock briefly).** Insert
+   a fresh `Arc<HandshakeSlot>` keyed by `host:port` to become the
+   leader; on a colliding key, clone the existing slot and become a
+   waiter. The `map` and `inflight` mutexes are deliberately *not*
+   held simultaneously to avoid lock-order discipline.
+3. **Lock-free body.** The leader runs `establish_session` with no
+   locks held, then re-takes `map` to install the session, then
+   re-takes `inflight` (via the `LeaderGuard` RAII handle) to
+   remove the slot and signal waiters. Waiters park on the slot's
+   `Condvar` bounded by their own per-call wall-clock budget; on
+   wake they loop back to phase 1 and pop a cookie of their own.
+
+Three invariants make the loop converge:
+
+- **Bounded cookie pool.** A successful KE handshake delivers
+  `~POOL_SIZE` cookies (typically 8 per RFC 8915 §6); if `N > POOL_SIZE`
+  waiters wake against a freshly installed session, `N - POOL_SIZE`
+  fall through to phase 2 and elect a new leader for the next
+  handshake. Worst case is `ceil(N / POOL_SIZE)` handshake rounds,
+  not infinite.
+- **Refuse-to-install-empty.** A handshake that delivers zero
+  cookies returns `NtsError::NoCookies` immediately to the leader
+  *and* propagates the same error to every waiter — never installs
+  a useless session that would force the next round of leaders to
+  loop on the same outcome.
+- **Per-call deadline.** Waiters anchor their deadline at
+  `started + timeout` where `started` is captured at the top of
+  the calling `checkout_with`; a leader that runs longer than a
+  given waiter's caller-budget cannot stretch that waiter's
+  wall-clock past its caller's contract. Such a waiter surfaces
+  `NtsError::Timeout(TimeoutPhase::KeRecordIo)` (the most accurate
+  single bucket for "stuck waiting on a KE handshake we did not
+  run ourselves") and returns immediately.
+
+Three things explicitly *not* coalesced:
+
+- **`nts_warm_cookies`** runs its own `establish_session` outside
+  the singleflight loop. Its documented contract is "force a fresh
+  handshake" and silently coalescing it with an unrelated query's
+  handshake would defeat that intent. A concurrent
+  `nts_warm_cookies` + `ntsQuery` against the same host therefore
+  still races the install, same as pre-3.2; the singleflight does
+  not make that race worse.
+- **Concurrent queries against different `host:port` keys** keep
+  running fully in parallel. The singleflight registry keys off
+  `session_key(spec)`, so two distinct keys each elect their own
+  leader; the existing "don't serialise unrelated hosts" property
+  from pre-3.2 is preserved.
+- **Per-`NtsClient` scoping** is preserved end-to-end. The
+  singleflight registry lives on `SessionTable`, not globally, so
+  two `NtsClient` instances never share leader-election state with
+  each other or with the process-wide default client.
+
+`LeaderGuard` is the RAII safety net: even when the leader's
+`establish_session` panics or the leader returns early without an
+explicit `complete`, the guard's `Drop` removes the inflight slot
+and signals waiters with `NtsError::Internal("singleflight leader
+aborted before publishing a result")` so they unpark immediately
+rather than blocking against a stale slot until their per-call
+deadline elapses.
+
 ## Public API stability layer
 
 `lib/nts.dart` is the package's stable public contract. It is a thin,
