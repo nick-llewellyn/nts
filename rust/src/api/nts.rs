@@ -1055,12 +1055,22 @@ impl SessionTable {
                 let mut g = self.map.lock().expect("session table poisoned");
                 if let Some(s) = g.get_mut(&key) {
                     if s.cookies_remaining() > 0 {
-                        let cookie = s
-                            .jar
-                            .take(&s.ntpv4_host)
-                            .expect("cookies_remaining > 0 implies take returns Some");
-                        let ctx = build_query_context(s, cookie);
-                        return Ok((ctx, KePhaseTimings::default()));
+                        // `cookies_remaining > 0` implies `take` returns
+                        // `Some` (both read the same per-host queue
+                        // under the same `map` lock), so this should
+                        // not surface in practice. Defend against the
+                        // invariant being silently violated by a
+                        // future `CookieJar` refactor: return
+                        // `NoCookies` rather than panicking with
+                        // `expect`. The pre-singleflight code surfaced
+                        // the same shape on this path.
+                        match s.jar.take(&s.ntpv4_host) {
+                            Some(cookie) => {
+                                let ctx = build_query_context(s, cookie);
+                                return Ok((ctx, KePhaseTimings::default()));
+                            }
+                            None => return Err(NtsError::NoCookies),
+                        }
                     }
                 }
             }
@@ -1119,18 +1129,37 @@ impl SessionTable {
                                 guard.complete(Err(NtsError::NoCookies));
                                 return Err(NtsError::NoCookies);
                             }
-                            let ctx = {
+                            // Same defensive `take`-shape as the
+                            // cache-hit branch: the leader's
+                            // `cookies_remaining() == 0` check above
+                            // guarantees the just-installed jar is
+                            // non-empty, so `take` should return
+                            // `Some` here. Defend against a future
+                            // `CookieJar` refactor silently breaking
+                            // that invariant by surfacing
+                            // `NoCookies` (and signalling the
+                            // singleflight slot with the same shape
+                            // so waiters fail-fast on the same
+                            // error) rather than panicking with
+                            // `expect`.
+                            let cookie_opt = {
                                 let mut g = self.map.lock().expect("session table poisoned");
                                 g.insert(key.clone(), session);
                                 let s = g.get_mut(&key).expect("just inserted under this key");
-                                let cookie = s
-                                    .jar
+                                s.jar
                                     .take(&s.ntpv4_host)
-                                    .expect("session validated above as cookies_remaining > 0");
-                                build_query_context(s, cookie)
+                                    .map(|cookie| (build_query_context(s, cookie), ()))
                             };
-                            guard.complete(Ok(()));
-                            return Ok((ctx, ke_timings));
+                            match cookie_opt {
+                                Some((ctx, ())) => {
+                                    guard.complete(Ok(()));
+                                    return Ok((ctx, ke_timings));
+                                }
+                                None => {
+                                    guard.complete(Err(NtsError::NoCookies));
+                                    return Err(NtsError::NoCookies);
+                                }
+                            }
                         }
                         Err(e) => {
                             guard.complete(Err(e.clone()));
