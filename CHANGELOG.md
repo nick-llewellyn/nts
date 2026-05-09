@@ -35,14 +35,19 @@ those types (closes `nts-u9a`).
   be removed at 4.0.0. Constructor syntax (`const
   NtsError.invalidSpec('x')`, `const NtsError.timeout(TimeoutPhase
   .ntp)`, etc.) is unchanged.
-- `lib/src/ffi/` is no longer re-exported from
-  `package:nts/nts.dart`. Code that imported FFI types or functions
-  through the public barrel must either move to the public surface
-  (`package:nts/nts.dart`) or, for internal-mock use cases like
-  `RustLib.initMock`, import from `package:nts/src/ffi/...` directly
-  with the existing `// ignore_for_file: implementation_imports`
-  pattern. The example's `MockNtsApi` (`example/lib/src/mock_api.dart`)
-  shows the intended shape.
+- The FFI DTOs, functions, and `NtsError` family are no longer
+  re-exported from `package:nts/nts.dart`. The bridge bootstrap
+  (`RustLib`) remains re-exported from `lib/src/ffi/frb_generated.dart`
+  because callers still need it to call `await RustLib.init()` (and
+  `RustLib.initMock` in tests); that one symbol is the intentional
+  exception, scoped to the bootstrap. Code that imported other FFI
+  types or functions through the public barrel must either move to
+  the public surface (`package:nts/nts.dart`) or, for internal-mock
+  use cases that build `RustLibApi` instances, import from
+  `package:nts/src/ffi/...` directly with the existing
+  `// ignore_for_file: implementation_imports` pattern. The example's
+  `MockNtsApi` (`example/lib/src/mock_api.dart`) shows the intended
+  shape.
 - `NtsError` now implements Dart's marker `Exception` interface
   instead of FRB's internal `FrbException`. Catching with
   `try { ... } on NtsError catch (err)` is unchanged; catching with
