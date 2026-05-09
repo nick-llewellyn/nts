@@ -197,8 +197,18 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 ///   long as the owning client and is bounded to the hosts that
 ///   client is interested in.
 ///
-/// The client is safe to share across isolates / async callers; the
-/// underlying Rust table is mutex-guarded.
+/// The client is safe to share across same-isolate async callers;
+/// the underlying Rust table is mutex-guarded, so concurrent
+/// `await`-ed calls on a single client serialize only for the brief
+/// window each cache lookup needs.
+///
+/// The handle wraps a `flutter_rust_bridge` `RustOpaque` that owns
+/// a finalizable native `Arc`, which is **not** sendable across
+/// isolate boundaries through a `SendPort` — a different isolate
+/// must construct its own [NtsClient] (which gets its own
+/// per-isolate session table) rather than receiving one minted on
+/// the main isolate. There is no clone-as-sendable-token API on
+/// the public surface today.
 class NtsClient {
   final ffi.NtsClient _inner;
 

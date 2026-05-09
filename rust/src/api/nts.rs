@@ -8,9 +8,16 @@
 //! - [`nts_warm_cookies`] forces a fresh NTS-KE handshake and ingests the
 //!   delivered cookie pool without sending any NTP traffic.
 //!
-//! Per-host session state (negotiated AEAD keys, NTPv4 destination, cookie
-//! jar) lives in a process-wide `Mutex<HashMap>` keyed by `host:port`. This
-//! is the only persistent state the bridge maintains.
+//! Both entry points delegate to a process-wide default [`NtsClient`] via
+//! [`default_nts_client`]; callers that need scoped session ownership
+//! construct their own [`NtsClient`] and call its `query` /
+//! `warm_cookies` methods directly. Each [`NtsClient`] owns one
+//! [`SessionTable`] — a `Mutex<HashMap<String, Session>>` keyed by
+//! `host:port` — and that table is the only persistent state the
+//! bridge maintains. Two [`NtsClient`] instances never share table
+//! state with each other or with the process-wide default; see
+//! [`NtsClient`] for the per-instance lifecycle methods (`invalidate`,
+//! `clear`).
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
