@@ -312,5 +312,414 @@ void main() {
         }
       },
     );
+
+    test('ntsWarmCookies also converts the FFI NtsError to its public '
+        'twin', () async {
+      // Symmetric coverage of the `ntsWarmCookies` catch arm. One
+      // sample is sufficient because the conversion helper is shared
+      // with `ntsQuery` (verified exhaustively by the case above);
+      // this test pins the wrapper-level wiring on the warm path.
+      api.nextThrow = const ffi.NtsError.timeout(ffi.TimeoutPhase.tls);
+      await expectLater(
+        ntsWarmCookies(spec: spec),
+        throwsA(
+          predicate<Object>(
+            (e) =>
+                e is NtsError && e == const NtsError.timeout(TimeoutPhase.tls),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('public DTO value semantics', () {
+    test('NtsServerSpec: ==, hashCode, toString', () {
+      const a = NtsServerSpec(host: 'time.example', port: 4460);
+      const b = NtsServerSpec(host: 'time.example', port: 4460);
+      const differentHost = NtsServerSpec(host: 'time.other', port: 4460);
+      const differentPort = NtsServerSpec(host: 'time.example', port: 4461);
+
+      // Reflexive + value-based equality.
+      expect(a, equals(a));
+      expect(a, equals(b));
+      expect(a.hashCode, b.hashCode);
+
+      // Each field participates in equality.
+      expect(a, isNot(equals(differentHost)));
+      expect(a, isNot(equals(differentPort)));
+
+      // Disjoint type comparison returns false rather than throwing.
+      // The lint is suppressed because the disjoint check IS the
+      // contract under test.
+      // ignore: unrelated_type_equality_checks
+      expect(a == 'time.example', isFalse);
+
+      expect(a.toString(), 'NtsServerSpec(host: time.example, port: 4460)');
+    });
+
+    test('PhaseTimings: ==, hashCode, toString — every field counts', () {
+      const base = PhaseTimings(
+        dnsMicros: 11,
+        connectMicros: 22,
+        tlsHandshakeMicros: 33,
+        keRecordIoMicros: 44,
+      );
+      const sameValue = PhaseTimings(
+        dnsMicros: 11,
+        connectMicros: 22,
+        tlsHandshakeMicros: 33,
+        keRecordIoMicros: 44,
+      );
+      expect(base, equals(sameValue));
+      expect(base.hashCode, sameValue.hashCode);
+
+      // Perturb one field at a time; each perturbation must break equality.
+      const perturbations = <PhaseTimings>[
+        PhaseTimings(
+          dnsMicros: 99,
+          connectMicros: 22,
+          tlsHandshakeMicros: 33,
+          keRecordIoMicros: 44,
+        ),
+        PhaseTimings(
+          dnsMicros: 11,
+          connectMicros: 99,
+          tlsHandshakeMicros: 33,
+          keRecordIoMicros: 44,
+        ),
+        PhaseTimings(
+          dnsMicros: 11,
+          connectMicros: 22,
+          tlsHandshakeMicros: 99,
+          keRecordIoMicros: 44,
+        ),
+        PhaseTimings(
+          dnsMicros: 11,
+          connectMicros: 22,
+          tlsHandshakeMicros: 33,
+          keRecordIoMicros: 99,
+        ),
+      ];
+      for (final p in perturbations) {
+        expect(base, isNot(equals(p)));
+      }
+
+      expect(
+        base.toString(),
+        'PhaseTimings(dnsMicros: 11, connectMicros: 22, '
+        'tlsHandshakeMicros: 33, keRecordIoMicros: 44)',
+      );
+    });
+
+    test('NtsTimeSample: ==, hashCode, toString — every field counts', () {
+      const phase = PhaseTimings(
+        dnsMicros: 1,
+        connectMicros: 2,
+        tlsHandshakeMicros: 3,
+        keRecordIoMicros: 4,
+      );
+      const otherPhase = PhaseTimings(
+        dnsMicros: 9,
+        connectMicros: 2,
+        tlsHandshakeMicros: 3,
+        keRecordIoMicros: 4,
+      );
+      const base = NtsTimeSample(
+        utcUnixMicros: 1_777_334_400_000_000,
+        roundTripMicros: 12_500,
+        serverStratum: 2,
+        aeadId: 30,
+        freshCookies: 7,
+        phaseTimings: phase,
+      );
+      const sameValue = NtsTimeSample(
+        utcUnixMicros: 1_777_334_400_000_000,
+        roundTripMicros: 12_500,
+        serverStratum: 2,
+        aeadId: 30,
+        freshCookies: 7,
+        phaseTimings: phase,
+      );
+      expect(base, equals(sameValue));
+      expect(base.hashCode, sameValue.hashCode);
+
+      // One perturbation per field, including phaseTimings.
+      const perturbations = <NtsTimeSample>[
+        NtsTimeSample(
+          utcUnixMicros: 0,
+          roundTripMicros: 12_500,
+          serverStratum: 2,
+          aeadId: 30,
+          freshCookies: 7,
+          phaseTimings: phase,
+        ),
+        NtsTimeSample(
+          utcUnixMicros: 1_777_334_400_000_000,
+          roundTripMicros: 0,
+          serverStratum: 2,
+          aeadId: 30,
+          freshCookies: 7,
+          phaseTimings: phase,
+        ),
+        NtsTimeSample(
+          utcUnixMicros: 1_777_334_400_000_000,
+          roundTripMicros: 12_500,
+          serverStratum: 99,
+          aeadId: 30,
+          freshCookies: 7,
+          phaseTimings: phase,
+        ),
+        NtsTimeSample(
+          utcUnixMicros: 1_777_334_400_000_000,
+          roundTripMicros: 12_500,
+          serverStratum: 2,
+          aeadId: 15,
+          freshCookies: 7,
+          phaseTimings: phase,
+        ),
+        NtsTimeSample(
+          utcUnixMicros: 1_777_334_400_000_000,
+          roundTripMicros: 12_500,
+          serverStratum: 2,
+          aeadId: 30,
+          freshCookies: 0,
+          phaseTimings: phase,
+        ),
+        NtsTimeSample(
+          utcUnixMicros: 1_777_334_400_000_000,
+          roundTripMicros: 12_500,
+          serverStratum: 2,
+          aeadId: 30,
+          freshCookies: 7,
+          phaseTimings: otherPhase,
+        ),
+      ];
+      for (final p in perturbations) {
+        expect(base, isNot(equals(p)));
+      }
+
+      expect(
+        base.toString(),
+        'NtsTimeSample(utcUnixMicros: 1777334400000000, '
+        'roundTripMicros: 12500, serverStratum: 2, aeadId: 30, '
+        'freshCookies: 7, phaseTimings: PhaseTimings(dnsMicros: 1, '
+        'connectMicros: 2, tlsHandshakeMicros: 3, keRecordIoMicros: 4))',
+      );
+    });
+
+    test('NtsWarmCookiesOutcome: ==, hashCode, toString', () {
+      const phase = PhaseTimings(
+        dnsMicros: 1,
+        connectMicros: 2,
+        tlsHandshakeMicros: 3,
+        keRecordIoMicros: 4,
+      );
+      const base = NtsWarmCookiesOutcome(freshCookies: 8, phaseTimings: phase);
+      const sameValue = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: phase,
+      );
+      expect(base, equals(sameValue));
+      expect(base.hashCode, sameValue.hashCode);
+
+      // Each field participates in equality.
+      const differentCookies = NtsWarmCookiesOutcome(
+        freshCookies: 9,
+        phaseTimings: phase,
+      );
+      const differentPhase = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: PhaseTimings(
+          dnsMicros: 99,
+          connectMicros: 2,
+          tlsHandshakeMicros: 3,
+          keRecordIoMicros: 4,
+        ),
+      );
+      expect(base, isNot(equals(differentCookies)));
+      expect(base, isNot(equals(differentPhase)));
+
+      expect(
+        base.toString(),
+        'NtsWarmCookiesOutcome(freshCookies: 8, '
+        'phaseTimings: PhaseTimings(dnsMicros: 1, connectMicros: 2, '
+        'tlsHandshakeMicros: 3, keRecordIoMicros: 4))',
+      );
+    });
+
+    test('NtsDnsPoolStats: ==, hashCode, toString — every field counts', () {
+      // Note: BigInt is not const-constructible, so these are runtime
+      // instances. The == / hashCode / toString contract still holds.
+      final base = NtsDnsPoolStats(
+        inFlight: 3,
+        highWaterMark: 7,
+        recovered: BigInt.from(42),
+        refused: BigInt.from(2),
+      );
+      final sameValue = NtsDnsPoolStats(
+        inFlight: 3,
+        highWaterMark: 7,
+        recovered: BigInt.from(42),
+        refused: BigInt.from(2),
+      );
+      expect(base, equals(sameValue));
+      expect(base.hashCode, sameValue.hashCode);
+
+      final perturbations = <NtsDnsPoolStats>[
+        NtsDnsPoolStats(
+          inFlight: 99,
+          highWaterMark: 7,
+          recovered: BigInt.from(42),
+          refused: BigInt.from(2),
+        ),
+        NtsDnsPoolStats(
+          inFlight: 3,
+          highWaterMark: 99,
+          recovered: BigInt.from(42),
+          refused: BigInt.from(2),
+        ),
+        NtsDnsPoolStats(
+          inFlight: 3,
+          highWaterMark: 7,
+          recovered: BigInt.from(99),
+          refused: BigInt.from(2),
+        ),
+        NtsDnsPoolStats(
+          inFlight: 3,
+          highWaterMark: 7,
+          recovered: BigInt.from(42),
+          refused: BigInt.from(99),
+        ),
+      ];
+      for (final p in perturbations) {
+        expect(base, isNot(equals(p)));
+      }
+
+      expect(
+        base.toString(),
+        'NtsDnsPoolStats(inFlight: 3, highWaterMark: 7, '
+        'recovered: 42, refused: 2)',
+      );
+    });
+  });
+
+  group('NtsError variant semantics', () {
+    // For each variant: factory builds the right subclass; ==/hashCode
+    // are value-based; toString carries the payload (or the empty
+    // parens for the payload-less NoCookies variant). String-payload
+    // variants share a check shape and are exercised in a loop;
+    // Timeout (TimeoutPhase payload) and NoCookies (no payload) are
+    // checked separately.
+
+    final stringPayloadCases = <(NtsError, NtsError, NtsError, Type, String)>[
+      (
+        const NtsError.invalidSpec('a'),
+        const NtsError.invalidSpec('a'),
+        const NtsError.invalidSpec('b'),
+        NtsErrorInvalidSpec,
+        'NtsError.invalidSpec(a)',
+      ),
+      (
+        const NtsError.network('a'),
+        const NtsError.network('a'),
+        const NtsError.network('b'),
+        NtsErrorNetwork,
+        'NtsError.network(a)',
+      ),
+      (
+        const NtsError.keProtocol('a'),
+        const NtsError.keProtocol('a'),
+        const NtsError.keProtocol('b'),
+        NtsErrorKeProtocol,
+        'NtsError.keProtocol(a)',
+      ),
+      (
+        const NtsError.ntpProtocol('a'),
+        const NtsError.ntpProtocol('a'),
+        const NtsError.ntpProtocol('b'),
+        NtsErrorNtpProtocol,
+        'NtsError.ntpProtocol(a)',
+      ),
+      (
+        const NtsError.authentication('a'),
+        const NtsError.authentication('a'),
+        const NtsError.authentication('b'),
+        NtsErrorAuthentication,
+        'NtsError.authentication(a)',
+      ),
+      (
+        const NtsError.internal('a'),
+        const NtsError.internal('a'),
+        const NtsError.internal('b'),
+        NtsErrorInternal,
+        'NtsError.internal(a)',
+      ),
+    ];
+
+    test('string-payload variants: factory→subclass, ==, hashCode, '
+        'toString', () {
+      // Cross-variant inequality probe: a non-trivial NoCookies, used
+      // to confirm every payload-bearing variant rejects an unrelated
+      // shape rather than falling through to its `field0 == ...` arm.
+      const otherVariant = NtsError.noCookies();
+      for (final (a, sameValue, differentPayload, subclass, str)
+          in stringPayloadCases) {
+        expect(a, isA<NtsError>());
+        expect(a.runtimeType, subclass);
+        expect(a, isA<Exception>());
+        expect(a, equals(a));
+        expect(a, equals(sameValue));
+        expect(a.hashCode, sameValue.hashCode);
+        expect(a, isNot(equals(differentPayload)));
+        expect(a, isNot(equals(otherVariant)));
+        // Disjoint type — must not throw, must be false. The lint is
+        // suppressed because the disjoint check IS the contract under
+        // test.
+        // ignore: unrelated_type_equality_checks
+        expect(a == 'a', isFalse);
+        expect(a.toString(), str);
+      }
+    });
+
+    test('NtsError.timeout: factory→subclass, ==, hashCode, '
+        'toString uses .name', () {
+      const a = NtsError.timeout(TimeoutPhase.ntp);
+      const sameValue = NtsError.timeout(TimeoutPhase.ntp);
+      const differentPhase = NtsError.timeout(TimeoutPhase.dnsSaturation);
+
+      expect(a.runtimeType, NtsErrorTimeout);
+      expect(a, isA<NtsError>());
+      expect(a, isA<Exception>());
+      expect(a, equals(a));
+      expect(a, equals(sameValue));
+      expect(a.hashCode, sameValue.hashCode);
+      expect(a, isNot(equals(differentPhase)));
+      expect(a, isNot(equals(const NtsError.noCookies())));
+
+      // toString uses the enum's `.name`, not its full type path.
+      expect(a.toString(), 'NtsError.timeout(ntp)');
+      expect(differentPhase.toString(), 'NtsError.timeout(dnsSaturation)');
+    });
+
+    test('NtsError.noCookies: factory→subclass, ==, hashCode, toString', () {
+      const a = NtsError.noCookies();
+      const b = NtsError.noCookies();
+
+      expect(a.runtimeType, NtsErrorNoCookies);
+      expect(a, isA<NtsError>());
+      expect(a, isA<Exception>());
+
+      // Two distinct instances of a payload-less variant compare equal
+      // via the `other is X` branch (no payload to compare).
+      expect(a, equals(b));
+      expect(a.hashCode, b.hashCode);
+
+      // Cross-variant inequality.
+      expect(a, isNot(equals(const NtsError.network('x'))));
+      // ignore: unrelated_type_equality_checks
+      expect(a == 'noCookies', isFalse);
+
+      expect(a.toString(), 'NtsError.noCookies()');
+    });
   });
 }

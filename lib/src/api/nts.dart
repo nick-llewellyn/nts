@@ -111,9 +111,12 @@ Future<NtsTimeSample> ntsQuery({
 /// [ntsQuery] and default to [kDefaultTimeoutMs] /
 /// [kDefaultDnsConcurrencyCap] when omitted.
 ///
-/// The returned [NtsWarmCookiesOutcome.phaseTimings] only covers the KE
-/// pipeline (DNS, connect, TLS, KE record I/O); there is no UDP NTP
-/// exchange on this path, so the `Ntp` phase is implicitly zero.
+/// The returned [NtsWarmCookiesOutcome.phaseTimings] only covers the
+/// KE pipeline (DNS, connect, TLS, KE record I/O); there is no UDP
+/// NTP exchange on this path. There is no [TimeoutPhase.ntp]-tagged
+/// field on [PhaseTimings] in the first place — [PhaseTimings] only
+/// names the four pre-NTP phases — so "implicitly zero" here is
+/// shorthand for "the UDP send/recv leg never ran on this code path."
 ///
 /// Throws an [NtsError] on every failure path.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
