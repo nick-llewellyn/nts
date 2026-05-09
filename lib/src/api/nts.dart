@@ -213,6 +213,16 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// client whose table is shared across every isolate that calls
 /// them. There is no clone-as-sendable-token API on the public
 /// surface today.
+///
+/// **Initialization**: `await RustLib.init()` from
+/// `package:nts/src/ffi/frb_generated.dart` must have completed
+/// before the [NtsClient] default constructor or any of its
+/// methods is called — the constructor synchronously dispatches
+/// through the FRB bridge to mint the underlying Rust handle, and
+/// the methods reach the same dispatch table. This is the same
+/// initialization step the top-level [ntsQuery] / [ntsWarmCookies]
+/// functions require; see the library-level dartdoc on
+/// `package:nts/nts.dart` for the full bootstrap walk-through.
 class NtsClient {
   final ffi.NtsClient _inner;
 
@@ -222,6 +232,14 @@ class NtsClient {
   /// clients constructed this way never share session state with each
   /// other or with the process-wide default used by the top-level
   /// [ntsQuery] / [ntsWarmCookies] functions.
+  ///
+  /// Synchronous: dispatches through the FRB bridge to mint the
+  /// underlying Rust handle in-line. `await RustLib.init()` must
+  /// have completed first; calling this before init throws a
+  /// `StateError` from FRB's dispatcher rather than an [NtsError].
+  /// Apps that mint a long-lived [NtsClient] during startup should
+  /// do so after the same `await RustLib.init()` they would do
+  /// before calling [ntsQuery].
   factory NtsClient() => NtsClient._(ffi.NtsClient());
 
   /// Per-client equivalent of the top-level [ntsQuery]. The cookie
