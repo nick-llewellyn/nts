@@ -14,10 +14,14 @@ that wanted to bound the long-lived cache footprint. Closes
 `nts-2dd`.
 
 This release is **purely additive** — every pre-3.1 caller keeps
-working unchanged. The top-level `ntsQuery` / `ntsWarmCookies` /
-`ntsDnsPoolStats` functions now delegate to a process-wide default
-`NtsClient`, sharing one cached session table the way they always
-have. There is no SemVer-affecting change.
+working unchanged. The top-level `ntsQuery` / `ntsWarmCookies`
+functions now delegate to a process-wide default `NtsClient`,
+sharing one cached session table the way they always have.
+`ntsDnsPoolStats` is unaffected by the per-client refactor — it
+remains a direct snapshot of the process-wide bounded DNS resolver
+counters (which live in `nts::dns`, not in the per-host session
+table that `NtsClient` owns) and stays a synchronous, free-standing
+function. There is no SemVer-affecting change.
 
 ### Added
 
