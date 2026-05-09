@@ -3283,7 +3283,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     use std::sync::atomic::AtomicUsize;
-    use std::sync::Barrier;
     use std::thread;
 
     /// Build a `Session` with `cookie_count` cookies in the jar so the
@@ -3341,6 +3340,99 @@ mod tests {
         }
     }
 
+    /// One-shot release primitive used by the singleflight tests to
+    /// park a leader handshake closure until the assertion-side
+    /// preconditions are met. Replaces `Barrier::new(2)` for these
+    /// cases because `std::sync::Barrier::wait` has no built-in
+    /// timeout — if the test thread panics before reaching the
+    /// matching `wait` (for example because `await_singleflight_state`
+    /// times out on a regression), the leader thread parks forever
+    /// and `cargo test` would have to rely on Rust's process exit to
+    /// reclaim it.
+    ///
+    /// Two layers of safety net:
+    ///
+    /// 1. `ReleaseHandle::wait_release` is bounded by a per-call
+    ///    `timeout` so even a leader running with a torn-down test
+    ///    thread cannot park indefinitely; on timeout it returns
+    ///    `Err(())` and the closure can surface a synthetic error.
+    /// 2. `BoundedRelease`'s `Drop` impl signals release as part of
+    ///    stack unwind. When the test panics, the local
+    ///    `BoundedRelease` is dropped, which fires `release()`,
+    ///    which unparks the leader closure immediately rather than
+    ///    making it ride out the full `wait_release` deadline. The
+    ///    `Arc<(Mutex, Condvar)>` survives long enough for the
+    ///    closure to wake (it is held independently by every
+    ///    `ReleaseHandle`) so the wakeup path is sound even when
+    ///    the original is mid-drop.
+    struct BoundedRelease {
+        state: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    /// Cloneable handle to a `BoundedRelease`'s shared state. The
+    /// handle is what the leader handshake closure captures and
+    /// parks on; the test thread retains the `BoundedRelease`
+    /// itself so its `Drop` can wake every parked handle on panic.
+    #[derive(Clone)]
+    struct ReleaseHandle {
+        state: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl BoundedRelease {
+        fn new() -> Self {
+            Self {
+                state: Arc::new((Mutex::new(false), Condvar::new())),
+            }
+        }
+
+        fn handle(&self) -> ReleaseHandle {
+            ReleaseHandle {
+                state: self.state.clone(),
+            }
+        }
+
+        /// Signal release. Idempotent — calling release twice (e.g.
+        /// once explicitly from the test, once again from `Drop`)
+        /// is a no-op the second time. Wakes every handle parked
+        /// on `wait_release`.
+        fn release(&self) {
+            let (lock, cv) = &*self.state;
+            *lock.lock().expect("BoundedRelease state poisoned") = true;
+            cv.notify_all();
+        }
+    }
+
+    impl Drop for BoundedRelease {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
+    impl ReleaseHandle {
+        /// Park until released or `timeout` elapses. Returns `Ok(())`
+        /// when released, `Err(())` on timeout. The handshake closure
+        /// translates `Err(())` into a synthetic `NtsError::Internal`
+        /// so a stuck test (released-via-Drop or genuinely timed out)
+        /// surfaces as a test failure rather than as a leader thread
+        /// that completes successfully.
+        fn wait_release(&self, timeout: Duration) -> Result<(), ()> {
+            let (lock, cv) = &*self.state;
+            let mut released = lock.lock().expect("BoundedRelease state poisoned");
+            let deadline = Instant::now() + timeout;
+            while !*released {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(());
+                }
+                let (next, _) = cv
+                    .wait_timeout(released, deadline - now)
+                    .expect("BoundedRelease state poisoned");
+                released = next;
+            }
+            Ok(())
+        }
+    }
+
     /// Acceptance criterion 1: N concurrent cold checkouts against the
     /// same host collapse onto exactly one `establish_session` call.
     /// Pre-singleflight, every concurrent caller would have run its own
@@ -3355,18 +3447,23 @@ mod tests {
             port: 4460,
         };
         let handshake_count = Arc::new(AtomicUsize::new(0));
-        // Block every leader's handshake until the test releases all of
-        // them simultaneously, so the N-1 followers definitely arrive
-        // at phase B and elect the leader's slot before the leader
-        // finishes. Without the barrier, a fast leader could complete
-        // before the followers ever entered checkout.
-        let barrier = Arc::new(Barrier::new(2));
+        // Park the leader's handshake until the test confirms every
+        // follower has reached phase B and elected the leader's slot,
+        // then release. Without the park, a fast leader could complete
+        // before the followers ever entered checkout. `BoundedRelease`
+        // (in place of `Barrier::new(2)`) is bounded by a per-call
+        // wait timeout *and* by a `Drop`-on-panic release, so a test
+        // that panics in `await_singleflight_state` cannot strand the
+        // leader thread.
+        let release = BoundedRelease::new();
+        let release_handle = release.handle();
         let do_handshake = {
             let handshake_count = handshake_count.clone();
-            let barrier = barrier.clone();
             move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
                 handshake_count.fetch_add(1, Ordering::SeqCst);
-                barrier.wait();
+                release_handle
+                    .wait_release(Duration::from_secs(10))
+                    .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
                 Ok((
                     make_test_session_with_cookies(
                         &spec.host,
@@ -3406,7 +3503,7 @@ mod tests {
         await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
             slot.is_some_and(|s| Arc::strong_count(s) == N + 1)
         });
-        barrier.wait();
+        release.release();
 
         let mut ok_count = 0;
         for h in handles {
@@ -3429,10 +3526,14 @@ mod tests {
     /// singleflight is keyed by `session_key(spec)` (i.e. `host:port`),
     /// so two different keys must each elect their own leader and the
     /// two handshakes must be in-flight simultaneously. Verified by
-    /// gating the per-host handshakes on a 2-party `Barrier`: if the
-    /// two leaders ever serialised, the second one would deadlock
-    /// against the barrier and the test would hang well past its
-    /// 30s default timeout.
+    /// gating the per-host handshakes on a shared rendezvous counter
+    /// with a bounded deadline: each leader increments
+    /// `arrived_count`, then polls until it sees `arrived_count == 2`.
+    /// If singleflight regresses and serialises the two handshakes,
+    /// the second leader never arrives, the first leader's poll
+    /// deadline elapses, and the closure surfaces a synthetic
+    /// `NtsError::Internal` so the test fails fast instead of
+    /// riding out cargo's per-test timeout.
     #[test]
     fn checkout_does_not_serialize_handshakes_across_distinct_hosts() {
         let table = Arc::new(SessionTable::new());
@@ -3444,13 +3545,27 @@ mod tests {
             host: "singleflight-host-b.test".into(),
             port: 4460,
         };
-        let parallel_barrier = Arc::new(Barrier::new(2));
+        let arrived_count = Arc::new(AtomicUsize::new(0));
         let do_handshake = {
-            let parallel_barrier = parallel_barrier.clone();
+            let arrived_count = arrived_count.clone();
             move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
-                // Prove both handshakes are in flight at the same time:
-                // each leader parks here until the other one arrives.
-                parallel_barrier.wait();
+                // Prove both handshakes are in flight at the same
+                // time: each leader announces its arrival, then
+                // polls until the partner has also announced.
+                // Bounded by a 10s deadline so a regression that
+                // serialises the leaders surfaces as a test
+                // failure rather than as a hang against cargo's
+                // per-test timeout.
+                arrived_count.fetch_add(1, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while arrived_count.load(Ordering::SeqCst) < 2 {
+                    if Instant::now() >= deadline {
+                        return Err(NtsError::Internal(
+                            "parallel-hosts rendezvous never reached 2 leaders".into(),
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
                 Ok((
                     make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
                     KePhaseTimings::default(),
@@ -3495,16 +3610,16 @@ mod tests {
             host: "singleflight-waiter-timeout.test".into(),
             port: 4460,
         };
-        let leader_release = Arc::new(Barrier::new(2));
-        let do_handshake = {
-            let leader_release = leader_release.clone();
-            move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
-                leader_release.wait();
-                Ok((
-                    make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
-                    KePhaseTimings::default(),
-                ))
-            }
+        let leader_release = BoundedRelease::new();
+        let leader_release_handle = leader_release.handle();
+        let do_handshake = move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+            leader_release_handle
+                .wait_release(Duration::from_secs(10))
+                .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                KePhaseTimings::default(),
+            ))
         };
 
         // Spawn the leader. It will park inside `do_handshake` until
@@ -3556,7 +3671,7 @@ mod tests {
         );
 
         // Release the leader so its thread joins cleanly.
-        leader_release.wait();
+        leader_release.release();
         if let Err(e) = leader.join().expect("leader thread panicked") {
             panic!("leader checkout failed: {e:?}");
         }
@@ -3577,13 +3692,15 @@ mod tests {
             port: 4460,
         };
         let handshake_count = Arc::new(AtomicUsize::new(0));
-        let release = Arc::new(Barrier::new(2));
+        let release = BoundedRelease::new();
+        let release_handle = release.handle();
         let do_handshake = {
             let handshake_count = handshake_count.clone();
-            let release = release.clone();
             move |_: &NtsServerSpec, _t: Duration, _c: usize| {
                 handshake_count.fetch_add(1, Ordering::SeqCst);
-                release.wait();
+                release_handle
+                    .wait_release(Duration::from_secs(10))
+                    .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
                 Err(NtsError::KeProtocol(
                     "synthetic leader-failure for singleflight test".into(),
                 ))
@@ -3615,7 +3732,7 @@ mod tests {
         await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
             slot.is_some_and(|s| Arc::strong_count(s) == N + 1)
         });
-        release.wait();
+        release.release();
 
         for h in handles {
             let result = h.join().expect("thread panicked");
