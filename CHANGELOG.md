@@ -1,5 +1,76 @@
 # Changelog
 
+## 3.1.0
+
+Adds an explicit, owned `NtsClient` handle so the per-host session
+table (negotiated AEAD keys, NTPv4 destination, cookie jar) can be
+scoped to a caller, cleared on demand, and isolated from other
+callers. Pre-3.1 the cache was a process-wide `OnceLock<Mutex<…>>`
+keyed by `host:port` with no public path to clear it, no per-caller
+scoping, and no eviction; that was fine for mobile/desktop apps with
+one steady set of NTS servers and a problem for test isolation,
+diagnostics tools that wanted to force a fresh KE handshake, and apps
+that wanted to bound the long-lived cache footprint. Closes
+`nts-2dd`.
+
+This release is **purely additive** — every pre-3.1 caller keeps
+working unchanged. The top-level `ntsQuery` / `ntsWarmCookies` /
+`ntsDnsPoolStats` functions now delegate to a process-wide default
+`NtsClient`, sharing one cached session table the way they always
+have. There is no SemVer-affecting change.
+
+### Added
+
+- `NtsClient` in `lib/src/api/nts.dart`. Construct with `NtsClient()`
+  to mint a fresh client whose session table starts empty and never
+  shares state with another `NtsClient` or with the process-wide
+  default. The handle exposes:
+  - `Future<NtsTimeSample> query({...})` — per-client equivalent of
+    the top-level `ntsQuery`.
+  - `Future<NtsWarmCookiesOutcome> warmCookies({...})` — per-client
+    equivalent of the top-level `ntsWarmCookies`.
+  - `bool invalidate(NtsServerSpec spec)` — drops the cached session
+    for `spec`'s `host:port`, returns `true` if an entry was removed.
+    Synchronous; backed by one mutex acquisition + `HashMap::remove`
+    on the Rust side.
+  - `void clear()` — drops every cached session in this client's
+    table. Synchronous.
+- Rust: `pub struct NtsClient` in `rust/src/api/nts.rs` with the same
+  five operations (`new`, `query`, `warm_cookies`, `invalidate`,
+  `clear`). Rust callers can construct an explicit `NtsClient` for
+  the same reasons; the existing top-level `nts_query` and
+  `nts_warm_cookies` free functions delegate to a process-wide
+  default `NtsClient` via `default_nts_client()`.
+
+### Changed
+
+- The Rust per-host cache layer is now an instance of a private
+  `SessionTable` struct (was a free `sessions()` accessor over a
+  `OnceLock<Mutex<HashMap<…>>>`). `nts_query` and `nts_warm_cookies`
+  share their bodies with `NtsClient::query` and
+  `NtsClient::warm_cookies` through internal `*_inner` helpers
+  parameterised on `&SessionTable`, so the per-instance and
+  process-wide-default code paths are bit-identical except for
+  which table the cookies and keys live in. No public-API change.
+- Pre-3.1 cache-layer unit tests in `rust/src/api/nts.rs` continue
+  to operate on the process-wide default table via thin
+  `#[cfg(test)]` compatibility shims (`sessions`, `deposit_cookies`,
+  `evict_session`); behaviour is unchanged.
+
+### When to construct an explicit `NtsClient`
+
+- Test isolation, so one test's cached sessions cannot bleed into
+  another's.
+- Diagnostics tools that want to force a fresh NTS-KE handshake on
+  demand without restarting the process.
+- Apps that want a clear scope-bounded lifetime for cached
+  sessions, e.g. discarding the cache between work batches.
+
+If your app already uses one steady set of NTS servers and you have
+no need for the lifecycle methods, keep calling the top-level
+`ntsQuery` / `ntsWarmCookies` — the singleton convenience is the
+recommended default.
+
 ## 3.0.0
 
 Closes the public API contract by hand-writing the DTOs and the

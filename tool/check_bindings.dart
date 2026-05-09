@@ -66,7 +66,13 @@ const _frbGeneratedDispatcher = 'lib/src/ffi/frb_generated.dart';
 //
 //   api/nts.dart            : public_member_api_docs (freezed wrappers)
 //   frb_generated.dart      : public_member_api_docs + prefer_final_locals
-//                             + prefer_const_constructors (dispatcher)
+//                             + prefer_const_constructors
+//                             + inference_failure_on_instance_creation
+//                             (dispatcher; the inference rule fires on
+//                             FRB's `RustArcStaticData(...)` opaque-type
+//                             initializer, which omits the unused
+//                             generic parameter — see the
+//                             `NtsClientImpl._kStaticData` site)
 //   frb_generated.io.dart   : public_member_api_docs (FFI bindings)
 //   frb_generated.web.dart  : public_member_api_docs (JS interop bindings)
 const _lintIgnorePatches = <String, List<String>>{
@@ -75,6 +81,7 @@ const _lintIgnorePatches = <String, List<String>>{
     'public_member_api_docs',
     'prefer_final_locals',
     'prefer_const_constructors',
+    'inference_failure_on_instance_creation',
   ],
   'lib/src/ffi/frb_generated.io.dart': <String>['public_member_api_docs'],
   'lib/src/ffi/frb_generated.web.dart': <String>['public_member_api_docs'],

@@ -8,8 +8,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `checkout`, `cookies_remaining`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `sessions`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `QueryContext`, `Session`, `UdpBindOutcome`, `UdpDeadline`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `checkout`, `clear`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `install`, `invalidate`, `new`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `QueryContext`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
@@ -88,6 +88,55 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
 );
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NtsClient>>
+abstract class NtsClient implements RustOpaqueInterface {
+  /// Drop every cached session. Cheap; intended for test cleanup
+  /// and for apps that want to bound long-lived process memory by
+  /// resetting the cache between work batches.
+  ///
+  /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
+  /// reason as [`invalidate`](Self::invalidate): one mutex
+  /// acquisition and one `HashMap::clear`.
+  void clear();
+
+  /// Drop the cached session for `spec`'s `host:port`, if any.
+  /// Returns `true` if an entry was removed, `false` if no session
+  /// was cached for that key. The next [`query`](Self::query) or
+  /// [`warm_cookies`](Self::warm_cookies) for that spec triggers a
+  /// fresh NTS-KE handshake.
+  ///
+  /// Does not validate `spec`. An invalid spec (empty host or zero
+  /// port) trivially has no cached session and returns `false`.
+  ///
+  /// Marked `#[flutter_rust_bridge::frb(sync)]` so cache
+  /// invalidation does not pay an isolate-hop round-trip; the
+  /// underlying operation is one mutex acquisition and one
+  /// `HashMap::remove`.
+  bool invalidate({required NtsServerSpec spec});
+
+  /// Construct a fresh client with an empty session table.
+  ///
+  /// Marked `#[flutter_rust_bridge::frb(sync)]` so the generated
+  /// Dart side exposes this as the `NtsClient()` default
+  /// constructor (synchronous; no isolate hop) rather than as an
+  /// `await NtsClient.newInstance()` static factory.
+  factory NtsClient() => RustLib.instance.api.crateApiNtsNtsClientNew();
+
+  /// Per-client equivalent of the top-level [`nts_query`].
+  Future<NtsTimeSample> query({
+    required NtsServerSpec spec,
+    required int timeoutMs,
+    required int dnsConcurrencyCap,
+  });
+
+  /// Per-client equivalent of the top-level [`nts_warm_cookies`].
+  Future<NtsWarmCookiesOutcome> warmCookies({
+    required NtsServerSpec spec,
+    required int timeoutMs,
+    required int dnsConcurrencyCap,
+  });
+}
 
 /// Snapshot of the bounded DNS resolver pool counters.
 ///

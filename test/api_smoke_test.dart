@@ -17,7 +17,7 @@
 // exercises the underlying generated bindings directly and is kept
 // separate as a contract test on the codegen pipeline.
 //
-// ignore_for_file: implementation_imports
+// ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
@@ -39,6 +39,30 @@ class _RecordingApi implements RustLibApi {
   ffi.NtsDnsPoolStats nextDnsPoolStats = _zeroFfiDnsPoolStats();
   Object? nextThrow;
 
+  // Per-`NtsClient`-method recording. Distinct from the top-level
+  // `lastQuery*` / `lastWarm*` fields above so a test that exercises
+  // both surfaces can assert on each one independently. The `last*That`
+  // fields hold the opaque `that:` handle the public wrapper passed
+  // through, used by the isolation test to assert that two `NtsClient`
+  // instances forward through distinct FFI handles.
+  ffi.NtsClient? lastClientQueryThat;
+  int? lastClientQueryTimeoutMs;
+  int? lastClientQueryDnsCap;
+  ffi.NtsClient? lastClientWarmThat;
+  int? lastClientWarmTimeoutMs;
+  int? lastClientWarmDnsCap;
+  ffi.NtsClient? lastClientInvalidateThat;
+  ffi.NtsServerSpec? lastClientInvalidateSpec;
+  ffi.NtsClient? lastClientClearThat;
+  int clientNewCalls = 0;
+  int clientClearCalls = 0;
+  int clientInvalidateCalls = 0;
+  // Return value the mock hands back from the next
+  // `crateApiNtsNtsClientInvalidate` call. Defaults to `false` so a
+  // test that does not override it gets the documented "no entry was
+  // cached" semantics.
+  bool nextInvalidateResult = false;
+
   void reset() {
     lastQueryTimeoutMs = null;
     lastQueryDnsCap = null;
@@ -49,6 +73,19 @@ class _RecordingApi implements RustLibApi {
     nextWarm = _ffiWarm(0);
     nextDnsPoolStats = _zeroFfiDnsPoolStats();
     nextThrow = null;
+    lastClientQueryThat = null;
+    lastClientQueryTimeoutMs = null;
+    lastClientQueryDnsCap = null;
+    lastClientWarmThat = null;
+    lastClientWarmTimeoutMs = null;
+    lastClientWarmDnsCap = null;
+    lastClientInvalidateThat = null;
+    lastClientInvalidateSpec = null;
+    lastClientClearThat = null;
+    clientNewCalls = 0;
+    clientClearCalls = 0;
+    clientInvalidateCalls = 0;
+    nextInvalidateResult = false;
   }
 
   @override
@@ -87,12 +124,122 @@ class _RecordingApi implements RustLibApi {
     return nextDnsPoolStats;
   }
 
+  // --- NtsClient surface ----------------------------------------------
+  //
+  // `crateApiNtsNtsClientNew` returns a `_FakeFfiNtsClient` so the
+  // public `NtsClient` wrapper has a `that:` handle to forward through
+  // the four method stubs below. The fake re-routes its own method
+  // calls back to this `_RecordingApi` (see `_FakeFfiNtsClient` for the
+  // forwarding indirection), giving the mock end-to-end visibility
+  // even though no real `RustOpaque` arc exists on the test side.
+
+  @override
+  ffi.NtsClient crateApiNtsNtsClientNew() {
+    clientNewCalls++;
+    return _FakeFfiNtsClient();
+  }
+
+  @override
+  Future<ffi.NtsTimeSample> crateApiNtsNtsClientQuery({
+    required ffi.NtsClient that,
+    required ffi.NtsServerSpec spec,
+    required int timeoutMs,
+    required int dnsConcurrencyCap,
+  }) async {
+    lastClientQueryThat = that;
+    lastClientQueryTimeoutMs = timeoutMs;
+    lastClientQueryDnsCap = dnsConcurrencyCap;
+    final t = nextThrow;
+    if (t != null) throw t;
+    return nextSample;
+  }
+
+  @override
+  Future<ffi.NtsWarmCookiesOutcome> crateApiNtsNtsClientWarmCookies({
+    required ffi.NtsClient that,
+    required ffi.NtsServerSpec spec,
+    required int timeoutMs,
+    required int dnsConcurrencyCap,
+  }) async {
+    lastClientWarmThat = that;
+    lastClientWarmTimeoutMs = timeoutMs;
+    lastClientWarmDnsCap = dnsConcurrencyCap;
+    final t = nextThrow;
+    if (t != null) throw t;
+    return nextWarm;
+  }
+
+  @override
+  bool crateApiNtsNtsClientInvalidate({
+    required ffi.NtsClient that,
+    required ffi.NtsServerSpec spec,
+  }) {
+    clientInvalidateCalls++;
+    lastClientInvalidateThat = that;
+    lastClientInvalidateSpec = spec;
+    return nextInvalidateResult;
+  }
+
+  @override
+  void crateApiNtsNtsClientClear({required ffi.NtsClient that}) {
+    clientClearCalls++;
+    lastClientClearThat = that;
+  }
+
   @override
   Future<void> crateApiSimpleInitApp() async {}
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnsupportedError('mock api: ${invocation.memberName} not stubbed');
+}
+
+// In-memory stand-in for `ffi.NtsClient`. The public `NtsClient`
+// wrapper holds one of these as its `_inner` field whenever
+// `_RecordingApi.crateApiNtsNtsClientNew` is the active mock; the
+// fake re-routes each `clear` / `invalidate` / `query` / `warmCookies`
+// call back through `RustLib.instance.api`, which is the same
+// `_RecordingApi` instance, so the mock observes the call exactly as
+// the real `NtsClientImpl` would have routed it. `dispose` /
+// `isDisposed` are stubbed because the real `RustOpaqueInterface`
+// requires them but the test mock has no `Arc` to release.
+class _FakeFfiNtsClient implements ffi.NtsClient {
+  @override
+  void clear() => RustLib.instance.api.crateApiNtsNtsClientClear(that: this);
+
+  @override
+  bool invalidate({required ffi.NtsServerSpec spec}) => RustLib.instance.api
+      .crateApiNtsNtsClientInvalidate(that: this, spec: spec);
+
+  @override
+  Future<ffi.NtsTimeSample> query({
+    required ffi.NtsServerSpec spec,
+    required int timeoutMs,
+    required int dnsConcurrencyCap,
+  }) => RustLib.instance.api.crateApiNtsNtsClientQuery(
+    that: this,
+    spec: spec,
+    timeoutMs: timeoutMs,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+  );
+
+  @override
+  Future<ffi.NtsWarmCookiesOutcome> warmCookies({
+    required ffi.NtsServerSpec spec,
+    required int timeoutMs,
+    required int dnsConcurrencyCap,
+  }) => RustLib.instance.api.crateApiNtsNtsClientWarmCookies(
+    that: this,
+    spec: spec,
+    timeoutMs: timeoutMs,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+  );
+
+  @override
+  void dispose() {}
+
+  @override
+  bool get isDisposed => false;
 }
 
 ffi.PhaseTimings _zeroFfiPhaseTimings() => ffi.PhaseTimings(
@@ -721,5 +868,127 @@ void main() {
 
       expect(a.toString(), 'NtsError.noCookies()');
     });
+  });
+
+  group('NtsClient handle', () {
+    const spec = NtsServerSpec(host: 'time.example', port: 4460);
+
+    test('default constructor mints a fresh FFI handle each call', () {
+      final c1 = NtsClient();
+      final c2 = NtsClient();
+      // The mock counts every `crateApiNtsNtsClientNew` invocation; one
+      // per public `NtsClient()` call.
+      expect(api.clientNewCalls, 2);
+      // Pin the surface-level isolation invariant by routing one call
+      // through each client and asserting the recorded `that:` handles
+      // differ. The Rust-side per-instance `SessionTable` ownership is
+      // exercised separately by the `cargo test --lib` cache-layer
+      // suite; the wrapper's job is to forward through distinct
+      // opaque handles.
+      c1.invalidate(spec);
+      final firstThat = api.lastClientInvalidateThat;
+      c2.invalidate(spec);
+      final secondThat = api.lastClientInvalidateThat;
+      expect(firstThat, isNotNull);
+      expect(secondThat, isNotNull);
+      expect(identical(firstThat, secondThat), isFalse);
+    });
+
+    test('query forwards spec, defaults, and the FFI sample', () async {
+      final client = NtsClient();
+      final sample = await client.query(spec: spec);
+      expect(api.lastClientQueryThat, isNotNull);
+      expect(api.lastClientQueryTimeoutMs, kDefaultTimeoutMs);
+      expect(api.lastClientQueryDnsCap, kDefaultDnsConcurrencyCap);
+      // The wrapper converts the FFI sample to the public DTO; pin
+      // both shape and value so a future conversion regression
+      // surfaces here as well as in the top-level `ntsQuery` group.
+      expect(sample, isA<NtsTimeSample>());
+      expect(sample.utcUnixMicros, isA<int>());
+    });
+
+    test('query forwards explicit overrides verbatim', () async {
+      final client = NtsClient();
+      await client.query(spec: spec, timeoutMs: 1234, dnsConcurrencyCap: 32);
+      expect(api.lastClientQueryTimeoutMs, 1234);
+      expect(api.lastClientQueryDnsCap, 32);
+    });
+
+    test('warmCookies forwards spec, defaults, and the FFI outcome', () async {
+      final client = NtsClient();
+      api.nextWarm = _ffiWarm(7);
+      final outcome = await client.warmCookies(spec: spec);
+      expect(api.lastClientWarmThat, isNotNull);
+      expect(api.lastClientWarmTimeoutMs, kDefaultTimeoutMs);
+      expect(api.lastClientWarmDnsCap, kDefaultDnsConcurrencyCap);
+      expect(outcome.freshCookies, 7);
+    });
+
+    test('warmCookies forwards explicit overrides verbatim', () async {
+      final client = NtsClient();
+      await client.warmCookies(
+        spec: spec,
+        timeoutMs: 9876,
+        dnsConcurrencyCap: 8,
+      );
+      expect(api.lastClientWarmTimeoutMs, 9876);
+      expect(api.lastClientWarmDnsCap, 8);
+    });
+
+    test('invalidate forwards the spec and returns the FFI bool', () {
+      final client = NtsClient();
+      api.nextInvalidateResult = true;
+      expect(client.invalidate(spec), isTrue);
+      expect(api.clientInvalidateCalls, 1);
+      expect(api.lastClientInvalidateSpec?.host, spec.host);
+      expect(api.lastClientInvalidateSpec?.port, spec.port);
+
+      api.nextInvalidateResult = false;
+      expect(client.invalidate(spec), isFalse);
+      expect(api.clientInvalidateCalls, 2);
+    });
+
+    test('clear delegates to the FFI', () {
+      final client = NtsClient();
+      client.clear();
+      expect(api.clientClearCalls, 1);
+      expect(api.lastClientClearThat, isNotNull);
+    });
+
+    test(
+      'query converts FFI NtsError to the public sealed class with stack',
+      () async {
+        final client = NtsClient();
+        api.nextThrow = const ffi.NtsError.timeout(ffi.TimeoutPhase.tls);
+        await expectLater(
+          client.query(spec: spec),
+          throwsA(
+            isA<NtsError>().having(
+              (e) => e,
+              'is timeout(tls)',
+              equals(const NtsError.timeout(TimeoutPhase.tls)),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'warmCookies converts FFI NtsError to the public sealed class',
+      () async {
+        final client = NtsClient();
+        api.nextThrow = const ffi.NtsError.noCookies();
+        await expectLater(
+          client.warmCookies(spec: spec),
+          throwsA(
+            isA<NtsError>().having(
+              (e) => e,
+              'is noCookies',
+              equals(const NtsError.noCookies()),
+            ),
+          ),
+        );
+      },
+    );
   });
 }

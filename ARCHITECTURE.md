@@ -155,6 +155,50 @@ few microseconds of inter-phase bookkeeping fall outside any
 field — but the discrepancy is bounded by call-site overhead, not
 by hidden I/O.
 
+## Session ownership and the `NtsClient` handle
+
+Per-host session state — the negotiated AEAD keys, NTPv4 destination,
+and cookie jar handed back by an NTS-KE handshake — lives in a
+`SessionTable` keyed by `host:port`. The table is the only persistent
+state the bridge maintains; everything else is derived from it on
+demand.
+
+Two ways to own a `SessionTable`:
+
+1. **Process-wide default.** The top-level convenience entry points
+   (`nts_query` / `nts_warm_cookies` on the Rust side, `ntsQuery` /
+   `ntsWarmCookies` on the Dart side) delegate to a singleton
+   `NtsClient` initialised lazily via `OnceLock`, whose `SessionTable`
+   is shared by every caller in the process. This is the historical
+   shape (1.x / 2.x) and remains the recommended default for apps
+   with one steady set of NTS servers.
+2. **Owned `NtsClient`.** Construct an explicit `NtsClient` (Rust:
+   `NtsClient::new()`; Dart: `NtsClient()`) to mint a fresh client
+   whose `SessionTable` is empty and shares no state with the default
+   client or with any other `NtsClient`. The handle exposes the same
+   `query` / `warm_cookies` operations plus `invalidate(spec)`
+   (drops one cached session, returns `bool`) and `clear()` (drops
+   every cached session).
+
+Use cases for the per-instance shape:
+
+- Test isolation, so one test's cached sessions cannot bleed into
+  another's. Pre-3.1, the only escape was a fresh process.
+- Diagnostics tools that want to force a fresh NTS-KE handshake on
+  demand (`invalidate(spec)` followed by the next `query` / `warm`
+  triggers a re-handshake).
+- Apps that want a clear scope-bounded lifetime for cached
+  sessions, e.g. discarding the cache between work batches via
+  `clear()` rather than letting it grow unboundedly across the
+  process lifetime.
+
+Internally, the per-client and process-wide-default code paths
+share their bodies through internal `*_inner` helpers parameterised
+on `&SessionTable`, so a behaviour change to the cache layer
+applies to both surfaces without duplication. The `SessionTable`
+itself is `pub(crate)` and FRB-ignored — Dart only ever sees
+`NtsClient`.
+
 ## Public API stability layer
 
 `lib/nts.dart` is the package's stable public contract. It is a thin,

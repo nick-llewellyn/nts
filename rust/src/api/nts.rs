@@ -465,21 +465,162 @@ impl Session {
 /// Mint a fresh, monotonically-increasing session generation ID.
 ///
 /// `Relaxed` is sufficient because the value is only ever compared for
-/// equality against a snapshot taken under the same `sessions()` mutex
-/// that gates every read/write of the session table. The mutex
-/// provides the cross-thread happens-before relationship; the atomic
-/// is here purely to give us a cheap uniqueness oracle without having
-/// to widen the lock-protected state.
+/// equality against a snapshot taken under the same [`SessionTable`]
+/// mutex that gates every read/write of the table. The mutex provides
+/// the cross-thread happens-before relationship; the atomic is here
+/// purely to give us a cheap uniqueness oracle without having to widen
+/// the lock-protected state.
 fn next_session_generation() -> u64 {
     static GEN: AtomicU64 = AtomicU64::new(1);
     GEN.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Process-wide session table. Sessions are keyed by `host:port` so two specs
-/// with different KE ports stay isolated even when they share a hostname.
+/// Per-host session table keyed by `host:port` so two specs with
+/// different KE ports stay isolated even when they share a hostname.
+///
+/// Each [`NtsClient`] owns one `SessionTable`; the convenience
+/// top-level entry points ([`nts_query`], [`nts_warm_cookies`])
+/// delegate to a process-wide default client whose table is exposed
+/// internally via [`default_session_table`]. The `Mutex` provides
+/// interior mutability so client methods take `&self` rather than
+/// `&mut self` and concurrent calls against the same client serialize
+/// only for the brief window each cache lookup needs.
+///
+/// `pub(crate)` so the FRB-generated dispatcher in
+/// `rust/src/frb_generated.rs` (a sibling module of `crate::api::nts`)
+/// can name the type, but not `pub` so downstream Rust crates do not
+/// see it. Marked `#[flutter_rust_bridge::frb(ignore)]` so FRB does
+/// not emit a public Dart binding for the type — it is reachable
+/// through the (private) `NtsClient.table` field, which is otherwise
+/// enough to make FRB's parser consider it part of the bindable
+/// surface.
+#[flutter_rust_bridge::frb(ignore)]
+pub(crate) struct SessionTable {
+    map: Mutex<HashMap<String, Session>>,
+}
+
+impl SessionTable {
+    fn new() -> Self {
+        Self {
+            map: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+/// Owned NTS client handle.
+///
+/// Each `NtsClient` owns its own session table, so two instances never
+/// share cookie or key state. The handle is safe to use from multiple
+/// threads concurrently — the inner table is mutex-guarded — and
+/// methods take `&self`, so a single `NtsClient` can be shared by
+/// reference (or via `Arc`) across the application.
+///
+/// The convenience top-level functions [`nts_query`] and
+/// [`nts_warm_cookies`] delegate to a process-wide default client.
+/// Construct an explicit `NtsClient` when you need test isolation,
+/// the ability to drop cached sessions on demand via
+/// [`NtsClient::invalidate`] / [`NtsClient::clear`], or scope-bounded
+/// session ownership.
+///
+/// `Default` is intentionally not derived so FRB does not surface a
+/// `default_()` static factory in the generated Dart bindings;
+/// [`NtsClient::new`] is the canonical constructor on both sides.
+pub struct NtsClient {
+    table: SessionTable,
+}
+
+impl NtsClient {
+    /// Construct a fresh client with an empty session table.
+    ///
+    /// Marked `#[flutter_rust_bridge::frb(sync)]` so the generated
+    /// Dart side exposes this as the `NtsClient()` default
+    /// constructor (synchronous; no isolate hop) rather than as an
+    /// `await NtsClient.newInstance()` static factory.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn new() -> Self {
+        Self {
+            table: SessionTable::new(),
+        }
+    }
+
+    /// Per-client equivalent of the top-level [`nts_query`].
+    pub fn query(
+        &self,
+        spec: NtsServerSpec,
+        timeout_ms: u32,
+        dns_concurrency_cap: u32,
+    ) -> Result<NtsTimeSample, NtsError> {
+        nts_query_inner(&self.table, spec, timeout_ms, dns_concurrency_cap)
+    }
+
+    /// Per-client equivalent of the top-level [`nts_warm_cookies`].
+    pub fn warm_cookies(
+        &self,
+        spec: NtsServerSpec,
+        timeout_ms: u32,
+        dns_concurrency_cap: u32,
+    ) -> Result<NtsWarmCookiesOutcome, NtsError> {
+        nts_warm_cookies_inner(&self.table, spec, timeout_ms, dns_concurrency_cap)
+    }
+
+    /// Drop the cached session for `spec`'s `host:port`, if any.
+    /// Returns `true` if an entry was removed, `false` if no session
+    /// was cached for that key. The next [`query`](Self::query) or
+    /// [`warm_cookies`](Self::warm_cookies) for that spec triggers a
+    /// fresh NTS-KE handshake.
+    ///
+    /// Does not validate `spec`. An invalid spec (empty host or zero
+    /// port) trivially has no cached session and returns `false`.
+    ///
+    /// Marked `#[flutter_rust_bridge::frb(sync)]` so cache
+    /// invalidation does not pay an isolate-hop round-trip; the
+    /// underlying operation is one mutex acquisition and one
+    /// `HashMap::remove`.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn invalidate(&self, spec: NtsServerSpec) -> bool {
+        self.table.invalidate(&spec)
+    }
+
+    /// Drop every cached session. Cheap; intended for test cleanup
+    /// and for apps that want to bound long-lived process memory by
+    /// resetting the cache between work batches.
+    ///
+    /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
+    /// reason as [`invalidate`](Self::invalidate): one mutex
+    /// acquisition and one `HashMap::clear`.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn clear(&self) {
+        self.table.clear()
+    }
+}
+
+/// Process-wide default `NtsClient`. Used by the top-level convenience
+/// functions so existing `nts_query` / `nts_warm_cookies` callers keep
+/// working unchanged after the per-client refactor.
+fn default_nts_client() -> &'static NtsClient {
+    static C: OnceLock<NtsClient> = OnceLock::new();
+    C.get_or_init(NtsClient::new)
+}
+
+/// Cache-layer test accessor for the default client's table. Used by
+/// the `#[cfg(test)]` `sessions` / `deposit_cookies` / `evict_session`
+/// compatibility shims so the pre-refactor cache-layer unit tests in
+/// this module keep operating on the same process-wide table the
+/// top-level [`nts_query`] / [`nts_warm_cookies`] reach via
+/// `default_nts_client().table`.
+#[cfg(test)]
+fn default_session_table() -> &'static SessionTable {
+    &default_nts_client().table
+}
+
+/// Cache-layer test compatibility shim. The pre-refactor cache-layer
+/// tests in this module poke the process-wide table directly via
+/// `sessions().lock()`; rather than rewrite every test site, expose
+/// the default client's inner mutex under the original name. Gated to
+/// `#[cfg(test)]` so it is dead-stripped from release builds.
+#[cfg(test)]
 fn sessions() -> &'static Mutex<HashMap<String, Session>> {
-    static S: OnceLock<Mutex<HashMap<String, Session>>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(HashMap::new()))
+    &default_session_table().map
 }
 
 fn session_key(spec: &NtsServerSpec) -> String {
@@ -634,111 +775,156 @@ struct QueryContext {
     aead_id: u16,
 }
 
-/// Acquire (or establish) a session and pop one cookie. The returned context
-/// owns the cookie and key clones so the network exchange runs lock-free.
-///
-/// Also returns the per-phase wall-clock breakdown of the KE
-/// handshake when one ran. On a cache-hit (the common case once the
-/// session is warm) every phase is reported as `0` because no
-/// handshake was performed.
-fn checkout(
-    spec: &NtsServerSpec,
-    timeout: Duration,
-    dns_concurrency_cap: usize,
-) -> Result<(QueryContext, KePhaseTimings), NtsError> {
-    let key = session_key(spec);
-    let mut guard = sessions().lock().expect("session table poisoned");
-    let need_handshake = match guard.get(&key) {
-        Some(s) => s.cookies_remaining() == 0,
-        None => true,
-    };
-    let mut ke_timings = KePhaseTimings::default();
-    if need_handshake {
-        // Drop the lock across the multi-RTT KE handshake so other queries
-        // against unrelated hosts aren't serialized behind it.
-        drop(guard);
-        let (session, timings) = establish_session(spec, timeout, dns_concurrency_cap)?;
-        ke_timings = timings;
-        let mut g = sessions().lock().expect("session table poisoned");
-        g.insert(key.clone(), session);
-        guard = g;
+impl SessionTable {
+    /// Acquire (or establish) a session and pop one cookie. The returned
+    /// context owns the cookie and key clones so the network exchange runs
+    /// lock-free.
+    ///
+    /// Also returns the per-phase wall-clock breakdown of the KE
+    /// handshake when one ran. On a cache-hit (the common case once the
+    /// session is warm) every phase is reported as `0` because no
+    /// handshake was performed.
+    fn checkout(
+        &self,
+        spec: &NtsServerSpec,
+        timeout: Duration,
+        dns_concurrency_cap: usize,
+    ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
+        let key = session_key(spec);
+        let mut guard = self.map.lock().expect("session table poisoned");
+        let need_handshake = match guard.get(&key) {
+            Some(s) => s.cookies_remaining() == 0,
+            None => true,
+        };
+        let mut ke_timings = KePhaseTimings::default();
+        if need_handshake {
+            // Drop the lock across the multi-RTT KE handshake so other queries
+            // against unrelated hosts aren't serialized behind it.
+            drop(guard);
+            let (session, timings) = establish_session(spec, timeout, dns_concurrency_cap)?;
+            ke_timings = timings;
+            let mut g = self.map.lock().expect("session table poisoned");
+            g.insert(key.clone(), session);
+            guard = g;
+        }
+        let session = guard
+            .get_mut(&key)
+            .ok_or_else(|| NtsError::Internal("session vanished after install".into()))?;
+        let cookie = session
+            .jar
+            .take(&session.ntpv4_host)
+            .ok_or(NtsError::NoCookies)?;
+        let ctx = QueryContext {
+            session_generation: session.generation,
+            cookie,
+            c2s_key: session.c2s_key.clone(),
+            s2c_key: session.s2c_key.clone(),
+            ntpv4_host: session.ntpv4_host.clone(),
+            ntpv4_port: session.ntpv4_port,
+            aead_id: session.aead_id,
+        };
+        Ok((ctx, ke_timings))
     }
-    let session = guard
-        .get_mut(&key)
-        .ok_or_else(|| NtsError::Internal("session vanished after install".into()))?;
-    let cookie = session
-        .jar
-        .take(&session.ntpv4_host)
-        .ok_or(NtsError::NoCookies)?;
-    let ctx = QueryContext {
-        session_generation: session.generation,
-        cookie,
-        c2s_key: session.c2s_key.clone(),
-        s2c_key: session.s2c_key.clone(),
-        ntpv4_host: session.ntpv4_host.clone(),
-        ntpv4_port: session.ntpv4_port,
-        aead_id: session.aead_id,
-    };
-    Ok((ctx, ke_timings))
-}
 
-/// Deposit fresh cookies harvested from a verified server reply.
-///
-/// The cookies are AEAD-sealed by the server with the C2S/S2C key pair
-/// from `expected_generation`. If a concurrent `nts_warm_cookies` (or
-/// another `checkout` that ran its own re-handshake) replaced the
-/// session under `spec_key` while this query was on the wire, the
-/// cached entry now holds an unrelated key pair and these cookies
-/// would be unusable against it — every future query that spent one
-/// would round-trip through `NtsError::Authentication` and force yet
-/// another KE handshake. Drop the cookies on the floor in that case;
-/// the next query will simply re-handshake and refill the jar from
-/// scratch, which is strictly cheaper than poisoning the cache.
-fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8>>) {
-    if cookies.is_empty() {
-        return;
-    }
-    let mut guard = sessions().lock().expect("session table poisoned");
-    if let Some(session) = guard.get_mut(spec_key) {
-        if session.generation != expected_generation {
-            // Session has been replaced since checkout; these cookies
-            // are bound to keys we no longer hold. Discard.
+    /// Deposit fresh cookies harvested from a verified server reply.
+    ///
+    /// The cookies are AEAD-sealed by the server with the C2S/S2C key pair
+    /// from `expected_generation`. If a concurrent `nts_warm_cookies` (or
+    /// another `checkout` that ran its own re-handshake) replaced the
+    /// session under `spec_key` while this query was on the wire, the
+    /// cached entry now holds an unrelated key pair and these cookies
+    /// would be unusable against it — every future query that spent one
+    /// would round-trip through `NtsError::Authentication` and force yet
+    /// another KE handshake. Drop the cookies on the floor in that case;
+    /// the next query will simply re-handshake and refill the jar from
+    /// scratch, which is strictly cheaper than poisoning the cache.
+    fn deposit_cookies(&self, spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8>>) {
+        if cookies.is_empty() {
             return;
         }
-        let host = session.ntpv4_host.clone();
-        session.jar.put_many(&host, cookies);
+        let mut guard = self.map.lock().expect("session table poisoned");
+        if let Some(session) = guard.get_mut(spec_key) {
+            if session.generation != expected_generation {
+                // Session has been replaced since checkout; these cookies
+                // are bound to keys we no longer hold. Discard.
+                return;
+            }
+            let host = session.ntpv4_host.clone();
+            session.jar.put_many(&host, cookies);
+        }
+    }
+
+    /// Drop the cached session for `spec_key` when the in-flight query that
+    /// produced the rekey signal was drawn from generation
+    /// `expected_generation`.
+    ///
+    /// Called by [`nts_query_inner`] on either rekey signal: `NtpError::Aead`
+    /// (tag mismatch in `parse_server_response`, typically after the
+    /// server rotated its master key out from under our cookie pool) or
+    /// `NtpError::StaleCookie` (RFC 8915 §5.7 unauthenticated `NTSN`
+    /// Kiss-of-Death with a matching Unique Identifier). Removing the
+    /// entry rather than just clearing the jar ensures the now-unusable
+    /// C2S/S2C keys are also released; the next [`checkout`](Self::checkout)
+    /// sees no entry and performs a fresh KE handshake immediately, instead
+    /// of draining 7 more stale cookies through identical failures and the
+    /// caller's exponential backoff over multiple hours.
+    ///
+    /// The generation guard is symmetric with
+    /// [`deposit_cookies`](Self::deposit_cookies): if a concurrent
+    /// `nts_warm_cookies` (or another `checkout` that triggered its own
+    /// re-handshake) installed a fresh session under the same key while
+    /// this query was on the wire, the failure belongs to the old keys
+    /// and the new session must not be evicted. Without the guard a
+    /// single transient auth error would force every concurrent caller
+    /// for the same host through a redundant re-handshake.
+    fn evict_session(&self, spec_key: &str, expected_generation: u64) {
+        let mut guard = self.map.lock().expect("session table poisoned");
+        if let Some(session) = guard.get(spec_key) {
+            if session.generation == expected_generation {
+                guard.remove(spec_key);
+            }
+        }
+    }
+
+    /// Replace any existing entry for `spec`'s `host:port` with `session`.
+    /// Used by [`nts_warm_cookies_inner`] after a successful KE handshake.
+    fn install(&self, spec: &NtsServerSpec, session: Session) {
+        let key = session_key(spec);
+        self.map
+            .lock()
+            .expect("session table poisoned")
+            .insert(key, session);
+    }
+
+    /// Drop the cached session for `spec`'s `host:port`. Returns whether
+    /// an entry was actually removed.
+    fn invalidate(&self, spec: &NtsServerSpec) -> bool {
+        self.map
+            .lock()
+            .expect("session table poisoned")
+            .remove(&session_key(spec))
+            .is_some()
+    }
+
+    /// Drop every cached session.
+    fn clear(&self) {
+        self.map.lock().expect("session table poisoned").clear();
     }
 }
 
-/// Drop the cached session for `spec_key` when the in-flight query that
-/// produced the rekey signal was drawn from generation
-/// `expected_generation`.
-///
-/// Called by [`nts_query`] on either rekey signal: `NtpError::Aead`
-/// (tag mismatch in `parse_server_response`, typically after the
-/// server rotated its master key out from under our cookie pool) or
-/// `NtpError::StaleCookie` (RFC 8915 §5.7 unauthenticated `NTSN`
-/// Kiss-of-Death with a matching Unique Identifier). Removing the
-/// entry rather than just clearing the jar ensures the now-unusable
-/// C2S/S2C keys are also released; the next [`checkout`] sees no
-/// entry and performs a fresh KE handshake immediately, instead of
-/// draining 7 more stale cookies through identical failures and the
-/// caller's exponential backoff over multiple hours.
-///
-/// The generation guard is symmetric with [`deposit_cookies`]: if a
-/// concurrent `nts_warm_cookies` (or another `checkout` that triggered
-/// its own re-handshake) installed a fresh session under the same key
-/// while this query was on the wire, the failure belongs to the old
-/// keys and the new session must not be evicted. Without the guard a
-/// single transient auth error would force every concurrent caller for
-/// the same host through a redundant re-handshake.
+/// Cache-layer test compatibility shims. Pre-refactor cache-layer
+/// tests in this module call `deposit_cookies` / `evict_session` as
+/// free functions; preserve those names against the default client's
+/// table so the test bodies stay untouched. Gated to `#[cfg(test)]`
+/// so they are dead-stripped from release builds.
+#[cfg(test)]
+fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8>>) {
+    default_session_table().deposit_cookies(spec_key, expected_generation, cookies)
+}
+
+#[cfg(test)]
 fn evict_session(spec_key: &str, expected_generation: u64) {
-    let mut guard = sessions().lock().expect("session table poisoned");
-    if let Some(session) = guard.get(spec_key) {
-        if session.generation == expected_generation {
-            guard.remove(spec_key);
-        }
-    }
+    default_session_table().evict_session(spec_key, expected_generation)
 }
 
 /// Resolve `(host, port)` and return a UDP socket bound to the local
@@ -982,6 +1168,20 @@ pub fn nts_query(
     timeout_ms: u32,
     dns_concurrency_cap: u32,
 ) -> Result<NtsTimeSample, NtsError> {
+    default_nts_client().query(spec, timeout_ms, dns_concurrency_cap)
+}
+
+/// Implementation shared by [`nts_query`] (which delegates to the
+/// process-wide default client's table) and [`NtsClient::query`]
+/// (which operates on the caller's own table). Parameterising on
+/// `&SessionTable` keeps both paths bit-identical except for which
+/// cache the cookies and keys live in.
+fn nts_query_inner(
+    table: &SessionTable,
+    spec: NtsServerSpec,
+    timeout_ms: u32,
+    dns_concurrency_cap: u32,
+) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
@@ -995,7 +1195,7 @@ pub fn nts_query(
     // which contradicts the documented "single global wall-clock
     // budget" contract on `timeout_ms`.
     let started = Instant::now();
-    let (ctx, ke_timings) = checkout(&spec, timeout, cap)?;
+    let (ctx, ke_timings) = table.checkout(&spec, timeout, cap)?;
     let session_generation = ctx.session_generation;
 
     // Fail-fast recovery: two distinct on-wire signals indicate the
@@ -1033,14 +1233,14 @@ pub fn nts_query(
     //
     // Eviction is gated on `session_generation`, the snapshot
     // captured at `checkout` time, symmetric to the guard in
-    // `deposit_cookies`. If a concurrent `nts_warm_cookies` (or
-    // another `checkout` that triggered its own re-handshake)
-    // installed a fresh session under the same key while this
-    // query was on the wire, the in-flight failure belongs to the
-    // old keys and the new session must survive untouched.
+    // [`SessionTable::deposit_cookies`]. If a concurrent
+    // `nts_warm_cookies` (or another `checkout` that triggered its
+    // own re-handshake) installed a fresh session under the same key
+    // while this query was on the wire, the in-flight failure belongs
+    // to the old keys and the new session must survive untouched.
     let evict_on_rekey_signal = |err: NtpError| -> NtsError {
         if matches!(&err, NtpError::Aead(_) | NtpError::StaleCookie) {
-            evict_session(&key, session_generation);
+            table.evict_session(&key, session_generation);
         }
         NtsError::from(err)
     };
@@ -1103,7 +1303,7 @@ pub fn nts_query(
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
         .map_err(evict_on_rekey_signal)?;
     let fresh_count = response.fresh_cookies.len() as u32;
-    deposit_cookies(&key, session_generation, response.fresh_cookies);
+    table.deposit_cookies(&key, session_generation, response.fresh_cookies);
 
     // Combine KE-path DNS time (zero on cache hits) with the UDP-path
     // DNS time so the surface field reflects the full DNS cost of
@@ -1140,14 +1340,23 @@ pub fn nts_warm_cookies(
     timeout_ms: u32,
     dns_concurrency_cap: u32,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
+    default_nts_client().warm_cookies(spec, timeout_ms, dns_concurrency_cap)
+}
+
+/// Implementation shared by [`nts_warm_cookies`] (default-client
+/// table) and [`NtsClient::warm_cookies`] (per-client table).
+fn nts_warm_cookies_inner(
+    table: &SessionTable,
+    spec: NtsServerSpec,
+    timeout_ms: u32,
+    dns_concurrency_cap: u32,
+) -> Result<NtsWarmCookiesOutcome, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
     let (session, ke_timings) = establish_session(&spec, timeout, cap)?;
     let count = session.cookies_remaining() as u32;
-    let key = session_key(&spec);
-    let mut guard = sessions().lock().expect("session table poisoned");
-    guard.insert(key, session);
+    table.install(&spec, session);
     Ok(NtsWarmCookiesOutcome {
         fresh_cookies: count,
         phase_timings: PhaseTimings::from(ke_timings),
@@ -2314,6 +2523,186 @@ mod tests {
         let r = remaining_budget_or_ntp_timeout(total, nearly)
             .expect("one-nanosecond slack must propagate");
         assert_eq!(r, Duration::from_nanos(1));
+    }
+
+    // --- per-instance NtsClient / SessionTable cache layer ----------
+    //
+    // The `default_session_table` shim above already pins the
+    // checkout / deposit_cookies / evict_session invariants against
+    // the process-wide table; the tests in this section pin the
+    // *per-instance* invariants the public `NtsClient` handle relies
+    // on: lifecycle (`install`, `invalidate`, `clear`), per-instance
+    // isolation (a fresh `SessionTable` shares no state with another
+    // fresh `SessionTable` or with the default table), and the
+    // `bool` return contract on `invalidate`. These tests use plain
+    // `make_test_session` rather than running a real NTS-KE
+    // handshake, mirroring how the existing cache-layer tests
+    // exercise the deposit/evict paths without standing up a live KE
+    // responder.
+
+    /// Per-instance lifecycle: `install` adds an entry, `invalidate`
+    /// returns `true` on hit and removes it, `invalidate` on a
+    /// missing key returns `false` and is a no-op, and `clear`
+    /// drops every remaining entry in one call.
+    #[test]
+    fn session_table_install_invalidate_clear_round_trip() {
+        let table = SessionTable::new();
+        let spec_a = NtsServerSpec {
+            host: "table-rt-a.invalid".into(),
+            port: 4460,
+        };
+        let spec_b = NtsServerSpec {
+            host: "table-rt-b.invalid".into(),
+            port: 4460,
+        };
+
+        let key_a = session_key(&spec_a);
+        let key_b = session_key(&spec_b);
+
+        // Install A and B; both visible under their own keys.
+        table.install(&spec_a, make_test_session("table-rt-a.invalid", 123, 1));
+        table.install(&spec_b, make_test_session("table-rt-b.invalid", 124, 2));
+        {
+            let g = table.map.lock().expect("test session table poisoned");
+            assert!(g.contains_key(&key_a), "spec A must be cached");
+            assert!(g.contains_key(&key_b), "spec B must be cached");
+        }
+
+        // Invalidate A: returns true, A is gone, B survives.
+        assert!(
+            table.invalidate(&spec_a),
+            "invalidate on a present entry must return true"
+        );
+        {
+            let g = table.map.lock().expect("test session table poisoned");
+            assert!(!g.contains_key(&key_a), "spec A must be evicted");
+            assert!(g.contains_key(&key_b), "spec B must survive A's eviction");
+        }
+
+        // Re-invalidate A: now a no-op that returns false.
+        assert!(
+            !table.invalidate(&spec_a),
+            "invalidate on a missing entry must return false (no-op)"
+        );
+
+        // Clear drops everything.
+        table.clear();
+        let g = table.map.lock().expect("test session table poisoned");
+        assert!(
+            g.is_empty(),
+            "clear must drop every entry; remaining keys: {:?}",
+            g.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// Per-instance isolation: two fresh `SessionTable`s share no
+    /// state, and neither shares with the process-wide default
+    /// table. Pins acceptance criterion 3 from `nts-2dd` at the
+    /// cache layer (the public `NtsClient` wrapper inherits this
+    /// invariant by construction since each `NtsClient::new` mints
+    /// a fresh `SessionTable`).
+    #[test]
+    fn session_table_instances_are_independent() {
+        let a = SessionTable::new();
+        let b = SessionTable::new();
+        let spec = NtsServerSpec {
+            host: "table-iso.invalid".into(),
+            port: 4460,
+        };
+        let key = session_key(&spec);
+
+        a.install(&spec, make_test_session("table-iso.invalid", 200, 1));
+
+        // B must be empty for this key.
+        {
+            let g = b.map.lock().expect("test session table poisoned");
+            assert!(
+                !g.contains_key(&key),
+                "B must not see A's installed session",
+            );
+        }
+        // A must still hold the entry it installed.
+        {
+            let g = a.map.lock().expect("test session table poisoned");
+            assert!(g.contains_key(&key), "A must still hold its own entry");
+        }
+        // The default table must also not see A's entry. Wrapped in
+        // an explicit clear so a stale entry from a previous test on
+        // the default table cannot mask the assertion. The eviction
+        // below is harmless even if the entry was never present.
+        default_session_table().invalidate(&spec);
+        {
+            let g = default_session_table()
+                .map
+                .lock()
+                .expect("default session table poisoned");
+            assert!(
+                !g.contains_key(&key),
+                "default table must not see entries installed in a fresh SessionTable",
+            );
+        }
+
+        // Symmetric cleanup so a parallel test on `a` does not see
+        // the stub session we left behind here.
+        a.clear();
+    }
+
+    /// `NtsClient::invalidate` and `NtsClient::clear` are thin
+    /// pass-throughs to the owned `SessionTable`. Pins the
+    /// `bool` return value on `invalidate` and the empty-after-clear
+    /// invariant at the public-handle layer so a future refactor
+    /// that drops the delegation surfaces here as well as in the
+    /// `SessionTable` tests above.
+    #[test]
+    fn nts_client_invalidate_and_clear_pass_through_to_table() {
+        let client = NtsClient::new();
+        let spec = NtsServerSpec {
+            host: "client-pass-through.invalid".into(),
+            port: 4460,
+        };
+        let key = session_key(&spec);
+
+        // Empty client: invalidate returns false, no panic, table
+        // still empty.
+        assert!(
+            !client.invalidate(spec.clone()),
+            "invalidate on a fresh client must return false",
+        );
+
+        // Install via the inner table, then invalidate via the
+        // public method. Returns true; the entry is gone.
+        client.table.install(
+            &spec,
+            make_test_session("client-pass-through.invalid", 1, 1),
+        );
+        assert!(
+            client.invalidate(spec.clone()),
+            "invalidate on an installed entry must return true",
+        );
+        {
+            let g = client.table.map.lock().expect("client table poisoned");
+            assert!(!g.contains_key(&key), "entry must be evicted");
+        }
+
+        // `clear` drops everything in one call. Install several
+        // entries first so a single-entry clear cannot pass by
+        // accident.
+        for i in 0..3u16 {
+            let s = NtsServerSpec {
+                host: format!("client-clear-{i}.invalid"),
+                port: 4460 + i,
+            };
+            client
+                .table
+                .install(&s, make_test_session(&s.host, 1, (10 + i).into()));
+        }
+        client.clear();
+        let g = client.table.map.lock().expect("client table poisoned");
+        assert!(
+            g.is_empty(),
+            "clear must drop every entry; remaining: {:?}",
+            g.keys().collect::<Vec<_>>()
+        );
     }
 
     /// Live integration probe — performs a real NTS-KE handshake and
