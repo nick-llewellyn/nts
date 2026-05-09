@@ -1,6 +1,7 @@
 //! NTS public API surface (RFC 8915).
 //!
-//! Two synchronous entry points are exposed across the FRB v2 worker pool:
+//! Two top-level convenience functions exercise the protocol across the
+//! FRB v2 worker pool:
 //!
 //! - `nts_query` (`ntsQuery` on the Dart side) runs a full
 //!   Authenticated NTPv4 exchange and returns a `NtsTimeSample`. It
@@ -10,16 +11,26 @@
 //!   fresh NTS-KE handshake and ingests the delivered cookie pool
 //!   without sending any NTP traffic.
 //!
-//! Both entry points delegate to a process-wide default `NtsClient` via
-//! a private `default_nts_client()` accessor; callers that need scoped
-//! session ownership construct their own `NtsClient` and call its
-//! `query` / `warm_cookies` methods directly. Each `NtsClient` owns
+//! Both convenience functions delegate to a process-wide default
+//! `NtsClient` via a private `default_nts_client()` accessor; callers
+//! that need scoped session ownership construct their own `NtsClient`
+//! and call its `query` / `warm_cookies` methods directly. The
+//! `NtsClient` handle additionally exposes a synchronous default
+//! constructor (`NtsClient()` on the Dart side) plus synchronous
+//! `invalidate(spec)` / `clear()` cache mutators marked
+//! `#[flutter_rust_bridge::frb(sync)]` so callers can drop sessions
+//! without paying an isolate-hop round-trip. Each `NtsClient` owns
 //! one private `SessionTable` — a `Mutex<HashMap<String, Session>>`
-//! keyed by `host:port` — and that table is the only persistent state
-//! the bridge maintains. Two `NtsClient` instances never share table
-//! state with each other or with the process-wide default; see
-//! `NtsClient` for the per-instance lifecycle methods (`invalidate`,
-//! `clear`).
+//! keyed by `host:port` — and that table is the only persistent
+//! NTS-protocol state the bridge maintains. Two `NtsClient`
+//! instances never share table state with each other or with the
+//! process-wide default.
+//!
+//! `nts_dns_pool_stats` (`ntsDnsPoolStats` on the Dart side) is also
+//! exposed from this module as a synchronous diagnostic snapshot of
+//! the bounded DNS resolver counters in `crate::nts::dns`; it is
+//! orthogonal to the per-host session table that `NtsClient` owns
+//! and is unaffected by the per-client refactor.
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
