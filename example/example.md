@@ -94,13 +94,12 @@ Future<void> main() async {
     // applying this offset is the caller's responsibility because the
     // "right" filter (median, lowest-RTT, Marzullo, …) is workload
     // specific.
-    final adjustedMicros =
-        best.utcUnixMicros.toInt() + (best.roundTripMicros.toInt() ~/ 2);
+    final adjustedMicros = best.utcUnixMicros + (best.roundTripMicros ~/ 2);
     final adjustedUtc = DateTime.fromMicrosecondsSinceEpoch(
       adjustedMicros,
       isUtc: true,
     );
-    final rttMs = best.roundTripMicros.toInt() / 1000.0;
+    final rttMs = best.roundTripMicros / 1000.0;
 
     print('samples  = ${samples.length}');
     print('best-rtt = ${rttMs.toStringAsFixed(2)} ms');
@@ -109,19 +108,19 @@ Future<void> main() async {
     print('aead-id  = ${best.aeadId}');
     print('cookies  = ${best.freshCookies}');
   } on NtsError catch (err) {
-    // `NtsError` is a `freezed` sealed class — exhaustive switch
+    // `NtsError` is a Dart 3 sealed class — exhaustive switch
     // expressions catch new variants at compile time if the package
     // ever grows them. Both `ntsWarmCookies` and `ntsQuery` surface
     // failures through this same hierarchy.
     final detail = switch (err) {
-      NtsError_InvalidSpec(:final field0) => 'invalid spec: $field0',
-      NtsError_Network(:final field0) => 'network: $field0',
-      NtsError_KeProtocol(:final field0) => 'NTS-KE: $field0',
-      NtsError_NtpProtocol(:final field0) => 'NTP: $field0',
-      NtsError_Authentication(:final field0) => 'AEAD auth: $field0',
-      NtsError_Timeout(:final field0) => 'timeout in phase ${field0.name}',
-      NtsError_NoCookies() => 'no cookies returned',
-      NtsError_Internal(:final field0) => 'internal: $field0',
+      NtsErrorInvalidSpec(:final field0) => 'invalid spec: $field0',
+      NtsErrorNetwork(:final field0) => 'network: $field0',
+      NtsErrorKeProtocol(:final field0) => 'NTS-KE: $field0',
+      NtsErrorNtpProtocol(:final field0) => 'NTP: $field0',
+      NtsErrorAuthentication(:final field0) => 'AEAD auth: $field0',
+      NtsErrorTimeout(:final field0) => 'timeout in phase ${field0.name}',
+      NtsErrorNoCookies() => 'no cookies returned',
+      NtsErrorInternal(:final field0) => 'internal: $field0',
     };
     print('nts call failed: $detail');
   }

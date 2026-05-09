@@ -3,20 +3,28 @@
 // public barrel — it's an internal contract that exists only so unit
 // tests and showcase apps can stub the bridge without loading a dylib.
 // The same pattern is used in `test/ffi_smoke_test.dart`.
+//
+// Because `RustLibApi`'s overrides accept and return the FFI DTOs from
+// `lib/src/ffi/api/nts.dart` (with their `PlatformInt64` microsecond
+// fields and freezed-generated `NtsError`), this file imports those
+// types directly rather than the public `package:nts/nts.dart` shapes
+// that 3.0+ consumer code uses. The wrapper layer in
+// `lib/src/api/nts.dart` converts at the boundary, so the rest of the
+// example only ever sees the public types.
 // ignore_for_file: implementation_imports
 
 import 'dart:math';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
-import 'package:nts/src/ffi/frb_generated.dart' show RustLibApi;
-import 'package:nts/nts.dart'
+import 'package:nts/src/ffi/api/nts.dart'
     show
         NtsError,
         NtsServerSpec,
         NtsTimeSample,
         NtsWarmCookiesOutcome,
         PhaseTimings;
+import 'package:nts/src/ffi/frb_generated.dart' show RustLibApi;
 
 /// In-memory `RustLibApi` implementation used by the example app and the
 /// widget smoke test as an explicit alternative to the bundled Rust dylib.

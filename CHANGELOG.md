@@ -1,5 +1,79 @@
 # Changelog
 
+## 3.0.0
+
+Closes the public API contract by hand-writing the DTOs and the
+`NtsError` sealed class on the Dart side. Pre-3.0 the wrapper layer
+re-exported `NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`,
+`NtsDnsPoolStats`, `PhaseTimings`, `TimeoutPhase`, and the entire
+`NtsError` family verbatim from `lib/src/ffi/api/nts.dart`; a Rust-side
+struct rename or reorder propagated as a Dart source break the moment
+`flutter_rust_bridge_codegen generate` re-emitted the bindings, and
+microsecond fields shipped as FRB's `PlatformInt64` rather than plain
+Dart `int`. 3.0 separates the two surfaces and converts at the wrapper
+boundary, so internal regen is no longer a SemVer event for any of
+those types (closes `nts-u9a`).
+
+### Breaking changes
+
+- All public DTOs (`NtsServerSpec`, `NtsTimeSample`,
+  `NtsWarmCookiesOutcome`, `NtsDnsPoolStats`, `PhaseTimings`) are now
+  hand-written in `lib/src/api/models.dart`. Microsecond fields
+  (`utcUnixMicros`, `roundTripMicros`, and every field on
+  `PhaseTimings`) are typed as plain `int` rather than
+  `PlatformInt64`. Call sites that did `sample.utcUnixMicros.toInt()`
+  should drop the `.toInt()`; the field is already an `int`. Test
+  fixtures and mocks that built these types via
+  `PlatformInt64Util.from(...)` should pass the underlying `int`
+  directly.
+- `NtsError` is now a Dart 3 `sealed class` hand-written in
+  `lib/src/api/errors.dart` instead of the FRB-generated freezed
+  sealed class. The variant subclasses are renamed from the
+  underscore-prefixed freezed convention (`NtsError_InvalidSpec`) to
+  idiomatic Dart PascalCase (`NtsErrorInvalidSpec`). The pre-3.0 names
+  survive as `@Deprecated` typedef aliases for one release; they will
+  be removed at 4.0.0. Constructor syntax (`const
+  NtsError.invalidSpec('x')`, `const NtsError.timeout(TimeoutPhase
+  .ntp)`, etc.) is unchanged.
+- `lib/src/ffi/` is no longer re-exported from
+  `package:nts/nts.dart`. Code that imported FFI types or functions
+  through the public barrel must either move to the public surface
+  (`package:nts/nts.dart`) or, for internal-mock use cases like
+  `RustLib.initMock`, import from `package:nts/src/ffi/...` directly
+  with the existing `// ignore_for_file: implementation_imports`
+  pattern. The example's `MockNtsApi` (`example/lib/src/mock_api.dart`)
+  shows the intended shape.
+- `NtsError` now implements Dart's marker `Exception` interface
+  instead of FRB's internal `FrbException`. Catching with
+  `try { ... } on NtsError catch (err)` is unchanged; catching with
+  `try { ... } on FrbException catch (err)` no longer binds an
+  `NtsError` and will need to switch to the `NtsError` clause.
+
+### Migration
+
+- Rename `NtsError_X` → `NtsErrorX` in switch arms and `is` checks
+  (drop the underscore). The deprecated typedefs let the old names
+  compile for one release; the analyzer will surface each call site as
+  a deprecation warning so the migration can be done at the consumer's
+  pace before 4.0.0.
+- Drop `.toInt()` calls on `NtsTimeSample.utcUnixMicros`,
+  `NtsTimeSample.roundTripMicros`, and `PhaseTimings.*Micros`.
+- Replace any `PlatformInt64Util.from(N)` in DTO constructors with
+  `N`.
+
+### Conversion layer (no runtime impact for callers)
+
+- `lib/src/api/nts.dart` now wraps every FFI call in a try/catch that
+  converts `lib/src/ffi/api/nts.dart`'s `NtsError` to the public
+  variant. Conversions are exhaustive `switch` expressions; a future
+  Rust-side variant addition surfaces as a compile error in the
+  conversion layer rather than as a silently-dropped variant at the
+  consumer.
+- `tool/check_bindings.dart` continues to watch only `lib/src/ffi/`
+  and `rust/src/frb_generated.rs`; the hand-written public surface in
+  `lib/src/api/` is not part of the FRB drift check by design (it
+  exists *because* it is hand-written).
+
 ## 2.0.0
 
 Adds first-class phase attribution to the public NTS surface so callers
