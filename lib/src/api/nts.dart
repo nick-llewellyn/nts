@@ -206,9 +206,13 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// a finalizable native `Arc`, which is **not** sendable across
 /// isolate boundaries through a `SendPort` — a different isolate
 /// must construct its own [NtsClient] (which gets its own
-/// per-isolate session table) rather than receiving one minted on
-/// the main isolate. There is no clone-as-sendable-token API on
-/// the public surface today.
+/// independent session table) rather than receiving one minted on
+/// the main isolate. The session table is owned by the `NtsClient`
+/// handle, not by the isolate; the top-level [ntsQuery] /
+/// [ntsWarmCookies] functions delegate to a process-wide default
+/// client whose table is shared across every isolate that calls
+/// them. There is no clone-as-sendable-token API on the public
+/// surface today.
 class NtsClient {
   final ffi.NtsClient _inner;
 
