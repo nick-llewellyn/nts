@@ -3533,7 +3533,9 @@ mod tests {
     /// the second leader never arrives, the first leader's poll
     /// deadline elapses, and the closure surfaces a synthetic
     /// `NtsError::Internal` so the test fails fast instead of
-    /// riding out cargo's per-test timeout.
+    /// hanging the CI job indefinitely (cargo test has no built-in
+    /// per-test timeout and CI runs `cargo test --lib` without an
+    /// external timeout wrapper).
     #[test]
     fn checkout_does_not_serialize_handshakes_across_distinct_hosts() {
         let table = Arc::new(SessionTable::new());
