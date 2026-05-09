@@ -179,6 +179,147 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 ///   alert on.
 NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 
+/// Owned NTS client handle.
+///
+/// Each [NtsClient] owns its own per-host session table on the Rust
+/// side, so two instances never share cookie or key state. The
+/// top-level convenience functions [ntsQuery] and [ntsWarmCookies]
+/// continue to delegate to a process-wide default client whose state
+/// is shared across all callers (the same behaviour as 1.x / 2.x);
+/// construct an explicit [NtsClient] when you need:
+///
+/// - **Test isolation**, so one test's cached sessions do not bleed
+///   into another's.
+/// - **On-demand cache invalidation** via [invalidate] (per-host) or
+///   [clear] (everything), e.g. for diagnostics tools that want to
+///   force a fresh NTS-KE handshake.
+/// - **Scope-bounded session ownership**, so the cache lives only as
+///   long as the owning client and is bounded to the hosts that
+///   client is interested in.
+///
+/// The client is safe to share across same-isolate async callers;
+/// the underlying Rust table is mutex-guarded, so concurrent
+/// `await`-ed calls on a single client serialize only for the brief
+/// window each cache lookup needs.
+///
+/// The handle wraps a `flutter_rust_bridge` `RustOpaque` that owns
+/// a finalizable native `Arc`, which is **not** sendable across
+/// isolate boundaries through a `SendPort` — a different isolate
+/// must construct its own [NtsClient] (which gets its own
+/// independent session table) rather than receiving one minted on
+/// the main isolate. The session table is owned by the `NtsClient`
+/// handle, not by the isolate; the top-level [ntsQuery] /
+/// [ntsWarmCookies] functions delegate to a process-wide default
+/// client whose table is shared across every isolate that calls
+/// them. There is no clone-as-sendable-token API on the public
+/// surface today.
+///
+/// **Initialization**: `await RustLib.init()` from
+/// `package:nts/src/ffi/frb_generated.dart` must have completed
+/// before the [NtsClient] default constructor or any of its
+/// methods is called — the constructor synchronously dispatches
+/// through the FRB bridge to mint the underlying Rust handle, and
+/// the methods reach the same dispatch table. This is the same
+/// initialization step the top-level [ntsQuery] / [ntsWarmCookies]
+/// functions require; see the library-level dartdoc on
+/// `package:nts/nts.dart` for the full bootstrap walk-through.
+class NtsClient {
+  final ffi.NtsClient _inner;
+
+  NtsClient._(this._inner);
+
+  /// Construct a fresh client whose session table starts empty. Two
+  /// clients constructed this way never share session state with each
+  /// other or with the process-wide default used by the top-level
+  /// [ntsQuery] / [ntsWarmCookies] functions.
+  ///
+  /// Synchronous: dispatches through the FRB bridge to mint the
+  /// underlying Rust handle in-line. `await RustLib.init()` must
+  /// have completed first; calling this before init throws a
+  /// `StateError` from FRB's dispatcher rather than an [NtsError].
+  /// Apps that mint a long-lived [NtsClient] during startup should
+  /// do so after the same `await RustLib.init()` they would do
+  /// before calling [ntsQuery].
+  factory NtsClient() => NtsClient._(ffi.NtsClient());
+
+  /// Per-client equivalent of the top-level [ntsQuery]. The cookie
+  /// pool, AEAD keys, and KE session live in this client's table; on
+  /// the first call (or after the cookie pool is exhausted) a full
+  /// NTS-KE handshake runs, then subsequent calls reuse the cached
+  /// session.
+  ///
+  /// Parameter semantics for `timeoutMs` and `dnsConcurrencyCap` are
+  /// identical to [ntsQuery]; defaults come from [kDefaultTimeoutMs]
+  /// and [kDefaultDnsConcurrencyCap]. The [NtsTimeSample] return
+  /// shape is identical too — see [ntsQuery]'s dartdoc for the raw
+  /// protocol primitives the sample exposes and how to apply the
+  /// one-way-delay correction.
+  ///
+  /// Throws an [NtsError] on every failure path.
+  Future<NtsTimeSample> query({
+    required NtsServerSpec spec,
+    int timeoutMs = kDefaultTimeoutMs,
+    int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+  }) async {
+    try {
+      final ffiSample = await _inner.query(
+        spec: _ffiSpec(spec),
+        timeoutMs: timeoutMs,
+        dnsConcurrencyCap: dnsConcurrencyCap,
+      );
+      return _publicSample(ffiSample);
+    } on ffi.NtsError catch (err, stack) {
+      // Preserve the original FFI-side stack trace through the
+      // conversion; see the comment in the top-level `ntsQuery`.
+      Error.throwWithStackTrace(_publicError(err), stack);
+    }
+  }
+
+  /// Per-client equivalent of the top-level [ntsWarmCookies]. Forces
+  /// a fresh NTS-KE handshake and ingests the delivered cookie pool
+  /// into this client's table, replacing any previously cached
+  /// session for the spec.
+  ///
+  /// Throws an [NtsError] on every failure path.
+  Future<NtsWarmCookiesOutcome> warmCookies({
+    required NtsServerSpec spec,
+    int timeoutMs = kDefaultTimeoutMs,
+    int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+  }) async {
+    try {
+      final ffiOutcome = await _inner.warmCookies(
+        spec: _ffiSpec(spec),
+        timeoutMs: timeoutMs,
+        dnsConcurrencyCap: dnsConcurrencyCap,
+      );
+      return _publicWarm(ffiOutcome);
+    } on ffi.NtsError catch (err, stack) {
+      Error.throwWithStackTrace(_publicError(err), stack);
+    }
+  }
+
+  /// Drop this client's cached session for `spec`'s `host:port`, if
+  /// any. Returns `true` when an entry was removed, `false` when no
+  /// session was cached for that key. The next [query] or
+  /// [warmCookies] for that spec triggers a fresh NTS-KE handshake.
+  ///
+  /// Synchronous: backed by one mutex acquisition and one
+  /// `HashMap::remove` on the Rust side; no isolate hop. Does not
+  /// validate `spec` — an invalid spec (empty host or zero port)
+  /// trivially has no cached entry and returns `false`.
+  bool invalidate(NtsServerSpec spec) =>
+      _inner.invalidate(spec: _ffiSpec(spec));
+
+  /// Drop every cached session in this client's table. Cheap;
+  /// intended for test cleanup and for apps that want to bound
+  /// long-lived process memory by resetting the cache between work
+  /// batches.
+  ///
+  /// Synchronous: backed by one mutex acquisition and one
+  /// `HashMap::clear` on the Rust side; no isolate hop.
+  void clear() => _inner.clear();
+}
+
 // --- conversion layer (FFI <-> public) -------------------------------
 //
 // All FFI types stay scoped to this file. Conversions are intentionally
