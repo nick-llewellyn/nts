@@ -3,8 +3,6 @@
 
 import 'dart:convert';
 
-import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show PlatformInt64Util;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show NtsError, NtsTimeSample, PhaseTimings, TimeoutPhase;
@@ -41,8 +39,8 @@ void main() {
   group('formatQuerySuccess', () {
     test('renders a two-line headline / continuation pair', () {
       final sample = NtsTimeSample(
-        utcUnixMicros: PlatformInt64Util.from(1_777_334_400 * 1000000),
-        roundTripMicros: PlatformInt64Util.from(226_000),
+        utcUnixMicros: 1_777_334_400 * 1000000,
+        roundTripMicros: 226_000,
         serverStratum: 1,
         aeadId: 15,
         freshCookies: 2,
@@ -132,8 +130,8 @@ void main() {
         916207,
       ).microsecondsSinceEpoch;
       final sample = NtsTimeSample(
-        utcUnixMicros: PlatformInt64Util.from(micros),
-        roundTripMicros: PlatformInt64Util.from(35650),
+        utcUnixMicros: micros,
+        roundTripMicros: 35650,
         serverStratum: 3,
         aeadId: 15,
         freshCookies: 2,
@@ -153,8 +151,8 @@ void main() {
 
     test('survives jsonEncode round-trip without losing fields', () {
       final sample = NtsTimeSample(
-        utcUnixMicros: PlatformInt64Util.from(1_777_334_400 * 1000000),
-        roundTripMicros: PlatformInt64Util.from(750),
+        utcUnixMicros: 1_777_334_400 * 1000000,
+        roundTripMicros: 750,
         serverStratum: 1,
         aeadId: 30,
         freshCookies: 8,
@@ -249,9 +247,9 @@ void main() {
   });
 }
 
-PhaseTimings _zeroPhaseTimings() => PhaseTimings(
-  dnsMicros: PlatformInt64Util.from(0),
-  connectMicros: PlatformInt64Util.from(0),
-  tlsHandshakeMicros: PlatformInt64Util.from(0),
-  keRecordIoMicros: PlatformInt64Util.from(0),
+PhaseTimings _zeroPhaseTimings() => const PhaseTimings(
+  dnsMicros: 0,
+  connectMicros: 0,
+  tlsHandshakeMicros: 0,
+  keRecordIoMicros: 0,
 );

@@ -99,7 +99,7 @@ Future<void> main() async {
   final sample = await ntsQuery(spec: spec, timeoutMs: 5000);
 
   final utc = DateTime.fromMicrosecondsSinceEpoch(
-    sample.utcUnixMicros.toInt(),
+    sample.utcUnixMicros,
     isUtc: true,
   );
   print('utc=$utc  rtt=${sample.roundTripMicros}µs');

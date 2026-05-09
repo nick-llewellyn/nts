@@ -163,30 +163,50 @@ hand-written file that re-exports a wrapper layer in
 underlying FRB-generated bindings in `lib/src/ffi/` are an internal
 implementation detail.
 
-The wrapper exists to absorb an asymmetry in `flutter_rust_bridge` v2
-codegen: every Rust `pub fn` argument is emitted as a `required` named
-parameter on the Dart side, with no support for optional / defaulted
-parameters. Without an intermediate layer, every internal Rust-side
-signature change — even a strict superset like adding a new optional
-knob — would propagate as a source-level break for every consumer
-(see the 1.2.0 release notes for the concrete `dnsConcurrencyCap`
-episode that motivated the refactor). The wrapper interprets the FRB
-contract on behalf of the consumer and exposes idiomatic Dart
-signatures with named optional parameters and defaults
-(`kDefaultTimeoutMs`, `kDefaultDnsConcurrencyCap`); future Rust-side
-additions land as new optional arguments with package defaults that
-preserve the pre-existing behaviour, so they no longer require a
-SemVer event.
+The wrapper has three jobs:
+
+1. **Function signatures** — `flutter_rust_bridge` v2 codegen emits
+   every Rust `pub fn` argument as a `required` named parameter on
+   the Dart side, with no support for optional / defaulted
+   parameters. Without an intermediate layer, every internal
+   Rust-side signature change — even a strict superset like adding a
+   new optional knob — would propagate as a source-level break for
+   every consumer (see the 1.2.0 release notes for the concrete
+   `dnsConcurrencyCap` episode that motivated the refactor). The
+   wrapper exposes idiomatic Dart signatures with named optional
+   parameters and defaults (`kDefaultTimeoutMs`,
+   `kDefaultDnsConcurrencyCap`); future Rust-side additions land as
+   new optional arguments with package defaults that preserve
+   pre-existing behaviour.
+2. **DTOs** — `lib/src/api/models.dart` hand-writes the public DTOs
+   (`NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`,
+   `NtsDnsPoolStats`, `PhaseTimings`) with plain Dart `int` fields
+   instead of FRB's `PlatformInt64` wrapper. The wrapper converts
+   from the FFI shapes at the call boundary. A Rust-side struct
+   field rename or reorder no longer becomes a Dart source break for
+   downstream callers; it surfaces as a compile error in the
+   conversion layer instead.
+3. **Errors** — `lib/src/api/errors.dart` hand-writes `NtsError` as a
+   Dart 3 `sealed class implements Exception` with eight final
+   variant subclasses (`NtsErrorInvalidSpec`, `NtsErrorNetwork`, …)
+   and the `TimeoutPhase` enum. The wrapper catches the FFI-side
+   `NtsError` and rethrows the public twin via an exhaustive
+   conversion `switch`, so the FFI's freezed-generated shape is
+   contained at the boundary. The pre-3.0 underscore-prefixed
+   variant names (`NtsError_InvalidSpec`, …) survive as
+   `@Deprecated` typedef aliases for one release; they are scheduled
+   for removal at 4.0.
 
 The deprecation policy for future Rust-side removals is symmetric:
-when an underlying Rust parameter is dropped, the corresponding Dart
-parameter survives in the wrapper as a deprecated no-op for at least
-one minor release before being removed at the next major bump. This
-gives consumers a window to migrate without a breaking change.
+when an underlying Rust parameter or field is dropped, its public
+Dart counterpart survives in the wrapper as a deprecated no-op for
+at least one minor release before being removed at the next major
+bump. This gives consumers a window to migrate without a breaking
+change.
 
 The split between `lib/src/api/` (hand-written, stable) and
 `lib/src/ffi/` (generated, regenerable) also pins the contract for
-contributors: Rust signature changes that don't appear in
+contributors: Rust signature changes that don't surface in
 `lib/src/api/` are by definition non-public and free to land at any
 release type.
 
@@ -195,7 +215,9 @@ release type.
 | Path | Role |
 |------|------|
 | `lib/nts.dart` | Public Dart API; explicit re-export of the stability-layer wrapper plus `RustLib`. |
-| `lib/src/api/` | Hand-written Dart wrapper around the FFI surface. The package's stable contract; carries the consumer-facing dartdoc. |
+| `lib/src/api/nts.dart` | Hand-written wrapper functions plus the FFI↔public conversion layer. Carries the consumer-facing dartdoc on the entry points. |
+| `lib/src/api/models.dart` | Hand-written public DTOs (`NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`, `NtsDnsPoolStats`, `PhaseTimings`). |
+| `lib/src/api/errors.dart` | Hand-written public `NtsError` sealed class plus `TimeoutPhase`; deprecated underscore-prefixed typedef aliases for the pre-3.0 variant names live at the bottom. |
 | `lib/src/ffi/` | Generated `flutter_rust_bridge` bindings — do not edit by hand. Internal implementation detail. |
 | `rust/src/api/` | Rust entry points exposed through FRB (`nts.rs`, `simple.rs`). |
 | `rust/src/nts/` | Protocol implementation (records, KE driver, AEAD, NTP, cookies, bounded DNS). |

@@ -12,14 +12,14 @@
 import 'package:nts/nts.dart'
     show
         NtsError,
-        NtsError_Authentication,
-        NtsError_Internal,
-        NtsError_InvalidSpec,
-        NtsError_KeProtocol,
-        NtsError_Network,
-        NtsError_NoCookies,
-        NtsError_NtpProtocol,
-        NtsError_Timeout,
+        NtsErrorAuthentication,
+        NtsErrorInternal,
+        NtsErrorInvalidSpec,
+        NtsErrorKeProtocol,
+        NtsErrorNetwork,
+        NtsErrorNoCookies,
+        NtsErrorNtpProtocol,
+        NtsErrorTimeout,
         NtsTimeSample;
 
 /// IANA AEAD identifier → human label used in success log lines.
@@ -48,10 +48,10 @@ String formatRtt(int micros) {
 /// `grep` tooling can still spot success lines on a single-line scan.
 String formatQuerySuccess(NtsTimeSample sample) {
   final utc = DateTime.fromMicrosecondsSinceEpoch(
-    sample.utcUnixMicros.toInt(),
+    sample.utcUnixMicros,
     isUtc: true,
   );
-  final rtt = formatRtt(sample.roundTripMicros.toInt()).padLeft(8);
+  final rtt = formatRtt(sample.roundTripMicros).padLeft(8);
   return 'OK  rtt=$rtt  stratum=${sample.serverStratum}  '
       'utc=${utc.toIso8601String()}\n'
       '    \u2514\u2500 aead=${aeadLabel(sample.aeadId)}  '
@@ -67,50 +67,50 @@ String formatWarmSuccess(int cookies) =>
 /// authentication and KE-/NTP-protocol errors are genuinely interesting
 /// and stay at error.
 bool isErrorSeverity(NtsError err) =>
-    err is NtsError_Authentication ||
-    err is NtsError_KeProtocol ||
-    err is NtsError_NtpProtocol ||
-    err is NtsError_Internal;
+    err is NtsErrorAuthentication ||
+    err is NtsErrorKeProtocol ||
+    err is NtsErrorNtpProtocol ||
+    err is NtsErrorInternal;
 
 /// Human-readable rendering of an [NtsError] suitable for the live log
 /// or stderr.
 String describeError(NtsError err) => switch (err) {
-  NtsError_InvalidSpec(:final field0) => 'InvalidSpec: $field0',
-  NtsError_Network(:final field0) => 'Network: $field0',
-  NtsError_KeProtocol(:final field0) => 'KeProtocol: $field0',
-  NtsError_NtpProtocol(:final field0) => 'NtpProtocol: $field0',
-  NtsError_Authentication(:final field0) => 'Authentication: $field0',
-  NtsError_Timeout(:final field0) =>
+  NtsErrorInvalidSpec(:final field0) => 'InvalidSpec: $field0',
+  NtsErrorNetwork(:final field0) => 'Network: $field0',
+  NtsErrorKeProtocol(:final field0) => 'KeProtocol: $field0',
+  NtsErrorNtpProtocol(:final field0) => 'NtpProtocol: $field0',
+  NtsErrorAuthentication(:final field0) => 'Authentication: $field0',
+  NtsErrorTimeout(:final field0) =>
     'Timeout (deadline expired in phase ${field0.name})',
-  NtsError_NoCookies() =>
+  NtsErrorNoCookies() =>
     'NoCookies (server completed KE but issued zero cookies)',
-  NtsError_Internal(:final field0) => 'Internal: $field0',
+  NtsErrorInternal(:final field0) => 'Internal: $field0',
 };
 
 /// Stable variant tag for an [NtsError], used as the `error_type`
 /// field in machine-readable output. Mirrors the Rust enum names so
 /// downstream consumers can switch on a single short string.
 String errorTypeName(NtsError err) => switch (err) {
-  NtsError_InvalidSpec() => 'InvalidSpec',
-  NtsError_Network() => 'Network',
-  NtsError_KeProtocol() => 'KeProtocol',
-  NtsError_NtpProtocol() => 'NtpProtocol',
-  NtsError_Authentication() => 'Authentication',
-  NtsError_Timeout() => 'Timeout',
-  NtsError_NoCookies() => 'NoCookies',
-  NtsError_Internal() => 'Internal',
+  NtsErrorInvalidSpec() => 'InvalidSpec',
+  NtsErrorNetwork() => 'Network',
+  NtsErrorKeProtocol() => 'KeProtocol',
+  NtsErrorNtpProtocol() => 'NtpProtocol',
+  NtsErrorAuthentication() => 'Authentication',
+  NtsErrorTimeout() => 'Timeout',
+  NtsErrorNoCookies() => 'NoCookies',
+  NtsErrorInternal() => 'Internal',
 };
 
 /// JSON-shaped success payload for an `ntsQuery` result. Carries the
 /// raw numeric fields the GUI / log already display, plus the human
 /// AEAD label so consumers don't need to reimplement [aeadLabel].
 Map<String, Object?> jsonQuerySuccess(NtsTimeSample sample) => {
-  'utc_unix_micros': sample.utcUnixMicros.toInt(),
+  'utc_unix_micros': sample.utcUnixMicros,
   'utc': DateTime.fromMicrosecondsSinceEpoch(
-    sample.utcUnixMicros.toInt(),
+    sample.utcUnixMicros,
     isUtc: true,
   ).toIso8601String(),
-  'rtt_micros': sample.roundTripMicros.toInt(),
+  'rtt_micros': sample.roundTripMicros,
   'stratum': sample.serverStratum,
   'aead_id': sample.aeadId,
   'aead_label': aeadLabel(sample.aeadId),
@@ -134,5 +134,5 @@ Map<String, Object?> jsonError(NtsError err) => {
   'error_type': errorTypeName(err),
   'message': describeError(err),
   'severity': isErrorSeverity(err) ? 'error' : 'warn',
-  if (err is NtsError_Timeout) 'phase': err.field0.name,
+  if (err is NtsErrorTimeout) 'phase': err.field0.name,
 };

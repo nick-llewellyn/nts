@@ -10,24 +10,25 @@
 
 // This test deliberately exercises the FRB layer directly — it is the
 // contract test for the codegen pipeline, not for the hand-written
-// wrapper in `lib/src/api/`. `ntsQuery` / `ntsWarmCookies` are imported
-// from the FFI module so the signatures asserted here are FRB's, not
-// the wrapper's. The companion wrapper-layer smoke test lives in
+// wrapper in `lib/src/api/`. All types and functions are imported from
+// the FFI module so the signatures asserted here are FRB's, not the
+// wrapper's. The companion wrapper-layer smoke test lives in
 // `test/api_smoke_test.dart`.
 // ignore_for_file: implementation_imports
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:nts/nts.dart'
+import 'package:nts/src/ffi/api/nts.dart'
     show
         NtsError,
         NtsServerSpec,
         NtsTimeSample,
         NtsWarmCookiesOutcome,
         PhaseTimings,
-        TimeoutPhase;
-import 'package:nts/src/ffi/api/nts.dart' show ntsQuery, ntsWarmCookies;
+        TimeoutPhase,
+        ntsQuery,
+        ntsWarmCookies;
 import 'package:nts/src/ffi/frb_generated.dart';
 
 class _FakeRustLibApi implements RustLibApi {
