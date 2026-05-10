@@ -459,14 +459,14 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Review dependencies
-        # Pinned to the latest major (v5.0.0, May 2026) instead of the
-        # floating `v5` tag so dependency / Node-runtime bumps land
-        # deliberately. v5.0.0 ships `runs.using: node24`, removing the
-        # earlier need for the `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` env
-        # opt-in. Inputs/outputs unchanged from v4.9.0; sole behavioural
-        # diff in the upstream changelog is a fix for the patched-version
-        # display when advisories use non-strict semver ranges (e.g.
-        # Maven beta versions). `fail-on-severity` semantics unchanged.
+        # Pinned to v5.0.0 (May 2026) rather than the floating `v5` tag
+        # so dependency / Node-runtime bumps land deliberately. v5.0.0
+        # ships `runs.using: node24`, removing the earlier need for the
+        # `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` env opt-in. Inputs/outputs
+        # unchanged from v4.9.0; sole behavioural diff in the upstream
+        # changelog is a fix for the patched-version display when
+        # advisories use non-strict semver ranges (e.g. Maven beta
+        # versions). `fail-on-severity` semantics unchanged.
         uses: actions/dependency-review-action@v5.0.0
         with:
           fail-on-severity: high
