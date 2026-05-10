@@ -303,6 +303,70 @@ shows the intended shape.
   `androidPlatformInitSucceeded`; idempotent (the flag only ever
   flips false → true).
 
+### Added — wrapper observability instrumentation
+
+Three operator-facing `log::info!` emit sites at NTS protocol
+milestones, wired through the existing `log` → `tracing` →
+`tracing-oslog` (iOS) / `android_logger` (Android) pipeline so
+they reach Console.app (iOS) and `logcat` (Android) without
+further consumer wiring:
+
+- `nts::ke` target — fires once per successful NTS-KE handshake
+  with `host`, `aead_id`, `cookies`, `ntp_host`, `ntp_port`, and
+  `trust_backend`. `ntp_host` / `ntp_port` are emitted as
+  separate `key=value` pairs rather than `host:port` so an IPv6
+  literal in the NTPv4 server address does not mangle the
+  address-vs-port boundary for log scrapers.
+- `nts::query` target — fires once per successful `ntsQuery`
+  call with `host`, `stratum`, `aead_id`, `fresh_cookies`,
+  `rtt_us`, and `trust_backend`.
+- `nts::warm` target — fires once per successful
+  `ntsWarmCookies` call with `host`, `cookies_in_jar`, and
+  `trust_backend`.
+
+All three are stripped at compile time in release builds via the
+default-on `log-strip` Cargo feature
+(`log/release_max_level_warn`), so they cost zero string-table
+bytes and zero runtime overhead in production. To enable them
+during local on-device verification, flip
+`hooks.user_defines.nts.verbose_logs` to `true` in
+`example/pubspec.yaml` and rebuild after a `flutter clean` (see
+the `pubspec.yaml` comment block for the exact procedure).
+
+### Changed — Authentication / KeProtocol routing documentation
+
+Documents the cross-variant routing that was previously only
+captured on the example app's `describeError` helper: AEAD-
+algorithm *negotiation* failures during NTS-KE — a server picking
+an AEAD identifier this client does not implement — surface as
+`NtsError.keProtocol`, not `NtsError.authentication`. The
+`Authentication` variant is reserved for cryptographic-
+verification failures of the AEAD primitive itself on a fully
+negotiated algorithm (tag mismatch, malformed AEAD input). A
+monitoring rule wired to "tag mismatch" alarms must therefore
+key on `Authentication` only.
+
+The routing note now lives on three sources of truth:
+
+- `NtsError.authentication` factory dartdoc in
+  `lib/src/api/errors.dart`.
+- `NtsError::Authentication` rustdoc in `rust/src/api/nts.rs`
+  (mirrors into the FFI binding `lib/src/ffi/api/nts.dart` via
+  codegen).
+- The pre-existing `describeError` dartdoc in
+  `example/lib/src/state/nts_format.dart` is corrected to name
+  the actual primary route
+  (`KeError::UnsupportedAead` → `From<KeError> for NtsError`
+  catch-all) plus the defence-in-depth path
+  (`AeadError::UnsupportedAlgorithm` → explicit arm of
+  `From<AeadError> for NtsError`); the previous prose cited a
+  non-existent `From<AeadError> for KeError` impl.
+
+No code-path or behaviour change; `Authentication` and
+`KeProtocol` continue to route exactly as they did in 2.0.0. The
+fix is purely documentary, scoped to the three doc surfaces
+above.
+
 ### Out of scope
 
 - `nts_warm_cookies` does *not* participate in the singleflight in
