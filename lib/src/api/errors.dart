@@ -87,6 +87,29 @@ sealed class NtsError implements Exception {
   const factory NtsError.ntpProtocol(String field0) = NtsErrorNtpProtocol;
 
   /// AEAD seal/open failed (tag mismatch, malformed input).
+  ///
+  /// Reserved for cryptographic-verification failures of the AEAD
+  /// primitive itself on a fully negotiated algorithm — i.e. the
+  /// `Aes128Siv`/`Aes128GcmSiv` `decrypt`/`encrypt` call returned an
+  /// error against a key derived from the TLS exporter. A monitoring
+  /// rule wired to "tag mismatch" alarms should key on this variant
+  /// only.
+  ///
+  /// AEAD-algorithm *negotiation* failures during NTS-KE — a server
+  /// picking an AEAD identifier this client does not implement —
+  /// surface as [NtsError.keProtocol] instead, not as
+  /// [NtsError.authentication]. The primary path is
+  /// `KeError::UnsupportedAead` raised inside
+  /// `rust/src/nts/ke.rs::validate_response` and routed to
+  /// `KeProtocol` by the catch-all arm of the
+  /// `From<KeError> for NtsError` impl in `rust/src/api/nts.rs`.
+  /// The defence-in-depth path (`AeadError::UnsupportedAlgorithm`,
+  /// only reached if validation is bypassed) is routed to the same
+  /// `KeProtocol` variant by the explicit arm of the
+  /// `From<AeadError> for NtsError` impl in the same file. See the
+  /// `describeError` dartdoc in
+  /// `example/lib/src/state/nts_format.dart` for the example app's
+  /// rendering of the same routing.
   const factory NtsError.authentication(String field0) = NtsErrorAuthentication;
 
   /// Wall-clock budget elapsed inside one of the call's pre-NTP or NTP
