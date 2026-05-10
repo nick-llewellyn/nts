@@ -1073,6 +1073,23 @@ mod tests {
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
     }
 
+    /// `PlatformOnly` and `PlatformWithFallback` differ only on the
+    /// `build_with_native_verifier` failure path: when the verifier
+    /// constructs successfully (the host's normal case), both modes
+    /// must produce a config that advertises the `ntske/1` ALPN and
+    /// reports `KeTrustBackend::Platform`. The failure-path divergence
+    /// (`PlatformOnly` → `KeError::TrustBackendUnavailable` vs
+    /// `PlatformWithFallback` → `KeTrustBackend::WebpkiRoots`) is not
+    /// reachable from a unit test on the host because
+    /// `build_with_native_verifier` does not fail there; it requires
+    /// the faux-responder fixture tracked separately.
+    #[test]
+    fn build_tls_config_platform_only_succeeds_when_verifier_constructs() {
+        let build = build_tls_config(KeTrustMode::PlatformOnly).expect("config builds");
+        assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
+        assert_eq!(build.initial_backend, KeTrustBackend::Platform);
+    }
+
     #[test]
     fn build_request_emits_expected_bytes() {
         // NextProtocol(NTPv4) crit + AeadAlgorithm(SIV-256) crit + EOM crit.

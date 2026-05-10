@@ -63,6 +63,23 @@ class _RecordingApi implements RustLibApi {
   // cached" semantics.
   bool nextInvalidateResult = false;
 
+  // --- Trust-anchor diagnostics surface ----------------------------
+  //
+  // `crateApiNtsNtsClientWithTrustMode` records the requested mode
+  // and pins it to the minted fake handle so the wrapper's
+  // `client.trustMode` getter (which dispatches through
+  // `crateApiNtsNtsClientTrustMode`) round-trips the construction
+  // choice. `crateApiNtsNtsTrustStatus` returns `nextTrustStatus`,
+  // defaulting to a sentinel snapshot (no handshake observed) so a
+  // test that does not override it gets the documented "process just
+  // started" shape.
+  int clientWithTrustModeCalls = 0;
+  ffi.TrustMode? lastClientWithTrustModeMode;
+  final Map<ffi.NtsClient, ffi.TrustMode> clientTrustModes =
+      <ffi.NtsClient, ffi.TrustMode>{};
+  int trustStatusCalls = 0;
+  ffi.NtsTrustStatus nextTrustStatus = _zeroFfiTrustStatus();
+
   void reset() {
     lastQueryTimeoutMs = null;
     lastQueryDnsCap = null;
@@ -86,6 +103,11 @@ class _RecordingApi implements RustLibApi {
     clientClearCalls = 0;
     clientInvalidateCalls = 0;
     nextInvalidateResult = false;
+    clientWithTrustModeCalls = 0;
+    lastClientWithTrustModeMode = null;
+    clientTrustModes.clear();
+    trustStatusCalls = 0;
+    nextTrustStatus = _zeroFfiTrustStatus();
   }
 
   @override
@@ -136,7 +158,34 @@ class _RecordingApi implements RustLibApi {
   @override
   ffi.NtsClient crateApiNtsNtsClientNew() {
     clientNewCalls++;
-    return _FakeFfiNtsClient();
+    final fake = _FakeFfiNtsClient();
+    // Default-constructed clients always carry the fallback policy on
+    // the Rust side; pin the same view here so a subsequent
+    // `client.trustMode` getter forwards through and reads back the
+    // documented default rather than tripping the noSuchMethod guard.
+    clientTrustModes[fake] = ffi.TrustMode.platformWithFallback;
+    return fake;
+  }
+
+  @override
+  ffi.NtsClient crateApiNtsNtsClientWithTrustMode({
+    required ffi.TrustMode trustMode,
+  }) {
+    clientWithTrustModeCalls++;
+    lastClientWithTrustModeMode = trustMode;
+    final fake = _FakeFfiNtsClient();
+    clientTrustModes[fake] = trustMode;
+    return fake;
+  }
+
+  @override
+  ffi.TrustMode crateApiNtsNtsClientTrustMode({required ffi.NtsClient that}) =>
+      clientTrustModes[that] ?? ffi.TrustMode.platformWithFallback;
+
+  @override
+  ffi.NtsTrustStatus crateApiNtsNtsTrustStatus() {
+    trustStatusCalls++;
+    return nextTrustStatus;
   }
 
   @override
@@ -285,6 +334,11 @@ ffi.NtsDnsPoolStats _zeroFfiDnsPoolStats() => ffi.NtsDnsPoolStats(
   highWaterMark: 0,
   recovered: BigInt.zero,
   refused: BigInt.zero,
+);
+
+ffi.NtsTrustStatus _zeroFfiTrustStatus() => ffi.NtsTrustStatus(
+  androidPlatformInitSucceeded: false,
+  androidHybridFallbackCount: BigInt.zero,
 );
 
 void main() {
@@ -834,6 +888,13 @@ void main() {
         'NtsError.authentication(a)',
       ),
       (
+        const NtsError.trustBackendUnavailable('a'),
+        const NtsError.trustBackendUnavailable('a'),
+        const NtsError.trustBackendUnavailable('b'),
+        NtsErrorTrustBackendUnavailable,
+        'NtsError.trustBackendUnavailable(a)',
+      ),
+      (
         const NtsError.internal('a'),
         const NtsError.internal('a'),
         const NtsError.internal('b'),
@@ -1029,5 +1090,155 @@ void main() {
         );
       },
     );
+
+    test('default constructor routes through the FFI default factory', () {
+      NtsClient();
+      expect(api.clientNewCalls, 1);
+      expect(api.clientWithTrustModeCalls, 0);
+    });
+
+    test('trustMode override routes through withTrustMode for platformOnly', () {
+      NtsClient(trustMode: TrustMode.platformOnly);
+      // The wrapper short-circuits the explicit call when the caller
+      // passed the default mode (covered by the previous test); a
+      // non-default mode must round-trip through the FRB factory so
+      // the Rust side observes the policy at construction time.
+      expect(api.clientNewCalls, 0);
+      expect(api.clientWithTrustModeCalls, 1);
+      expect(api.lastClientWithTrustModeMode, ffi.TrustMode.platformOnly);
+    });
+
+    test(
+      'trustMode override delegates to the default factory when '
+      'platformWithFallback is requested',
+      () {
+        NtsClient(trustMode: TrustMode.platformWithFallback);
+        // Equivalent to the no-arg form: avoids a redundant FFI hop
+        // when the caller's mode matches the singleton's default.
+        expect(api.clientNewCalls, 1);
+        expect(api.clientWithTrustModeCalls, 0);
+      },
+    );
+
+    test('client.trustMode getter round-trips the construction choice', () {
+      final c1 = NtsClient();
+      final c2 = NtsClient(trustMode: TrustMode.platformOnly);
+      expect(c1.trustMode, TrustMode.platformWithFallback);
+      expect(c2.trustMode, TrustMode.platformOnly);
+    });
+  });
+
+  group('ntsTrustStatus', () {
+    test('forwards the FFI snapshot and converts every field', () {
+      api.nextTrustStatus = ffi.NtsTrustStatus(
+        defaultClientBackend: ffi.TrustBackend.platform,
+        androidPlatformInitSucceeded: true,
+        androidHybridFallbackCount: BigInt.from(7),
+      );
+      final status = ntsTrustStatus();
+      expect(api.trustStatusCalls, 1);
+      expect(status.defaultClientBackend, TrustBackend.platform);
+      expect(status.androidPlatformInitSucceeded, isTrue);
+      expect(status.androidHybridFallbackCount, BigInt.from(7));
+    });
+
+    test('null defaultClientBackend on the FFI side maps to null', () {
+      api.nextTrustStatus = ffi.NtsTrustStatus(
+        androidPlatformInitSucceeded: false,
+        androidHybridFallbackCount: BigInt.zero,
+      );
+      final status = ntsTrustStatus();
+      expect(status.defaultClientBackend, isNull);
+      expect(status.androidPlatformInitSucceeded, isFalse);
+      expect(status.androidHybridFallbackCount, BigInt.zero);
+    });
+
+    test(
+      'every TrustBackend variant survives the FFI -> public conversion',
+      () {
+        for (final variant in const <(ffi.TrustBackend, TrustBackend)>[
+          (ffi.TrustBackend.platform, TrustBackend.platform),
+          (
+            ffi.TrustBackend.platformWithHybridFallback,
+            TrustBackend.platformWithHybridFallback,
+          ),
+          (ffi.TrustBackend.webpkiRoots, TrustBackend.webpkiRoots),
+        ]) {
+          api.nextTrustStatus = ffi.NtsTrustStatus(
+            defaultClientBackend: variant.$1,
+            androidPlatformInitSucceeded: false,
+            androidHybridFallbackCount: BigInt.zero,
+          );
+          expect(ntsTrustStatus().defaultClientBackend, variant.$2);
+        }
+      },
+    );
+  });
+
+  group('NtsTrustStatus DTO', () {
+    test('==, hashCode, toString — every field counts', () {
+      final base = NtsTrustStatus(
+        defaultClientBackend: TrustBackend.platform,
+        androidPlatformInitSucceeded: true,
+        androidHybridFallbackCount: BigInt.from(3),
+      );
+      final sameValue = NtsTrustStatus(
+        defaultClientBackend: TrustBackend.platform,
+        androidPlatformInitSucceeded: true,
+        androidHybridFallbackCount: BigInt.from(3),
+      );
+      expect(base, equals(sameValue));
+      expect(base.hashCode, sameValue.hashCode);
+
+      final perturbations = <NtsTrustStatus>[
+        NtsTrustStatus(
+          defaultClientBackend: TrustBackend.webpkiRoots,
+          androidPlatformInitSucceeded: true,
+          androidHybridFallbackCount: BigInt.from(3),
+        ),
+        NtsTrustStatus(
+          defaultClientBackend: TrustBackend.platform,
+          androidPlatformInitSucceeded: false,
+          androidHybridFallbackCount: BigInt.from(3),
+        ),
+        NtsTrustStatus(
+          defaultClientBackend: TrustBackend.platform,
+          androidPlatformInitSucceeded: true,
+          androidHybridFallbackCount: BigInt.from(4),
+        ),
+        NtsTrustStatus(
+          defaultClientBackend: null,
+          androidPlatformInitSucceeded: true,
+          androidHybridFallbackCount: BigInt.from(3),
+        ),
+      ];
+      for (final p in perturbations) {
+        expect(base, isNot(equals(p)));
+      }
+      // Disjoint type — must not throw, must be false.
+      // ignore: unrelated_type_equality_checks
+      expect(base == 'NtsTrustStatus', isFalse);
+
+      expect(
+        base.toString(),
+        'NtsTrustStatus(defaultClientBackend: platform, '
+        'androidPlatformInitSucceeded: true, '
+        'androidHybridFallbackCount: 3)',
+      );
+    });
+
+    test('toString renders null defaultClientBackend as the literal "null"', () {
+      final unset = NtsTrustStatus(
+        defaultClientBackend: null,
+        androidPlatformInitSucceeded: false,
+        androidHybridFallbackCount: BigInt.zero,
+      );
+      expect(
+        unset.toString(),
+        'NtsTrustStatus(defaultClientBackend: null, '
+        'androidPlatformInitSucceeded: false, '
+        'androidHybridFallbackCount: 0)',
+      );
+    });
   });
 }

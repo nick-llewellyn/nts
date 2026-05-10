@@ -4301,4 +4301,119 @@ mod tests {
             .expect("cache hit");
         assert_eq!(ctx.trust_backend, TrustBackend::PlatformWithHybridFallback);
     }
+
+    /// Round-trip every `TrustBackend` variant through the `From`
+    /// conversion to `InternalTrustBackend` (used by the trust-state
+    /// recording path) and back, pinning the bidirectional mapping. A
+    /// future Rust-side variant addition surfaces as a non-compiling
+    /// match arm in *both* `From` impls; this test additionally pins
+    /// the invariant that the round-trip preserves identity for every
+    /// listed variant rather than collapsing two onto a single internal
+    /// counterpart.
+    #[test]
+    fn trust_backend_round_trips_through_internal() {
+        for variant in [
+            TrustBackend::Platform,
+            TrustBackend::PlatformWithHybridFallback,
+            TrustBackend::WebpkiRoots,
+        ] {
+            let internal: crate::nts::trust_state::InternalTrustBackend = variant.into();
+            let back: TrustBackend = internal.into();
+            assert_eq!(back, variant, "variant {variant:?} did not round-trip");
+        }
+    }
+
+    /// `KeTrustBackend` (the KE-layer-internal taxonomy) maps onto
+    /// `TrustBackend` (the public-API enum that crosses the FRB
+    /// boundary). Pin every variant so a Rust-side rename in `nts::ke`
+    /// surfaces as a non-compiling arm here rather than as a silent
+    /// re-attribution at the consumer.
+    #[test]
+    fn ke_trust_backend_maps_to_public_trust_backend() {
+        use crate::nts::ke::KeTrustBackend;
+        for (ke_variant, public_variant) in [
+            (KeTrustBackend::Platform, TrustBackend::Platform),
+            (
+                KeTrustBackend::PlatformWithHybridFallback,
+                TrustBackend::PlatformWithHybridFallback,
+            ),
+            (KeTrustBackend::WebpkiRoots, TrustBackend::WebpkiRoots),
+        ] {
+            let mapped: TrustBackend = ke_variant.into();
+            assert_eq!(mapped, public_variant, "{ke_variant:?} did not map");
+        }
+    }
+
+    /// `TrustMode` (the public-API enum) maps onto `KeTrustMode` (the
+    /// KE-layer-internal taxonomy). Same exhaustiveness guard as the
+    /// `KeTrustBackend` test above, on the inbound side of the
+    /// boundary.
+    #[test]
+    fn trust_mode_maps_to_ke_trust_mode() {
+        use crate::nts::ke::KeTrustMode;
+        for (public_variant, ke_variant) in [
+            (TrustMode::PlatformWithFallback, KeTrustMode::PlatformWithFallback),
+            (TrustMode::PlatformOnly, KeTrustMode::PlatformOnly),
+        ] {
+            let mapped: KeTrustMode = public_variant.into();
+            assert_eq!(mapped, ke_variant, "{public_variant:?} did not map");
+        }
+    }
+
+    /// `nts_trust_status()` reads the process-global `TRUST_STATE`
+    /// snapshot and converts the internal types onto the public DTO.
+    /// Tests cannot mutate the singleton without interfering with
+    /// every other test in the suite, so this test asserts only the
+    /// shape contract — that the call returns a well-formed
+    /// `NtsTrustStatus` whose fields agree with the singleton snapshot
+    /// taken at the same moment. The variant-by-variant conversion is
+    /// covered separately by `trust_backend_round_trips_through_internal`
+    /// against fresh `ProcessTrustState` instances.
+    #[test]
+    fn nts_trust_status_reads_singleton_and_converts_shape() {
+        let status = nts_trust_status();
+        let snap = crate::nts::trust_state::TRUST_STATE.snapshot();
+        // `default_client_backend` may be `None` if no singleton
+        // handshake has run in this process yet; the contract is
+        // that *if* the snapshot says `Some`, the public DTO carries
+        // the matching `TrustBackend` variant.
+        match (snap.default_backend, status.default_client_backend) {
+            (None, None) => {}
+            (Some(internal), Some(public)) => {
+                let mapped: TrustBackend = internal.into();
+                assert_eq!(public, mapped);
+            }
+            other => panic!(
+                "default_backend Option-shape mismatch between snapshot \
+                 and DTO: {other:?}"
+            ),
+        }
+        assert_eq!(
+            status.android_platform_init_succeeded,
+            snap.android_platform_init_succeeded,
+        );
+        assert_eq!(
+            status.android_hybrid_fallback_count,
+            snap.android_hybrid_fallback_count,
+        );
+    }
+
+    /// `NtsClient::with_trust_mode` plumbs the requested mode onto the
+    /// constructed handle and the `trust_mode()` accessor reads it
+    /// back. `NtsClient::new` is the documented equivalent of
+    /// `with_trust_mode(PlatformWithFallback)`. Both invariants are
+    /// what the Dart-side wrapper relies on to round-trip the
+    /// caller's policy through the FRB boundary.
+    #[test]
+    fn nts_client_trust_mode_round_trips_construction_choice() {
+        assert_eq!(NtsClient::new().trust_mode(), TrustMode::PlatformWithFallback);
+        assert_eq!(
+            NtsClient::with_trust_mode(TrustMode::PlatformWithFallback).trust_mode(),
+            TrustMode::PlatformWithFallback,
+        );
+        assert_eq!(
+            NtsClient::with_trust_mode(TrustMode::PlatformOnly).trust_mode(),
+            TrustMode::PlatformOnly,
+        );
+    }
 }

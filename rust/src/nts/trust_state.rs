@@ -137,3 +137,92 @@ impl ProcessTrustState {
 }
 
 pub(crate) static TRUST_STATE: ProcessTrustState = ProcessTrustState::new();
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every test here constructs a fresh `ProcessTrustState` via the
+    // `const fn new()` ctor so the assertions are not coupled to the
+    // process-global `TRUST_STATE` singleton's history. Tests that
+    // touched the singleton would interfere with each other and with
+    // any concurrently-running test that exercises the public API
+    // path.
+
+    #[test]
+    fn snapshot_is_unset_after_construction() {
+        let state = ProcessTrustState::new();
+        let snap = state.snapshot();
+        assert_eq!(snap.default_backend, None);
+        assert!(!snap.android_platform_init_succeeded);
+        assert_eq!(snap.android_hybrid_fallback_count, 0);
+    }
+
+    #[test]
+    fn record_default_backend_round_trips_each_variant() {
+        for variant in [
+            InternalTrustBackend::Platform,
+            InternalTrustBackend::PlatformWithHybridFallback,
+            InternalTrustBackend::WebpkiRoots,
+        ] {
+            let state = ProcessTrustState::new();
+            state.record_default_backend(variant);
+            assert_eq!(state.snapshot().default_backend, Some(variant));
+        }
+    }
+
+    #[test]
+    fn record_default_backend_overwrites_previous_value() {
+        let state = ProcessTrustState::new();
+        state.record_default_backend(InternalTrustBackend::Platform);
+        state.record_default_backend(InternalTrustBackend::WebpkiRoots);
+        assert_eq!(
+            state.snapshot().default_backend,
+            Some(InternalTrustBackend::WebpkiRoots),
+            "the most recent record_default_backend wins"
+        );
+    }
+
+    #[test]
+    fn record_android_init_success_is_idempotent_and_latches_true() {
+        let state = ProcessTrustState::new();
+        assert!(!state.snapshot().android_platform_init_succeeded);
+        state.record_android_init_success();
+        assert!(state.snapshot().android_platform_init_succeeded);
+        // The second call is a redundant true store; the snapshot
+        // continues to read true rather than toggling back to false.
+        state.record_android_init_success();
+        assert!(state.snapshot().android_platform_init_succeeded);
+    }
+
+    #[test]
+    fn bump_hybrid_fallback_increments_monotonically() {
+        let state = ProcessTrustState::new();
+        assert_eq!(state.snapshot().android_hybrid_fallback_count, 0);
+        state.bump_hybrid_fallback();
+        assert_eq!(state.snapshot().android_hybrid_fallback_count, 1);
+        for _ in 0..4 {
+            state.bump_hybrid_fallback();
+        }
+        assert_eq!(state.snapshot().android_hybrid_fallback_count, 5);
+    }
+
+    /// All three counters are independent; touching one must not bleed
+    /// into the other two. Cross-counter independence is the property
+    /// the snapshot accessor's three-load contract relies on.
+    #[test]
+    fn snapshot_carries_every_independent_counter() {
+        let state = ProcessTrustState::new();
+        state.record_default_backend(InternalTrustBackend::PlatformWithHybridFallback);
+        state.record_android_init_success();
+        state.bump_hybrid_fallback();
+        state.bump_hybrid_fallback();
+        let snap = state.snapshot();
+        assert_eq!(
+            snap.default_backend,
+            Some(InternalTrustBackend::PlatformWithHybridFallback)
+        );
+        assert!(snap.android_platform_init_succeeded);
+        assert_eq!(snap.android_hybrid_fallback_count, 2);
+    }
+}
