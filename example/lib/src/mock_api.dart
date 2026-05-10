@@ -51,9 +51,19 @@ class MockNtsApi implements RustLibApi {
   final Random _random;
 
   /// Per-fake-client trust mode pinned at construction so the
-  /// `client.trustMode()` getter round-trips. Mirrors the
-  /// `clientTrustModes` map in `test/api_smoke_test.dart`.
-  final Map<NtsClient, TrustMode> _clientTrustModes = <NtsClient, TrustMode>{};
+  /// `client.trustMode()` getter round-trips. Uses an [Expando]
+  /// rather than a `Map<NtsClient, TrustMode>` so dropped fake
+  /// clients are eligible for GC: every `TrustMode` toggle in the
+  /// example mints a new fake client, and a strong-keyed map would
+  /// pin every fake (and every per-client state attached to it)
+  /// alive for the lifetime of the process. The `_RecordingApi` in
+  /// `test/api_smoke_test.dart` uses a `Map` because tests are
+  /// short-lived and benefit from a deterministic iterable view of
+  /// the minted clients; the example app is the long-lived path
+  /// and warrants the weak-key form.
+  final Expando<TrustMode> _clientTrustModes = Expando<TrustMode>(
+    'MockNtsApi._clientTrustModes',
+  );
 
   /// Most-recent backend resolved by the *singleton* path
   /// (top-level `crateApiNtsNtsQuery` / `crateApiNtsNtsWarmCookies`)

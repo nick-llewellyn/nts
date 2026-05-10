@@ -290,4 +290,46 @@ void main() {
       );
     },
   );
+
+  testWidgets('an in-flight query that completes after a TrustMode flip does '
+      'not overwrite the new client\'s attribution', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Kick off a query against the default (PlatformWithFallback)
+    // client and immediately flip the toggle while the future is
+    // still suspended on the mock's 25-65ms delay.
+    await tester.tap(find.text('NTS Query'));
+    await tester.pump();
+    await tester.tap(find.text('Platform only'));
+    await tester.pump();
+
+    // Flush the in-flight future.
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump();
+
+    // Active client is the new (PlatformOnly) one, which has run
+    // no handshake of its own; the in-flight query's completion
+    // landed against a dropped client, so lastHandshakeBackend
+    // must stay at its post-toggle sentinel `null`.
+    expect(h.state.trustMode.value, TrustMode.platformOnly);
+    expect(h.state.lastHandshakeBackend.value, isNull);
+
+    // The success line still rides into the log (the protocol
+    // event happened, the user wants to see it) but is annotated
+    // so the reader knows the state-write was suppressed.
+    final logs = h.state.log.entries.value
+        .where((e) => e.source == 'nts_query')
+        .toList();
+    expect(
+      logs.any((e) => e.message.contains('from previous TrustMode')),
+      isTrue,
+      reason: 'stale completion should be tagged in the log',
+    );
+  });
 }
