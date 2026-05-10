@@ -300,45 +300,53 @@ final class NtsErrorInternal extends NtsError {
 // PascalCase forms (`NtsErrorInvalidSpec` etc.); these typedefs exist
 // so consumer code that pattern-matched on the old names compiles
 // against 3.0.x with deprecation warnings, and can be migrated before
-// 4.0.0 removes them. The `camel_case_types` lint suppression is
-// intentional and scoped per-typedef.
+// a future 4.x release removes them. The `camel_case_types` lint
+// suppression is intentional and scoped per-typedef.
 
-/// Pre-3.0 alias for [NtsErrorInvalidSpec]. Will be removed at 4.0.0.
+/// Pre-3.0 alias for [NtsErrorInvalidSpec]. Will be removed in a future
+/// 4.x release.
 @Deprecated('Renamed to NtsErrorInvalidSpec; remove the underscore.')
 // ignore: camel_case_types
 typedef NtsError_InvalidSpec = NtsErrorInvalidSpec;
 
-/// Pre-3.0 alias for [NtsErrorNetwork]. Will be removed at 4.0.0.
+/// Pre-3.0 alias for [NtsErrorNetwork]. Will be removed in a future
+/// 4.x release.
 @Deprecated('Renamed to NtsErrorNetwork; remove the underscore.')
 // ignore: camel_case_types
 typedef NtsError_Network = NtsErrorNetwork;
 
-/// Pre-3.0 alias for [NtsErrorKeProtocol]. Will be removed at 4.0.0.
+/// Pre-3.0 alias for [NtsErrorKeProtocol]. Will be removed in a future
+/// 4.x release.
 @Deprecated('Renamed to NtsErrorKeProtocol; remove the underscore.')
 // ignore: camel_case_types
 typedef NtsError_KeProtocol = NtsErrorKeProtocol;
 
-/// Pre-3.0 alias for [NtsErrorNtpProtocol]. Will be removed at 4.0.0.
+/// Pre-3.0 alias for [NtsErrorNtpProtocol]. Will be removed in a future
+/// 4.x release.
 @Deprecated('Renamed to NtsErrorNtpProtocol; remove the underscore.')
 // ignore: camel_case_types
 typedef NtsError_NtpProtocol = NtsErrorNtpProtocol;
 
-/// Pre-3.0 alias for [NtsErrorAuthentication]. Will be removed at 4.0.0.
+/// Pre-3.0 alias for [NtsErrorAuthentication]. Will be removed in a
+/// future 4.x release.
 @Deprecated('Renamed to NtsErrorAuthentication; remove the underscore.')
 // ignore: camel_case_types
 typedef NtsError_Authentication = NtsErrorAuthentication;
 
-/// Pre-3.0 alias for [NtsErrorTimeout]. Will be removed at 4.0.0.
+/// Pre-3.0 alias for [NtsErrorTimeout]. Will be removed in a future
+/// 4.x release.
 @Deprecated('Renamed to NtsErrorTimeout; remove the underscore.')
 // ignore: camel_case_types
 typedef NtsError_Timeout = NtsErrorTimeout;
 
-/// Pre-3.0 alias for [NtsErrorNoCookies]. Will be removed at 4.0.0.
+/// Pre-3.0 alias for [NtsErrorNoCookies]. Will be removed in a future
+/// 4.x release.
 @Deprecated('Renamed to NtsErrorNoCookies; remove the underscore.')
 // ignore: camel_case_types
 typedef NtsError_NoCookies = NtsErrorNoCookies;
 
-/// Pre-3.0 alias for [NtsErrorInternal]. Will be removed at 4.0.0.
+/// Pre-3.0 alias for [NtsErrorInternal]. Will be removed in a future
+/// 4.x release.
 @Deprecated('Renamed to NtsErrorInternal; remove the underscore.')
 // ignore: camel_case_types
 typedef NtsError_Internal = NtsErrorInternal;
