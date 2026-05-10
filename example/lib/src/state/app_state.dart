@@ -16,6 +16,7 @@
 // propagate through `filteredServers` automatically thanks to the
 // signals-core dependency tracking.
 
+import 'package:nts/nts.dart' show NtsTrustStatus, TrustMode;
 import 'package:signals/signals.dart'
     show Computed, ReadonlySignal, Signal, computed, signal;
 
@@ -48,7 +49,9 @@ class AppState {
        ),
        searchQuery = signal<String>(''),
        regionFilter = signal<String>(kAllRegions),
-       favoritesOnly = signal<bool>(false) {
+       favoritesOnly = signal<bool>(false),
+       trustMode = signal<TrustMode>(TrustMode.platformWithFallback),
+       trustStatus = signal<NtsTrustStatus?>(null) {
     filteredServers = computed<List<NtsServerEntry>>(_recomputeFiltered);
     regions = _collectRegions(catalog);
   }
@@ -90,6 +93,19 @@ class AppState {
 
   /// When `true`, hides every non-favourited server.
   final Signal<bool> favoritesOnly;
+
+  /// Trust-anchor policy applied to subsequent NTS-KE handshakes.
+  /// Construction-time on the Rust side, so [NtsController] mints a
+  /// fresh `NtsClient` whenever this signal changes value. Defaults
+  /// to [TrustMode.platformWithFallback] to mirror the package's
+  /// pre-3.0.0 behaviour.
+  final Signal<TrustMode> trustMode;
+
+  /// Most-recent process-wide trust-anchor diagnostic snapshot, or
+  /// `null` if the user has not requested one yet. Refreshed on
+  /// demand by the trust-status panel and after every successful
+  /// query / warm so the surfaced backend stays current.
+  final Signal<NtsTrustStatus?> trustStatus;
 
   /// Computed view: catalog → filtered & sorted with favourites first.
   /// Recomputes lazily whenever any of the input signals changes.

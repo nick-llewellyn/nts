@@ -16,7 +16,8 @@
 // rather than into separate result signals — the on-screen log is
 // the single canonical surface for query outcomes.
 
-import 'package:nts/nts.dart' show NtsError, ntsQuery, ntsWarmCookies;
+import 'package:nts/nts.dart'
+    show NtsClient, NtsError, TrustMode, ntsTrustStatus;
 
 import '../data/server_entry.dart';
 import 'app_state.dart';
@@ -31,9 +32,51 @@ import 'nts_format.dart';
 const int _kTimeoutMs = 5000;
 
 class NtsController {
-  NtsController(this.state);
+  NtsController(this.state)
+    : _client = NtsClient(trustMode: state.trustMode.value) {
+    // Re-mint the per-instance NtsClient whenever the user toggles
+    // the trust-mode signal. TrustMode is a construction-time
+    // parameter on the Rust side; replacing the handle is the only
+    // way to switch policies without restarting the app. The
+    // previous client's cached cookie pool is dropped on the floor
+    // intentionally — the demo's whole point is to make the cold-
+    // start cost of each policy visible.
+    state.trustMode.subscribe((_) => _onTrustModeChanged());
+  }
 
   final AppState state;
+
+  /// Active per-instance NTS client. Owns its own per-host session
+  /// table so the demo's trust-mode toggle doesn't bleed cookies /
+  /// keys between policies.
+  NtsClient _client;
+
+  /// Trust mode the active [_client] was constructed with. Tracked
+  /// independently of [AppState.trustMode] so the subscription
+  /// callback can short-circuit redundant reconstructions when the
+  /// signal fires with the same value (e.g. during initial
+  /// listener attachment).
+  TrustMode _activeMode = TrustMode.platformWithFallback;
+
+  void _onTrustModeChanged() {
+    final next = state.trustMode.value;
+    if (next == _activeMode) return;
+    _activeMode = next;
+    _client = NtsClient(trustMode: next);
+    state.log.info(
+      'system',
+      'TrustMode → ${formatTrustMode(next)} '
+          '(new NtsClient minted; cached sessions dropped)',
+    );
+  }
+
+  /// Refresh the on-screen trust-status snapshot. Bound to the
+  /// trust-status panel's refresh button; also called after every
+  /// successful query / warm so the panel surfaces the most recent
+  /// backend the singleton resolved to.
+  void refreshTrustStatus() {
+    state.trustStatus.value = ntsTrustStatus();
+  }
 
   /// Run a single authenticated NTPv4 query against `entry`.
   ///
@@ -84,7 +127,7 @@ class NtsController {
   Future<void> runQuery(NtsServerEntry entry) async {
     state.log.info('nts_query', 'Starting query', host: entry.hostname);
     try {
-      final sample = await ntsQuery(
+      final sample = await _client.query(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
         dnsConcurrencyCap: 0,
@@ -94,6 +137,7 @@ class NtsController {
         formatQuerySuccess(sample),
         host: entry.hostname,
       );
+      refreshTrustStatus();
     } on NtsError catch (err) {
       _logError('nts_query', err, entry.hostname);
     } catch (err, stack) {
@@ -111,16 +155,17 @@ class NtsController {
   Future<void> warmCookies(NtsServerEntry entry) async {
     state.log.info('nts_warm_cookies', 'Starting warm', host: entry.hostname);
     try {
-      final outcome = await ntsWarmCookies(
+      final outcome = await _client.warmCookies(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
         dnsConcurrencyCap: 0,
       );
       state.log.info(
         'nts_warm_cookies',
-        formatWarmSuccess(outcome.freshCookies),
+        formatWarmSuccess(outcome),
         host: entry.hostname,
       );
+      refreshTrustStatus();
     } on NtsError catch (err) {
       _logError('nts_warm_cookies', err, entry.hostname);
     } catch (err, stack) {

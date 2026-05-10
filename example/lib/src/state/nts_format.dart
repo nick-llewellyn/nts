@@ -21,7 +21,11 @@ import 'package:nts/nts.dart'
         NtsErrorNtpProtocol,
         NtsErrorTimeout,
         NtsErrorTrustBackendUnavailable,
-        NtsTimeSample;
+        NtsTimeSample,
+        NtsTrustStatus,
+        NtsWarmCookiesOutcome,
+        TrustBackend,
+        TrustMode;
 
 /// IANA AEAD identifier → human label used in success log lines.
 String aeadLabel(int id) => switch (id) {
@@ -39,12 +43,32 @@ String formatRtt(int micros) {
   return '${(micros / 1000000).toStringAsFixed(2)}s';
 }
 
+/// Trust-anchor backend label used in success log lines and the
+/// trust-status panel. Mirrors the [TrustBackend] enum names but
+/// substitutes a short human form so a reader scanning the log can
+/// spot a fallback path without consulting the dartdoc. The labels
+/// stay short (≤ 22 chars) so they fit alongside the AEAD / cookie
+/// metadata on the success line's continuation row without wrapping.
+String formatTrustBackend(TrustBackend backend) => switch (backend) {
+  TrustBackend.platform => 'platform',
+  TrustBackend.platformWithHybridFallback => 'platform+hybrid-fallback',
+  TrustBackend.webpkiRoots => 'webpki-roots',
+};
+
+/// Human label for a [TrustMode] used in the toggle, status panel,
+/// and any log line that needs to attribute a query to a specific
+/// build-time fallback policy.
+String formatTrustMode(TrustMode mode) => switch (mode) {
+  TrustMode.platformWithFallback => 'platform-with-fallback',
+  TrustMode.platformOnly => 'platform-only',
+};
+
 /// Two-line success rendering of an `ntsQuery` result.
 ///
 /// Headline carries the metrics a user actually scans for (RTT,
 /// stratum, server time); the indented continuation carries the
-/// crypto/cookie metadata that matters when something is wrong but
-/// is noise during normal operation. The leading `OK ` marker is
+/// crypto/cookie/trust metadata that matters when something is wrong
+/// but is noise during normal operation. The leading `OK ` marker is
 /// preserved on the headline so the share-export and any external
 /// `grep` tooling can still spot success lines on a single-line scan.
 String formatQuerySuccess(NtsTimeSample sample) {
@@ -56,12 +80,32 @@ String formatQuerySuccess(NtsTimeSample sample) {
   return 'OK  rtt=$rtt  stratum=${sample.serverStratum}  '
       'utc=${utc.toIso8601String()}\n'
       '    \u2514\u2500 aead=${aeadLabel(sample.aeadId)}  '
-      'cookies=${sample.freshCookies}';
+      'cookies=${sample.freshCookies}  '
+      'trust=${formatTrustBackend(sample.trustBackend)}';
 }
 
 /// Single-line success rendering of an `ntsWarmCookies` result.
-String formatWarmSuccess(int cookies) =>
-    'OK  recovered $cookies fresh cookie(s)';
+/// Carries the trust backend so a warm-only diagnostic flow surfaces
+/// the same backend attribution as a full query.
+String formatWarmSuccess(NtsWarmCookiesOutcome outcome) =>
+    'OK  recovered ${outcome.freshCookies} fresh cookie(s)  '
+    'trust=${formatTrustBackend(outcome.trustBackend)}';
+
+/// Multi-line summary of a [NtsTrustStatus] snapshot for the
+/// trust-status panel. Renders each field on its own line so the
+/// reader can scan the three independent dimensions
+/// (default-singleton-backend, Android JNI bootstrap, hybrid
+/// fallback counter) without parsing a single dense string.
+String formatTrustStatus(NtsTrustStatus status) {
+  final backend = status.defaultClientBackend == null
+      ? '(no handshake observed)'
+      : formatTrustBackend(status.defaultClientBackend!);
+  return 'default-singleton-backend: $backend\n'
+      'android-platform-init-succeeded: '
+      '${status.androidPlatformInitSucceeded}\n'
+      'android-hybrid-fallback-count: '
+      '${status.androidHybridFallbackCount}';
+}
 
 /// Severity classification for an [NtsError]. Network / timeout / spec
 /// errors are routine when probing arbitrary hosts and warrant warn;
@@ -140,9 +184,13 @@ String errorTypeName(NtsError err) => switch (err) {
   NtsErrorInternal() => 'Internal',
 };
 
-/// JSON-shaped success payload for an `ntsQuery` result. Carries the
-/// raw numeric fields the GUI / log already display, plus the human
-/// AEAD label so consumers don't need to reimplement [aeadLabel].
+/// JSON-shaped success payload for an `ntsQuery` result. Carries
+/// the raw numeric fields the GUI / log already display, plus the
+/// human AEAD label so consumers don't need to reimplement
+/// [aeadLabel] and the trust-backend variant tag so monitoring
+/// pipelines can distinguish a platform-store handshake from a
+/// hybrid-fallback or webpki-roots one without re-parsing the human
+/// message.
 Map<String, Object?> jsonQuerySuccess(NtsTimeSample sample) => {
   'utc_unix_micros': sample.utcUnixMicros,
   'utc': DateTime.fromMicrosecondsSinceEpoch(
@@ -154,10 +202,17 @@ Map<String, Object?> jsonQuerySuccess(NtsTimeSample sample) => {
   'aead_id': sample.aeadId,
   'aead_label': aeadLabel(sample.aeadId),
   'cookies': sample.freshCookies,
+  'trust_backend': sample.trustBackend.name,
 };
 
 /// JSON-shaped success payload for an `ntsWarmCookies` result.
-Map<String, Object?> jsonWarmSuccess(int cookies) => {'cookies': cookies};
+/// Mirrors the per-handshake trust-backend attribution carried by
+/// [jsonQuerySuccess] so a warm-only diagnostic flow stays
+/// machine-readable without a separate code path.
+Map<String, Object?> jsonWarmSuccess(NtsWarmCookiesOutcome outcome) => {
+  'cookies': outcome.freshCookies,
+  'trust_backend': outcome.trustBackend.name,
+};
 
 /// JSON-shaped failure payload for an [NtsError]. Pairs the variant
 /// tag with the same human-readable description used in text output

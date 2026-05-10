@@ -11,7 +11,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:nts/nts.dart' show RustLib;
+import 'package:nts/nts.dart' show RustLib, TrustMode;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
 import 'package:nts_example/src/mock_api.dart';
@@ -136,7 +136,11 @@ void main() {
         (e) =>
             e.message.startsWith('OK ') &&
             e.message.contains('stratum=') &&
-            e.message.contains('aead='),
+            e.message.contains('aead=') &&
+            // 3.0.0: trust backend rides on the success line so a
+            // reader can spot a fallback path without consulting the
+            // dartdoc.
+            e.message.contains('trust='),
       ),
       isTrue,
     );
@@ -158,5 +162,60 @@ void main() {
 
     final visible = h.state.filtered.value;
     expect(visible.first.hostname, 'ptbtime1.ptb.de');
+  });
+
+  testWidgets('TrustMode toggle flips the signal and emits a system log line', (
+    tester,
+  ) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Default policy is platform-with-fallback.
+    expect(h.state.trustMode.value, TrustMode.platformWithFallback);
+
+    // Tap the "Platform only" segment of the segmented button.
+    await tester.tap(find.text('Platform only'));
+    await tester.pump();
+
+    expect(h.state.trustMode.value, TrustMode.platformOnly);
+    // The controller's subscription posts a `system` line that
+    // names the new mode and the cookie-pool drop. Asserting on
+    // the line rather than just the signal proves the controller
+    // is wired to the signal end-to-end.
+    final sys = h.state.log.entries.value
+        .where((e) => e.source == 'system')
+        .toList();
+    expect(
+      sys.any((e) => e.message.contains('TrustMode → platform-only')),
+      isTrue,
+    );
+  });
+
+  testWidgets('TrustStatusPanel renders sentinel + refreshes on demand', (
+    tester,
+  ) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Sentinel state before any handshake or refresh.
+    expect(find.text('Trust status'), findsOneWidget);
+    expect(find.textContaining('No snapshot yet'), findsOneWidget);
+
+    // Refresh button forces a snapshot read.
+    await tester.tap(find.byTooltip('Refresh trust status'));
+    await tester.pump();
+
+    expect(h.state.trustStatus.value, isNotNull);
+    expect(find.textContaining('default-singleton-backend'), findsOneWidget);
   });
 }

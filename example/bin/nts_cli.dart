@@ -256,8 +256,8 @@ Future<void> _runWarm(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
     ctx.success(
       'nts_warm_cookies',
       spec.host,
-      text: formatWarmSuccess(outcome.freshCookies),
-      jsonPayload: jsonWarmSuccess(outcome.freshCookies),
+      text: formatWarmSuccess(outcome),
+      jsonPayload: jsonWarmSuccess(outcome),
     );
   } on NtsError catch (err) {
     ctx.failure('nts_warm_cookies', spec.host, err);

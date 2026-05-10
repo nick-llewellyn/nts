@@ -23,6 +23,7 @@ import 'state/nts_controller.dart';
 import 'widgets/action_panel.dart';
 import 'widgets/log_view.dart';
 import 'widgets/server_list_view.dart';
+import 'widgets/trust_status_panel.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key, required this.state, required this.controller});
@@ -53,11 +54,16 @@ class HomePage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Server list claims the upper half; the action button
-            // strip is its natural height; the log gets the remainder.
+            // Server list claims the upper half; the action panel,
+            // trust-status row and the log buffer stack below it.
+            // Each of the non-list sections is its own intrinsic
+            // height; the log gets the remainder via the second
+            // Expanded.
             Expanded(flex: 1, child: ServerListView(state: state)),
             const Divider(height: 1),
             ActionPanel(state: state, controller: controller),
+            const Divider(height: 1),
+            TrustStatusPanel(state: state, controller: controller),
             const Divider(height: 1),
             Expanded(flex: 1, child: LogView(state: state)),
           ],
