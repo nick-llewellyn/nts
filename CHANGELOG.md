@@ -37,8 +37,12 @@ for Dart 3 `switch` consumers. Chunks 2 and 3 are purely additive
 on their own.
 
 The Rust crate (`nts_rust`) version is at `0.4.0`, unchanged
-across these chunks; no wire-format change crossed the FRB
-boundary in any of them.
+across these chunks; the on-the-wire NTS-KE / NTPv4 framing was
+not modified by any of them. The Dart-facing FRB surface *did*
+grow new types and fields (`TrustMode`, `TrustBackend`,
+`NtsTrustStatus`, `ntsTrustStatus()`, and a `trustBackend` field
+on `NtsTimeSample` / `NtsWarmCookiesOutcome`) — those additions
+are the source of the major bump, not a network-protocol change.
 
 ### Migration from 2.0.0
 
