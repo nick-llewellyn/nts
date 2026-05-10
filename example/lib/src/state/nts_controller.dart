@@ -26,7 +26,7 @@ import 'nts_format.dart';
 /// budget that spans DNS, NTS-KE (TCP connect, TLS handshake,
 /// record I/O) and the AEAD-NTPv4 UDP exchange as one shrinking
 /// deadline — see the `ntsQuery` dartdoc in `package:nts/nts.dart`
-/// for the full mechanic. Mirrors the value the original example
+/// for the full mechanism. Mirrors the value the original example
 /// used.
 const int _kTimeoutMs = 5000;
 
