@@ -44,6 +44,7 @@
 //!
 //! [`PKIXRevocationChecker`]: https://developer.android.com/reference/java/security/cert/PKIXRevocationChecker
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -55,6 +56,8 @@ use rustls::{
 };
 
 use rustls_platform_verifier::Verifier as PlatformVerifier;
+
+use crate::nts::trust_state::TRUST_STATE;
 
 /// Substring uniquely identifying the `Error::General` variant that
 /// `rustls-platform-verifier` synthesises when a `JNIError` is raised
@@ -78,6 +81,16 @@ pub struct HybridVerifier {
     /// Lazily built; the parsing cost of the bundled trust-anchor set is
     /// paid once, only on the first `Revoked` we actually see in the wild.
     fallback: OnceLock<Arc<WebPkiServerVerifier>>,
+    /// Per-instance count of `verify_server_cert` calls in which the
+    /// `webpki-roots` fallback overrode a platform verdict. Read by
+    /// `crate::nts::ke::perform_handshake` after the TLS handshake
+    /// completes so the per-handshake `KeOutcome::trust_backend` can
+    /// distinguish `Platform` from `PlatformWithHybridFallback` even
+    /// though both run through the same `ServerCertVerifier`. The
+    /// process-global counter in [`TRUST_STATE`] is bumped in
+    /// lockstep so [`crate::api::nts::nts_trust_status`] sees the
+    /// same fallback as a deployment-wide signal.
+    fallback_count: AtomicU64,
 }
 
 impl HybridVerifier {
@@ -85,7 +98,20 @@ impl HybridVerifier {
         Self {
             platform: Arc::new(PlatformVerifier::new()),
             fallback: OnceLock::new(),
+            fallback_count: AtomicU64::new(0),
         }
+    }
+
+    /// Snapshot the per-instance fallback counter. `perform_handshake`
+    /// samples this before-and-after to detect a hybrid-fallback
+    /// firing on this specific handshake.
+    pub fn fallback_count(&self) -> u64 {
+        self.fallback_count.load(Ordering::Relaxed)
+    }
+
+    fn record_fallback(&self) {
+        self.fallback_count.fetch_add(1, Ordering::Relaxed);
+        TRUST_STATE.bump_hybrid_fallback();
     }
 
     fn fallback(&self) -> Result<&Arc<WebPkiServerVerifier>, Error> {
@@ -134,13 +160,23 @@ impl ServerCertVerifier for HybridVerifier {
                     "platform verifier reported Revoked for {host}; retrying with webpki-roots (likely missing OCSP AIA, e.g. Let's Encrypt R12)",
                 );
                 let fallback = self.fallback()?;
-                fallback.verify_server_cert(
+                let result = fallback.verify_server_cert(
                     end_entity,
                     intermediates,
                     server_name,
                     ocsp_response,
                     now,
-                )
+                );
+                // Bump only on a successful fallback so the counter
+                // measures "fallback overrode a platform verdict",
+                // not "fallback was attempted". A failed fallback
+                // surfaces as the underlying webpki error and is not
+                // an attribution-worthy event for the per-handshake
+                // `KeOutcome::trust_backend` field.
+                if result.is_ok() {
+                    self.record_fallback();
+                }
+                result
             }
             Err(Error::General(msg)) if msg.contains(NATIVE_VERIFIER_JNI_MARKER) => {
                 let host = host_for_log(server_name);
@@ -149,13 +185,17 @@ impl ServerCertVerifier for HybridVerifier {
                     "platform verifier failed via JNI for {host} ({msg}); retrying with webpki-roots (likely R8 stripped org.rustls.platformverifier.* — see the nts plugin's android/consumer-rules.pro for the required keep rules)",
                 );
                 let fallback = self.fallback()?;
-                fallback.verify_server_cert(
+                let result = fallback.verify_server_cert(
                     end_entity,
                     intermediates,
                     server_name,
                     ocsp_response,
                     now,
-                )
+                );
+                if result.is_ok() {
+                    self.record_fallback();
+                }
+                result
             }
             Err(other) => Err(other),
         }

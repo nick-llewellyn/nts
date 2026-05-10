@@ -23,7 +23,8 @@ import 'package:nts/src/ffi/api/nts.dart'
         NtsServerSpec,
         NtsTimeSample,
         NtsWarmCookiesOutcome,
-        PhaseTimings;
+        PhaseTimings,
+        TrustBackend;
 import 'package:nts/src/ffi/frb_generated.dart' show RustLibApi;
 
 /// In-memory `RustLibApi` implementation used by the example app and the
@@ -66,6 +67,7 @@ class MockNtsApi implements RustLibApi {
       aeadId: 15,
       freshCookies: 1,
       phaseTimings: _mockPhaseTimings(),
+      trustBackend: TrustBackend.platform,
     );
   }
 
@@ -79,6 +81,7 @@ class MockNtsApi implements RustLibApi {
     return NtsWarmCookiesOutcome(
       freshCookies: 8,
       phaseTimings: _mockPhaseTimings(),
+      trustBackend: TrustBackend.platform,
     );
   }
 

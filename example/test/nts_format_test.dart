@@ -5,7 +5,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
-    show NtsError, NtsTimeSample, PhaseTimings, TimeoutPhase;
+    show NtsError, NtsTimeSample, PhaseTimings, TimeoutPhase, TrustBackend;
 import 'package:nts_example/src/state/nts_format.dart';
 
 void main() {
@@ -45,6 +45,7 @@ void main() {
         aeadId: 15,
         freshCookies: 2,
         phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platform,
       );
       final out = formatQuerySuccess(sample);
       final lines = out.split('\n');
@@ -111,6 +112,10 @@ void main() {
         'Timeout',
       );
       expect(errorTypeName(const NtsError.noCookies()), 'NoCookies');
+      expect(
+        errorTypeName(const NtsError.trustBackendUnavailable('x')),
+        'TrustBackendUnavailable',
+      );
       expect(errorTypeName(const NtsError.internal('x')), 'Internal');
     });
   });
@@ -136,6 +141,7 @@ void main() {
         aeadId: 15,
         freshCookies: 2,
         phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platform,
       );
 
       expect(jsonQuerySuccess(sample), {
@@ -157,6 +163,7 @@ void main() {
         aeadId: 30,
         freshCookies: 8,
         phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platform,
       );
 
       final encoded = jsonEncode(jsonQuerySuccess(sample));

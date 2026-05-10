@@ -220,6 +220,15 @@ pub struct NtsTimeSample {
     /// (Dart: `roundTripMicros`) it accounts for the entire
     /// wall-clock cost of `nts_query` (Dart: `ntsQuery`).
     pub phase_timings: PhaseTimings,
+    /// Trust-anchor backend that authenticated this query's TLS
+    /// chain. On the fresh-KE path reflects the just-completed
+    /// handshake's resolution; on the steady-state cached-session
+    /// path reflects the *original* handshake's value (cached on
+    /// the underlying `Session`), so callers always see a concrete
+    /// per-query attribution rather than a placeholder for cached
+    /// queries. New in 3.0.0; mirrors the per-query observable
+    /// pattern established by `phase_timings`.
+    pub trust_backend: TrustBackend,
 }
 
 /// Successful outcome of `nts_warm_cookies` (Dart: `ntsWarmCookies`).
@@ -236,6 +245,11 @@ pub struct NtsWarmCookiesOutcome {
     /// of this call, so `dns_micros` (Dart: `dnsMicros`) reflects
     /// only the KE-host lookup.
     pub phase_timings: PhaseTimings,
+    /// Trust-anchor backend that authenticated this handshake's TLS
+    /// chain. `nts_warm_cookies` always runs a fresh KE handshake
+    /// (no cached-session short-circuit), so the value is always
+    /// the just-completed handshake's resolution. New in 3.0.0.
+    pub trust_backend: TrustBackend,
 }
 
 /// Snapshot of the bounded DNS resolver pool counters.
@@ -322,6 +336,190 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
     }
 }
 
+/// Snapshot the process-global trust-anchor diagnostic state.
+///
+/// Returns three observables that callers cannot recover from a
+/// per-query [`NtsTimeSample`] alone:
+///
+/// 1. `default_client_backend` — backend the *default singleton*
+///    [`NtsClient`] (the one used by [`nts_query`] and
+///    [`nts_warm_cookies`]) most recently resolved to. `None` when
+///    no handshake has run yet against the singleton (process just
+///    started, or all queries so far went through caller-minted
+///    clients). Custom-client callers should read the per-handshake
+///    `trust_backend` field on [`NtsTimeSample`] /
+///    [`NtsWarmCookiesOutcome`] for accurate per-client attribution
+///    instead.
+/// 2. `android_platform_init_succeeded` — `true` iff
+///    `com.nllewellyn.nts.PlatformInit.nativeInit` reported success
+///    at least once. `false` on every other platform. A `false` value
+///    on Android implies subsequent handshakes will run against the
+///    `webpki-roots` static bundle regardless of [`TrustMode`].
+/// 3. `android_hybrid_fallback_count` — cumulative count of TLS
+///    chains the Android `HybridVerifier` has accepted via the
+///    `webpki-roots` fallback path. Always zero on non-Android
+///    platforms. See [`crate::nts::hybrid_verifier`] for the curated
+///    fallback-eligible failure shapes.
+///
+/// Reads three atomics with `Relaxed` ordering. The snapshot is
+/// intended for human / dashboard consumption, not for cross-thread
+/// synchronisation; per-counter monotonicity holds, but cross-counter
+/// invariants within a single snapshot do not.
+///
+/// Marked `#[frb(sync)]` for the same reason as
+/// [`nts_dns_pool_stats`]: the underlying state read is cheap enough
+/// that paying isolate-hop overhead would dominate the call.
+#[flutter_rust_bridge::frb(sync)]
+pub fn nts_trust_status() -> NtsTrustStatus {
+    let snap = crate::nts::trust_state::TRUST_STATE.snapshot();
+    NtsTrustStatus {
+        default_client_backend: snap.default_backend.map(TrustBackend::from),
+        android_platform_init_succeeded: snap.android_platform_init_succeeded,
+        android_hybrid_fallback_count: snap.android_hybrid_fallback_count,
+    }
+}
+
+/// Trust-anchor backend that authenticated a TLS chain, or that a
+/// process-global resolution attempt landed on.
+///
+/// Carried per-handshake on [`NtsTimeSample`] / [`NtsWarmCookiesOutcome`]
+/// and process-globally on [`NtsTrustStatus`]. See `ARCHITECTURE.md`'s
+/// "Trust-anchor diagnostics" section for the operational shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustBackend {
+    /// `rustls-platform-verifier` ran against the OS trust store
+    /// (system roots plus any user / MDM-installed roots). Source of
+    /// truth for enterprise-managed devices and the only way to honour
+    /// pinned corporate CAs.
+    Platform,
+    /// Android-only: the platform verifier ran first, but its result
+    /// was overridden by the `webpki-roots` fallback inside
+    /// [`crate::nts::hybrid_verifier::HybridVerifier`] for one of the
+    /// curated platform-failure shapes documented there
+    /// (missing-OCSP-AIA chains such as Let's Encrypt R12, R8-stripped
+    /// AAR classes). Indicates the platform verifier's view was
+    /// rejected and the static bundle was authoritative for this
+    /// chain.
+    PlatformWithHybridFallback,
+    /// `build_with_native_verifier` failed at TLS-config construction
+    /// time and the static `webpki-roots` bundle authenticated the
+    /// chain end-to-end. Loses visibility into MDM / user-installed
+    /// roots; works against the major public NTS providers but not
+    /// against corporate TLS-inspection appliances. See
+    /// [`TrustMode::PlatformOnly`] for the opt-in that surfaces this
+    /// path as [`NtsError::TrustBackendUnavailable`] instead.
+    WebpkiRoots,
+}
+
+/// Caller-selected policy for which trust-anchor backend [`NtsClient`]
+/// is willing to run against. Set immutably at client construction and
+/// applied to every handshake the client initiates.
+///
+/// The default singleton client used by the top-level convenience
+/// functions ([`nts_query`], [`nts_warm_cookies`]) is constructed with
+/// [`TrustMode::PlatformWithFallback`] and never changes, so existing
+/// callers see no behaviour change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustMode {
+    /// Platform store is the primary source of truth; on
+    /// `build_with_native_verifier` failure the client silently
+    /// downgrades to the `webpki-roots` static bundle. Default mode
+    /// for the top-level convenience functions and for
+    /// [`NtsClient::new`].
+    PlatformWithFallback,
+    /// Platform store is the only acceptable source of truth. On
+    /// `build_with_native_verifier` failure the client surfaces
+    /// [`NtsError::TrustBackendUnavailable`] rather than falling
+    /// back. Use when a pinned corporate CA or an MDM-installed root
+    /// is the load-bearing trust anchor and a silent downgrade to a
+    /// static bundle would defeat the deployment's TLS-inspection
+    /// posture.
+    PlatformOnly,
+}
+
+impl From<TrustMode> for crate::nts::ke::KeTrustMode {
+    fn from(m: TrustMode) -> Self {
+        match m {
+            TrustMode::PlatformWithFallback => Self::PlatformWithFallback,
+            TrustMode::PlatformOnly => Self::PlatformOnly,
+        }
+    }
+}
+
+impl From<crate::nts::ke::KeTrustBackend> for TrustBackend {
+    fn from(b: crate::nts::ke::KeTrustBackend) -> Self {
+        match b {
+            crate::nts::ke::KeTrustBackend::Platform => Self::Platform,
+            crate::nts::ke::KeTrustBackend::PlatformWithHybridFallback => {
+                Self::PlatformWithHybridFallback
+            }
+            crate::nts::ke::KeTrustBackend::WebpkiRoots => Self::WebpkiRoots,
+        }
+    }
+}
+
+impl From<TrustBackend> for crate::nts::trust_state::InternalTrustBackend {
+    fn from(b: TrustBackend) -> Self {
+        match b {
+            TrustBackend::Platform => Self::Platform,
+            TrustBackend::PlatformWithHybridFallback => Self::PlatformWithHybridFallback,
+            TrustBackend::WebpkiRoots => Self::WebpkiRoots,
+        }
+    }
+}
+
+impl From<crate::nts::trust_state::InternalTrustBackend> for TrustBackend {
+    fn from(b: crate::nts::trust_state::InternalTrustBackend) -> Self {
+        match b {
+            crate::nts::trust_state::InternalTrustBackend::Platform => Self::Platform,
+            crate::nts::trust_state::InternalTrustBackend::PlatformWithHybridFallback => {
+                Self::PlatformWithHybridFallback
+            }
+            crate::nts::trust_state::InternalTrustBackend::WebpkiRoots => Self::WebpkiRoots,
+        }
+    }
+}
+
+/// Process-global trust-anchor diagnostic snapshot returned by
+/// [`nts_trust_status`] (Dart: `ntsTrustStatus`).
+///
+/// The fields combine static facts (which backend the default
+/// singleton client resolved to at first-handshake time, whether the
+/// Android JNI bootstrap succeeded) with one dynamic counter (how
+/// many times the Android hybrid verifier has overridden the
+/// platform verdict with a webpki-roots fallback since process
+/// start). Fields not relevant to the current platform are reported
+/// with the documented "n/a" sentinel rather than omitted, so the
+/// snapshot has the same shape on every host.
+#[derive(Debug, Clone)]
+pub struct NtsTrustStatus {
+    /// Backend the default singleton client most recently resolved to
+    /// at handshake time. `None` when no handshake has run yet
+    /// against the singleton (e.g. process just started, or all
+    /// queries so far went through caller-minted [`NtsClient`]
+    /// instances). Custom-client callers should read the per-handshake
+    /// `trust_backend` field on [`NtsTimeSample`] /
+    /// [`NtsWarmCookiesOutcome`] for accurate per-client attribution.
+    pub default_client_backend: Option<TrustBackend>,
+    /// On Android: `true` iff
+    /// `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
+    /// invoked at least once and reported success. `false` on every
+    /// other platform (no JNI bootstrap step exists). A `false`
+    /// value on Android implies the process is currently running
+    /// against the `webpki-roots` static bundle for any subsequent
+    /// handshake, regardless of the caller's [`TrustMode`].
+    pub android_platform_init_succeeded: bool,
+    /// Cumulative count of TLS chains the Android
+    /// [`crate::nts::hybrid_verifier::HybridVerifier`] has accepted
+    /// via the `webpki-roots` fallback path since process start.
+    /// Always zero on non-Android platforms (no `HybridVerifier`
+    /// exists). Non-zero on Android indicates at least one chain
+    /// arrived whose only platform-side failure was a curated
+    /// fallback-eligible shape (missing OCSP-AIA, R8-stripped AAR
+    /// classes, etc.).
+    pub android_hybrid_fallback_count: u64,
+}
+
 /// Failure modes for `nts_query` (Dart: `ntsQuery`) and
 /// `nts_warm_cookies` (Dart: `ntsWarmCookies`).
 #[derive(Debug, Clone)]
@@ -346,6 +544,14 @@ pub enum NtsError {
     Timeout(TimeoutPhase),
     /// Cookie jar empty after a handshake (server delivered none).
     NoCookies,
+    /// Caller selected [`TrustMode::PlatformOnly`] and
+    /// `build_with_native_verifier` could not construct a
+    /// platform-backed `ClientConfig`. Surfaced instead of silently
+    /// downgrading to the `webpki-roots` static bundle. The payload
+    /// carries the underlying construction-failure diagnostic. New
+    /// in 3.0.0; consumers using exhaustive `switch` on `NtsError`
+    /// must add an arm for this variant.
+    TrustBackendUnavailable(String),
     /// Bug guard for unreachable internal states.
     Internal(String),
 }
@@ -360,6 +566,7 @@ impl std::fmt::Display for NtsError {
             Self::Authentication(m) => write!(f, "AEAD: {m}"),
             Self::Timeout(p) => write!(f, "operation timed out in phase {p:?}"),
             Self::NoCookies => f.write_str("server delivered no cookies"),
+            Self::TrustBackendUnavailable(m) => write!(f, "trust backend unavailable: {m}"),
             Self::Internal(m) => write!(f, "internal: {m}"),
         }
     }
@@ -379,6 +586,13 @@ impl From<KeError> for NtsError {
             KeError::Io(io) => Self::Network(io.to_string()),
             KeError::Tls(t) => Self::KeProtocol(format!("TLS: {t}")),
             KeError::NoCookies => Self::NoCookies,
+            // `TrustBackendUnavailable` only fires on the
+            // `TrustMode::PlatformOnly` strict path; surface it as the
+            // dedicated typed variant rather than collapsing onto
+            // `KeProtocol` so callers can distinguish a platform-store
+            // construction failure from a genuine TLS / KE protocol
+            // failure without inspecting free-form diagnostic strings.
+            KeError::TrustBackendUnavailable(m) => Self::TrustBackendUnavailable(m),
             other => Self::KeProtocol(other.to_string()),
         }
     }
@@ -474,6 +688,16 @@ struct Session {
     ntpv4_host: String,
     ntpv4_port: u16,
     jar: CookieJar,
+    /// Trust-anchor backend the original KE handshake authenticated
+    /// against. Cached on the `Session` so steady-state cached-session
+    /// queries can populate `NtsTimeSample::trust_backend` /
+    /// `NtsWarmCookiesOutcome::trust_backend` with the same value the
+    /// fresh-KE path would have surfaced. Mirrors the
+    /// "`phase_timings` zeros for cached paths but `trust_backend`
+    /// carries the original handshake's value" pattern so callers
+    /// always see a concrete attribution rather than `None` /
+    /// "n/a" for cached samples.
+    trust_backend: TrustBackend,
 }
 
 impl Session {
@@ -715,20 +939,75 @@ impl SessionTable {
 /// both sides.
 pub struct NtsClient {
     table: SessionTable,
+    /// Trust-anchor policy applied to every handshake this client
+    /// initiates. Set immutably at construction; the only way to
+    /// change it is to mint a new client. Plumbed down through
+    /// `query`/`warm_cookies` → `nts_*_inner` → `SessionTable::checkout`
+    /// → `establish_session` → `KeRequest::trust_mode` →
+    /// `build_tls_config`. New in 3.0.0.
+    trust_mode: TrustMode,
+    /// `true` for the process-wide default singleton client returned
+    /// by [`default_nts_client`]; `false` for every caller-minted
+    /// client. Drives whether the post-handshake trust-backend value
+    /// is recorded into the process-global trust state for
+    /// [`nts_trust_status`] to surface — only the singleton's
+    /// handshakes contribute to that observable, so multi-client
+    /// deployments can distinguish singleton-path attribution from
+    /// custom-client attribution.
+    is_default: bool,
 }
 
 impl NtsClient {
-    /// Construct a fresh client with an empty session table.
+    /// Construct a fresh client with an empty session table and the
+    /// default trust-anchor policy ([`TrustMode::PlatformWithFallback`]).
     ///
     /// Marked `#[flutter_rust_bridge::frb(sync)]` so the generated
     /// Dart side exposes this as the `NtsClient()` default
     /// constructor (synchronous; no isolate hop) rather than as an
     /// `await NtsClient.newInstance()` static factory.
+    ///
+    /// Use [`NtsClient::with_trust_mode`] to opt into
+    /// [`TrustMode::PlatformOnly`] strict mode for clients that
+    /// pin a corporate CA or otherwise refuse to downgrade to the
+    /// `webpki-roots` static bundle. The top-level convenience
+    /// functions ([`nts_query`], [`nts_warm_cookies`]) always go
+    /// through a default-mode singleton and are unaffected.
     #[flutter_rust_bridge::frb(sync)]
     pub fn new() -> Self {
         Self {
             table: SessionTable::new(),
+            trust_mode: TrustMode::PlatformWithFallback,
+            is_default: false,
         }
+    }
+
+    /// Construct a fresh client with the caller-selected
+    /// [`TrustMode`] policy. Equivalent to [`NtsClient::new`] when
+    /// `trust_mode == TrustMode::PlatformWithFallback`; produces a
+    /// strict-mode client when `trust_mode ==
+    /// TrustMode::PlatformOnly`.
+    ///
+    /// Marked `#[flutter_rust_bridge::frb(sync)]` so the generated
+    /// Dart side exposes this as a synchronous factory rather than
+    /// an `await` constructor — `NtsClient.withTrustMode(TrustMode...)`
+    /// (the wrapper layer further smooths this into a named-parameter
+    /// optional on the Dart `NtsClient` constructor).
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn with_trust_mode(trust_mode: TrustMode) -> Self {
+        Self {
+            table: SessionTable::new(),
+            trust_mode,
+            is_default: false,
+        }
+    }
+
+    /// Trust-anchor policy this client was constructed with. Useful
+    /// for diagnostics and for callers that round-trip a client
+    /// handle through their own configuration layer and need to
+    /// re-derive the policy without keeping a parallel record.
+    #[flutter_rust_bridge::frb(sync)]
+    pub fn trust_mode(&self) -> TrustMode {
+        self.trust_mode
     }
 
     /// Per-client equivalent of the top-level `nts_query`
@@ -739,7 +1018,14 @@ impl NtsClient {
         timeout_ms: u32,
         dns_concurrency_cap: u32,
     ) -> Result<NtsTimeSample, NtsError> {
-        nts_query_inner(&self.table, spec, timeout_ms, dns_concurrency_cap)
+        nts_query_inner(
+            &self.table,
+            spec,
+            timeout_ms,
+            dns_concurrency_cap,
+            self.trust_mode,
+            self.is_default,
+        )
     }
 
     /// Per-client equivalent of the top-level `nts_warm_cookies`
@@ -750,7 +1036,14 @@ impl NtsClient {
         timeout_ms: u32,
         dns_concurrency_cap: u32,
     ) -> Result<NtsWarmCookiesOutcome, NtsError> {
-        nts_warm_cookies_inner(&self.table, spec, timeout_ms, dns_concurrency_cap)
+        nts_warm_cookies_inner(
+            &self.table,
+            spec,
+            timeout_ms,
+            dns_concurrency_cap,
+            self.trust_mode,
+            self.is_default,
+        )
     }
 
     /// Drop the cached session for `spec`'s `host:port`, if any.
@@ -787,9 +1080,21 @@ impl NtsClient {
 /// Process-wide default `NtsClient`. Used by the top-level convenience
 /// functions so existing `nts_query` / `nts_warm_cookies` callers keep
 /// working unchanged after the per-client refactor.
+///
+/// Constructed with `is_default = true` so its handshakes record their
+/// resolved trust backend into the process-global trust state surfaced
+/// by [`nts_trust_status`]; caller-minted clients (which go through
+/// [`NtsClient::new`] / [`NtsClient::with_trust_mode`] with
+/// `is_default = false`) do not contribute to that observable so a
+/// multi-client deployment can distinguish singleton-path attribution
+/// from custom-client attribution.
 fn default_nts_client() -> &'static NtsClient {
     static C: OnceLock<NtsClient> = OnceLock::new();
-    C.get_or_init(NtsClient::new)
+    C.get_or_init(|| NtsClient {
+        table: SessionTable::new(),
+        trust_mode: TrustMode::PlatformWithFallback,
+        is_default: true,
+    })
 }
 
 /// Cache-layer test accessor for the default client's table. Used by
@@ -921,6 +1226,7 @@ fn establish_session(
     spec: &NtsServerSpec,
     timeout: Duration,
     dns_concurrency_cap: usize,
+    trust_mode: TrustMode,
 ) -> Result<(Session, KePhaseTimings), NtsError> {
     let req = KeRequest {
         host: spec.host.clone(),
@@ -928,8 +1234,10 @@ fn establish_session(
         aead_algorithms: vec![aead_ids::AES_SIV_CMAC_256, aead_ids::AES_128_GCM_SIV],
         timeout: Some(timeout),
         dns_concurrency_cap,
+        trust_mode: trust_mode.into(),
     };
     let outcome: KeOutcome = perform_handshake(&req)?;
+    let trust_backend: TrustBackend = outcome.trust_backend.into();
     let c2s_key = AeadKey::from_keying_material(outcome.aead_id, &outcome.c2s_key)
         .map_err(|e| NtsError::Internal(format!("KE produced unusable C2S key: {e}")))?;
     let s2c_key = AeadKey::from_keying_material(outcome.aead_id, &outcome.s2c_key)
@@ -947,6 +1255,7 @@ fn establish_session(
         ntpv4_host: outcome.ntpv4_host,
         ntpv4_port: outcome.ntpv4_port,
         jar,
+        trust_backend,
     };
     Ok((session, outcome.phase_timings))
 }
@@ -963,6 +1272,14 @@ struct QueryContext {
     ntpv4_host: String,
     ntpv4_port: u16,
     aead_id: u16,
+    /// Trust-anchor backend the [`Session`] this context was checked
+    /// out from authenticated against. Carried verbatim from the
+    /// session's cached value (set at handshake time) so per-query
+    /// `NtsTimeSample::trust_backend` /
+    /// `NtsWarmCookiesOutcome::trust_backend` reflects the original
+    /// handshake's backend on cached-session paths and the
+    /// just-completed handshake's backend on fresh-KE paths.
+    trust_backend: TrustBackend,
 }
 
 /// Outcome of `checkout`'s role-election step. The leader will run the
@@ -995,6 +1312,7 @@ fn build_query_context(s: &Session, cookie: Vec<u8>) -> QueryContext {
         ntpv4_host: s.ntpv4_host.clone(),
         ntpv4_port: s.ntpv4_port,
         aead_id: s.aead_id,
+        trust_backend: s.trust_backend,
     }
 }
 
@@ -1024,9 +1342,10 @@ impl SessionTable {
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
+        trust_mode: TrustMode,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
-        self.checkout_with(spec, timeout, dns_concurrency_cap, &|s, t, c| {
-            establish_session(s, t, c)
+        self.checkout_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
+            establish_session(s, t, c, trust_mode)
         })
     }
 
@@ -1547,11 +1866,20 @@ pub fn nts_query(
 /// (which operates on the caller's own table). Parameterising on
 /// `&SessionTable` keeps both paths bit-identical except for which
 /// cache the cookies and keys live in.
+///
+/// `trust_mode` is the caller's [`TrustMode`] policy (the default
+/// singleton uses `PlatformWithFallback`; caller-minted clients use
+/// whatever they were constructed with). `is_default_client` selects
+/// whether the post-handshake trust-backend value contributes to the
+/// process-global state surfaced by [`nts_trust_status`] — only
+/// singleton-path handshakes contribute.
 fn nts_query_inner(
     table: &SessionTable,
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
+    trust_mode: TrustMode,
+    is_default_client: bool,
 ) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
@@ -1566,8 +1894,11 @@ fn nts_query_inner(
     // which contradicts the documented "single global wall-clock
     // budget" contract on `timeout_ms`.
     let started = Instant::now();
-    let (ctx, ke_timings) = table.checkout(&spec, timeout, cap)?;
+    let (ctx, ke_timings) = table.checkout(&spec, timeout, cap, trust_mode)?;
     let session_generation = ctx.session_generation;
+    if is_default_client {
+        crate::nts::trust_state::TRUST_STATE.record_default_backend(ctx.trust_backend.into());
+    }
 
     // Fail-fast recovery: two distinct on-wire signals indicate the
     // cached session is out of step with the server and must be
@@ -1690,6 +2021,7 @@ fn nts_query_inner(
         aead_id: ctx.aead_id,
         fresh_cookies: fresh_count,
         phase_timings,
+        trust_backend: ctx.trust_backend,
     })
 }
 
@@ -1716,21 +2048,33 @@ pub fn nts_warm_cookies(
 
 /// Implementation shared by [`nts_warm_cookies`] (default-client
 /// table) and [`NtsClient::warm_cookies`] (per-client table).
+///
+/// `trust_mode` is the caller's [`TrustMode`] policy; `is_default_client`
+/// selects whether the post-handshake trust-backend value contributes to
+/// the process-global state surfaced by [`nts_trust_status`]. See
+/// [`nts_query_inner`] for the symmetric plumbing on the query path.
 fn nts_warm_cookies_inner(
     table: &SessionTable,
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
+    trust_mode: TrustMode,
+    is_default_client: bool,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
-    let (session, ke_timings) = establish_session(&spec, timeout, cap)?;
+    let (session, ke_timings) = establish_session(&spec, timeout, cap, trust_mode)?;
+    let trust_backend = session.trust_backend;
+    if is_default_client {
+        crate::nts::trust_state::TRUST_STATE.record_default_backend(trust_backend.into());
+    }
     let count = session.cookies_remaining() as u32;
     table.install(&spec, session);
     Ok(NtsWarmCookiesOutcome {
         fresh_cookies: count,
         phase_timings: PhaseTimings::from(ke_timings),
+        trust_backend,
     })
 }
 
@@ -1922,6 +2266,7 @@ mod tests {
             ntpv4_host: host.to_owned(),
             ntpv4_port,
             jar: CookieJar::new(),
+            trust_backend: TrustBackend::Platform,
         }
     }
 
@@ -3795,5 +4140,155 @@ mod tests {
         assert_ne!(generations[0], generations[1]);
         assert_ne!(generations[1], generations[2]);
         assert_ne!(generations[0], generations[2]);
+    }
+
+    // ------------------------------------------------------------------
+    // Trust-anchor diagnostics + strict-mode tests (nts-21j, 3.0.0).
+    //
+    // Pin the public conversions between `TrustMode`/`TrustBackend` and
+    // their protocol-layer mirrors, the `NtsError` mapping for the new
+    // `TrustBackendUnavailable` variant, and the `NtsClient` round-trip
+    // of `trust_mode()` so a future refactor of either layer surfaces
+    // here rather than in a downstream consumer's exhaustive `switch`.
+    // ------------------------------------------------------------------
+
+    /// Acceptance criterion 4 (default trust mode is unchanged): a
+    /// freshly-constructed `NtsClient` reports
+    /// `TrustMode::PlatformWithFallback`. The default singleton path
+    /// surfaced by `nts_query` / `nts_warm_cookies` likewise reaches
+    /// `establish_session` with this mode (verified by the live
+    /// integration tests further up).
+    #[test]
+    fn nts_client_default_trust_mode_is_platform_with_fallback() {
+        let client = NtsClient::new();
+        assert_eq!(client.trust_mode(), TrustMode::PlatformWithFallback);
+    }
+
+    /// Acceptance criterion 3 (strict mode is opt-in): a client minted
+    /// with `TrustMode::PlatformOnly` round-trips that mode through
+    /// `trust_mode()` and `is_default == false`, so subsequent
+    /// handshakes reach `build_tls_config` with the strict policy and
+    /// do not contribute to the singleton-path observable surfaced by
+    /// `nts_trust_status`.
+    #[test]
+    fn nts_client_with_trust_mode_round_trips_strict() {
+        let client = NtsClient::with_trust_mode(TrustMode::PlatformOnly);
+        assert_eq!(client.trust_mode(), TrustMode::PlatformOnly);
+        assert!(!client.is_default);
+    }
+
+    /// Pin the `KeError::TrustBackendUnavailable -> NtsError::TrustBackendUnavailable`
+    /// mapping. The failure shape is the load-bearing observable for
+    /// strict-mode callers — collapsing it onto `KeProtocol` would
+    /// re-introduce the silent-downgrade hazard the strict mode is
+    /// meant to surface as a typed error.
+    #[test]
+    fn ke_error_trust_backend_unavailable_maps_to_typed_nts_error() {
+        let ke_err = KeError::TrustBackendUnavailable("synthetic test failure".into());
+        let nts_err: NtsError = ke_err.into();
+        match nts_err {
+            NtsError::TrustBackendUnavailable(msg) => {
+                assert!(
+                    msg.contains("synthetic test failure"),
+                    "diagnostic should be preserved verbatim, got {msg:?}",
+                );
+            }
+            other => panic!("expected TrustBackendUnavailable, got {other:?}"),
+        }
+    }
+
+    /// Pin the `From` round-trips between the public `TrustMode` /
+    /// `TrustBackend` enums and their protocol-layer mirrors. The
+    /// `From` chain is the only thing keeping `establish_session`'s
+    /// trust-mode plumbing from silently dropping a variant on
+    /// either end of the boundary.
+    #[test]
+    fn trust_mode_and_backend_conversions_are_total() {
+        // TrustMode -> KeTrustMode
+        for m in [TrustMode::PlatformWithFallback, TrustMode::PlatformOnly] {
+            let ke: crate::nts::ke::KeTrustMode = m.into();
+            match (m, ke) {
+                (
+                    TrustMode::PlatformWithFallback,
+                    crate::nts::ke::KeTrustMode::PlatformWithFallback,
+                ) => {}
+                (TrustMode::PlatformOnly, crate::nts::ke::KeTrustMode::PlatformOnly) => {}
+                _ => panic!("TrustMode -> KeTrustMode mapping diverged"),
+            }
+        }
+        // KeTrustBackend -> TrustBackend
+        for b in [
+            crate::nts::ke::KeTrustBackend::Platform,
+            crate::nts::ke::KeTrustBackend::PlatformWithHybridFallback,
+            crate::nts::ke::KeTrustBackend::WebpkiRoots,
+        ] {
+            let public: TrustBackend = b.into();
+            match (b, public) {
+                (crate::nts::ke::KeTrustBackend::Platform, TrustBackend::Platform) => {}
+                (
+                    crate::nts::ke::KeTrustBackend::PlatformWithHybridFallback,
+                    TrustBackend::PlatformWithHybridFallback,
+                ) => {}
+                (crate::nts::ke::KeTrustBackend::WebpkiRoots, TrustBackend::WebpkiRoots) => {}
+                _ => panic!("KeTrustBackend -> TrustBackend mapping diverged"),
+            }
+        }
+    }
+
+    /// `nts_trust_status()` must be safe to call with no prior
+    /// handshake (process just started, or all queries went through
+    /// caller-minted clients). Snapshot fields land at their
+    /// documented "no signal yet" values rather than panicking on a
+    /// missing observation.
+    #[test]
+    fn nts_trust_status_snapshot_is_safe_with_no_handshake() {
+        let status = nts_trust_status();
+        // android_platform_init_succeeded is always false off-Android;
+        // on Android the test harness does not invoke the JNI bootstrap
+        // either, so the same assertion holds.
+        assert!(!status.android_platform_init_succeeded);
+        // hybrid_fallback_count is `Relaxed` and global; we cannot
+        // assert == 0 because earlier tests in this process may have
+        // exercised the Android-only code path. Assert weak monotonicity:
+        // calling snapshot twice shows the second value is >= the first.
+        let second = nts_trust_status();
+        assert!(second.android_hybrid_fallback_count >= status.android_hybrid_fallback_count);
+    }
+
+    /// Cached-session checkouts must surface the original handshake's
+    /// `trust_backend` via `QueryContext`, mirroring how
+    /// `phase_timings` is zeroed-but-present on the cache-hit path.
+    /// Without this the per-query `NtsTimeSample::trust_backend`
+    /// attribution would degrade on every cached query and callers
+    /// would not be able to round-trip provenance through their
+    /// observability layer.
+    #[test]
+    fn checkout_cache_hit_preserves_session_trust_backend() {
+        let table = SessionTable::new();
+        let spec = NtsServerSpec {
+            host: "trust-backend-cache-hit.test".into(),
+            port: 4460,
+        };
+        // Pre-install a session whose trust_backend is
+        // `PlatformWithHybridFallback` (a non-default value, so a
+        // regression that hard-codes Platform on the cache-hit path
+        // surfaces as a value mismatch).
+        let mut session = make_test_session_with_cookies(
+            "trust-backend-cache-hit.test",
+            4460,
+            next_session_generation(),
+            4,
+        );
+        session.trust_backend = TrustBackend::PlatformWithHybridFallback;
+        table.install(&spec, session);
+        let (ctx, _) = table
+            .checkout(
+                &spec,
+                Duration::from_secs(5),
+                4,
+                TrustMode::PlatformWithFallback,
+            )
+            .expect("cache hit");
+        assert_eq!(ctx.trust_backend, TrustBackend::PlatformWithHybridFallback);
     }
 }

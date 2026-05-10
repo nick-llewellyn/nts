@@ -163,6 +163,34 @@ fn phase_io_to_ke(e: std::io::Error, phase: KeTimeoutPhase) -> KeError {
     }
 }
 
+/// Trust-anchor policy for [`KeRequest`]. Mirrors
+/// [`crate::api::nts::TrustMode`] across the protocol-layer boundary
+/// so the protocol module stays independent of the public-API enum
+/// definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeTrustMode {
+    /// Platform store first, `webpki-roots` static bundle on
+    /// `build_with_native_verifier` failure. Default behaviour
+    /// preserved across all releases prior to 3.0.0.
+    PlatformWithFallback,
+    /// Platform store only; `build_with_native_verifier` failure
+    /// surfaces as [`KeError::TrustBackendUnavailable`] rather than
+    /// downgrading to the static bundle.
+    PlatformOnly,
+}
+
+/// Trust-anchor backend that authenticated this handshake's TLS chain.
+/// Populated by [`perform_handshake`] from the `build_tls_config`
+/// resolution and (on Android) from the per-handshake hybrid-fallback
+/// observation. Mirrors [`crate::api::nts::TrustBackend`] across the
+/// protocol-layer boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeTrustBackend {
+    Platform,
+    PlatformWithHybridFallback,
+    WebpkiRoots,
+}
+
 /// Inputs for a single NTS-KE handshake.
 #[derive(Debug, Clone)]
 pub struct KeRequest {
@@ -181,6 +209,13 @@ pub struct KeRequest {
     /// surfaces as `io::ErrorKind::WouldBlock` which the
     /// `From<io::Error> for NtsError` mapping reuses for `Timeout`.
     pub dns_concurrency_cap: usize,
+    /// Trust-anchor policy for this handshake. Threads through
+    /// [`build_tls_config`] to control the
+    /// `build_with_native_verifier` failure-fallback decision. New
+    /// in 3.0.0; defaults to [`KeTrustMode::PlatformWithFallback`]
+    /// for the unit-test constructors that elide it via
+    /// [`KeRequest::default`]-style helpers.
+    pub trust_mode: KeTrustMode,
 }
 
 /// Phase of an NTS-KE handshake whose budget elapsed.
@@ -267,6 +302,15 @@ pub struct KeOutcome {
     /// `req.timeout = None` short-circuits the bounded DNS resolver,
     /// leaving `dns_micros` at zero).
     pub phase_timings: KePhaseTimings,
+    /// Trust-anchor backend that authenticated this handshake's TLS
+    /// chain. Reflects the `build_tls_config` resolution at config
+    /// time plus, on Android, the per-handshake hybrid-fallback
+    /// observation: `Platform` if the platform verifier alone
+    /// accepted the chain, `PlatformWithHybridFallback` if the
+    /// Android `HybridVerifier` overrode a platform verdict via the
+    /// `webpki-roots` fallback, `WebpkiRoots` if `build_tls_config`
+    /// itself fell back to the static bundle at construction time.
+    pub trust_backend: KeTrustBackend,
 }
 
 #[derive(Debug)]
@@ -287,6 +331,16 @@ pub enum KeError {
     /// A critical record we don't recognize was received (RFC 8915 §4.1.4).
     UnknownCritical(u16),
     MissingNextProtocol,
+    /// `TrustMode::PlatformOnly` was selected and
+    /// `build_with_native_verifier` failed. The payload carries the
+    /// underlying `rustls::Error` rendered as a string so the API
+    /// layer can preserve the diagnostic on the typed
+    /// `NtsError::TrustBackendUnavailable` mapping. Distinct from
+    /// `Tls` because the error happens during `ClientConfig`
+    /// construction, before any TLS handshake bytes go on the wire,
+    /// and reflects a deployment-policy decision rather than a
+    /// protocol failure.
+    TrustBackendUnavailable(String),
     /// RFC 8915 §4.1.2 — "The NTS Next Protocol Negotiation record [...]
     /// MUST be sent with the Critical Bit set." A server that ships this
     /// record without the C bit is either non-compliant or attempting a
@@ -332,6 +386,9 @@ impl std::fmt::Display for KeError {
             Self::NoCookies => f.write_str("response delivered no cookies"),
             Self::MessageTooLarge => {
                 write!(f, "NTS-KE response exceeded {MAX_MESSAGE_BYTES}-byte cap",)
+            }
+            Self::TrustBackendUnavailable(m) => {
+                write!(f, "trust backend unavailable (PlatformOnly mode): {m}")
             }
         }
     }
@@ -502,6 +559,26 @@ struct KeOutcomePartial {
     warnings: Vec<u16>,
 }
 
+/// Result of [`build_tls_config`]: the assembled `ClientConfig`, the
+/// trust backend resolved at construction time (`Platform` if the
+/// platform verifier was wired up, `WebpkiRoots` if the static-bundle
+/// fallback fired), and on Android a handle to the per-build
+/// [`HybridVerifier`] so [`perform_handshake`] can sample its
+/// per-instance fallback counter after the handshake to tell
+/// `Platform` from `PlatformWithHybridFallback` for *this* chain.
+pub struct TlsConfigBuild {
+    pub config: Arc<ClientConfig>,
+    pub initial_backend: KeTrustBackend,
+    /// `Some` only on Android and only when the platform path resolved
+    /// successfully; `None` on every other platform and on the
+    /// `WebpkiRoots` hard-fallback path. `perform_handshake` uses
+    /// `Option::map(|h| h.fallback_count())` to read the
+    /// per-handshake fallback signal without needing platform-gated
+    /// match arms in the call site.
+    #[cfg(target_os = "android")]
+    pub hybrid: Option<Arc<crate::nts::hybrid_verifier::HybridVerifier>>,
+}
+
 /// Build a `ClientConfig` with the platform trust store, `ntske/1` ALPN,
 /// and TLS 1.3 as the only acceptable protocol version (RFC 8915 §3).
 ///
@@ -527,28 +604,83 @@ struct KeOutcomePartial {
 ///   constructed directly rather than via `ConfigVerifierExt` because
 ///   that helper hard-codes `with_safe_default_protocol_versions()`
 ///   which would re-admit TLS 1.2 if the `tls12` feature is on.
-/// - **Hard fallback**: a static webpki-roots config, used only when
-///   the verifier above fails to construct (the platform path is the
-///   source of truth for the runtime trust decision).
-fn build_tls_config() -> Result<Arc<ClientConfig>, KeError> {
+/// - **Hard fallback**: a static webpki-roots config. Used when
+///   `build_with_native_verifier` errors *and* `trust_mode ==
+///   PlatformWithFallback`. Under `PlatformOnly` the same
+///   construction failure surfaces as
+///   [`KeError::TrustBackendUnavailable`] so callers who pinned a
+///   corporate CA see a typed failure instead of a silent downgrade.
+pub fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let mut cfg = match build_with_native_verifier() {
-        Ok(c) => c,
-        Err(_) => build_with_webpki_roots()?,
-    };
-    cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
-    Ok(Arc::new(cfg))
+    build_tls_config_inner(trust_mode)
 }
 
 #[cfg(target_os = "android")]
-fn build_with_native_verifier() -> Result<ClientConfig, rustls::Error> {
+fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
     use crate::nts::hybrid_verifier::HybridVerifier;
-    Ok(
-        ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(HybridVerifier::new()))
-            .with_no_client_auth(),
-    )
+    match build_with_native_verifier_android() {
+        Ok((mut cfg, hybrid)) => {
+            cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+            Ok(TlsConfigBuild {
+                config: Arc::new(cfg),
+                initial_backend: KeTrustBackend::Platform,
+                hybrid: Some(hybrid),
+            })
+        }
+        Err(e) => match trust_mode {
+            KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
+            KeTrustMode::PlatformWithFallback => {
+                let mut cfg = build_with_webpki_roots()?;
+                cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+                Ok(TlsConfigBuild {
+                    config: Arc::new(cfg),
+                    initial_backend: KeTrustBackend::WebpkiRoots,
+                    hybrid: None,
+                })
+            }
+        },
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+    match build_with_native_verifier() {
+        Ok(mut cfg) => {
+            cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+            Ok(TlsConfigBuild {
+                config: Arc::new(cfg),
+                initial_backend: KeTrustBackend::Platform,
+            })
+        }
+        Err(e) => match trust_mode {
+            KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
+            KeTrustMode::PlatformWithFallback => {
+                let mut cfg = build_with_webpki_roots()?;
+                cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+                Ok(TlsConfigBuild {
+                    config: Arc::new(cfg),
+                    initial_backend: KeTrustBackend::WebpkiRoots,
+                })
+            }
+        },
+    }
+}
+
+#[cfg(target_os = "android")]
+fn build_with_native_verifier_android() -> Result<
+    (
+        ClientConfig,
+        Arc<crate::nts::hybrid_verifier::HybridVerifier>,
+    ),
+    rustls::Error,
+> {
+    use crate::nts::hybrid_verifier::HybridVerifier;
+    let hybrid = Arc::new(HybridVerifier::new());
+    let cfg = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
+        .dangerous()
+        .with_custom_certificate_verifier(hybrid.clone())
+        .with_no_client_auth();
+    Ok((cfg, hybrid))
 }
 
 #[cfg(not(target_os = "android"))]
@@ -596,11 +728,17 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     if req.aead_algorithms.is_empty() {
         return Err(KeError::MissingAead);
     }
-    let cfg = build_tls_config()?;
+    let build = build_tls_config(req.trust_mode)?;
+    // Snapshot the per-instance hybrid-fallback counter *before* the
+    // handshake so we can detect a fallback firing on this specific
+    // chain. Only meaningful on Android with the platform path; `None`
+    // on other platforms and on the WebpkiRoots hard-fallback path.
+    #[cfg(target_os = "android")]
+    let pre_fallback = build.hybrid.as_ref().map(|h| h.fallback_count());
     let server_name = ServerName::try_from(req.host.as_str())
         .map_err(|_| KeError::InvalidServerName)?
         .to_owned();
-    let mut conn = ClientConnection::new(cfg, server_name)?;
+    let mut conn = ClientConnection::new(build.config.clone(), server_name)?;
 
     let deadline = req.timeout.map(Deadline::new);
     let connected = connect_with_deadline_using(
@@ -663,6 +801,23 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     conn.send_close_notify();
     let _ = Stream::new(&mut conn, &mut tcp).flush();
 
+    // Resolve the per-handshake trust-backend attribution. On
+    // non-Android platforms (and on the WebpkiRoots hard-fallback
+    // path) the answer is fully determined at config-build time. On
+    // Android the platform path is initially `Platform`; it upgrades
+    // to `PlatformWithHybridFallback` if and only if
+    // `HybridVerifier::verify_server_cert` bumped its per-instance
+    // counter during the TLS handshake we just completed.
+    #[cfg(target_os = "android")]
+    let trust_backend = match (build.initial_backend, &build.hybrid, pre_fallback) {
+        (KeTrustBackend::Platform, Some(h), Some(pre)) if h.fallback_count() > pre => {
+            KeTrustBackend::PlatformWithHybridFallback
+        }
+        (b, _, _) => b,
+    };
+    #[cfg(not(target_os = "android"))]
+    let trust_backend = build.initial_backend;
+
     Ok(KeOutcome {
         ntpv4_host: partial.ntpv4_host,
         ntpv4_port: partial.ntpv4_port,
@@ -677,6 +832,7 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
             tls_handshake_micros,
             ke_record_io_micros,
         },
+        trust_backend,
     })
 }
 
@@ -899,8 +1055,8 @@ mod tests {
     /// version probe redundant at this layer.
     #[test]
     fn build_tls_config_advertises_ntske_alpn() {
-        let cfg = build_tls_config().expect("config builds");
-        assert_eq!(cfg.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
+        let build = build_tls_config(KeTrustMode::PlatformWithFallback).expect("config builds");
+        assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
     }
 
     #[test]
@@ -1547,6 +1703,7 @@ mod tests {
             aead_algorithms: vec![aead::AES_SIV_CMAC_256],
             timeout: Some(Duration::from_secs(10)),
             dns_concurrency_cap: crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+            trust_mode: KeTrustMode::PlatformWithFallback,
         };
         let outcome = perform_handshake(&req).expect("handshake");
         assert_eq!(outcome.aead_id, aead::AES_SIV_CMAC_256);

@@ -97,6 +97,16 @@ sealed class NtsError implements Exception {
   /// Cookie jar empty after a handshake (server delivered none).
   const factory NtsError.noCookies() = NtsErrorNoCookies;
 
+  /// Caller selected `TrustMode.platformOnly` and the platform
+  /// trust-anchor backend could not be constructed. Surfaced
+  /// instead of silently downgrading to the `webpki-roots` static
+  /// bundle. The payload carries the underlying construction-failure
+  /// diagnostic. New in 3.0.0; consumers using exhaustive
+  /// `switch (err) { ... }` on `NtsError` must add an arm for this
+  /// variant.
+  const factory NtsError.trustBackendUnavailable(String field0) =
+      NtsErrorTrustBackendUnavailable;
+
   /// Bug guard for unreachable internal states.
   const factory NtsError.internal(String field0) = NtsErrorInternal;
 }
@@ -239,6 +249,30 @@ final class NtsErrorNoCookies extends NtsError {
 
   @override
   String toString() => 'NtsError.noCookies()';
+}
+
+/// Variant: caller selected `TrustMode.platformOnly` and the
+/// platform trust-anchor backend could not be constructed.
+/// New in 3.0.0; see [NtsError.trustBackendUnavailable].
+final class NtsErrorTrustBackendUnavailable extends NtsError {
+  /// Underlying construction-failure diagnostic from
+  /// `build_with_native_verifier` (typically a `rustls::Error`
+  /// rendered as a string).
+  final String field0;
+
+  /// Construct a `TrustBackendUnavailable` variant.
+  const NtsErrorTrustBackendUnavailable(this.field0) : super._();
+
+  @override
+  int get hashCode => Object.hash(NtsErrorTrustBackendUnavailable, field0);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NtsErrorTrustBackendUnavailable && field0 == other.field0);
+
+  @override
+  String toString() => 'NtsError.trustBackendUnavailable($field0)';
 }
 
 /// Variant: bug guard for unreachable internal states.

@@ -212,6 +212,10 @@ class _FakeFfiNtsClient implements ffi.NtsClient {
       .crateApiNtsNtsClientInvalidate(that: this, spec: spec);
 
   @override
+  ffi.TrustMode trustMode() =>
+      RustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
+
+  @override
   Future<ffi.NtsTimeSample> query({
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
@@ -256,6 +260,7 @@ ffi.NtsTimeSample _ffiSample({
   int aeadId = 15,
   int freshCookies = 1,
   ffi.PhaseTimings? phaseTimings,
+  ffi.TrustBackend trustBackend = ffi.TrustBackend.platform,
 }) => ffi.NtsTimeSample(
   utcUnixMicros: PlatformInt64Util.from(utcUnixMicros),
   roundTripMicros: PlatformInt64Util.from(roundTripMicros),
@@ -263,11 +268,16 @@ ffi.NtsTimeSample _ffiSample({
   aeadId: aeadId,
   freshCookies: freshCookies,
   phaseTimings: phaseTimings ?? _zeroFfiPhaseTimings(),
+  trustBackend: trustBackend,
 );
 
-ffi.NtsWarmCookiesOutcome _ffiWarm(int cookies) => ffi.NtsWarmCookiesOutcome(
+ffi.NtsWarmCookiesOutcome _ffiWarm(
+  int cookies, {
+  ffi.TrustBackend trustBackend = ffi.TrustBackend.platform,
+}) => ffi.NtsWarmCookiesOutcome(
   freshCookies: cookies,
   phaseTimings: _zeroFfiPhaseTimings(),
+  trustBackend: trustBackend,
 );
 
 ffi.NtsDnsPoolStats _zeroFfiDnsPoolStats() => ffi.NtsDnsPoolStats(
@@ -388,10 +398,7 @@ void main() {
     });
 
     test('ntsWarmCookies surfaces a public NtsWarmCookiesOutcome', () async {
-      api.nextWarm = ffi.NtsWarmCookiesOutcome(
-        freshCookies: 8,
-        phaseTimings: _zeroFfiPhaseTimings(),
-      );
+      api.nextWarm = _ffiWarm(8);
       final outcome = await ntsWarmCookies(spec: spec);
       expect(outcome, isA<NtsWarmCookiesOutcome>());
       expect(outcome.freshCookies, 8);
@@ -578,6 +585,7 @@ void main() {
         aeadId: 30,
         freshCookies: 7,
         phaseTimings: phase,
+        trustBackend: TrustBackend.platform,
       );
       const sameValue = NtsTimeSample(
         utcUnixMicros: 1_777_334_400_000_000,
@@ -586,11 +594,12 @@ void main() {
         aeadId: 30,
         freshCookies: 7,
         phaseTimings: phase,
+        trustBackend: TrustBackend.platform,
       );
       expect(base, equals(sameValue));
       expect(base.hashCode, sameValue.hashCode);
 
-      // One perturbation per field, including phaseTimings.
+      // One perturbation per field, including phaseTimings and trustBackend.
       const perturbations = <NtsTimeSample>[
         NtsTimeSample(
           utcUnixMicros: 0,
@@ -599,6 +608,7 @@ void main() {
           aeadId: 30,
           freshCookies: 7,
           phaseTimings: phase,
+          trustBackend: TrustBackend.platform,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -607,6 +617,7 @@ void main() {
           aeadId: 30,
           freshCookies: 7,
           phaseTimings: phase,
+          trustBackend: TrustBackend.platform,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -615,6 +626,7 @@ void main() {
           aeadId: 30,
           freshCookies: 7,
           phaseTimings: phase,
+          trustBackend: TrustBackend.platform,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -623,6 +635,7 @@ void main() {
           aeadId: 15,
           freshCookies: 7,
           phaseTimings: phase,
+          trustBackend: TrustBackend.platform,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -631,6 +644,7 @@ void main() {
           aeadId: 30,
           freshCookies: 0,
           phaseTimings: phase,
+          trustBackend: TrustBackend.platform,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -639,6 +653,16 @@ void main() {
           aeadId: 30,
           freshCookies: 7,
           phaseTimings: otherPhase,
+          trustBackend: TrustBackend.platform,
+        ),
+        NtsTimeSample(
+          utcUnixMicros: 1_777_334_400_000_000,
+          roundTripMicros: 12_500,
+          serverStratum: 2,
+          aeadId: 30,
+          freshCookies: 7,
+          phaseTimings: phase,
+          trustBackend: TrustBackend.webpkiRoots,
         ),
       ];
       for (final p in perturbations) {
@@ -650,7 +674,8 @@ void main() {
         'NtsTimeSample(utcUnixMicros: 1777334400000000, '
         'roundTripMicros: 12500, serverStratum: 2, aeadId: 30, '
         'freshCookies: 7, phaseTimings: PhaseTimings(dnsMicros: 1, '
-        'connectMicros: 2, tlsHandshakeMicros: 3, keRecordIoMicros: 4))',
+        'connectMicros: 2, tlsHandshakeMicros: 3, keRecordIoMicros: 4), '
+        'trustBackend: platform)',
       );
     });
 
@@ -661,18 +686,24 @@ void main() {
         tlsHandshakeMicros: 3,
         keRecordIoMicros: 4,
       );
-      const base = NtsWarmCookiesOutcome(freshCookies: 8, phaseTimings: phase);
+      const base = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: phase,
+        trustBackend: TrustBackend.platform,
+      );
       const sameValue = NtsWarmCookiesOutcome(
         freshCookies: 8,
         phaseTimings: phase,
+        trustBackend: TrustBackend.platform,
       );
       expect(base, equals(sameValue));
       expect(base.hashCode, sameValue.hashCode);
 
-      // Each field participates in equality.
+      // Each field participates in equality, including trustBackend.
       const differentCookies = NtsWarmCookiesOutcome(
         freshCookies: 9,
         phaseTimings: phase,
+        trustBackend: TrustBackend.platform,
       );
       const differentPhase = NtsWarmCookiesOutcome(
         freshCookies: 8,
@@ -682,15 +713,23 @@ void main() {
           tlsHandshakeMicros: 3,
           keRecordIoMicros: 4,
         ),
+        trustBackend: TrustBackend.platform,
+      );
+      const differentTrust = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: phase,
+        trustBackend: TrustBackend.webpkiRoots,
       );
       expect(base, isNot(equals(differentCookies)));
       expect(base, isNot(equals(differentPhase)));
+      expect(base, isNot(equals(differentTrust)));
 
       expect(
         base.toString(),
         'NtsWarmCookiesOutcome(freshCookies: 8, '
         'phaseTimings: PhaseTimings(dnsMicros: 1, connectMicros: 2, '
-        'tlsHandshakeMicros: 3, keRecordIoMicros: 4))',
+        'tlsHandshakeMicros: 3, keRecordIoMicros: 4), '
+        'trustBackend: platform)',
       );
     });
 

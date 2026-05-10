@@ -52,6 +52,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   NtsServerSpec dco_decode_box_autoadd_nts_server_spec(dynamic raw);
 
   @protected
+  TrustBackend dco_decode_box_autoadd_trust_backend(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -73,13 +76,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw);
 
   @protected
+  NtsTrustStatus dco_decode_nts_trust_status(dynamic raw);
+
+  @protected
   NtsWarmCookiesOutcome dco_decode_nts_warm_cookies_outcome(dynamic raw);
+
+  @protected
+  TrustBackend? dco_decode_opt_box_autoadd_trust_backend(dynamic raw);
 
   @protected
   PhaseTimings dco_decode_phase_timings(dynamic raw);
 
   @protected
   TimeoutPhase dco_decode_timeout_phase(dynamic raw);
+
+  @protected
+  TrustBackend dco_decode_trust_backend(dynamic raw);
+
+  @protected
+  TrustMode dco_decode_trust_mode(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -129,6 +144,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  TrustBackend sse_decode_box_autoadd_trust_backend(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -150,7 +170,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   NtsTimeSample sse_decode_nts_time_sample(SseDeserializer deserializer);
 
   @protected
+  NtsTrustStatus sse_decode_nts_trust_status(SseDeserializer deserializer);
+
+  @protected
   NtsWarmCookiesOutcome sse_decode_nts_warm_cookies_outcome(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  TrustBackend? sse_decode_opt_box_autoadd_trust_backend(
     SseDeserializer deserializer,
   );
 
@@ -159,6 +187,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   TimeoutPhase sse_decode_timeout_phase(SseDeserializer deserializer);
+
+  @protected
+  TrustBackend sse_decode_trust_backend(SseDeserializer deserializer);
+
+  @protected
+  TrustMode sse_decode_trust_mode(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -212,6 +246,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_trust_backend(
+    TrustBackend self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -239,8 +279,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_nts_time_sample(NtsTimeSample self, SseSerializer serializer);
 
   @protected
+  void sse_encode_nts_trust_status(
+    NtsTrustStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_nts_warm_cookies_outcome(
     NtsWarmCookiesOutcome self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_trust_backend(
+    TrustBackend? self,
     SseSerializer serializer,
   );
 
@@ -249,6 +301,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_timeout_phase(TimeoutPhase self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_trust_backend(TrustBackend self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_trust_mode(TrustMode self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_16(int self, SseSerializer serializer);
