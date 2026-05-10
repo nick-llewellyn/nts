@@ -38,6 +38,14 @@ example/macos/Pods/
 # FVM Version Cache
 .fvm/
 
+# Coverage artefacts. Both `flutter test --coverage` (Dart) and
+# `cargo tarpaulin --output-dir coverage` (Rust) write `lcov.info`
+# into a sibling `coverage/` directory. Each CI run regenerates and
+# uploads the file to Codecov directly from the workflow; the
+# in-tree copy is purely a local artefact and must not ship inside
+# the published tarball. Mirrors root .gitignore.
+coverage/
+
 # --- Additional publish-only exclusions ------------------------------
 
 # AI-agent guidance files. Tracked in git (so contributors and the

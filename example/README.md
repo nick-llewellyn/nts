@@ -173,8 +173,10 @@ entirely.
 ```text
 Usage: nts_cli [options] <host> [<host>...]
 -p, --port            TCP port for NTS-KE on every host (default: 4460).
--t, --timeout         Per-request timeout in milliseconds. Applied
-                      independently to the KE handshake and the UDP recv leg.
+-t, --timeout         Per-request timeout in milliseconds. Single global
+                      wall-clock budget that spans DNS, NTS-KE (TCP connect,
+                      TLS handshake, record I/O) and the AEAD-NTPv4 UDP
+                      exchange as one shrinking deadline.
                       (default: 5000)
 -l, --library         Path to a prebuilt nts_rust dylib. If
                       omitted, falls back to rust/target/release/.

@@ -74,8 +74,10 @@ ArgParser _buildParser() => ArgParser()
     abbr: 't',
     defaultsTo: '$_kDefaultTimeoutMs',
     help:
-        'Per-request timeout in milliseconds. Applied independently '
-        'to the KE handshake and the UDP recv leg.',
+        'Per-request timeout in milliseconds. Single global '
+        'wall-clock budget that spans DNS, NTS-KE (TCP connect, '
+        'TLS handshake, record I/O) and the AEAD-NTPv4 UDP '
+        'exchange as one shrinking deadline.',
   )
   ..addOption(
     'library',
