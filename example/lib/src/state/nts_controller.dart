@@ -70,6 +70,13 @@ class NtsController {
     if (next == _activeMode) return;
     _activeMode = next;
     _client = NtsClient(trustMode: next);
+    // The previous client's last-handshake backend belongs to a
+    // policy that no longer applies; clearing the signal puts the
+    // panel back to its "no per-client handshake yet" sentinel
+    // until the new client completes a query / warm. Anything else
+    // would let the panel display a backend attribution from a
+    // session table that has just been dropped.
+    state.lastHandshakeBackend.value = null;
     state.log.info(
       'system',
       'TrustMode → ${formatTrustMode(next)} '

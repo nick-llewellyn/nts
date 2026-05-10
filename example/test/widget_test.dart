@@ -256,4 +256,38 @@ void main() {
       expect(find.textContaining('last-handshake-backend: '), findsOneWidget);
     },
   );
+
+  testWidgets(
+    'flipping TrustMode resets lastHandshakeBackend so the panel does '
+    'not show stale attribution from the dropped client',
+    (tester) async {
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      // Drive a successful query so the last-handshake row populates.
+      await tester.tap(find.text('NTS Query'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expect(h.state.lastHandshakeBackend.value, isNotNull);
+
+      // Flip the trust mode -- the controller mints a new NtsClient
+      // and must clear the now-stale attribution because the backend
+      // recorded earlier belongs to a session table that has just
+      // been dropped.
+      await tester.tap(find.text('Platform only'));
+      await tester.pump();
+
+      expect(h.state.trustMode.value, TrustMode.platformOnly);
+      expect(h.state.lastHandshakeBackend.value, isNull);
+      expect(
+        find.textContaining('last-handshake-backend: (no per-client'),
+        findsOneWidget,
+      );
+    },
+  );
 }
