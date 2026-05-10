@@ -196,9 +196,8 @@ void main() {
     );
   });
 
-  testWidgets('TrustStatusPanel renders sentinel + refreshes on demand', (
-    tester,
-  ) async {
+  testWidgets('TrustStatusPanel renders both sentinel rows and refreshes the '
+      'singleton snapshot on demand', (tester) async {
     final h = await _bootHarness();
     await tester.pumpWidget(
       MaterialApp(
@@ -207,15 +206,54 @@ void main() {
     );
     await tester.pump();
 
-    // Sentinel state before any handshake or refresh.
+    // Both rows start at their sentinel: no per-client handshake
+    // has fired yet, and no singleton snapshot has been read.
     expect(find.text('Trust status'), findsOneWidget);
-    expect(find.textContaining('No snapshot yet'), findsOneWidget);
+    expect(
+      find.textContaining('last-handshake-backend: (no per-client'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('singleton snapshot: (tap refresh'),
+      findsOneWidget,
+    );
 
-    // Refresh button forces a snapshot read.
-    await tester.tap(find.byTooltip('Refresh trust status'));
+    // Refresh button forces a singleton-snapshot read but does
+    // NOT populate the per-client row (no per-client handshake
+    // has happened yet).
+    await tester.tap(find.byTooltip('Refresh singleton snapshot'));
     await tester.pump();
 
     expect(h.state.trustStatus.value, isNotNull);
+    expect(h.state.lastHandshakeBackend.value, isNull);
     expect(find.textContaining('default-singleton-backend'), findsOneWidget);
+    // Per-client row should still show its sentinel.
+    expect(
+      find.textContaining('last-handshake-backend: (no per-client'),
+      findsOneWidget,
+    );
   });
+
+  testWidgets(
+    'a successful per-client query populates the last-handshake row',
+    (tester) async {
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('NTS Query'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+
+      // Per-client row reflects what the just-completed handshake
+      // actually used; mock returns TrustBackend.platform on the
+      // happy path.
+      expect(h.state.lastHandshakeBackend.value, isNotNull);
+      expect(find.textContaining('last-handshake-backend: '), findsOneWidget);
+    },
+  );
 }

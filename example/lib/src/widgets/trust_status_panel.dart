@@ -1,13 +1,27 @@
-// Compact panel rendering the most-recent `ntsTrustStatus()`
-// snapshot. Sits above the live log so a user can see at a glance
-// which trust backend the singleton client most recently resolved
-// to and (on Android) whether the JNI bootstrap succeeded.
+// Trust-anchor diagnostics panel. Sits above the live log and shows
+// two independent dimensions:
 //
-// The signal-driven panel updates whenever [NtsController.runQuery]
-// or [NtsController.warmCookies] completes (both refresh the
-// snapshot in-band) and on demand via the refresh button — the
-// underlying counters are racy but per-counter monotonic, so the
-// panel is fine to re-read on user action.
+// 1. **Last handshake** — the trust backend the controller's
+//    per-instance `NtsClient` resolved to on its most-recent
+//    successful query / warm. Driven by [AppState.lastHandshakeBackend],
+//    which [NtsController] populates from
+//    `NtsTimeSample.trustBackend` / `NtsWarmCookiesOutcome.trustBackend`
+//    in-band on every success. Always populated after the first
+//    successful action button press, regardless of trust mode.
+//
+// 2. **Singleton snapshot** — the process-wide `ntsTrustStatus()`
+//    output. Its `defaultClientBackend` only updates when the
+//    *top-level* `ntsQuery` / `ntsWarmCookies` runs a handshake;
+//    this example dispatches everything through a caller-minted
+//    `NtsClient`, so this row stays at its `null` sentinel during
+//    normal demo use. The remaining two fields
+//    (`androidPlatformInitSucceeded`, `androidHybridFallbackCount`)
+//    are real platform-level diagnostics and update normally.
+//
+// Splitting the two prevents the misleading sentinel that an
+// earlier revision of this panel showed: telling the user to "run
+// a query or tap refresh" when no amount of per-client handshakes
+// would ever populate the singleton-scoped field.
 
 import 'package:flutter/material.dart';
 import 'package:signals/signals_flutter.dart' show Watch;
@@ -42,28 +56,67 @@ class TrustStatusPanel extends StatelessWidget {
               children: [
                 Text('Trust status', style: theme.textTheme.titleSmall),
                 const SizedBox(height: 4),
-                Watch((context) {
-                  final status = state.trustStatus.value;
-                  final body = status == null
-                      ? 'No snapshot yet — run a query or tap refresh.'
-                      : formatTrustStatus(status);
-                  return Text(
-                    body,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  );
-                }),
+                _LastHandshakeRow(state: state, theme: theme),
+                const SizedBox(height: 6),
+                _SingletonSnapshotRow(state: state, theme: theme),
               ],
             ),
           ),
           IconButton(
-            tooltip: 'Refresh trust status',
+            tooltip: 'Refresh singleton snapshot',
             icon: const Icon(Icons.refresh),
             onPressed: controller.refreshTrustStatus,
           ),
         ],
       ),
     );
+  }
+}
+
+class _LastHandshakeRow extends StatelessWidget {
+  const _LastHandshakeRow({required this.state, required this.theme});
+
+  final AppState state;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Watch((context) {
+      final backend = state.lastHandshakeBackend.value;
+      final body = backend == null
+          ? 'last-handshake-backend: (no per-client handshake yet)'
+          : 'last-handshake-backend: ${formatTrustBackend(backend)}';
+      return Text(
+        body,
+        style: theme.textTheme.bodySmall?.copyWith(
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      );
+    });
+  }
+}
+
+class _SingletonSnapshotRow extends StatelessWidget {
+  const _SingletonSnapshotRow({required this.state, required this.theme});
+
+  final AppState state;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Watch((context) {
+      final status = state.trustStatus.value;
+      final body = status == null
+          ? 'singleton snapshot: (tap refresh to load; '
+                'defaultClientBackend will only populate after '
+                'top-level ntsQuery / ntsWarmCookies runs)'
+          : 'singleton snapshot:\n${formatTrustStatus(status)}';
+      return Text(
+        body,
+        style: theme.textTheme.bodySmall?.copyWith(
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      );
+    });
   }
 }

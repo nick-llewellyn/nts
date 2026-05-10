@@ -55,10 +55,14 @@ class MockNtsApi implements RustLibApi {
   /// `clientTrustModes` map in `test/api_smoke_test.dart`.
   final Map<NtsClient, TrustMode> _clientTrustModes = <NtsClient, TrustMode>{};
 
-  /// Most-recent backend resolved by any minted fake client.
-  /// Surfaced through [crateApiNtsNtsTrustStatus] as
-  /// `defaultClientBackend` so the on-screen trust-status panel
-  /// updates after each query / warm.
+  /// Most-recent backend resolved by the *singleton* path
+  /// (top-level `crateApiNtsNtsQuery` / `crateApiNtsNtsWarmCookies`)
+  /// only. Surfaced through [crateApiNtsNtsTrustStatus] as
+  /// `defaultClientBackend`, mirroring the real Rust-side semantics
+  /// where caller-minted [NtsClient] instances do not affect the
+  /// singleton snapshot. Per-client paths track their backend
+  /// out-of-band on the returned `NtsTimeSample` /
+  /// `NtsWarmCookiesOutcome`.
   TrustBackend? _lastResolvedBackend;
 
   @override
@@ -80,6 +84,10 @@ class MockNtsApi implements RustLibApi {
       throw const NtsError.authentication('mock: synthetic AEAD tag mismatch');
     }
 
+    // Singleton path -- record the backend on the snapshot so
+    // `crateApiNtsNtsTrustStatus().defaultClientBackend` matches
+    // real Rust-side semantics (singleton-only attribution).
+    _lastResolvedBackend = TrustBackend.platform;
     return _mockSample(rttMs: rttMs, backend: TrustBackend.platform);
   }
 
@@ -90,6 +98,7 @@ class MockNtsApi implements RustLibApi {
     required int dnsConcurrencyCap,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 80));
+    _lastResolvedBackend = TrustBackend.platform;
     return _mockWarm(backend: TrustBackend.platform);
   }
 
@@ -185,11 +194,16 @@ class MockNtsApi implements RustLibApi {
         : TrustBackend.platform;
   }
 
+  // Pure DTO factories: these are shared by both the singleton and
+  // per-client paths and intentionally do NOT touch
+  // `_lastResolvedBackend`. Singleton callers must record the
+  // backend at their own call site (see crateApiNtsNtsQuery /
+  // crateApiNtsNtsWarmCookies) so per-client paths cannot leak into
+  // the singleton snapshot.
   NtsTimeSample _mockSample({
     required int rttMs,
     required TrustBackend backend,
   }) {
-    _lastResolvedBackend = backend;
     final nowMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
     return NtsTimeSample(
       utcUnixMicros: PlatformInt64Util.from(nowMicros),
@@ -202,14 +216,12 @@ class MockNtsApi implements RustLibApi {
     );
   }
 
-  NtsWarmCookiesOutcome _mockWarm({required TrustBackend backend}) {
-    _lastResolvedBackend = backend;
-    return NtsWarmCookiesOutcome(
-      freshCookies: 8,
-      phaseTimings: _mockPhaseTimings(),
-      trustBackend: backend,
-    );
-  }
+  NtsWarmCookiesOutcome _mockWarm({required TrustBackend backend}) =>
+      NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: _mockPhaseTimings(),
+        trustBackend: backend,
+      );
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(

@@ -46,9 +46,11 @@ String formatRtt(int micros) {
 /// Trust-anchor backend label used in success log lines and the
 /// trust-status panel. Mirrors the [TrustBackend] enum names but
 /// substitutes a short human form so a reader scanning the log can
-/// spot a fallback path without consulting the dartdoc. The labels
-/// stay short (≤ 22 chars) so they fit alongside the AEAD / cookie
-/// metadata on the success line's continuation row without wrapping.
+/// spot a fallback path without consulting the dartdoc. Labels are
+/// short and self-describing rather than constrained to a fixed
+/// character bound; the SelectableText surface that renders the
+/// success line wraps gracefully when the continuation row would
+/// otherwise overflow.
 String formatTrustBackend(TrustBackend backend) => switch (backend) {
   TrustBackend.platform => 'platform',
   TrustBackend.platformWithHybridFallback => 'platform+hybrid-fallback',

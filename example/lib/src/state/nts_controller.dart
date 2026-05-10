@@ -33,7 +33,13 @@ const int _kTimeoutMs = 5000;
 
 class NtsController {
   NtsController(this.state)
-    : _client = NtsClient(trustMode: state.trustMode.value) {
+    : _client = NtsClient(trustMode: state.trustMode.value),
+      // Initialize from the same source-of-truth that built `_client`
+      // so the two cannot diverge if the caller starts the app under
+      // a non-default trust mode (e.g. a future deeplink that pre-
+      // populates `state.trustMode` to `platformOnly` before the
+      // controller is constructed).
+      _activeMode = state.trustMode.value {
     // Re-mint the per-instance NtsClient whenever the user toggles
     // the trust-mode signal. TrustMode is a construction-time
     // parameter on the Rust side; replacing the handle is the only
@@ -55,8 +61,9 @@ class NtsController {
   /// independently of [AppState.trustMode] so the subscription
   /// callback can short-circuit redundant reconstructions when the
   /// signal fires with the same value (e.g. during initial
-  /// listener attachment).
-  TrustMode _activeMode = TrustMode.platformWithFallback;
+  /// listener attachment). Initialized from [AppState.trustMode] so
+  /// the two stay in lockstep from construction onward.
+  TrustMode _activeMode;
 
   void _onTrustModeChanged() {
     final next = state.trustMode.value;
@@ -70,10 +77,20 @@ class NtsController {
     );
   }
 
-  /// Refresh the on-screen trust-status snapshot. Bound to the
-  /// trust-status panel's refresh button; also called after every
-  /// successful query / warm so the panel surfaces the most recent
-  /// backend the singleton resolved to.
+  /// Refresh the singleton-side process-wide trust-status snapshot.
+  ///
+  /// Important: `ntsTrustStatus().defaultClientBackend` only updates
+  /// when the *top-level* `ntsQuery` / `ntsWarmCookies` (the default-
+  /// singleton client) runs a handshake. This controller dispatches
+  /// every query through a caller-minted [NtsClient], so the
+  /// singleton snapshot stays at its sentinel `null` for as long as
+  /// only this controller is driving the bridge. The per-handshake
+  /// backend that the controller's last query / warm actually used
+  /// is tracked separately on [AppState.lastHandshakeBackend], which
+  /// is the load-bearing field for the trust-status panel's "last
+  /// handshake" row. Bound to the panel's refresh button so a
+  /// curious user can still verify the singleton-side state on
+  /// demand.
   void refreshTrustStatus() {
     state.trustStatus.value = ntsTrustStatus();
   }
@@ -137,6 +154,13 @@ class NtsController {
         formatQuerySuccess(sample),
         host: entry.hostname,
       );
+      // Per-handshake backend goes straight onto AppState so the
+      // trust-status panel's "last handshake" row reflects what
+      // *this* caller-minted client actually used. Singleton snapshot
+      // is refreshed too for users who also poke the top-level
+      // ntsQuery / ntsWarmCookies in another path; on a controller-
+      // only run it stays at its sentinel `null`, which is correct.
+      state.lastHandshakeBackend.value = sample.trustBackend;
       refreshTrustStatus();
     } on NtsError catch (err) {
       _logError('nts_query', err, entry.hostname);
@@ -165,6 +189,7 @@ class NtsController {
         formatWarmSuccess(outcome),
         host: entry.hostname,
       );
+      state.lastHandshakeBackend.value = outcome.trustBackend;
       refreshTrustStatus();
     } on NtsError catch (err) {
       _logError('nts_warm_cookies', err, entry.hostname);
