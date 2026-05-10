@@ -336,15 +336,15 @@ the `pubspec.yaml` comment block for the exact procedure).
 ### Changed — Authentication / KeProtocol routing documentation
 
 Documents the cross-variant routing that was previously only
-captured on the example app's `describeError` helper: AEAD-
-algorithm *negotiation* failures during NTS-KE — a server picking
-an AEAD identifier this client does not implement — surface as
-`NtsError.keProtocol`, not `NtsError.authentication`. The
-`Authentication` variant is reserved for cryptographic-
-verification failures of the AEAD primitive itself on a fully
-negotiated algorithm (tag mismatch, malformed AEAD input). A
-monitoring rule wired to "tag mismatch" alarms must therefore
-key on `Authentication` only.
+captured on the example app's `describeError` helper:
+AEAD-algorithm *negotiation* failures during NTS-KE — a server
+picking an AEAD identifier this client does not implement —
+surface as `NtsError.keProtocol`, not `NtsError.authentication`.
+The `Authentication` variant is reserved for
+cryptographic-verification failures of the AEAD primitive itself
+on a fully negotiated algorithm (tag mismatch, malformed AEAD
+input). A monitoring rule wired to "tag mismatch" alarms must
+therefore key on `Authentication` only.
 
 The routing note now lives on three sources of truth:
 
