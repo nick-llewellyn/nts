@@ -720,12 +720,24 @@ enum TrustMode {
   /// [`NtsClient::new`].
   platformWithFallback,
 
-  /// Platform store is the only acceptable source of truth. On
+  /// Refuses the build-time silent fallback. On
   /// `build_with_native_verifier` failure the client surfaces
-  /// [`NtsError::TrustBackendUnavailable`] rather than falling
-  /// back. Use when a pinned corporate CA or an MDM-installed root
-  /// is the load-bearing trust anchor and a silent downgrade to a
-  /// static bundle would defeat the deployment's TLS-inspection
-  /// posture.
+  /// [`NtsError::TrustBackendUnavailable`] rather than constructing
+  /// a `webpki-roots` config. Use when a pinned corporate CA or an
+  /// MDM-installed root is the load-bearing trust anchor and a
+  /// silent downgrade to a static bundle would defeat the
+  /// deployment's TLS-inspection posture.
+  ///
+  /// This setting governs the **build-time** hard-fallback
+  /// decision only. On Android, the `HybridVerifier` makes a
+  /// separate **per-chain** decision after the platform verifier
+  /// returns: chains the platform verifier rejects with a curated
+  /// fallback-eligible failure shape (e.g. missing-OCSP-AIA chains
+  /// such as Let's Encrypt R12) can still be accepted via the
+  /// `webpki-roots` static bundle and surface as
+  /// [`TrustBackend::PlatformWithHybridFallback`]. That path is
+  /// not affected by `TrustMode`. `PlatformOnly` therefore means
+  /// "no silent build-time downgrade", not "the public-CA bundle
+  /// is unreachable".
   platformOnly,
 }

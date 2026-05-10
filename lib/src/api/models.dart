@@ -288,12 +288,25 @@ enum TrustMode {
   /// preserved across all releases prior to 3.0.0.
   platformWithFallback,
 
-  /// Platform store only; `build_with_native_verifier` failure
-  /// surfaces as `NtsErrorTrustBackendUnavailable` rather than
-  /// downgrading to the static bundle. Use when a pinned corporate
-  /// CA or an MDM-installed root is the load-bearing trust anchor
-  /// and a silent downgrade to a static bundle would defeat the
+  /// Refuses the build-time silent fallback;
+  /// `build_with_native_verifier` failure surfaces as
+  /// [NtsErrorTrustBackendUnavailable] rather than downgrading to
+  /// the static bundle. Use when a pinned corporate CA or an
+  /// MDM-installed root is the load-bearing trust anchor and a
+  /// silent downgrade to a static bundle would defeat the
   /// deployment's TLS-inspection posture.
+  ///
+  /// This governs the **build-time** hard-fallback decision only.
+  /// On Android, the platform-side `HybridVerifier` makes a
+  /// separate **per-chain** decision after the platform verifier
+  /// returns: chains the platform verifier rejects with a curated
+  /// fallback-eligible failure shape (e.g. missing-OCSP-AIA chains
+  /// such as Let's Encrypt R12) can still be accepted via the
+  /// `webpki-roots` static bundle and surface as
+  /// [TrustBackend.platformWithHybridFallback]. That path is not
+  /// affected by [TrustMode]. `platformOnly` therefore means "no
+  /// silent build-time downgrade", not "the public-CA bundle is
+  /// unreachable".
   platformOnly,
 }
 
