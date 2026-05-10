@@ -89,11 +89,17 @@ bool isErrorSeverity(NtsError err) =>
 ///   inside the NTS-KE record exchange (RFC 8915 §4.1.5) before any
 ///   authenticated NTPv4 packet is constructed; a server that picks an
 ///   AEAD identifier this client does not implement is a *negotiation*
-///   failure, surfaced via the `From<AeadError> for KeError` mapping
-///   in `rust/src/api/nts.rs`. [NtsErrorAuthentication] is reserved
-///   for cryptographic-verification failures on a fully negotiated AEAD
-///   (tag mismatch, malformed AEAD input). A monitoring rule wired to
-///   "tag mismatch" alarms must therefore key on
+///   failure, surfaced via `KeError::UnsupportedAead` in
+///   `rust/src/nts/ke.rs::validate_response` and routed to
+///   `KeProtocol` by the catch-all arm of the
+///   `From<KeError> for NtsError` impl in `rust/src/api/nts.rs`
+///   (the defence-in-depth `AeadError::UnsupportedAlgorithm` path
+///   lands at the same `KeProtocol` variant via the explicit arm of
+///   the `From<AeadError> for NtsError` impl in the same file).
+///   [NtsErrorAuthentication] is reserved for
+///   cryptographic-verification failures on a fully negotiated AEAD
+///   (tag mismatch, malformed AEAD input). A monitoring rule wired
+///   to "tag mismatch" alarms must therefore key on
 ///   [NtsErrorAuthentication] only, not [NtsErrorKeProtocol].
 /// - **NTP Kiss-of-Death (KoD) and unsynchronized-server states tunnel
 ///   through [NtsErrorNtpProtocol]**. The 4-octet KoD reference id

@@ -311,6 +311,26 @@ sealed class NtsError with _$NtsError implements FrbException {
   const factory NtsError.ntpProtocol(String field0) = NtsError_NtpProtocol;
 
   /// AEAD seal/open failed (tag mismatch, malformed input).
+  ///
+  /// Reserved for cryptographic-verification failures of the AEAD
+  /// primitive itself on a fully negotiated algorithm — i.e. the
+  /// `aes_siv` / `aes_gcm_siv` `decrypt` / `encrypt` call returned
+  /// an error against a key derived from the TLS exporter. A
+  /// monitoring rule wired to "tag mismatch" alarms should key on
+  /// this variant only.
+  ///
+  /// AEAD-algorithm *negotiation* failures during NTS-KE — a
+  /// server picking an AEAD identifier this client does not
+  /// implement — route to [`Self::KeProtocol`] instead. The
+  /// primary path is [`KeError::UnsupportedAead`] raised inside
+  /// [`crate::nts::ke::validate_response`], mapped to `KeProtocol`
+  /// by the catch-all arm of the `From<KeError>` impl below;
+  /// the defence-in-depth path ([`AeadError::UnsupportedAlgorithm`],
+  /// only reached if validation is bypassed) is mapped to the
+  /// same `KeProtocol` variant by the explicit arm of the
+  /// `From<AeadError>` impl. The Dart-side mirror of this
+  /// routing lives on `NtsError.authentication` in
+  /// `lib/src/api/errors.dart`.
   const factory NtsError.authentication(String field0) =
       NtsError_Authentication;
 

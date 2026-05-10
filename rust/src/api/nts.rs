@@ -543,6 +543,26 @@ pub enum NtsError {
     /// NTPv4 packet parsing or extension validation failed.
     NtpProtocol(String),
     /// AEAD seal/open failed (tag mismatch, malformed input).
+    ///
+    /// Reserved for cryptographic-verification failures of the AEAD
+    /// primitive itself on a fully negotiated algorithm — i.e. the
+    /// `aes_siv` / `aes_gcm_siv` `decrypt` / `encrypt` call returned
+    /// an error against a key derived from the TLS exporter. A
+    /// monitoring rule wired to "tag mismatch" alarms should key on
+    /// this variant only.
+    ///
+    /// AEAD-algorithm *negotiation* failures during NTS-KE — a
+    /// server picking an AEAD identifier this client does not
+    /// implement — route to [`Self::KeProtocol`] instead. The
+    /// primary path is [`KeError::UnsupportedAead`] raised inside
+    /// [`crate::nts::ke::validate_response`], mapped to `KeProtocol`
+    /// by the catch-all arm of the `From<KeError>` impl below;
+    /// the defence-in-depth path ([`AeadError::UnsupportedAlgorithm`],
+    /// only reached if validation is bypassed) is mapped to the
+    /// same `KeProtocol` variant by the explicit arm of the
+    /// `From<AeadError>` impl. The Dart-side mirror of this
+    /// routing lives on `NtsError.authentication` in
+    /// `lib/src/api/errors.dart`.
     Authentication(String),
     /// Wall-clock budget elapsed inside one of the call's pre-NTP or
     /// NTP phases. The [`TimeoutPhase`] payload identifies which
@@ -2024,6 +2044,17 @@ fn nts_query_inner(
     let mut phase_timings = PhaseTimings::from(ke_timings);
     phase_timings.dns_micros = phase_timings.dns_micros.saturating_add(udp_dns_micros);
 
+    log::info!(
+        target: "nts::query",
+        "NTP sample: host={} stratum={} aead_id={} fresh_cookies={} rtt_us={} trust_backend={:?}",
+        spec.host,
+        response.header.stratum,
+        ctx.aead_id,
+        fresh_count,
+        rtt_micros,
+        ctx.trust_backend,
+    );
+
     Ok(NtsTimeSample {
         utc_unix_micros: ntp64_to_unix_micros(response.header.transmit_timestamp),
         round_trip_micros: rtt_micros,
@@ -2081,6 +2112,13 @@ fn nts_warm_cookies_inner(
     }
     let count = session.cookies_remaining() as u32;
     table.install(&spec, session);
+    log::info!(
+        target: "nts::warm",
+        "warm cookies: host={} cookies_in_jar={} trust_backend={:?}",
+        spec.host,
+        count,
+        trust_backend,
+    );
     Ok(NtsWarmCookiesOutcome {
         fresh_cookies: count,
         phase_timings: PhaseTimings::from(ke_timings),
