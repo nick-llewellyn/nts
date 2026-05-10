@@ -277,6 +277,89 @@ aborted before publishing a result")` so they unpark immediately
 rather than blocking against a stale slot until their per-call
 deadline elapses.
 
+## Trust-anchor diagnostics
+
+TLS chain validation runs against one of three anchor sources, and
+the resolution is reported on two axes: per-handshake on the public
+DTOs, and process-globally via a snapshot accessor.
+
+The three resolutions (`TrustBackend`):
+
+- **`platform`** — `rustls-platform-verifier` ran against the OS
+  trust store (system roots plus user / MDM-installed roots). The
+  source of truth for enterprise-managed devices and the only way
+  to honour pinned corporate CAs.
+- **`platformWithHybridFallback`** — Android-only. The platform
+  verifier ran first and rejected the chain, but the rejection
+  matched a curated platform-failure shape (e.g. missing-OCSP-AIA
+  chains such as Let's Encrypt R12, R8-stripped AAR classes). The
+  `webpki-roots` static bundle was then consulted and accepted
+  the chain. The decision is made inside `HybridVerifier`
+  (`rust/src/nts/hybrid_verifier.rs`); the curated failure shapes
+  are documented at the call site there. Indicates the platform
+  verifier's view was rejected and the static bundle was
+  authoritative for this chain.
+- **`webpkiRoots`** — `build_with_native_verifier` failed at
+  TLS-config construction time and the static bundle authenticated
+  the chain end-to-end. Loses visibility into MDM / user-installed
+  roots; works against the major public NTS providers but not
+  against corporate TLS-inspection appliances.
+
+The two trust-mode policies (`TrustMode`, set at `NtsClient`
+construction):
+
+- **`platformWithFallback`** (default) — pre-3.0 behaviour. If
+  `build_with_native_verifier` fails at TLS-config construction,
+  fall back silently to the `webpki-roots` static bundle and
+  surface the resolution as `TrustBackend::webpkiRoots` on the
+  next handshake. No new error variant is reachable.
+- **`platformOnly`** — refuses the silent fallback. If
+  `build_with_native_verifier` fails at TLS-config construction,
+  the handshake is aborted with `NtsError::TrustBackendUnavailable`
+  carrying the underlying `rustls::Error` text. Appropriate when
+  a pinned corporate CA or MDM-installed root is the load-bearing
+  trust anchor and a silent downgrade to the public-CA bundle
+  would defeat the deployment intent. The Android hybrid-fallback
+  path inside `HybridVerifier` is **not** affected by `TrustMode`:
+  it is a per-chain, per-failure-shape decision made after the
+  platform verifier returns, not a build-time fallback.
+
+Per-handshake reporting:
+
+- `NtsTimeSample.trustBackend` and `NtsWarmCookiesOutcome.trustBackend`
+  carry the resolution that authenticated this handshake's chain.
+- On the cached-session fast path the field reflects the
+  *original* handshake's resolution (cached on the underlying
+  `Session`), so callers always see a concrete per-query
+  attribution rather than a placeholder for cached queries.
+  `nts_warm_cookies` always runs a fresh handshake, so its
+  outcome's value is always the just-completed resolution.
+
+Process-global snapshot (`nts_trust_status() -> NtsTrustStatus`):
+
+- `defaultClientBackend` — the trust backend the *default
+  singleton* `NtsClient` last observed. `null` until that client
+  performs its first handshake. Caller-minted `NtsClient`
+  instances are intentionally not reflected here; the snapshot is
+  for callers using the top-level convenience functions.
+- `androidPlatformInitSucceeded` — `true` once
+  `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
+  invoked at least once and reported success. `false` on every
+  other platform (no JNI bootstrap step exists). A `false` value
+  on Android implies subsequent handshakes will run against the
+  static bundle regardless of `TrustMode`.
+- `androidHybridFallbackCount` — cumulative count of TLS chains
+  the Android `HybridVerifier` has accepted via the `webpki-roots`
+  fallback path since process start. Always zero on non-Android
+  platforms. Non-zero on Android indicates at least one chain
+  arrived whose only platform-side failure was a curated
+  fallback-eligible shape.
+
+State tracking lives in `rust/src/nts/trust_state.rs` behind
+`Relaxed` atomics. The snapshot is intended for human / dashboard
+consumption, not for cross-thread happens-before ordering
+decisions; reads are wait-free.
+
 ## Public API stability layer
 
 `lib/nts.dart` is the package's stable public contract. It is a thin,

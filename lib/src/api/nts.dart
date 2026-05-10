@@ -179,6 +179,33 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 ///   alert on.
 NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 
+/// Snapshot the process-global trust-anchor diagnostic state.
+/// Synchronous (no future / isolate hop): backed by three atomic
+/// loads, cheap enough to call from a UI poll loop or a pre-flight
+/// "can I even validate against the platform store?" check.
+///
+/// Returns three observables that callers cannot recover from a
+/// per-query [NtsTimeSample] alone:
+///
+/// 1. `defaultClientBackend` — backend the *default singleton*
+///    [NtsClient] (used by [ntsQuery] and [ntsWarmCookies]) most
+///    recently resolved to. `null` when no handshake has run yet
+///    against the singleton. Custom-client callers should read
+///    [NtsTimeSample.trustBackend] / [NtsWarmCookiesOutcome.trustBackend]
+///    for accurate per-client attribution.
+/// 2. `androidPlatformInitSucceeded` — `true` iff the Android JNI
+///    bootstrap reported success at least once. `false` on every
+///    other platform.
+/// 3. `androidHybridFallbackCount` — cumulative count of TLS chains
+///    the Android hybrid verifier has accepted via the
+///    `webpki-roots` fallback path. Always zero on non-Android
+///    platforms.
+///
+/// Per-counter monotonicity holds across consecutive snapshots; the
+/// snapshot is intended for human / dashboard consumption, not for
+/// cross-thread synchronisation.
+NtsTrustStatus ntsTrustStatus() => _publicTrustStatus(ffi.ntsTrustStatus());
+
 /// Owned NTS client handle.
 ///
 /// Each [NtsClient] owns its own per-host session table on the Rust
@@ -233,6 +260,19 @@ class NtsClient {
   /// other or with the process-wide default used by the top-level
   /// [ntsQuery] / [ntsWarmCookies] functions.
   ///
+  /// `trustMode` selects the trust-anchor policy applied to every
+  /// handshake this client initiates; defaults to
+  /// [TrustMode.platformWithFallback], which preserves the silent
+  /// `webpki-roots` downgrade behaviour matching the top-level
+  /// convenience functions and every release prior to 3.0.0. Pass
+  /// [TrustMode.platformOnly] to refuse the downgrade and surface
+  /// `NtsErrorTrustBackendUnavailable` when the platform verifier
+  /// cannot be constructed; appropriate when a pinned corporate CA
+  /// or MDM-installed root is the load-bearing trust anchor and a
+  /// silent fallback to the static bundle would defeat the
+  /// deployment's TLS-inspection posture. The choice is immutable
+  /// for the life of the client.
+  ///
   /// Synchronous: dispatches through the FRB bridge to mint the
   /// underlying Rust handle in-line. `await RustLib.init()` must
   /// have completed first; calling this before init throws a
@@ -240,7 +280,16 @@ class NtsClient {
   /// Apps that mint a long-lived [NtsClient] during startup should
   /// do so after the same `await RustLib.init()` they would do
   /// before calling [ntsQuery].
-  factory NtsClient() => NtsClient._(ffi.NtsClient());
+  factory NtsClient({TrustMode trustMode = TrustMode.platformWithFallback}) {
+    final inner = trustMode == TrustMode.platformWithFallback
+        ? ffi.NtsClient()
+        : ffi.NtsClient.withTrustMode(trustMode: _ffiTrustMode(trustMode));
+    return NtsClient._(inner);
+  }
+
+  /// Trust-anchor policy this client was constructed with.
+  /// Synchronous: backed by a one-byte read on the Rust side.
+  TrustMode get trustMode => _publicTrustMode(_inner.trustMode());
 
   /// Per-client equivalent of the top-level [ntsQuery]. The cookie
   /// pool, AEAD keys, and KE session live in this client's table; on
@@ -337,12 +386,14 @@ NtsTimeSample _publicSample(ffi.NtsTimeSample s) => NtsTimeSample(
   aeadId: s.aeadId,
   freshCookies: s.freshCookies,
   phaseTimings: _publicPhase(s.phaseTimings),
+  trustBackend: _publicTrustBackend(s.trustBackend),
 );
 
 NtsWarmCookiesOutcome _publicWarm(ffi.NtsWarmCookiesOutcome o) =>
     NtsWarmCookiesOutcome(
       freshCookies: o.freshCookies,
       phaseTimings: _publicPhase(o.phaseTimings),
+      trustBackend: _publicTrustBackend(o.trustBackend),
     );
 
 PhaseTimings _publicPhase(ffi.PhaseTimings p) => PhaseTimings(
@@ -378,5 +429,32 @@ NtsError _publicError(ffi.NtsError err) => switch (err) {
     _publicTimeoutPhase(field0),
   ),
   ffi.NtsError_NoCookies() => const NtsError.noCookies(),
+  ffi.NtsError_TrustBackendUnavailable(:final field0) =>
+    NtsError.trustBackendUnavailable(field0),
   ffi.NtsError_Internal(:final field0) => NtsError.internal(field0),
 };
+
+TrustBackend _publicTrustBackend(ffi.TrustBackend b) => switch (b) {
+  ffi.TrustBackend.platform => TrustBackend.platform,
+  ffi.TrustBackend.platformWithHybridFallback =>
+    TrustBackend.platformWithHybridFallback,
+  ffi.TrustBackend.webpkiRoots => TrustBackend.webpkiRoots,
+};
+
+TrustMode _publicTrustMode(ffi.TrustMode m) => switch (m) {
+  ffi.TrustMode.platformWithFallback => TrustMode.platformWithFallback,
+  ffi.TrustMode.platformOnly => TrustMode.platformOnly,
+};
+
+ffi.TrustMode _ffiTrustMode(TrustMode m) => switch (m) {
+  TrustMode.platformWithFallback => ffi.TrustMode.platformWithFallback,
+  TrustMode.platformOnly => ffi.TrustMode.platformOnly,
+};
+
+NtsTrustStatus _publicTrustStatus(ffi.NtsTrustStatus s) => NtsTrustStatus(
+  defaultClientBackend: s.defaultClientBackend == null
+      ? null
+      : _publicTrustBackend(s.defaultClientBackend!),
+  androidPlatformInitSucceeded: s.androidPlatformInitSucceeded,
+  androidHybridFallbackCount: s.androidHybridFallbackCount,
+);

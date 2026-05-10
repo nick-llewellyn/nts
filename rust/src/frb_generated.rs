@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -771080935;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 412369031;
 
 // Section: executor
 
@@ -231,6 +231,53 @@ fn wire__crate__api__nts__NtsClient_query_impl(
         },
     )
 }
+fn wire__crate__api__nts__NtsClient_trust_mode_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "NtsClient_trust_mode",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NtsClient>,
+            >>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let mut api_that_guard = None;
+                let decode_indices_ =
+                    flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                        flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                            &api_that, 0, false,
+                        ),
+                    ]);
+                for i in decode_indices_ {
+                    match i {
+                        0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                        _ => unreachable!(),
+                    }
+                }
+                let api_that_guard = api_that_guard.unwrap();
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::api::nts::NtsClient::trust_mode(&*api_that_guard))?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__nts__NtsClient_warm_cookies_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -285,6 +332,38 @@ fn wire__crate__api__nts__NtsClient_warm_cookies_impl(
                     Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__nts__NtsClient_with_trust_mode_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "NtsClient_with_trust_mode",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_trust_mode = <crate::api::nts::TrustMode>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::nts::NtsClient::with_trust_mode(
+                    api_trust_mode,
+                ))?;
+                Ok(output_ok)
+            })())
         },
     )
 }
@@ -387,6 +466,35 @@ fn wire__crate__api__nts__nts_query_impl(
                     Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__nts__nts_trust_status_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "nts_trust_status",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::nts::nts_trust_status())?;
+                Ok(output_ok)
+            })())
         },
     )
 }
@@ -581,6 +689,10 @@ impl SseDecode for crate::api::nts::NtsError {
             }
             7 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::TrustBackendUnavailable(var_field0);
+            }
+            8 => {
+                let mut var_field0 = <String>::sse_decode(deserializer);
                 return crate::api::nts::NtsError::Internal(var_field0);
             }
             _ => {
@@ -611,6 +723,7 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
         let mut var_aeadId = <u16>::sse_decode(deserializer);
         let mut var_freshCookies = <u32>::sse_decode(deserializer);
         let mut var_phaseTimings = <crate::api::nts::PhaseTimings>::sse_decode(deserializer);
+        let mut var_trustBackend = <crate::api::nts::TrustBackend>::sse_decode(deserializer);
         return crate::api::nts::NtsTimeSample {
             utc_unix_micros: var_utcUnixMicros,
             round_trip_micros: var_roundTripMicros,
@@ -618,6 +731,22 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
             aead_id: var_aeadId,
             fresh_cookies: var_freshCookies,
             phase_timings: var_phaseTimings,
+            trust_backend: var_trustBackend,
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::NtsTrustStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_defaultClientBackend =
+            <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+        let mut var_androidPlatformInitSucceeded = <bool>::sse_decode(deserializer);
+        let mut var_androidHybridFallbackCount = <u64>::sse_decode(deserializer);
+        return crate::api::nts::NtsTrustStatus {
+            default_client_backend: var_defaultClientBackend,
+            android_platform_init_succeeded: var_androidPlatformInitSucceeded,
+            android_hybrid_fallback_count: var_androidHybridFallbackCount,
         };
     }
 }
@@ -627,10 +756,23 @@ impl SseDecode for crate::api::nts::NtsWarmCookiesOutcome {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_freshCookies = <u32>::sse_decode(deserializer);
         let mut var_phaseTimings = <crate::api::nts::PhaseTimings>::sse_decode(deserializer);
+        let mut var_trustBackend = <crate::api::nts::TrustBackend>::sse_decode(deserializer);
         return crate::api::nts::NtsWarmCookiesOutcome {
             fresh_cookies: var_freshCookies,
             phase_timings: var_phaseTimings,
+            trust_backend: var_trustBackend,
         };
+    }
+}
+
+impl SseDecode for Option<crate::api::nts::TrustBackend> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<crate::api::nts::TrustBackend>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
     }
 }
 
@@ -662,6 +804,31 @@ impl SseDecode for crate::api::nts::TimeoutPhase {
             4 => crate::api::nts::TimeoutPhase::KeRecordIo,
             5 => crate::api::nts::TimeoutPhase::Ntp,
             _ => unreachable!("Invalid variant for TimeoutPhase: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::TrustBackend {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::nts::TrustBackend::Platform,
+            1 => crate::api::nts::TrustBackend::PlatformWithHybridFallback,
+            2 => crate::api::nts::TrustBackend::WebpkiRoots,
+            _ => unreachable!("Invalid variant for TrustBackend: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::TrustMode {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::nts::TrustMode::PlatformWithFallback,
+            1 => crate::api::nts::TrustMode::PlatformOnly,
+            _ => unreachable!("Invalid variant for TrustMode: {}", inner),
         };
     }
 }
@@ -716,11 +883,11 @@ fn pde_ffi_dispatcher_primary_impl(
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
         4 => wire__crate__api__nts__NtsClient_query_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__nts__NtsClient_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__nts__nts_query_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__nts__nts_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__nts__phase_timings_default_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__nts__NtsClient_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__nts__nts_query_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__nts__nts_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__nts__phase_timings_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -736,7 +903,10 @@ fn pde_ffi_dispatcher_sync_impl(
         1 => wire__crate__api__nts__NtsClient_clear_impl(ptr, rust_vec_len, data_len),
         2 => wire__crate__api__nts__NtsClient_invalidate_impl(ptr, rust_vec_len, data_len),
         3 => wire__crate__api__nts__NtsClient_new_impl(ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__nts__nts_dns_pool_stats_impl(ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__nts__NtsClient_trust_mode_impl(ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__nts__NtsClient_with_trust_mode_impl(ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__nts__nts_dns_pool_stats_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__nts__nts_trust_status_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -804,8 +974,11 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsError {
                 [5.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             crate::api::nts::NtsError::NoCookies => [6.into_dart()].into_dart(),
-            crate::api::nts::NtsError::Internal(field0) => {
+            crate::api::nts::NtsError::TrustBackendUnavailable(field0) => {
                 [7.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::nts::NtsError::Internal(field0) => {
+                [8.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
                 unimplemented!("");
@@ -850,6 +1023,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTimeSample {
             self.aead_id.into_into_dart().into_dart(),
             self.fresh_cookies.into_into_dart().into_dart(),
             self.phase_timings.into_into_dart().into_dart(),
+            self.trust_backend.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -866,11 +1040,38 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsTimeSample>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTrustStatus {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.default_client_backend.into_into_dart().into_dart(),
+            self.android_platform_init_succeeded
+                .into_into_dart()
+                .into_dart(),
+            self.android_hybrid_fallback_count
+                .into_into_dart()
+                .into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::nts::NtsTrustStatus
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsTrustStatus>
+    for crate::api::nts::NtsTrustStatus
+{
+    fn into_into_dart(self) -> crate::api::nts::NtsTrustStatus {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsWarmCookiesOutcome {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.fresh_cookies.into_into_dart().into_dart(),
             self.phase_timings.into_into_dart().into_dart(),
+            self.trust_backend.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -925,6 +1126,41 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::TimeoutPhase>
     for crate::api::nts::TimeoutPhase
 {
     fn into_into_dart(self) -> crate::api::nts::TimeoutPhase {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::TrustBackend {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Platform => 0.into_dart(),
+            Self::PlatformWithHybridFallback => 1.into_dart(),
+            Self::WebpkiRoots => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::nts::TrustBackend {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::TrustBackend>
+    for crate::api::nts::TrustBackend
+{
+    fn into_into_dart(self) -> crate::api::nts::TrustBackend {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::TrustMode {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::PlatformWithFallback => 0.into_dart(),
+            Self::PlatformOnly => 1.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::nts::TrustMode {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::TrustMode> for crate::api::nts::TrustMode {
+    fn into_into_dart(self) -> crate::api::nts::TrustMode {
         self
     }
 }
@@ -1026,8 +1262,12 @@ impl SseEncode for crate::api::nts::NtsError {
             crate::api::nts::NtsError::NoCookies => {
                 <i32>::sse_encode(6, serializer);
             }
-            crate::api::nts::NtsError::Internal(field0) => {
+            crate::api::nts::NtsError::TrustBackendUnavailable(field0) => {
                 <i32>::sse_encode(7, serializer);
+                <String>::sse_encode(field0, serializer);
+            }
+            crate::api::nts::NtsError::Internal(field0) => {
+                <i32>::sse_encode(8, serializer);
                 <String>::sse_encode(field0, serializer);
             }
             _ => {
@@ -1054,6 +1294,19 @@ impl SseEncode for crate::api::nts::NtsTimeSample {
         <u16>::sse_encode(self.aead_id, serializer);
         <u32>::sse_encode(self.fresh_cookies, serializer);
         <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
+        <crate::api::nts::TrustBackend>::sse_encode(self.trust_backend, serializer);
+    }
+}
+
+impl SseEncode for crate::api::nts::NtsTrustStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Option<crate::api::nts::TrustBackend>>::sse_encode(
+            self.default_client_backend,
+            serializer,
+        );
+        <bool>::sse_encode(self.android_platform_init_succeeded, serializer);
+        <u64>::sse_encode(self.android_hybrid_fallback_count, serializer);
     }
 }
 
@@ -1062,6 +1315,17 @@ impl SseEncode for crate::api::nts::NtsWarmCookiesOutcome {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <u32>::sse_encode(self.fresh_cookies, serializer);
         <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
+        <crate::api::nts::TrustBackend>::sse_encode(self.trust_backend, serializer);
+    }
+}
+
+impl SseEncode for Option<crate::api::nts::TrustBackend> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <crate::api::nts::TrustBackend>::sse_encode(value, serializer);
+        }
     }
 }
 
@@ -1086,6 +1350,39 @@ impl SseEncode for crate::api::nts::TimeoutPhase {
                 crate::api::nts::TimeoutPhase::Tls => 3,
                 crate::api::nts::TimeoutPhase::KeRecordIo => 4,
                 crate::api::nts::TimeoutPhase::Ntp => 5,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::nts::TrustBackend {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::nts::TrustBackend::Platform => 0,
+                crate::api::nts::TrustBackend::PlatformWithHybridFallback => 1,
+                crate::api::nts::TrustBackend::WebpkiRoots => 2,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::nts::TrustMode {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::nts::TrustMode::PlatformWithFallback => 0,
+                crate::api::nts::TrustMode::PlatformOnly => 1,
                 _ => {
                     unimplemented!("");
                 }

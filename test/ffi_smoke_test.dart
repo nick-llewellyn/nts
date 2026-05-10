@@ -27,6 +27,7 @@ import 'package:nts/src/ffi/api/nts.dart'
         NtsWarmCookiesOutcome,
         PhaseTimings,
         TimeoutPhase,
+        TrustBackend,
         ntsQuery,
         ntsWarmCookies;
 import 'package:nts/src/ffi/frb_generated.dart';
@@ -47,6 +48,7 @@ class _FakeRustLibApi implements RustLibApi {
     aeadId: 15,
     freshCookies: 1,
     phaseTimings: _zeroPhaseTimings(),
+    trustBackend: TrustBackend.platform,
   );
 
   @override
@@ -54,8 +56,11 @@ class _FakeRustLibApi implements RustLibApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
-  }) async =>
-      NtsWarmCookiesOutcome(freshCookies: 8, phaseTimings: _zeroPhaseTimings());
+  }) async => NtsWarmCookiesOutcome(
+    freshCookies: 8,
+    phaseTimings: _zeroPhaseTimings(),
+    trustBackend: TrustBackend.platform,
+  );
 
   @override
   Future<PhaseTimings> crateApiNtsPhaseTimingsDefault() async =>

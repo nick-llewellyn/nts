@@ -1,30 +1,176 @@
 # Changelog
 
-## 3.2.0
+## 3.0.0
 
-Adds per-host singleflight to the cache-layer `checkout` path so
-concurrent cold queries against the same `host:port` collapse onto
-a single in-flight NTS-KE handshake instead of each running their
-own duplicate one. Pre-3.2 the cache layer dropped the session-table
-mutex across the multi-RTT handshake — correct for tail-latency on
-unrelated hosts, but a resource-waste bug in the common cold-start
-shape where a UI fires several queries against the same time source
-in parallel: every concurrent caller saw `need_handshake = true`,
-each ran a full TLS + NTS-KE handshake, and whichever
-`establish_session` finished last won the install while the others'
-sessions (and all their cookies) were dropped on the floor. The
-per-call session-generation guard prevented stale-cookie poisoning
-across the race, so this was never a *correctness* bug — but N
-concurrent cold callers caused N TLS handshakes, N DNS lookups, and
-N bursts of network activity against the same server. Closes
-`nts-o8u`.
+The first release after `2.0.0` consolidates four chunks of work
+that landed on `main` between the 2.x line and the 3.0 cut:
 
-This release is **purely additive** — every pre-3.2 caller keeps
-working unchanged. The collapse is internal to `SessionTable`;
-no public API changed and no documented timing contract was tightened.
-The Rust crate (`nts_rust`) version is unchanged at 0.4.0.
+1. **Trust-anchor backend diagnostics + strict `platformOnly` mode**
+   — every `ntsQuery` / `ntsWarmCookies` result now reports which
+   trust-anchor backend authenticated its TLS chain, and callers
+   can opt into refusing the silent downgrade from the platform
+   store to the static `webpki-roots` bundle.
+2. **Per-host singleflight on the cache-layer checkout path** —
+   concurrent cold queries against the same `host:port` collapse
+   onto a single in-flight NTS-KE handshake instead of each
+   running their own duplicate one. Internal to `SessionTable`;
+   no API change.
+3. **Owned `NtsClient` session handle** — an explicit, owned
+   client whose per-host session table can be scoped to a caller,
+   cleared on demand, and isolated from other callers. The
+   top-level `ntsQuery` / `ntsWarmCookies` continue to delegate
+   to a process-wide default `NtsClient`, so existing
+   single-cache callers see no change.
+4. **Hand-written public DTOs and sealed `NtsError`** — the
+   public surface is no longer a re-export of the FRB-generated
+   bindings. A Rust-side struct rename or reorder is no longer
+   a SemVer event for any of the public DTO types.
 
-### Added
+This is a **major version bump** because chunks 1 and 4 each
+break the public Dart API: chunk 4 renames the `NtsError_*`
+variant subclasses from the underscore-prefixed freezed convention
+to idiomatic PascalCase (with deprecated typedef aliases for the
+old names) and re-types the microsecond fields from `PlatformInt64`
+to plain Dart `int`; chunk 1 adds an `NtsErrorTrustBackendUnavailable`
+variant to the sealed `NtsError` class which breaks exhaustiveness
+for Dart 3 `switch` consumers. Chunks 2 and 3 are purely additive
+on their own.
+
+The Rust crate (`nts_rust`) version is at `0.4.0`, unchanged
+across these chunks; the on-the-wire NTS-KE / NTPv4 framing was
+not modified by any of them. The Dart-facing FRB surface *did*
+grow new types and fields (`TrustMode`, `TrustBackend`,
+`NtsTrustStatus`, `ntsTrustStatus()`, and a `trustBackend` field
+on `NtsTimeSample` / `NtsWarmCookiesOutcome`) — those additions
+are the source of the major bump, not a network-protocol change.
+
+### Migration from 2.0.0
+
+#### Rename pre-3.0 freezed-style variant subclasses
+
+Drop the underscore from `NtsError_*` variant subclasses in
+`switch` arms and `is` checks: `NtsError_InvalidSpec` →
+`NtsErrorInvalidSpec`, etc. The factory-constructor syntax
+(`const NtsError.invalidSpec('x')`, `const NtsError.timeout(TimeoutPhase.ntp)`,
+…) is unchanged. Deprecated typedef aliases let the old names
+keep compiling for one release with a deprecation warning, so
+the migration can be done at the consumer's pace before the next
+major bump removes them.
+
+#### Drop `.toInt()` and `PlatformInt64Util.from(...)` in DTO sites
+
+Microsecond fields on `NtsTimeSample` (`utcUnixMicros`,
+`roundTripMicros`) and `PhaseTimings` (`dnsMicros`, …,
+`keRecordIoMicros`) are now plain `int` rather than FRB's
+`PlatformInt64`. Drop `.toInt()` calls on field reads and replace
+`PlatformInt64Util.from(N)` with `N` in test fixtures and mocks
+that build these types directly.
+
+#### Add an arm for the new sealed-class variant
+
+Any exhaustive `switch (err) { … }` over an `NtsError` value must
+add an arm for the new `NtsErrorTrustBackendUnavailable` variant:
+
+```dart
+final detail = switch (err) {
+  // ... existing arms unchanged ...
+  NtsErrorNoCookies() => 'no cookies returned',
+  NtsErrorTrustBackendUnavailable(:final field0) =>
+      'trust backend unavailable: $field0',
+  NtsErrorInternal(:final field0) => 'internal: $field0',
+};
+```
+
+Callers that only catch `NtsError` (or `Exception`) and do not
+destructure variants need no changes. Default-singleton callers
+of `ntsQuery` / `ntsWarmCookies` continue to get the pre-3.0
+hybrid trust-anchor behaviour (platform verifier first,
+`webpki-roots` fallback on construction failure) and will never
+see the new variant; it is reachable only when a custom
+`NtsClient` is constructed with `trustMode: TrustMode.platformOnly`.
+
+#### Switch any `on FrbException` clauses to `on NtsError`
+
+`NtsError` now implements Dart's marker `Exception` interface
+instead of FRB's internal `FrbException`. Catching with
+`try { ... } on NtsError catch (err)` is unchanged; catching with
+`try { ... } on FrbException catch (err)` no longer binds an
+`NtsError` and will need to switch to the `NtsError` clause.
+
+#### Drop FFI re-exports from `package:nts/nts.dart`
+
+The FFI DTOs, functions, and `NtsError` family are no longer
+re-exported from `package:nts/nts.dart`. The bridge bootstrap
+(`RustLib`) remains re-exported because callers still need it
+to call `await RustLib.init()` (and `RustLib.initMock` in tests);
+that one symbol is the intentional exception, scoped to the
+bootstrap. Code that imported other FFI types or functions
+through the public barrel must either move to the public surface
+(`package:nts/nts.dart`) or, for internal-mock use cases that
+build `RustLibApi` instances, import from `package:nts/src/ffi/...`
+directly with the existing `// ignore_for_file: implementation_imports`
+pattern. The example's `MockNtsApi` (`example/lib/src/mock_api.dart`)
+shows the intended shape.
+
+### Added — public DTOs and sealed `NtsError`
+
+- All public DTOs (`NtsServerSpec`, `NtsTimeSample`,
+  `NtsWarmCookiesOutcome`, `NtsDnsPoolStats`, `PhaseTimings`) are now
+  hand-written in `lib/src/api/models.dart`. Microsecond fields are
+  typed as plain `int` rather than `PlatformInt64`.
+- `NtsError` is a Dart 3 `sealed class` hand-written in
+  `lib/src/api/errors.dart` instead of the FRB-generated freezed
+  sealed class. Variant subclasses use idiomatic Dart PascalCase
+  (`NtsErrorInvalidSpec` etc.). Pre-3.0 `NtsError_*` names survive
+  as `@Deprecated` typedef aliases and will be removed at the next
+  major bump.
+- `lib/src/api/nts.dart` wraps every FFI call in a try/catch that
+  converts the FFI `NtsError` to the public variant. Conversions
+  are exhaustive `switch` expressions; a future Rust-side variant
+  addition surfaces as a compile error in the conversion layer
+  rather than as a silently-dropped variant at the consumer.
+
+### Added — `NtsClient` handle
+
+- `NtsClient` in `lib/src/api/nts.dart`. Construct with `NtsClient()`
+  to mint a fresh client whose session table starts empty and never
+  shares state with another `NtsClient` or with the process-wide
+  default. The handle exposes:
+  - `Future<NtsTimeSample> query({...})` — per-client equivalent of
+    the top-level `ntsQuery`.
+  - `Future<NtsWarmCookiesOutcome> warmCookies({...})` — per-client
+    equivalent of the top-level `ntsWarmCookies`.
+  - `bool invalidate(NtsServerSpec spec)` — drops the cached session
+    for `spec`'s `host:port`, returns `true` if an entry was removed.
+    Synchronous; backed by one mutex acquisition + `HashMap::remove`
+    on the Rust side.
+  - `void clear()` — drops every cached session in this client's
+    table. Synchronous.
+- Rust: `pub struct NtsClient` in `rust/src/api/nts.rs` with the same
+  five operations (`new`, `query`, `warm_cookies`, `invalidate`,
+  `clear`). Rust callers can construct an explicit `NtsClient` for
+  the same reasons; the existing top-level `nts_query` and
+  `nts_warm_cookies` free functions delegate to a process-wide
+  default `NtsClient` via `default_nts_client()`.
+- The Rust per-host cache layer is now an instance of a private
+  `SessionTable` struct (was a free `sessions()` accessor over a
+  `OnceLock<Mutex<HashMap<…>>>`). `nts_query` and `nts_warm_cookies`
+  share their bodies with `NtsClient::query` and
+  `NtsClient::warm_cookies` through internal `*_inner` helpers
+  parameterised on `&SessionTable`, so the per-instance and
+  process-wide-default code paths are bit-identical except for
+  which table the cookies and keys live in.
+- When to construct an explicit `NtsClient`: test isolation (so one
+  test's cached sessions cannot bleed into another's); diagnostics
+  tools that want to force a fresh NTS-KE handshake on demand
+  without restarting the process; apps that want a clear scope-bounded
+  lifetime for cached sessions, e.g. discarding the cache between
+  work batches. If your app already uses one steady set of NTS
+  servers and you have no need for the lifecycle methods, keep
+  calling the top-level `ntsQuery` / `ntsWarmCookies` — the
+  singleton convenience is the recommended default.
+
+### Added — per-host singleflight
 
 - Per-key singleflight in `SessionTable::checkout` (Rust internal):
   - The first concurrent checkout against a given `host:port`
@@ -52,198 +198,133 @@ The Rust crate (`nts_rust`) version is unchanged at 0.4.0.
     without explicit completion; in that case waiters unpark on a
     sentinel `NtsError::Internal` rather than blocking against the
     stale slot until their per-call deadline elapses.
-
-### Changed
-
-- Concurrent `ntsQuery` calls against the same `host:port` during a
-  cold cache (or when the cookie pool was exhausted) now share one
-  KE handshake instead of running N. The visible-from-Dart effect is
-  faster cold-start and lower rate-limit pressure on the upstream
-  server. Per-call timing semantics are unchanged: the leader
-  reports its own KE phase timings; waiters report zero phase
-  timings (same as cache hits — "no handshake ran in this thread"),
-  matching the existing convention.
+- The visible-from-Dart effect is faster cold-start and lower
+  rate-limit pressure on the upstream server when a UI fires
+  several queries against the same time source in parallel.
+- Per-call timing semantics are unchanged: the leader reports its
+  own KE phase timings; waiters report zero phase timings (same
+  as cache hits — "no handshake ran in this thread"), matching the
+  existing convention.
 - The singleflight is keyed by `session_key(spec)` (i.e.
   `host:port`), so concurrent queries against *different* hosts
-  continue to run their handshakes fully in parallel — the
-  pre-3.2 "don't serialise unrelated hosts" property is preserved.
-- Per-`NtsClient` scoping from 3.1 is preserved: the singleflight
-  registry lives on `SessionTable`, so two `NtsClient` instances
-  never collide with each other's leader-election state, and the
-  process-wide default client's singleflight is independent of any
-  bespoke `NtsClient` a caller mints.
+  continue to run their handshakes fully in parallel.
+- The singleflight registry lives on `SessionTable`, so two
+  `NtsClient` instances never collide with each other's
+  leader-election state, and the process-wide default client's
+  singleflight is independent of any bespoke `NtsClient` a caller
+  mints.
+- `nts_warm_cookies` does *not* participate in the singleflight.
+  It always runs its own `establish_session`, matching its
+  documented "force a fresh handshake" contract — a manual refresh
+  gesture should not be silently coalesced with an unrelated
+  `ntsQuery`'s handshake.
+
+### Added — trust-anchor diagnostics + strict mode
+
+- `TrustMode` enum on the public DTO surface (in `lib/src/api/models.dart`):
+  - `TrustMode.platformWithFallback` — the pre-3.0 default behaviour:
+    platform verifier first, `webpki-roots` static-bundle fallback if
+    `build_with_native_verifier` fails at TLS-config construction time.
+  - `TrustMode.platformOnly` — strict mode: refuse the fallback and
+    surface `NtsError.trustBackendUnavailable(diagnostic)` if the
+    platform verifier cannot be constructed. Use when a pinned
+    corporate CA or MDM-installed root is the load-bearing trust
+    anchor and a silent downgrade to the static bundle would defeat
+    the deployment's TLS-inspection posture.
+- `TrustBackend` enum on the public DTO surface:
+  - `TrustBackend.platform` — `rustls-platform-verifier` validated
+    the chain against the OS trust store (system + user/MDM roots).
+  - `TrustBackend.platformWithHybridFallback` — Android-only: the
+    hybrid verifier overrode a platform-side failure with the
+    `webpki-roots` bundle for one of the curated fallback-eligible
+    failure shapes (e.g. missing-OCSP-AIA chains such as Let's
+    Encrypt R12, R8-stripped AAR classes).
+  - `TrustBackend.webpkiRoots` — `build_with_native_verifier` failed
+    at TLS-config construction time and the static `webpki-roots`
+    bundle authenticated the chain end-to-end.
+- `NtsTimeSample.trustBackend` and `NtsWarmCookiesOutcome.trustBackend`
+  fields. Per-handshake attribution carried on every successful
+  result. On the steady-state cached-session `ntsQuery` path
+  (no fresh KE handshake) the value reflects the *original*
+  handshake's resolution, cached on the underlying session, so
+  callers always see a concrete attribution rather than a
+  placeholder for cached queries.
+- `NtsClient` constructor now accepts an optional
+  `trustMode: TrustMode` named parameter; defaults to
+  `TrustMode.platformWithFallback` so existing call sites are
+  source-compatible. The choice is immutable for the life of the
+  client. Read it back via the new `NtsClient.trustMode` getter
+  (synchronous; backed by a one-byte read on the Rust side).
+- Top-level `ntsTrustStatus()` function returning an
+  `NtsTrustStatus` snapshot. Synchronous (no future / isolate hop):
+  backed by three atomic-relaxed loads, cheap enough to call from
+  a UI poll loop or a pre-flight "can I even validate against the
+  platform store?" check. The snapshot exposes:
+  - `defaultClientBackend: TrustBackend?` — backend the *default
+    singleton* `NtsClient` (used by `ntsQuery` / `ntsWarmCookies`)
+    most recently resolved to. `null` when no handshake has yet run
+    against the singleton in this process. Custom-client callers
+    should read `NtsTimeSample.trustBackend` /
+    `NtsWarmCookiesOutcome.trustBackend` for accurate per-client
+    attribution.
+  - `androidPlatformInitSucceeded: bool` — `true` iff the Android
+    JNI bootstrap (`PlatformInit.nativeInit`) reported success at
+    least once. `false` on every other platform (no JNI bootstrap
+    step exists). A `false` value on Android implies subsequent
+    handshakes will be running against `webpki-roots` regardless
+    of the caller's `TrustMode`.
+  - `androidHybridFallbackCount: BigInt` — cumulative count of TLS
+    chains the Android hybrid verifier has accepted via the
+    `webpki-roots` fallback path since process start. Always zero
+    on non-Android platforms.
+- `NtsError.trustBackendUnavailable(String diagnostic)` variant
+  (sealed class member: `NtsErrorTrustBackendUnavailable`). Surfaces
+  only on the strict-mode `TrustMode.platformOnly` path; the
+  payload carries the underlying `build_with_native_verifier`
+  construction-failure diagnostic.
+
+### Changed — trust-anchor diagnostics + strict mode
+
+- The `webpki-roots` static-bundle fallback inside `build_tls_config`
+  is now gated by the caller's `TrustMode`. Pre-3.0 it always ran
+  on platform-verifier construction failure; in 3.0+ it runs only
+  when the client was constructed with `TrustMode.platformWithFallback`
+  (the default), and is replaced by an `NtsError.trustBackendUnavailable`
+  return when the client was constructed with `TrustMode.platformOnly`.
+- The Android `HybridVerifier` now reports back to the per-handshake
+  trust-state tracker on every `webpki-roots` fallback decision so
+  the per-query `trustBackend` field can distinguish
+  `TrustBackend.platform` from `TrustBackend.platformWithHybridFallback`.
+  No behavioural change to the verification logic itself.
+- The Android JNI bootstrap (`Java_com_nllewellyn_nts_PlatformInit_nativeInit`)
+  now latches a process-global "platform init succeeded" flag on
+  every successful `rustls_platform_verifier::android::init_with_env`
+  call. Used by `ntsTrustStatus()` to report
+  `androidPlatformInitSucceeded`; idempotent (the flag only ever
+  flips false → true).
 
 ### Out of scope
 
 - `nts_warm_cookies` does *not* participate in the singleflight in
-  this release. It always runs its own `establish_session`,
-  matching its documented "force a fresh handshake" contract — a
-  manual refresh gesture should not be silently coalesced with an
-  unrelated `ntsQuery`'s handshake. A concurrent `nts_warm_cookies`
-  + `ntsQuery` against the same host therefore still races the
-  install (same race as pre-3.2; the singleflight does not make it
-  worse). If real call patterns surface a need to coalesce
-  warm-cookies traffic, a follow-up can extend the singleflight to
-  span both flows.
+  this release. A concurrent `nts_warm_cookies` + `ntsQuery` against
+  the same host therefore still races the install (same race as
+  pre-3.0; the singleflight does not make it worse). If real call
+  patterns surface a need to coalesce warm-cookies traffic, a
+  follow-up can extend the singleflight to span both flows.
 - Cache-eviction policy (LRU / max-size / TTL) and per-host
-  singleflight metrics remain follow-ups under their own tickets;
-  this release does not change cache lifetime semantics.
-
-## 3.1.0
-
-Adds an explicit, owned `NtsClient` handle so the per-host session
-table (negotiated AEAD keys, NTPv4 destination, cookie jar) can be
-scoped to a caller, cleared on demand, and isolated from other
-callers. Pre-3.1 the cache was a process-wide `OnceLock<Mutex<…>>`
-keyed by `host:port` with no public path to clear it, no per-caller
-scoping, and no eviction; that was fine for mobile/desktop apps with
-one steady set of NTS servers and a problem for test isolation,
-diagnostics tools that wanted to force a fresh KE handshake, and apps
-that wanted to bound the long-lived cache footprint. Closes
-`nts-2dd`.
-
-This release is **purely additive** — every pre-3.1 caller keeps
-working unchanged. The top-level `ntsQuery` / `ntsWarmCookies`
-functions now delegate to a process-wide default `NtsClient`,
-sharing one cached session table the way they always have.
-`ntsDnsPoolStats` is unaffected by the per-client refactor — it
-remains a direct snapshot of the process-wide bounded DNS resolver
-counters (which live in `nts::dns`, not in the per-host session
-table that `NtsClient` owns) and stays a synchronous, free-standing
-function. The 3.0 → 3.1 bump is the additive minor that the new
-`NtsClient` surface justifies under SemVer; no breaking change.
-The Rust crate (`nts_rust`) version is unchanged at 0.4.0.
-
-### Added
-
-- `NtsClient` in `lib/src/api/nts.dart`. Construct with `NtsClient()`
-  to mint a fresh client whose session table starts empty and never
-  shares state with another `NtsClient` or with the process-wide
-  default. The handle exposes:
-  - `Future<NtsTimeSample> query({...})` — per-client equivalent of
-    the top-level `ntsQuery`.
-  - `Future<NtsWarmCookiesOutcome> warmCookies({...})` — per-client
-    equivalent of the top-level `ntsWarmCookies`.
-  - `bool invalidate(NtsServerSpec spec)` — drops the cached session
-    for `spec`'s `host:port`, returns `true` if an entry was removed.
-    Synchronous; backed by one mutex acquisition + `HashMap::remove`
-    on the Rust side.
-  - `void clear()` — drops every cached session in this client's
-    table. Synchronous.
-- Rust: `pub struct NtsClient` in `rust/src/api/nts.rs` with the same
-  five operations (`new`, `query`, `warm_cookies`, `invalidate`,
-  `clear`). Rust callers can construct an explicit `NtsClient` for
-  the same reasons; the existing top-level `nts_query` and
-  `nts_warm_cookies` free functions delegate to a process-wide
-  default `NtsClient` via `default_nts_client()`.
-
-### Changed
-
-- The Rust per-host cache layer is now an instance of a private
-  `SessionTable` struct (was a free `sessions()` accessor over a
-  `OnceLock<Mutex<HashMap<…>>>`). `nts_query` and `nts_warm_cookies`
-  share their bodies with `NtsClient::query` and
-  `NtsClient::warm_cookies` through internal `*_inner` helpers
-  parameterised on `&SessionTable`, so the per-instance and
-  process-wide-default code paths are bit-identical except for
-  which table the cookies and keys live in. No public-API change.
-- Pre-3.1 cache-layer unit tests in `rust/src/api/nts.rs` continue
-  to operate on the process-wide default table via thin
-  `#[cfg(test)]` compatibility shims (`sessions`, `deposit_cookies`,
-  `evict_session`); behaviour is unchanged.
-
-### When to construct an explicit `NtsClient`
-
-- Test isolation, so one test's cached sessions cannot bleed into
-  another's.
-- Diagnostics tools that want to force a fresh NTS-KE handshake on
-  demand without restarting the process.
-- Apps that want a clear scope-bounded lifetime for cached
-  sessions, e.g. discarding the cache between work batches.
-
-If your app already uses one steady set of NTS servers and you have
-no need for the lifecycle methods, keep calling the top-level
-`ntsQuery` / `ntsWarmCookies` — the singleton convenience is the
-recommended default.
-
-## 3.0.0
-
-Closes the public API contract by hand-writing the DTOs and the
-`NtsError` sealed class on the Dart side. Pre-3.0 the wrapper layer
-re-exported `NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`,
-`NtsDnsPoolStats`, `PhaseTimings`, `TimeoutPhase`, and the entire
-`NtsError` family verbatim from `lib/src/ffi/api/nts.dart`; a Rust-side
-struct rename or reorder propagated as a Dart source break the moment
-`flutter_rust_bridge_codegen generate` re-emitted the bindings, and
-microsecond fields shipped as FRB's `PlatformInt64` rather than plain
-Dart `int`. 3.0 separates the two surfaces and converts at the wrapper
-boundary, so internal regen is no longer a SemVer event for any of
-those types (closes `nts-u9a`).
-
-### Breaking changes
-
-- All public DTOs (`NtsServerSpec`, `NtsTimeSample`,
-  `NtsWarmCookiesOutcome`, `NtsDnsPoolStats`, `PhaseTimings`) are now
-  hand-written in `lib/src/api/models.dart`. Microsecond fields
-  (`utcUnixMicros`, `roundTripMicros`, and every field on
-  `PhaseTimings`) are typed as plain `int` rather than
-  `PlatformInt64`. Call sites that did `sample.utcUnixMicros.toInt()`
-  should drop the `.toInt()`; the field is already an `int`. Test
-  fixtures and mocks that built these types via
-  `PlatformInt64Util.from(...)` should pass the underlying `int`
-  directly.
-- `NtsError` is now a Dart 3 `sealed class` hand-written in
-  `lib/src/api/errors.dart` instead of the FRB-generated freezed
-  sealed class. The variant subclasses are renamed from the
-  underscore-prefixed freezed convention (`NtsError_InvalidSpec`) to
-  idiomatic Dart PascalCase (`NtsErrorInvalidSpec`). The pre-3.0 names
-  survive as `@Deprecated` typedef aliases for one release; they will
-  be removed at 4.0.0. Constructor syntax (`const
-  NtsError.invalidSpec('x')`, `const NtsError.timeout(TimeoutPhase
-  .ntp)`, etc.) is unchanged.
-- The FFI DTOs, functions, and `NtsError` family are no longer
-  re-exported from `package:nts/nts.dart`. The bridge bootstrap
-  (`RustLib`) remains re-exported from `lib/src/ffi/frb_generated.dart`
-  because callers still need it to call `await RustLib.init()` (and
-  `RustLib.initMock` in tests); that one symbol is the intentional
-  exception, scoped to the bootstrap. Code that imported other FFI
-  types or functions through the public barrel must either move to
-  the public surface (`package:nts/nts.dart`) or, for internal-mock
-  use cases that build `RustLibApi` instances, import from
-  `package:nts/src/ffi/...` directly with the existing
-  `// ignore_for_file: implementation_imports` pattern. The example's
-  `MockNtsApi` (`example/lib/src/mock_api.dart`) shows the intended
-  shape.
-- `NtsError` now implements Dart's marker `Exception` interface
-  instead of FRB's internal `FrbException`. Catching with
-  `try { ... } on NtsError catch (err)` is unchanged; catching with
-  `try { ... } on FrbException catch (err)` no longer binds an
-  `NtsError` and will need to switch to the `NtsError` clause.
-
-### Migration
-
-- Rename `NtsError_X` → `NtsErrorX` in switch arms and `is` checks
-  (drop the underscore). The deprecated typedefs let the old names
-  compile for one release; the analyzer will surface each call site as
-  a deprecation warning so the migration can be done at the consumer's
-  pace before 4.0.0.
-- Drop `.toInt()` calls on `NtsTimeSample.utcUnixMicros`,
-  `NtsTimeSample.roundTripMicros`, and `PhaseTimings.*Micros`.
-- Replace any `PlatformInt64Util.from(N)` in DTO constructors with
-  `N`.
-
-### Conversion layer (no runtime impact for callers)
-
-- `lib/src/api/nts.dart` now wraps every FFI call in a try/catch that
-  converts `lib/src/ffi/api/nts.dart`'s `NtsError` to the public
-  variant. Conversions are exhaustive `switch` expressions; a future
-  Rust-side variant addition surfaces as a compile error in the
-  conversion layer rather than as a silently-dropped variant at the
-  consumer.
-- `tool/check_bindings.dart` continues to watch only `lib/src/ffi/`
-  and `rust/src/frb_generated.rs`; the hand-written public surface in
-  `lib/src/api/` is not part of the FRB drift check by design (it
-  exists *because* it is hand-written).
+  singleflight metrics remain follow-ups under their own tickets.
+- The strict trust mode does not implement certificate or public-key
+  pinning; it only refuses the `webpki-roots` downgrade. Callers
+  who want to pin a specific root or leaf should layer that check
+  on top of the platform-verifier path themselves (no public hook
+  for it exists in 3.0).
+- The per-handshake `trustBackend` field is reported on the public
+  DTOs but not yet on the JSON output of the example CLI's `--json`
+  mode. A follow-up can add it once the JSON contract is reviewed.
+- `NtsError.trustBackendUnavailable` is reachable only via
+  `TrustMode.platformOnly`; default-singleton callers continue to
+  see the pre-3.0 fallback behaviour and will never observe this
+  variant.
 
 ## 2.0.0
 
@@ -255,8 +336,7 @@ inspecting free-form diagnostic strings or bolting a Dart-side
 `Stopwatch` around `ntsQuery`. The Rust crate `nts_rust` is bumped to
 `0.4.0` to reflect a breaking change in the public NTS API surface;
 the Dart package is bumped to `2.0.0` for the matching breaking change
-in the FFI signatures and the `NtsError::Timeout` payload (closes
-`nts-r2l`).
+in the FFI signatures and the `NtsError::Timeout` payload.
 
 ### Breaking changes
 
@@ -345,7 +425,7 @@ in the FFI signatures and the `NtsError::Timeout` payload (closes
   the orphan path, failing the job explicitly on the orphan
   diagnostic rather than implicitly via trailing drift. Header
   comment in `tool/check_bindings.dart` is rewritten to document
-  the orphan check and its rationale (closes `nts-lmf`).
+  the orphan check and its rationale.
 
 ### Coverage artefact ignore at any depth
 
@@ -576,7 +656,7 @@ to `1.3.2` (patch).
   cookie pool. The next `checkout` for that host finds no entry
   and performs a fresh NTS-KE handshake instead of draining the
   remaining cookies through identical failures plus the caller's
-  per-source exponential backoff. Closes `nts-0jl`.
+  per-source exponential backoff.
   - **AEAD authentication failure** — local C2S seal in
     `build_client_request` or remote S2C verify in
     `parse_server_response` returns `NtpError::Aead`. The cached
@@ -745,8 +825,8 @@ to `1.3.2` (patch).
   remaining role as the lifecycle-hook host.
   `lib/src/ffi/api/simple.dart` is removed; FRB does not auto-clean
   stale module files when a Rust `api/` module loses its last `pub`
-  item (followup tracked as `nts-lmf` to extend
-  `tool/check_bindings.dart` to flag this footgun). The
+  item (a follow-up extends `tool/check_bindings.dart` to flag
+  this footgun). The
   `crateApiSimpleGreet` overrides in `example/lib/src/mock_api.dart`,
   `test/api_smoke_test.dart`, and `test/ffi_smoke_test.dart` are
   removed in the same commit; the FRB-generated layer
@@ -1387,7 +1467,7 @@ Assets bridge.
 
 - `lib/src/ffi/frb_generated.dart`: regenerate against the current
   `analysis_options.yaml`. Removing the `analyzer.exclude:
-  [lib/src/ffi/**]` block in 1.0.5 (`nts-2cq`) had a side effect that
+  [lib/src/ffi/**]` block in 1.0.5 had a side effect that
   the bindings CI job did not surface until the next commit that
   re-triggered the job: `flutter_rust_bridge_codegen` runs an
   analyzer-aware fix-up over the Dart it emits before exiting, that
@@ -1428,8 +1508,8 @@ published Dart surface, the Rust crate, or the Native Assets bridge.
   about the rendering quirk that motivated the file's existence
   (`pana` priority list, the `example/main.dart` shadowing dance from
   1.0.3 / 1.0.4). The fenced sample is the consumer-visible artefact;
-  the rendering history is recorded in this changelog and in the
-  `nts-9td` commit message, not in the file pub.dev publishes.
+  the rendering history is recorded in this changelog, not in the
+  file pub.dev publishes.
 
 - `analysis_options.yaml`: remove the
   `analyzer.exclude: [lib/src/ffi/**]` block so local

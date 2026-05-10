@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -771080935;
+  int get rustContentHash => 412369031;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -94,12 +94,16 @@ abstract class RustLibApi extends BaseApi {
     required int dnsConcurrencyCap,
   });
 
+  TrustMode crateApiNtsNtsClientTrustMode({required NtsClient that});
+
   Future<NtsWarmCookiesOutcome> crateApiNtsNtsClientWarmCookies({
     required NtsClient that,
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
   });
+
+  NtsClient crateApiNtsNtsClientWithTrustMode({required TrustMode trustMode});
 
   Future<void> crateApiSimpleInitApp();
 
@@ -110,6 +114,8 @@ abstract class RustLibApi extends BaseApi {
     required int timeoutMs,
     required int dnsConcurrencyCap,
   });
+
+  NtsTrustStatus crateApiNtsNtsTrustStatus();
 
   Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
@@ -260,6 +266,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  TrustMode crateApiNtsNtsClientTrustMode({required NtsClient that}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNtsClient(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 5)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_trust_mode,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNtsNtsClientTrustModeConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsNtsClientTrustModeConstMeta =>
+      const TaskConstMeta(
+        debugName: "NtsClient_trust_mode",
+        argNames: ["that"],
+      );
+
+  @override
   Future<NtsWarmCookiesOutcome> crateApiNtsNtsClientWarmCookies({
     required NtsClient that,
     required NtsServerSpec spec,
@@ -280,7 +315,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 6,
             port: port_,
           );
         },
@@ -302,6 +337,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  NtsClient crateApiNtsNtsClientWithTrustMode({required TrustMode trustMode}) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_trust_mode(trustMode, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerNtsClient,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNtsNtsClientWithTrustModeConstMeta,
+        argValues: [trustMode],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsNtsClientWithTrustModeConstMeta =>
+      const TaskConstMeta(
+        debugName: "NtsClient_with_trust_mode",
+        argNames: ["trustMode"],
+      );
+
+  @override
   Future<void> crateApiSimpleInitApp() {
     return handler.executeNormal(
       NormalTask(
@@ -310,7 +372,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 8,
             port: port_,
           );
         },
@@ -334,7 +396,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_nts_dns_pool_stats,
@@ -366,7 +428,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 10,
             port: port_,
           );
         },
@@ -387,6 +449,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  NtsTrustStatus crateApiNtsNtsTrustStatus() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_nts_trust_status,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNtsNtsTrustStatusConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsNtsTrustStatusConstMeta =>
+      const TaskConstMeta(debugName: "nts_trust_status", argNames: []);
+
+  @override
   Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
     required NtsServerSpec spec,
     required int timeoutMs,
@@ -402,7 +486,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 12,
             port: port_,
           );
         },
@@ -431,7 +515,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 13,
             port: port_,
           );
         },
@@ -503,6 +587,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  TrustBackend dco_decode_box_autoadd_trust_backend(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_trust_backend(raw);
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -553,6 +643,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 6:
         return const NtsError_NoCookies();
       case 7:
+        return NtsError_TrustBackendUnavailable(dco_decode_String(raw[1]));
+      case 8:
         return NtsError_Internal(dco_decode_String(raw[1]));
       default:
         throw Exception("unreachable");
@@ -575,8 +667,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return NtsTimeSample(
       utcUnixMicros: dco_decode_i_64(arr[0]),
       roundTripMicros: dco_decode_i_64(arr[1]),
@@ -584,6 +676,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       aeadId: dco_decode_u_16(arr[3]),
       freshCookies: dco_decode_u_32(arr[4]),
       phaseTimings: dco_decode_phase_timings(arr[5]),
+      trustBackend: dco_decode_trust_backend(arr[6]),
+    );
+  }
+
+  @protected
+  NtsTrustStatus dco_decode_nts_trust_status(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return NtsTrustStatus(
+      defaultClientBackend: dco_decode_opt_box_autoadd_trust_backend(arr[0]),
+      androidPlatformInitSucceeded: dco_decode_bool(arr[1]),
+      androidHybridFallbackCount: dco_decode_u_64(arr[2]),
     );
   }
 
@@ -591,12 +697,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   NtsWarmCookiesOutcome dco_decode_nts_warm_cookies_outcome(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return NtsWarmCookiesOutcome(
       freshCookies: dco_decode_u_32(arr[0]),
       phaseTimings: dco_decode_phase_timings(arr[1]),
+      trustBackend: dco_decode_trust_backend(arr[2]),
     );
+  }
+
+  @protected
+  TrustBackend? dco_decode_opt_box_autoadd_trust_backend(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_trust_backend(raw);
   }
 
   @protected
@@ -617,6 +730,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TimeoutPhase dco_decode_timeout_phase(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return TimeoutPhase.values[raw as int];
+  }
+
+  @protected
+  TrustBackend dco_decode_trust_backend(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return TrustBackend.values[raw as int];
+  }
+
+  @protected
+  TrustMode dco_decode_trust_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return TrustMode.values[raw as int];
   }
 
   @protected
@@ -713,6 +838,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  TrustBackend sse_decode_box_autoadd_trust_backend(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_trust_backend(deserializer));
+  }
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
@@ -774,6 +907,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return const NtsError_NoCookies();
       case 7:
         final var_field0 = sse_decode_String(deserializer);
+        return NtsError_TrustBackendUnavailable(var_field0);
+      case 8:
+        final var_field0 = sse_decode_String(deserializer);
         return NtsError_Internal(var_field0);
       default:
         throw UnimplementedError('');
@@ -797,6 +933,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     final var_aeadId = sse_decode_u_16(deserializer);
     final var_freshCookies = sse_decode_u_32(deserializer);
     final var_phaseTimings = sse_decode_phase_timings(deserializer);
+    final var_trustBackend = sse_decode_trust_backend(deserializer);
     return NtsTimeSample(
       utcUnixMicros: var_utcUnixMicros,
       roundTripMicros: var_roundTripMicros,
@@ -804,6 +941,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       aeadId: var_aeadId,
       freshCookies: var_freshCookies,
       phaseTimings: var_phaseTimings,
+      trustBackend: var_trustBackend,
+    );
+  }
+
+  @protected
+  NtsTrustStatus sse_decode_nts_trust_status(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final var_defaultClientBackend = sse_decode_opt_box_autoadd_trust_backend(
+      deserializer,
+    );
+    final var_androidPlatformInitSucceeded = sse_decode_bool(deserializer);
+    final var_androidHybridFallbackCount = sse_decode_u_64(deserializer);
+    return NtsTrustStatus(
+      defaultClientBackend: var_defaultClientBackend,
+      androidPlatformInitSucceeded: var_androidPlatformInitSucceeded,
+      androidHybridFallbackCount: var_androidHybridFallbackCount,
     );
   }
 
@@ -814,10 +967,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     final var_freshCookies = sse_decode_u_32(deserializer);
     final var_phaseTimings = sse_decode_phase_timings(deserializer);
+    final var_trustBackend = sse_decode_trust_backend(deserializer);
     return NtsWarmCookiesOutcome(
       freshCookies: var_freshCookies,
       phaseTimings: var_phaseTimings,
+      trustBackend: var_trustBackend,
     );
+  }
+
+  @protected
+  TrustBackend? sse_decode_opt_box_autoadd_trust_backend(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_trust_backend(deserializer));
+    } else {
+      return null;
+    }
   }
 
   @protected
@@ -840,6 +1008,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     final inner = sse_decode_i_32(deserializer);
     return TimeoutPhase.values[inner];
+  }
+
+  @protected
+  TrustBackend sse_decode_trust_backend(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final inner = sse_decode_i_32(deserializer);
+    return TrustBackend.values[inner];
+  }
+
+  @protected
+  TrustMode sse_decode_trust_mode(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final inner = sse_decode_i_32(deserializer);
+    return TrustMode.values[inner];
   }
 
   @protected
@@ -938,6 +1120,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_trust_backend(
+    TrustBackend self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_trust_backend(self, serializer);
+  }
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
@@ -995,8 +1186,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_timeout_phase(field0, serializer);
       case NtsError_NoCookies():
         sse_encode_i_32(6, serializer);
-      case NtsError_Internal(field0: final field0):
+      case NtsError_TrustBackendUnavailable(field0: final field0):
         sse_encode_i_32(7, serializer);
+        sse_encode_String(field0, serializer);
+      case NtsError_Internal(field0: final field0):
+        sse_encode_i_32(8, serializer);
         sse_encode_String(field0, serializer);
     }
   }
@@ -1023,6 +1217,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_u_16(self.aeadId, serializer);
     sse_encode_u_32(self.freshCookies, serializer);
     sse_encode_phase_timings(self.phaseTimings, serializer);
+    sse_encode_trust_backend(self.trustBackend, serializer);
+  }
+
+  @protected
+  void sse_encode_nts_trust_status(
+    NtsTrustStatus self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_opt_box_autoadd_trust_backend(
+      self.defaultClientBackend,
+      serializer,
+    );
+    sse_encode_bool(self.androidPlatformInitSucceeded, serializer);
+    sse_encode_u_64(self.androidHybridFallbackCount, serializer);
   }
 
   @protected
@@ -1033,6 +1242,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self.freshCookies, serializer);
     sse_encode_phase_timings(self.phaseTimings, serializer);
+    sse_encode_trust_backend(self.trustBackend, serializer);
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_trust_backend(
+    TrustBackend? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_trust_backend(self, serializer);
+    }
   }
 
   @protected
@@ -1046,6 +1269,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_timeout_phase(TimeoutPhase self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_trust_backend(TrustBackend self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_trust_mode(TrustMode self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
   }
@@ -1142,6 +1377,13 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
   );
+
+  /// Trust-anchor policy this client was constructed with. Useful
+  /// for diagnostics and for callers that round-trip a client
+  /// handle through their own configuration layer and need to
+  /// re-derive the policy without keeping a parallel record.
+  TrustMode trustMode() =>
+      RustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
 
   /// Per-client equivalent of the top-level `nts_warm_cookies`
   /// (`ntsWarmCookies` on the Dart side).

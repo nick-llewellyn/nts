@@ -33,6 +33,8 @@ use jni::objects::{JClass, JObject};
 use jni::sys::jboolean;
 use jni::JNIEnv;
 
+use crate::nts::trust_state::TRUST_STATE;
+
 /// JNI entry point invoked by `com.nllewellyn.nts.PlatformInit.nativeInit`.
 ///
 /// Returns `JNI_TRUE` (1) when the verifier was initialized successfully or
@@ -58,7 +60,17 @@ pub extern "system" fn Java_com_nllewellyn_nts_PlatformInit_nativeInit<'local>(
     context: JObject<'local>,
 ) -> jboolean {
     match rustls_platform_verifier::android::init_with_env(&mut env, context) {
-        Ok(()) => 1,
+        Ok(()) => {
+            // Latch the process-wide diagnostic flag so
+            // `nts_trust_status()` reports the JNI bootstrap as
+            // successful for the rest of the process lifetime. The
+            // underlying `init_with_env` is itself
+            // `OnceCell`-guarded, so re-entry from a second JNI call
+            // after a successful first call is idempotent on both
+            // sides.
+            TRUST_STATE.record_android_init_success();
+            1
+        }
         Err(_) => 0,
     }
 }

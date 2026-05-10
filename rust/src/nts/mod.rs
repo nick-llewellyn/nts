@@ -26,6 +26,7 @@ pub mod dns;
 pub mod ke;
 pub mod ntp;
 pub mod records;
+pub mod trust_state;
 
 // Android-only: see `hybrid_verifier::HybridVerifier`. Salvages NTS-KE
 // handshakes against servers whose Let's Encrypt R12 leaves omit the

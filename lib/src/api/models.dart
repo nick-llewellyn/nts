@@ -143,6 +143,15 @@ class NtsTimeSample {
   /// for the entire wall-clock cost of `ntsQuery`.
   final PhaseTimings phaseTimings;
 
+  /// Trust-anchor backend that authenticated this query's TLS chain.
+  /// On the fresh-KE path reflects the just-completed handshake's
+  /// resolution; on the steady-state cached-session path reflects the
+  /// *original* handshake's value (cached on the underlying session),
+  /// so callers always see a concrete per-query attribution rather
+  /// than a placeholder for cached queries. New in 3.0.0; mirrors the
+  /// per-query observable pattern established by [phaseTimings].
+  final TrustBackend trustBackend;
+
   /// Construct a sample. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures; production code receives instances
   /// from `ntsQuery`.
@@ -153,6 +162,7 @@ class NtsTimeSample {
     required this.aeadId,
     required this.freshCookies,
     required this.phaseTimings,
+    required this.trustBackend,
   });
 
   @override
@@ -163,6 +173,7 @@ class NtsTimeSample {
     aeadId,
     freshCookies,
     phaseTimings,
+    trustBackend,
   );
 
   @override
@@ -174,14 +185,16 @@ class NtsTimeSample {
           serverStratum == other.serverStratum &&
           aeadId == other.aeadId &&
           freshCookies == other.freshCookies &&
-          phaseTimings == other.phaseTimings);
+          phaseTimings == other.phaseTimings &&
+          trustBackend == other.trustBackend);
 
   @override
   String toString() =>
       'NtsTimeSample(utcUnixMicros: $utcUnixMicros, '
       'roundTripMicros: $roundTripMicros, '
       'serverStratum: $serverStratum, aeadId: $aeadId, '
-      'freshCookies: $freshCookies, phaseTimings: $phaseTimings)';
+      'freshCookies: $freshCookies, phaseTimings: $phaseTimings, '
+      'trustBackend: ${trustBackend.name})';
 }
 
 /// Successful outcome of `ntsWarmCookies`.
@@ -199,27 +212,171 @@ class NtsWarmCookiesOutcome {
   /// call, so [PhaseTimings.dnsMicros] reflects only the KE-host lookup.
   final PhaseTimings phaseTimings;
 
+  /// Trust-anchor backend that authenticated this handshake's TLS
+  /// chain. `ntsWarmCookies` always runs a fresh KE handshake (no
+  /// cached-session short-circuit), so the value is always the
+  /// just-completed handshake's resolution. New in 3.0.0.
+  final TrustBackend trustBackend;
+
   /// Construct an outcome. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures.
   const NtsWarmCookiesOutcome({
     required this.freshCookies,
     required this.phaseTimings,
+    required this.trustBackend,
   });
 
   @override
-  int get hashCode => Object.hash(freshCookies, phaseTimings);
+  int get hashCode => Object.hash(freshCookies, phaseTimings, trustBackend);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is NtsWarmCookiesOutcome &&
           freshCookies == other.freshCookies &&
-          phaseTimings == other.phaseTimings);
+          phaseTimings == other.phaseTimings &&
+          trustBackend == other.trustBackend);
 
   @override
   String toString() =>
       'NtsWarmCookiesOutcome(freshCookies: $freshCookies, '
-      'phaseTimings: $phaseTimings)';
+      'phaseTimings: $phaseTimings, trustBackend: ${trustBackend.name})';
+}
+
+/// Trust-anchor backend that authenticated a TLS chain, or that a
+/// process-global resolution attempt landed on.
+///
+/// Carried per-handshake on [NtsTimeSample] / [NtsWarmCookiesOutcome]
+/// and process-globally on [NtsTrustStatus]. See `ARCHITECTURE.md`'s
+/// "Trust-anchor diagnostics" section for the operational shape.
+enum TrustBackend {
+  /// `rustls-platform-verifier` ran against the OS trust store
+  /// (system roots plus any user / MDM-installed roots). Source of
+  /// truth for enterprise-managed devices and the only way to honour
+  /// pinned corporate CAs.
+  platform,
+
+  /// Android-only: the platform verifier ran first, but its result
+  /// was overridden by the `webpki-roots` fallback inside the
+  /// hybrid verifier for one of the curated platform-failure shapes
+  /// (missing-OCSP-AIA chains such as Let's Encrypt R12, R8-stripped
+  /// AAR classes). Indicates the platform verifier's view was
+  /// rejected and the static bundle was authoritative for this chain.
+  platformWithHybridFallback,
+
+  /// `build_with_native_verifier` failed at TLS-config construction
+  /// time and the static `webpki-roots` bundle authenticated the
+  /// chain end-to-end. Loses visibility into MDM / user-installed
+  /// roots; works against the major public NTS providers but not
+  /// against corporate TLS-inspection appliances. See
+  /// [TrustMode.platformOnly] for the opt-in that surfaces this
+  /// path as `NtsErrorTrustBackendUnavailable` instead.
+  webpkiRoots,
+}
+
+/// Caller-selected policy for which trust-anchor backend an
+/// [NtsClient] is willing to run against. Set immutably at client
+/// construction and applied to every handshake the client initiates.
+///
+/// The default singleton client used by the top-level convenience
+/// functions ([ntsQuery], [ntsWarmCookies]) is constructed with
+/// [TrustMode.platformWithFallback] and never changes, so existing
+/// callers see no behaviour change.
+enum TrustMode {
+  /// Platform store first, `webpki-roots` static bundle on
+  /// `build_with_native_verifier` failure. Default behaviour
+  /// preserved across all releases prior to 3.0.0.
+  platformWithFallback,
+
+  /// Refuses the build-time silent fallback;
+  /// `build_with_native_verifier` failure surfaces as
+  /// [NtsErrorTrustBackendUnavailable] rather than downgrading to
+  /// the static bundle. Use when a pinned corporate CA or an
+  /// MDM-installed root is the load-bearing trust anchor and a
+  /// silent downgrade to a static bundle would defeat the
+  /// deployment's TLS-inspection posture.
+  ///
+  /// This governs the **build-time** hard-fallback decision only.
+  /// On Android, the platform-side `HybridVerifier` makes a
+  /// separate **per-chain** decision after the platform verifier
+  /// returns: chains the platform verifier rejects with a curated
+  /// fallback-eligible failure shape (e.g. missing-OCSP-AIA chains
+  /// such as Let's Encrypt R12) can still be accepted via the
+  /// `webpki-roots` static bundle and surface as
+  /// [TrustBackend.platformWithHybridFallback]. That path is not
+  /// affected by [TrustMode]. `platformOnly` therefore means "no
+  /// silent build-time downgrade", not "the public-CA bundle is
+  /// unreachable".
+  platformOnly,
+}
+
+/// Process-global trust-anchor diagnostic snapshot returned by
+/// `ntsTrustStatus()`.
+///
+/// The fields combine static facts (which backend the default
+/// singleton client resolved to at first-handshake time, whether the
+/// Android JNI bootstrap succeeded) with one dynamic counter (how
+/// many times the Android hybrid verifier has overridden the
+/// platform verdict with a webpki-roots fallback since process
+/// start). Fields not relevant to the current platform are reported
+/// with the documented sentinel value (`null` / `false` / `0`)
+/// rather than omitted, so the snapshot has the same shape on every
+/// host.
+class NtsTrustStatus {
+  /// Backend the default singleton client most recently resolved to
+  /// at handshake time. `null` when no handshake has run yet against
+  /// the singleton (process just started, or all queries so far went
+  /// through caller-minted [NtsClient] instances). Custom-client
+  /// callers should read the per-handshake [NtsTimeSample.trustBackend]
+  /// / [NtsWarmCookiesOutcome.trustBackend] for accurate per-client
+  /// attribution.
+  final TrustBackend? defaultClientBackend;
+
+  /// On Android: `true` iff the JNI bootstrap has reported success
+  /// at least once. `false` on every other platform (no JNI
+  /// bootstrap step exists). A `false` value on Android implies the
+  /// process is currently running against the `webpki-roots` static
+  /// bundle for any subsequent handshake, regardless of the caller's
+  /// [TrustMode].
+  final bool androidPlatformInitSucceeded;
+
+  /// Cumulative count of TLS chains the Android hybrid verifier has
+  /// accepted via the `webpki-roots` fallback path since process
+  /// start. Always zero on non-Android platforms (no hybrid verifier
+  /// exists). Non-zero on Android indicates at least one chain
+  /// arrived whose only platform-side failure was a curated
+  /// fallback-eligible shape.
+  final BigInt androidHybridFallbackCount;
+
+  /// Construct a snapshot. Intended for the wrapper-layer conversion
+  /// boundary and for test fixtures.
+  const NtsTrustStatus({
+    required this.defaultClientBackend,
+    required this.androidPlatformInitSucceeded,
+    required this.androidHybridFallbackCount,
+  });
+
+  @override
+  int get hashCode => Object.hash(
+    defaultClientBackend,
+    androidPlatformInitSucceeded,
+    androidHybridFallbackCount,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NtsTrustStatus &&
+          defaultClientBackend == other.defaultClientBackend &&
+          androidPlatformInitSucceeded == other.androidPlatformInitSucceeded &&
+          androidHybridFallbackCount == other.androidHybridFallbackCount);
+
+  @override
+  String toString() =>
+      'NtsTrustStatus(defaultClientBackend: '
+      '${defaultClientBackend?.name ?? "null"}, '
+      'androidPlatformInitSucceeded: $androidPlatformInitSucceeded, '
+      'androidHybridFallbackCount: $androidHybridFallbackCount)';
 }
 
 /// Snapshot of the bounded DNS resolver pool counters.

@@ -55,7 +55,7 @@ extension NtsErrorPatterns on NtsError {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NtsError_InvalidSpec value)?  invalidSpec,TResult Function( NtsError_Network value)?  network,TResult Function( NtsError_KeProtocol value)?  keProtocol,TResult Function( NtsError_NtpProtocol value)?  ntpProtocol,TResult Function( NtsError_Authentication value)?  authentication,TResult Function( NtsError_Timeout value)?  timeout,TResult Function( NtsError_NoCookies value)?  noCookies,TResult Function( NtsError_Internal value)?  internal,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NtsError_InvalidSpec value)?  invalidSpec,TResult Function( NtsError_Network value)?  network,TResult Function( NtsError_KeProtocol value)?  keProtocol,TResult Function( NtsError_NtpProtocol value)?  ntpProtocol,TResult Function( NtsError_Authentication value)?  authentication,TResult Function( NtsError_Timeout value)?  timeout,TResult Function( NtsError_NoCookies value)?  noCookies,TResult Function( NtsError_TrustBackendUnavailable value)?  trustBackendUnavailable,TResult Function( NtsError_Internal value)?  internal,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
@@ -65,7 +65,8 @@ return keProtocol(_that);case NtsError_NtpProtocol() when ntpProtocol != null:
 return ntpProtocol(_that);case NtsError_Authentication() when authentication != null:
 return authentication(_that);case NtsError_Timeout() when timeout != null:
 return timeout(_that);case NtsError_NoCookies() when noCookies != null:
-return noCookies(_that);case NtsError_Internal() when internal != null:
+return noCookies(_that);case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
+return trustBackendUnavailable(_that);case NtsError_Internal() when internal != null:
 return internal(_that);case _:
   return orElse();
 
@@ -84,7 +85,7 @@ return internal(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NtsError_InvalidSpec value)  invalidSpec,required TResult Function( NtsError_Network value)  network,required TResult Function( NtsError_KeProtocol value)  keProtocol,required TResult Function( NtsError_NtpProtocol value)  ntpProtocol,required TResult Function( NtsError_Authentication value)  authentication,required TResult Function( NtsError_Timeout value)  timeout,required TResult Function( NtsError_NoCookies value)  noCookies,required TResult Function( NtsError_Internal value)  internal,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NtsError_InvalidSpec value)  invalidSpec,required TResult Function( NtsError_Network value)  network,required TResult Function( NtsError_KeProtocol value)  keProtocol,required TResult Function( NtsError_NtpProtocol value)  ntpProtocol,required TResult Function( NtsError_Authentication value)  authentication,required TResult Function( NtsError_Timeout value)  timeout,required TResult Function( NtsError_NoCookies value)  noCookies,required TResult Function( NtsError_TrustBackendUnavailable value)  trustBackendUnavailable,required TResult Function( NtsError_Internal value)  internal,}){
 final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec():
@@ -94,7 +95,8 @@ return keProtocol(_that);case NtsError_NtpProtocol():
 return ntpProtocol(_that);case NtsError_Authentication():
 return authentication(_that);case NtsError_Timeout():
 return timeout(_that);case NtsError_NoCookies():
-return noCookies(_that);case NtsError_Internal():
+return noCookies(_that);case NtsError_TrustBackendUnavailable():
+return trustBackendUnavailable(_that);case NtsError_Internal():
 return internal(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
@@ -109,7 +111,7 @@ return internal(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NtsError_InvalidSpec value)?  invalidSpec,TResult? Function( NtsError_Network value)?  network,TResult? Function( NtsError_KeProtocol value)?  keProtocol,TResult? Function( NtsError_NtpProtocol value)?  ntpProtocol,TResult? Function( NtsError_Authentication value)?  authentication,TResult? Function( NtsError_Timeout value)?  timeout,TResult? Function( NtsError_NoCookies value)?  noCookies,TResult? Function( NtsError_Internal value)?  internal,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NtsError_InvalidSpec value)?  invalidSpec,TResult? Function( NtsError_Network value)?  network,TResult? Function( NtsError_KeProtocol value)?  keProtocol,TResult? Function( NtsError_NtpProtocol value)?  ntpProtocol,TResult? Function( NtsError_Authentication value)?  authentication,TResult? Function( NtsError_Timeout value)?  timeout,TResult? Function( NtsError_NoCookies value)?  noCookies,TResult? Function( NtsError_TrustBackendUnavailable value)?  trustBackendUnavailable,TResult? Function( NtsError_Internal value)?  internal,}){
 final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
@@ -119,7 +121,8 @@ return keProtocol(_that);case NtsError_NtpProtocol() when ntpProtocol != null:
 return ntpProtocol(_that);case NtsError_Authentication() when authentication != null:
 return authentication(_that);case NtsError_Timeout() when timeout != null:
 return timeout(_that);case NtsError_NoCookies() when noCookies != null:
-return noCookies(_that);case NtsError_Internal() when internal != null:
+return noCookies(_that);case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
+return trustBackendUnavailable(_that);case NtsError_Internal() when internal != null:
 return internal(_that);case _:
   return null;
 
@@ -137,7 +140,7 @@ return internal(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String field0)?  invalidSpec,TResult Function( String field0)?  network,TResult Function( String field0)?  keProtocol,TResult Function( String field0)?  ntpProtocol,TResult Function( String field0)?  authentication,TResult Function( TimeoutPhase field0)?  timeout,TResult Function()?  noCookies,TResult Function( String field0)?  internal,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String field0)?  invalidSpec,TResult Function( String field0)?  network,TResult Function( String field0)?  keProtocol,TResult Function( String field0)?  ntpProtocol,TResult Function( String field0)?  authentication,TResult Function( TimeoutPhase field0)?  timeout,TResult Function()?  noCookies,TResult Function( String field0)?  trustBackendUnavailable,TResult Function( String field0)?  internal,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
 return invalidSpec(_that.field0);case NtsError_Network() when network != null:
@@ -146,7 +149,8 @@ return keProtocol(_that.field0);case NtsError_NtpProtocol() when ntpProtocol != 
 return ntpProtocol(_that.field0);case NtsError_Authentication() when authentication != null:
 return authentication(_that.field0);case NtsError_Timeout() when timeout != null:
 return timeout(_that.field0);case NtsError_NoCookies() when noCookies != null:
-return noCookies();case NtsError_Internal() when internal != null:
+return noCookies();case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
+return trustBackendUnavailable(_that.field0);case NtsError_Internal() when internal != null:
 return internal(_that.field0);case _:
   return orElse();
 
@@ -165,7 +169,7 @@ return internal(_that.field0);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String field0)  invalidSpec,required TResult Function( String field0)  network,required TResult Function( String field0)  keProtocol,required TResult Function( String field0)  ntpProtocol,required TResult Function( String field0)  authentication,required TResult Function( TimeoutPhase field0)  timeout,required TResult Function()  noCookies,required TResult Function( String field0)  internal,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String field0)  invalidSpec,required TResult Function( String field0)  network,required TResult Function( String field0)  keProtocol,required TResult Function( String field0)  ntpProtocol,required TResult Function( String field0)  authentication,required TResult Function( TimeoutPhase field0)  timeout,required TResult Function()  noCookies,required TResult Function( String field0)  trustBackendUnavailable,required TResult Function( String field0)  internal,}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec():
 return invalidSpec(_that.field0);case NtsError_Network():
@@ -174,7 +178,8 @@ return keProtocol(_that.field0);case NtsError_NtpProtocol():
 return ntpProtocol(_that.field0);case NtsError_Authentication():
 return authentication(_that.field0);case NtsError_Timeout():
 return timeout(_that.field0);case NtsError_NoCookies():
-return noCookies();case NtsError_Internal():
+return noCookies();case NtsError_TrustBackendUnavailable():
+return trustBackendUnavailable(_that.field0);case NtsError_Internal():
 return internal(_that.field0);}
 }
 /// A variant of `when` that fallback to returning `null`
@@ -189,7 +194,7 @@ return internal(_that.field0);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String field0)?  invalidSpec,TResult? Function( String field0)?  network,TResult? Function( String field0)?  keProtocol,TResult? Function( String field0)?  ntpProtocol,TResult? Function( String field0)?  authentication,TResult? Function( TimeoutPhase field0)?  timeout,TResult? Function()?  noCookies,TResult? Function( String field0)?  internal,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String field0)?  invalidSpec,TResult? Function( String field0)?  network,TResult? Function( String field0)?  keProtocol,TResult? Function( String field0)?  ntpProtocol,TResult? Function( String field0)?  authentication,TResult? Function( TimeoutPhase field0)?  timeout,TResult? Function()?  noCookies,TResult? Function( String field0)?  trustBackendUnavailable,TResult? Function( String field0)?  internal,}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
 return invalidSpec(_that.field0);case NtsError_Network() when network != null:
@@ -198,7 +203,8 @@ return keProtocol(_that.field0);case NtsError_NtpProtocol() when ntpProtocol != 
 return ntpProtocol(_that.field0);case NtsError_Authentication() when authentication != null:
 return authentication(_that.field0);case NtsError_Timeout() when timeout != null:
 return timeout(_that.field0);case NtsError_NoCookies() when noCookies != null:
-return noCookies();case NtsError_Internal() when internal != null:
+return noCookies();case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
+return trustBackendUnavailable(_that.field0);case NtsError_Internal() when internal != null:
 return internal(_that.field0);case _:
   return null;
 
@@ -634,6 +640,72 @@ String toString() {
 
 
 
+
+/// @nodoc
+
+
+class NtsError_TrustBackendUnavailable extends NtsError {
+  const NtsError_TrustBackendUnavailable(this.field0): super._();
+  
+
+ final  String field0;
+
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsError_TrustBackendUnavailableCopyWith<NtsError_TrustBackendUnavailable> get copyWith => _$NtsError_TrustBackendUnavailableCopyWithImpl<NtsError_TrustBackendUnavailable>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_TrustBackendUnavailable&&(identical(other.field0, field0) || other.field0 == field0));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,field0);
+
+@override
+String toString() {
+  return 'NtsError.trustBackendUnavailable(field0: $field0)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $NtsError_TrustBackendUnavailableCopyWith<$Res> implements $NtsErrorCopyWith<$Res> {
+  factory $NtsError_TrustBackendUnavailableCopyWith(NtsError_TrustBackendUnavailable value, $Res Function(NtsError_TrustBackendUnavailable) _then) = _$NtsError_TrustBackendUnavailableCopyWithImpl;
+@useResult
+$Res call({
+ String field0
+});
+
+
+
+
+}
+/// @nodoc
+class _$NtsError_TrustBackendUnavailableCopyWithImpl<$Res>
+    implements $NtsError_TrustBackendUnavailableCopyWith<$Res> {
+  _$NtsError_TrustBackendUnavailableCopyWithImpl(this._self, this._then);
+
+  final NtsError_TrustBackendUnavailable _self;
+  final $Res Function(NtsError_TrustBackendUnavailable) _then;
+
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+  return _then(NtsError_TrustBackendUnavailable(
+null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
 
 /// @nodoc
 
