@@ -566,12 +566,17 @@ struct KeOutcomePartial {
 /// trust backend resolved at construction time (`Platform` if the
 /// platform verifier was wired up, `WebpkiRoots` if the static-bundle
 /// fallback fired), and on Android a handle to the per-build
-/// [`HybridVerifier`] so [`perform_handshake`] can sample its
+/// `HybridVerifier` so [`perform_handshake`] can sample its
 /// per-instance fallback counter after the handshake to tell
 /// `Platform` from `PlatformWithHybridFallback` for *this* chain.
-pub struct TlsConfigBuild {
-    pub config: Arc<ClientConfig>,
-    pub initial_backend: KeTrustBackend,
+///
+/// `pub(crate)` because every caller — [`build_tls_config`],
+/// [`build_tls_config_inner`] (both cfg arms), and
+/// [`perform_handshake`] — lives inside this module; the type is
+/// not part of the public Rust API surface.
+pub(crate) struct TlsConfigBuild {
+    pub(crate) config: Arc<ClientConfig>,
+    pub(crate) initial_backend: KeTrustBackend,
     /// `Some` only on Android and only when the platform path resolved
     /// successfully; `None` on every other platform and on the
     /// `WebpkiRoots` hard-fallback path. `perform_handshake` uses
@@ -579,7 +584,7 @@ pub struct TlsConfigBuild {
     /// per-handshake fallback signal without needing platform-gated
     /// match arms in the call site.
     #[cfg(target_os = "android")]
-    pub hybrid: Option<Arc<crate::nts::hybrid_verifier::HybridVerifier>>,
+    pub(crate) hybrid: Option<Arc<crate::nts::hybrid_verifier::HybridVerifier>>,
 }
 
 /// Build a `ClientConfig` with the platform trust store, `ntske/1` ALPN,
@@ -602,7 +607,10 @@ pub struct TlsConfigBuild {
 ///   fallback that activates only on `CertificateError::Revoked` or the
 ///   `rustls-platform-verifier` JNI-failure marker, to work around
 ///   missing-OCSP-AIA chains such as Let's Encrypt R12 and R8-stripped
-///   AAR classes). See [`crate::nts::hybrid_verifier`].
+///   AAR classes). Defined in the `crate::nts::hybrid_verifier` module
+///   (Android-only; gated by `#[cfg(target_os = "android")]` on its
+///   declaration in `nts/mod.rs`, so the rustdoc link is omitted to
+///   keep docs warning-free on non-Android targets).
 /// - **Other platforms**: bare `rustls_platform_verifier::Verifier`,
 ///   constructed directly rather than via `ConfigVerifierExt` because
 ///   that helper hard-codes `with_safe_default_protocol_versions()`
@@ -613,7 +621,11 @@ pub struct TlsConfigBuild {
 ///   construction failure surfaces as
 ///   [`KeError::TrustBackendUnavailable`] so callers who pinned a
 ///   corporate CA see a typed failure instead of a silent downgrade.
-pub fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+///
+/// `pub(crate)` because every caller — [`perform_handshake`] and the
+/// in-module test fixture — lives inside this module; the function
+/// is not part of the public Rust API surface.
+pub(crate) fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     build_tls_config_inner(trust_mode)
 }

@@ -18,10 +18,12 @@
 //!    of `rustls_platform_verifier::android::init_with_env`.
 //!
 //! 3. Cumulative count of TLS chains the Android
-//!    [`crate::nts::hybrid_verifier::HybridVerifier`] has accepted via
-//!    its `webpki-roots` fallback path since process start. Bumped by
-//!    every `verify_server_cert` call that overrides a platform
-//!    verdict; never reset.
+//!    `crate::nts::hybrid_verifier::HybridVerifier` (Android-only;
+//!    intra-doc link omitted to keep rustdoc warning-free on
+//!    non-Android targets) has accepted via its `webpki-roots`
+//!    fallback path since process start. Bumped by every
+//!    `verify_server_cert` call that overrides a platform verdict;
+//!    never reset.
 //!
 //! All three counters use atomic `Relaxed` loads/stores: the snapshot
 //! returned by [`crate::api::nts::nts_trust_status`] is intended for
