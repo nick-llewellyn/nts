@@ -337,7 +337,7 @@ Per-handshake reporting:
 
 Process-global snapshot (`nts_trust_status() -> NtsTrustStatus`):
 
-- `defaultTrustBackend` — the trust backend the *default
+- `defaultClientBackend` — the trust backend the *default
   singleton* `NtsClient` last observed. `null` until that client
   performs its first handshake. Caller-minted `NtsClient`
   instances are intentionally not reflected here; the snapshot is
