@@ -6,26 +6,25 @@ The first release after `2.0.0` consolidates four chunks of work
 that landed on `main` between the 2.x line and the 3.0 cut:
 
 1. **Trust-anchor backend diagnostics + strict `platformOnly` mode**
-   (closes `nts-21j`) — every `ntsQuery` / `ntsWarmCookies` result
-   now reports which trust-anchor backend authenticated its TLS
-   chain, and callers can opt into refusing the silent downgrade
-   from the platform store to the static `webpki-roots` bundle.
-2. **Per-host singleflight on the cache-layer checkout path**
-   (closes `nts-o8u`) — concurrent cold queries against the same
-   `host:port` collapse onto a single in-flight NTS-KE handshake
-   instead of each running their own duplicate one. Internal to
-   `SessionTable`; no API change.
-3. **Owned `NtsClient` session handle** (closes `nts-2dd`) — an
-   explicit, owned client whose per-host session table can be
-   scoped to a caller, cleared on demand, and isolated from other
-   callers. The top-level `ntsQuery` / `ntsWarmCookies` continue
-   to delegate to a process-wide default `NtsClient`, so existing
+   — every `ntsQuery` / `ntsWarmCookies` result now reports which
+   trust-anchor backend authenticated its TLS chain, and callers
+   can opt into refusing the silent downgrade from the platform
+   store to the static `webpki-roots` bundle.
+2. **Per-host singleflight on the cache-layer checkout path** —
+   concurrent cold queries against the same `host:port` collapse
+   onto a single in-flight NTS-KE handshake instead of each
+   running their own duplicate one. Internal to `SessionTable`;
+   no API change.
+3. **Owned `NtsClient` session handle** — an explicit, owned
+   client whose per-host session table can be scoped to a caller,
+   cleared on demand, and isolated from other callers. The
+   top-level `ntsQuery` / `ntsWarmCookies` continue to delegate
+   to a process-wide default `NtsClient`, so existing
    single-cache callers see no change.
-4. **Hand-written public DTOs and sealed `NtsError`** (closes
-   `nts-u9a`) — the public surface is no longer a re-export of
-   the FRB-generated bindings. A Rust-side struct rename or
-   reorder is no longer a SemVer event for any of the public
-   DTO types.
+4. **Hand-written public DTOs and sealed `NtsError`** — the
+   public surface is no longer a re-export of the FRB-generated
+   bindings. A Rust-side struct rename or reorder is no longer
+   a SemVer event for any of the public DTO types.
 
 This is a **major version bump** because chunks 1 and 4 each
 break the public Dart API: chunk 4 renames the `NtsError_*`
@@ -109,7 +108,7 @@ directly with the existing `// ignore_for_file: implementation_imports`
 pattern. The example's `MockNtsApi` (`example/lib/src/mock_api.dart`)
 shows the intended shape.
 
-### Added — public DTOs and sealed `NtsError` (was `nts-u9a`)
+### Added — public DTOs and sealed `NtsError`
 
 - All public DTOs (`NtsServerSpec`, `NtsTimeSample`,
   `NtsWarmCookiesOutcome`, `NtsDnsPoolStats`, `PhaseTimings`) are now
@@ -127,7 +126,7 @@ shows the intended shape.
   addition surfaces as a compile error in the conversion layer
   rather than as a silently-dropped variant at the consumer.
 
-### Added — `NtsClient` handle (was `nts-2dd`)
+### Added — `NtsClient` handle
 
 - `NtsClient` in `lib/src/api/nts.dart`. Construct with `NtsClient()`
   to mint a fresh client whose session table starts empty and never
@@ -167,7 +166,7 @@ shows the intended shape.
   calling the top-level `ntsQuery` / `ntsWarmCookies` — the
   singleton convenience is the recommended default.
 
-### Added — per-host singleflight (was `nts-o8u`)
+### Added — per-host singleflight
 
 - Per-key singleflight in `SessionTable::checkout` (Rust internal):
   - The first concurrent checkout against a given `host:port`
@@ -216,7 +215,7 @@ shows the intended shape.
   gesture should not be silently coalesced with an unrelated
   `ntsQuery`'s handshake.
 
-### Added — trust-anchor diagnostics + strict mode (was `nts-21j`)
+### Added — trust-anchor diagnostics + strict mode
 
 - `TrustMode` enum on the public DTO surface (in `lib/src/api/models.dart`):
   - `TrustMode.platformWithFallback` — the pre-3.0 default behaviour:
@@ -333,8 +332,7 @@ inspecting free-form diagnostic strings or bolting a Dart-side
 `Stopwatch` around `ntsQuery`. The Rust crate `nts_rust` is bumped to
 `0.4.0` to reflect a breaking change in the public NTS API surface;
 the Dart package is bumped to `2.0.0` for the matching breaking change
-in the FFI signatures and the `NtsError::Timeout` payload (closes
-`nts-r2l`).
+in the FFI signatures and the `NtsError::Timeout` payload.
 
 ### Breaking changes
 
@@ -423,7 +421,7 @@ in the FFI signatures and the `NtsError::Timeout` payload (closes
   the orphan path, failing the job explicitly on the orphan
   diagnostic rather than implicitly via trailing drift. Header
   comment in `tool/check_bindings.dart` is rewritten to document
-  the orphan check and its rationale (closes `nts-lmf`).
+  the orphan check and its rationale.
 
 ### Coverage artefact ignore at any depth
 
@@ -654,7 +652,7 @@ to `1.3.2` (patch).
   cookie pool. The next `checkout` for that host finds no entry
   and performs a fresh NTS-KE handshake instead of draining the
   remaining cookies through identical failures plus the caller's
-  per-source exponential backoff. Closes `nts-0jl`.
+  per-source exponential backoff.
   - **AEAD authentication failure** — local C2S seal in
     `build_client_request` or remote S2C verify in
     `parse_server_response` returns `NtpError::Aead`. The cached
@@ -823,8 +821,8 @@ to `1.3.2` (patch).
   remaining role as the lifecycle-hook host.
   `lib/src/ffi/api/simple.dart` is removed; FRB does not auto-clean
   stale module files when a Rust `api/` module loses its last `pub`
-  item (followup tracked as `nts-lmf` to extend
-  `tool/check_bindings.dart` to flag this footgun). The
+  item (a follow-up extends `tool/check_bindings.dart` to flag
+  this footgun). The
   `crateApiSimpleGreet` overrides in `example/lib/src/mock_api.dart`,
   `test/api_smoke_test.dart`, and `test/ffi_smoke_test.dart` are
   removed in the same commit; the FRB-generated layer
@@ -1465,7 +1463,7 @@ Assets bridge.
 
 - `lib/src/ffi/frb_generated.dart`: regenerate against the current
   `analysis_options.yaml`. Removing the `analyzer.exclude:
-  [lib/src/ffi/**]` block in 1.0.5 (`nts-2cq`) had a side effect that
+  [lib/src/ffi/**]` block in 1.0.5 had a side effect that
   the bindings CI job did not surface until the next commit that
   re-triggered the job: `flutter_rust_bridge_codegen` runs an
   analyzer-aware fix-up over the Dart it emits before exiting, that
@@ -1506,8 +1504,8 @@ published Dart surface, the Rust crate, or the Native Assets bridge.
   about the rendering quirk that motivated the file's existence
   (`pana` priority list, the `example/main.dart` shadowing dance from
   1.0.3 / 1.0.4). The fenced sample is the consumer-visible artefact;
-  the rendering history is recorded in this changelog and in the
-  `nts-9td` commit message, not in the file pub.dev publishes.
+  the rendering history is recorded in this changelog, not in the
+  file pub.dev publishes.
 
 - `analysis_options.yaml`: remove the
   `analyzer.exclude: [lib/src/ffi/**]` block so local
