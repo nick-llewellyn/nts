@@ -67,10 +67,20 @@ void main() {
   });
 
   group('NtsError severity + description', () {
-    test('authentication / KE / NTP / internal errors are error-severity', () {
+    test('authentication / KE / NTP / trust-backend / internal errors are '
+        'error-severity', () {
       expect(isErrorSeverity(const NtsError.authentication('x')), isTrue);
       expect(isErrorSeverity(const NtsError.keProtocol('x')), isTrue);
       expect(isErrorSeverity(const NtsError.ntpProtocol('x')), isTrue);
+      // TrustBackendUnavailable is a deliberate caller-side
+      // configuration choice (`PlatformOnly`) the runtime cannot
+      // honour; classified as error so an operator notices the
+      // misconfiguration rather than treating it as a transient
+      // network blip.
+      expect(
+        isErrorSeverity(const NtsError.trustBackendUnavailable('x')),
+        isTrue,
+      );
       expect(isErrorSeverity(const NtsError.internal('x')), isTrue);
     });
 
@@ -93,6 +103,13 @@ void main() {
       expect(
         describeError(const NtsError.noCookies()),
         startsWith('NoCookies'),
+      );
+      expect(
+        describeError(
+          const NtsError.trustBackendUnavailable('platform CA bundle missing'),
+        ),
+        'TrustBackendUnavailable (PlatformOnly mode rejected fallback): '
+        'platform CA bundle missing',
       );
     });
   });

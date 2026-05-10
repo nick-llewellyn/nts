@@ -65,16 +65,45 @@ String formatWarmSuccess(int cookies) =>
 
 /// Severity classification for an [NtsError]. Network / timeout / spec
 /// errors are routine when probing arbitrary hosts and warrant warn;
-/// authentication and KE-/NTP-protocol errors are genuinely interesting
-/// and stay at error.
+/// authentication, KE-/NTP-protocol, internal, and trust-backend
+/// errors are genuinely interesting and stay at error. The trust-backend
+/// case is a deliberate caller-side configuration choice (`PlatformOnly`)
+/// the runtime cannot honour; loud surfacing is appropriate so an
+/// operator notices the misconfiguration rather than treating it as a
+/// transient network blip.
 bool isErrorSeverity(NtsError err) =>
     err is NtsErrorAuthentication ||
     err is NtsErrorKeProtocol ||
     err is NtsErrorNtpProtocol ||
+    err is NtsErrorTrustBackendUnavailable ||
     err is NtsErrorInternal;
 
 /// Human-readable rendering of an [NtsError] suitable for the live log
 /// or stderr.
+///
+/// Cross-variant routing notes that affect how a reader instrumenting
+/// against this surface should interpret the strings:
+///
+/// - **AEAD-algorithm negotiation failures arrive as [NtsErrorKeProtocol],
+///   not [NtsErrorAuthentication]**. The AEAD-id round-trip happens
+///   inside the NTS-KE record exchange (RFC 8915 §4.1.5) before any
+///   authenticated NTPv4 packet is constructed; a server that picks an
+///   AEAD identifier this client does not implement is a *negotiation*
+///   failure, surfaced via the `From<AeadError> for KeError` mapping
+///   in `rust/src/api/nts.rs`. [NtsErrorAuthentication] is reserved
+///   for cryptographic-verification failures on a fully negotiated AEAD
+///   (tag mismatch, malformed AEAD input). A monitoring rule wired to
+///   "tag mismatch" alarms must therefore key on
+///   [NtsErrorAuthentication] only, not [NtsErrorKeProtocol].
+/// - **NTP Kiss-of-Death (KoD) and unsynchronized-server states tunnel
+///   through [NtsErrorNtpProtocol]**. The 4-octet KoD reference id
+///   (`RATE`, `DENY`, `RSTR`, `NTSN`, …) and the unsynchronised-leap
+///   flag are preserved verbatim in `field0`; callers that want to
+///   distinguish "server told me to back off" from "server's clock is
+///   not yet steered" can substring-match the message rather than
+///   needing a dedicated error variant. The CLI / GUI surfaces here
+///   render the message verbatim under the `NtpProtocol:` prefix so a
+///   reader sees the raw KoD text for free.
 String describeError(NtsError err) => switch (err) {
   NtsErrorInvalidSpec(:final field0) => 'InvalidSpec: $field0',
   NtsErrorNetwork(:final field0) => 'Network: $field0',
