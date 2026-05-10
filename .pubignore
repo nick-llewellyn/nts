@@ -46,6 +46,11 @@ example/macos/Pods/
 # the published tarball. Mirrors root .gitignore.
 coverage/
 
+# macOS Finder metadata. Mirrors root .gitignore; if a maintainer
+# happens to publish from a directory a Finder window has visited,
+# the local-only `.DS_Store` files must not ship in the tarball.
+.DS_Store
+
 # --- Additional publish-only exclusions ------------------------------
 
 # AI-agent guidance files. Tracked in git (so contributors and the
