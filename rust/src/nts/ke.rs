@@ -212,9 +212,12 @@ pub struct KeRequest {
     /// Trust-anchor policy for this handshake. Threads through
     /// [`build_tls_config`] to control the
     /// `build_with_native_verifier` failure-fallback decision. New
-    /// in 3.0.0; defaults to [`KeTrustMode::PlatformWithFallback`]
-    /// for the unit-test constructors that elide it via
-    /// [`KeRequest::default`]-style helpers.
+    /// in 3.0.0; the public-API layer (`crate::api::nts::NtsClient`)
+    /// sets this from its own `TrustMode` field per call, and unit
+    /// tests construct `KeRequest` literally with the desired
+    /// variant. Pre-3.0 callers that did not name this field
+    /// should add `trust_mode: KeTrustMode::PlatformWithFallback`
+    /// to preserve existing behaviour.
     pub trust_mode: KeTrustMode,
 }
 
@@ -617,7 +620,6 @@ pub fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeErr
 
 #[cfg(target_os = "android")]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
-    use crate::nts::hybrid_verifier::HybridVerifier;
     match build_with_native_verifier_android() {
         Ok((mut cfg, hybrid)) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
