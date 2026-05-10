@@ -832,17 +832,6 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     #[cfg(not(target_os = "android"))]
     let trust_backend = build.initial_backend;
 
-    log::info!(
-        target: "nts::ke",
-        "KE handshake ok: host={} aead_id={} cookies={} ntp={}:{} trust_backend={:?}",
-        req.host,
-        partial.aead_id,
-        partial.cookies.len(),
-        partial.ntpv4_host,
-        partial.ntpv4_port,
-        trust_backend,
-    );
-
     Ok(KeOutcome {
         ntpv4_host: partial.ntpv4_host,
         ntpv4_port: partial.ntpv4_port,
