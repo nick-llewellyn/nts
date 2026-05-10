@@ -48,8 +48,8 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 /// 3. `android_hybrid_fallback_count` — cumulative count of TLS
 ///    chains the Android `HybridVerifier` has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
-///    platforms. See [`crate::nts::hybrid_verifier`] for the curated
-///    fallback-eligible failure shapes.
+///    platforms. The curated fallback-eligible failure shapes are
+///    documented on the `HybridVerifier` Rust source.
 ///
 /// Reads three atomics with `Relaxed` ordering. The snapshot is
 /// intended for human / dashboard consumption, not for cross-thread
@@ -472,14 +472,13 @@ class NtsTrustStatus {
   /// handshake, regardless of the caller's [`TrustMode`].
   final bool androidPlatformInitSucceeded;
 
-  /// Cumulative count of TLS chains the Android
-  /// [`crate::nts::hybrid_verifier::HybridVerifier`] has accepted
-  /// via the `webpki-roots` fallback path since process start.
-  /// Always zero on non-Android platforms (no `HybridVerifier`
-  /// exists). Non-zero on Android indicates at least one chain
-  /// arrived whose only platform-side failure was a curated
-  /// fallback-eligible shape (missing OCSP-AIA, R8-stripped AAR
-  /// classes, etc.).
+  /// Cumulative count of TLS chains the Android `HybridVerifier`
+  /// has accepted via the `webpki-roots` fallback path since
+  /// process start. Always zero on non-Android platforms (no
+  /// `HybridVerifier` exists). Non-zero on Android indicates at
+  /// least one chain arrived whose only platform-side failure was
+  /// a curated fallback-eligible shape (missing OCSP-AIA,
+  /// R8-stripped AAR classes, etc.).
   final BigInt androidHybridFallbackCount;
 
   const NtsTrustStatus({
@@ -688,12 +687,11 @@ enum TrustBackend {
 
   /// Android-only: the platform verifier ran first, but its result
   /// was overridden by the `webpki-roots` fallback inside
-  /// [`crate::nts::hybrid_verifier::HybridVerifier`] for one of the
-  /// curated platform-failure shapes documented there
-  /// (missing-OCSP-AIA chains such as Let's Encrypt R12, R8-stripped
-  /// AAR classes). Indicates the platform verifier's view was
-  /// rejected and the static bundle was authoritative for this
-  /// chain.
+  /// `HybridVerifier` for one of the curated platform-failure shapes
+  /// documented there (missing-OCSP-AIA chains such as Let's Encrypt
+  /// R12, R8-stripped AAR classes). Indicates the platform verifier's
+  /// view was rejected and the static bundle was authoritative for
+  /// this chain.
   platformWithHybridFallback,
 
   /// `build_with_native_verifier` failed at TLS-config construction
