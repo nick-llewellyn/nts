@@ -26,13 +26,14 @@ recovery means resetting `main` back to its authoritative remote
 (typically `origin/main`, but see the multi-remote caveat in the
 "Recovery when the rule is broken" section below if you cloned
 from a fork) rather than preventing the commit in the first place.
-Required
-approvals are set to **0**, so self-merging is the expected default
-once the required status checks pass. Every PR triggers the CI
-workflow (including doc-only ones); the `build`, `rust`,
-`rust-bridge-sync`, `hooks-syntax`, and `hooks-behaviour` jobs all
-skip the heavy work on doc-only diffs but still report a status, so
-branch protection resolves without manual intervention. See
+Required approvals are set to **0** so a *human* contributor can
+self-merge once the required status checks pass; **agents must
+not** self-merge — see [Agent merge policy](#agent-merge-policy-read-this-before-any-gh-pr-merge)
+below. Every PR triggers the CI workflow (including doc-only
+ones); the `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`,
+and `hooks-behaviour` jobs all skip the heavy work on doc-only
+diffs but still report a status, so branch protection resolves
+without manual intervention. See
 [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow) for the
 authoritative branch-protection table.
 
@@ -44,7 +45,10 @@ git switch -c <type>/<short-slug>      # e.g. feat/coverage-upload
 git push -u origin HEAD                # push the feature branch
 gh pr create --fill                    # uses .github/pull_request_template.md
 # ... wait for CI; fix anything red ...
-gh pr merge --squash --delete-branch   # self-merge once green
+# STOP HERE. Report PR URL + CI status to the user and wait for
+# explicit "merge it" before running `gh pr merge`. See
+# "Agent merge policy" below — branch protection allows the
+# merge, but the policy here does not.
 ```
 
 Operational notes:
@@ -60,6 +64,55 @@ Operational notes:
   [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow). Treat
   that section as the source of truth when reconciling repo
   settings.
+
+## Agent merge policy (read this before any `gh pr merge`)
+
+> **Hard rule:** An agent must **never** call `gh pr merge` (or
+> the GitHub web "Merge pull request" button via any tool) on a
+> PR it authored, regardless of CI state, regardless of whether
+> the PR appears trivial, and regardless of how recently the user
+> said "merge the previous one". A separate explicit "merge it"
+> from the user is required for **every** merge, **every** time.
+
+Branch protection's `required_approving_review_count: 0` exists so
+that a *human* contributor can self-merge their own work without
+having to round-trip a reviewer for trivial changes. Agents are
+not human contributors. The PR-creation step, plus the user's
+review of the diff, plus the user's explicit instruction to
+merge, are the agent-authored equivalent of the review-and-merge
+loop that protection rule was designed for.
+
+This policy applies even when:
+
+- CI is fully green and all required status checks pass.
+- The PR is small (one commit, one file, one line).
+- An earlier PR in the same session was merged with the user's
+  permission. Permission does **not** carry forward to the next
+  PR.
+- The user said "fine, ship it" or similar about a *different*
+  PR, even minutes earlier.
+- The change reverts an earlier agent action (revert PRs also
+  need explicit merge permission).
+- AGENTS.md, CLAUDE.md, or any other doc says "self-merge once
+  green" — that language is for human contributors. The rule in
+  this section overrides it for agents.
+
+The agent-side workflow is therefore:
+
+1. Push the branch and open the PR (`gh pr create`).
+2. Report the PR URL, the diff summary, and the CI status to the
+   user.
+3. **Stop.** Wait for explicit "merge it" / "go ahead and merge"
+   / equivalent unambiguous instruction.
+4. On receiving that instruction, `gh pr merge --squash
+   --delete-branch` and report the merge result.
+
+Recovery when this rule is broken: open a revert PR
+(`git revert <squash-sha>` on a `revert/pr-<n>-<short-slug>`
+branch, push, `gh pr create`) and stop at step 3 of the
+workflow above. Do **not** auto-merge the revert PR either —
+that would compound the original failure with the same
+mistake.
 
 ## Branch Protection (read this before any `git commit`)
 
