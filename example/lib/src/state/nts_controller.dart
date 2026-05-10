@@ -22,8 +22,12 @@ import '../data/server_entry.dart';
 import 'app_state.dart';
 import 'nts_format.dart';
 
-/// Per-request timeout applied independently to NTS-KE and the UDP
-/// recv leg. Mirrors the value the original example used.
+/// Per-request timeout in milliseconds. Single global wall-clock
+/// budget that spans DNS, NTS-KE (TCP connect, TLS handshake,
+/// record I/O) and the AEAD-NTPv4 UDP exchange as one shrinking
+/// deadline — see the `ntsQuery` dartdoc in `package:nts/nts.dart`
+/// for the full mechanism. Mirrors the value the original example
+/// used.
 const int _kTimeoutMs = 5000;
 
 class NtsController {
