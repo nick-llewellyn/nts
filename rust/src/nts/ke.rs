@@ -832,9 +832,16 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     #[cfg(not(target_os = "android"))]
     let trust_backend = build.initial_backend;
 
+    // `ntp_host` / `ntp_port` are emitted as separate `key=value`
+    // pairs rather than a combined `host:port` token because
+    // `partial.ntpv4_host` can be an IPv6 literal (RFC 8915 §4.1.7
+    // `Server` record carries an arbitrary host string), and a flat
+    // `host:port` join makes the address-vs-port boundary
+    // unparseable for log scrapers when the host itself contains
+    // colons (e.g. `2001:db8::1` + port `4460`).
     log::info!(
         target: "nts::ke",
-        "KE handshake ok: host={} aead_id={} cookies={} ntp={}:{} trust_backend={:?}",
+        "KE handshake ok: host={} aead_id={} cookies={} ntp_host={} ntp_port={} trust_backend={:?}",
         req.host,
         partial.aead_id,
         partial.cookies.len(),

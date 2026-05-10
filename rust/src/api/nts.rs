@@ -553,15 +553,27 @@ pub enum NtsError {
     ///
     /// AEAD-algorithm *negotiation* failures during NTS-KE — a
     /// server picking an AEAD identifier this client does not
-    /// implement — route to [`Self::KeProtocol`] instead. The
-    /// primary path is [`KeError::UnsupportedAead`] raised inside
-    /// [`crate::nts::ke::validate_response`], mapped to `KeProtocol`
+    /// implement — route to `NtsError::KeProtocol` instead (Dart:
+    /// `NtsError.keProtocol`). The primary path is
+    /// `KeError::UnsupportedAead` raised inside
+    /// `crate::nts::ke::validate_response`, mapped to `KeProtocol`
     /// by the catch-all arm of the `From<KeError>` impl below;
-    /// the defence-in-depth path ([`AeadError::UnsupportedAlgorithm`],
+    /// the defence-in-depth path (`AeadError::UnsupportedAlgorithm`,
     /// only reached if validation is bypassed) is mapped to the
     /// same `KeProtocol` variant by the explicit arm of the
     /// `From<AeadError>` impl. The Dart-side mirror of this
     /// routing lives on `NtsError.authentication` in
+    /// `lib/src/api/errors.dart`.
+    ///
+    /// Names like `KeError::UnsupportedAead`,
+    /// `crate::nts::ke::validate_response`, and
+    /// `AeadError::UnsupportedAlgorithm` refer to crate-internal
+    /// Rust items and are intentionally rendered as inline code
+    /// rather than rustdoc intra-doc links: this rustdoc is mirrored
+    /// into Dart via FRB, and broken cross-language links would
+    /// surface as dead references on the Dart side. A Rust reader
+    /// can find them via crate-internal navigation; a Dart reader
+    /// has the parallel dartdoc on `NtsError.authentication` in
     /// `lib/src/api/errors.dart`.
     Authentication(String),
     /// Wall-clock budget elapsed inside one of the call's pre-NTP or
