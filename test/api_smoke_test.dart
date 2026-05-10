@@ -1097,28 +1097,28 @@ void main() {
       expect(api.clientWithTrustModeCalls, 0);
     });
 
-    test('trustMode override routes through withTrustMode for platformOnly', () {
-      NtsClient(trustMode: TrustMode.platformOnly);
-      // The wrapper short-circuits the explicit call when the caller
-      // passed the default mode (covered by the previous test); a
-      // non-default mode must round-trip through the FRB factory so
-      // the Rust side observes the policy at construction time.
-      expect(api.clientNewCalls, 0);
-      expect(api.clientWithTrustModeCalls, 1);
-      expect(api.lastClientWithTrustModeMode, ffi.TrustMode.platformOnly);
-    });
-
     test(
-      'trustMode override delegates to the default factory when '
-      'platformWithFallback is requested',
+      'trustMode override routes through withTrustMode for platformOnly',
       () {
-        NtsClient(trustMode: TrustMode.platformWithFallback);
-        // Equivalent to the no-arg form: avoids a redundant FFI hop
-        // when the caller's mode matches the singleton's default.
-        expect(api.clientNewCalls, 1);
-        expect(api.clientWithTrustModeCalls, 0);
+        NtsClient(trustMode: TrustMode.platformOnly);
+        // The wrapper short-circuits the explicit call when the caller
+        // passed the default mode (covered by the previous test); a
+        // non-default mode must round-trip through the FRB factory so
+        // the Rust side observes the policy at construction time.
+        expect(api.clientNewCalls, 0);
+        expect(api.clientWithTrustModeCalls, 1);
+        expect(api.lastClientWithTrustModeMode, ffi.TrustMode.platformOnly);
       },
     );
+
+    test('trustMode override delegates to the default factory when '
+        'platformWithFallback is requested', () {
+      NtsClient(trustMode: TrustMode.platformWithFallback);
+      // Equivalent to the no-arg form: avoids a redundant FFI hop
+      // when the caller's mode matches the singleton's default.
+      expect(api.clientNewCalls, 1);
+      expect(api.clientWithTrustModeCalls, 0);
+    });
 
     test('client.trustMode getter round-trips the construction choice', () {
       final c1 = NtsClient();
@@ -1227,18 +1227,21 @@ void main() {
       );
     });
 
-    test('toString renders null defaultClientBackend as the literal "null"', () {
-      final unset = NtsTrustStatus(
-        defaultClientBackend: null,
-        androidPlatformInitSucceeded: false,
-        androidHybridFallbackCount: BigInt.zero,
-      );
-      expect(
-        unset.toString(),
-        'NtsTrustStatus(defaultClientBackend: null, '
-        'androidPlatformInitSucceeded: false, '
-        'androidHybridFallbackCount: 0)',
-      );
-    });
+    test(
+      'toString renders null defaultClientBackend as the literal "null"',
+      () {
+        final unset = NtsTrustStatus(
+          defaultClientBackend: null,
+          androidPlatformInitSucceeded: false,
+          androidHybridFallbackCount: BigInt.zero,
+        );
+        expect(
+          unset.toString(),
+          'NtsTrustStatus(defaultClientBackend: null, '
+          'androidPlatformInitSucceeded: false, '
+          'androidHybridFallbackCount: 0)',
+        );
+      },
+    );
   });
 }
