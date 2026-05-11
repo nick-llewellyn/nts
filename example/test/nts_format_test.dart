@@ -5,7 +5,15 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
-    show NtsError, NtsTimeSample, PhaseTimings, TimeoutPhase, TrustBackend;
+    show
+        NtsError,
+        NtsTimeSample,
+        NtsTrustStatus,
+        NtsWarmCookiesOutcome,
+        PhaseTimings,
+        TimeoutPhase,
+        TrustBackend,
+        TrustMode;
 import 'package:nts_example/src/state/nts_format.dart';
 
 void main() {
@@ -36,8 +44,35 @@ void main() {
     });
   });
 
+  group('formatTrustBackend', () {
+    test('platform → short label', () {
+      expect(formatTrustBackend(TrustBackend.platform), 'platform');
+    });
+    test('platformWithHybridFallback → short label', () {
+      expect(
+        formatTrustBackend(TrustBackend.platformWithHybridFallback),
+        'platform+hybrid-fallback',
+      );
+    });
+    test('webpkiRoots → short label', () {
+      expect(formatTrustBackend(TrustBackend.webpkiRoots), 'webpki-roots');
+    });
+  });
+
+  group('formatTrustMode', () {
+    test('platformWithFallback → short label', () {
+      expect(
+        formatTrustMode(TrustMode.platformWithFallback),
+        'platform-with-fallback',
+      );
+    });
+    test('platformOnly → short label', () {
+      expect(formatTrustMode(TrustMode.platformOnly), 'platform-only');
+    });
+  });
+
   group('formatQuerySuccess', () {
-    test('renders a two-line headline / continuation pair', () {
+    test('renders a two-line headline / continuation pair with trust', () {
       final sample = NtsTimeSample(
         utcUnixMicros: 1_777_334_400 * 1000000,
         roundTripMicros: 226_000,
@@ -45,7 +80,7 @@ void main() {
         aeadId: 15,
         freshCookies: 2,
         phaseTimings: _zeroPhaseTimings(),
-        trustBackend: TrustBackend.platform,
+        trustBackend: TrustBackend.platformWithHybridFallback,
       );
       final out = formatQuerySuccess(sample);
       final lines = out.split('\n');
@@ -57,12 +92,52 @@ void main() {
       expect(lines[1], startsWith('    └─ '));
       expect(lines[1], contains('aead=AES-SIV-CMAC-256(15)'));
       expect(lines[1], contains('cookies=2'));
+      // Trust backend goes on the continuation row alongside aead /
+      // cookies so the headline stays scannable.
+      expect(lines[1], contains('trust=platform+hybrid-fallback'));
     });
   });
 
   group('formatWarmSuccess', () {
-    test('renders OK + count', () {
-      expect(formatWarmSuccess(8), 'OK  recovered 8 fresh cookie(s)');
+    test('renders OK + count + trust backend', () {
+      final outcome = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platform,
+      );
+      expect(
+        formatWarmSuccess(outcome),
+        'OK  recovered 8 fresh cookie(s)  trust=platform',
+      );
+    });
+  });
+
+  group('formatTrustStatus', () {
+    test('null defaultClientBackend renders the no-handshake sentinel', () {
+      final status = NtsTrustStatus(
+        defaultClientBackend: null,
+        androidPlatformInitSucceeded: false,
+        androidHybridFallbackCount: BigInt.zero,
+      );
+      final out = formatTrustStatus(status);
+      expect(out, contains('default-singleton-backend: (no handshake'));
+      expect(out, contains('android-platform-init-succeeded: false'));
+      expect(out, contains('android-hybrid-fallback-count: 0'));
+    });
+
+    test('non-null backend renders the human-readable label', () {
+      final status = NtsTrustStatus(
+        defaultClientBackend: TrustBackend.platformWithHybridFallback,
+        androidPlatformInitSucceeded: true,
+        androidHybridFallbackCount: BigInt.from(7),
+      );
+      final out = formatTrustStatus(status);
+      expect(
+        out,
+        contains('default-singleton-backend: platform+hybrid-fallback'),
+      );
+      expect(out, contains('android-platform-init-succeeded: true'));
+      expect(out, contains('android-hybrid-fallback-count: 7'));
     });
   });
 
@@ -169,6 +244,7 @@ void main() {
         'aead_id': 15,
         'aead_label': 'AES-SIV-CMAC-256(15)',
         'cookies': 2,
+        'trust_backend': 'platform',
       });
     });
 
@@ -189,12 +265,21 @@ void main() {
       expect(decoded['aead_label'], 'AES-128-GCM-SIV(30)');
       expect(decoded['cookies'], 8);
       expect(decoded['rtt_micros'], 750);
+      expect(decoded['trust_backend'], 'platform');
     });
   });
 
   group('jsonWarmSuccess', () {
-    test('emits a single-key cookie count', () {
-      expect(jsonWarmSuccess(8), {'cookies': 8});
+    test('emits the cookie count plus trust-backend variant tag', () {
+      final outcome = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platformWithHybridFallback,
+      );
+      expect(jsonWarmSuccess(outcome), {
+        'cookies': 8,
+        'trust_backend': 'platformWithHybridFallback',
+      });
     });
   });
 

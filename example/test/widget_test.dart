@@ -11,7 +11,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:nts/nts.dart' show RustLib;
+import 'package:nts/nts.dart' show RustLib, TrustMode;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
 import 'package:nts_example/src/mock_api.dart';
@@ -136,7 +136,11 @@ void main() {
         (e) =>
             e.message.startsWith('OK ') &&
             e.message.contains('stratum=') &&
-            e.message.contains('aead='),
+            e.message.contains('aead=') &&
+            // 3.0.0: trust backend rides on the success line so a
+            // reader can spot a fallback path without consulting the
+            // dartdoc.
+            e.message.contains('trust='),
       ),
       isTrue,
     );
@@ -158,5 +162,174 @@ void main() {
 
     final visible = h.state.filtered.value;
     expect(visible.first.hostname, 'ptbtime1.ptb.de');
+  });
+
+  testWidgets('TrustMode toggle flips the signal and emits a system log line', (
+    tester,
+  ) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Default policy is platform-with-fallback.
+    expect(h.state.trustMode.value, TrustMode.platformWithFallback);
+
+    // Tap the "Platform only" segment of the segmented button.
+    await tester.tap(find.text('Platform only'));
+    await tester.pump();
+
+    expect(h.state.trustMode.value, TrustMode.platformOnly);
+    // The controller's subscription posts a `system` line that
+    // names the new mode and the cookie-pool drop. Asserting on
+    // the line rather than just the signal proves the controller
+    // is wired to the signal end-to-end.
+    final sys = h.state.log.entries.value
+        .where((e) => e.source == 'system')
+        .toList();
+    expect(
+      sys.any((e) => e.message.contains('TrustMode → platform-only')),
+      isTrue,
+    );
+  });
+
+  testWidgets('TrustStatusPanel renders both sentinel rows and refreshes the '
+      'singleton snapshot on demand', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Both rows start at their sentinel: no per-client handshake
+    // has fired yet, and no singleton snapshot has been read.
+    expect(find.text('Trust status'), findsOneWidget);
+    expect(
+      find.textContaining('last-handshake-backend: (no per-client'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('singleton snapshot: (tap refresh'),
+      findsOneWidget,
+    );
+
+    // Refresh button forces a singleton-snapshot read but does
+    // NOT populate the per-client row (no per-client handshake
+    // has happened yet).
+    await tester.tap(find.byTooltip('Refresh singleton snapshot'));
+    await tester.pump();
+
+    expect(h.state.trustStatus.value, isNotNull);
+    expect(h.state.lastHandshakeBackend.value, isNull);
+    expect(find.textContaining('default-singleton-backend'), findsOneWidget);
+    // Per-client row should still show its sentinel.
+    expect(
+      find.textContaining('last-handshake-backend: (no per-client'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'a successful per-client query populates the last-handshake row',
+    (tester) async {
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('NTS Query'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+
+      // Per-client row reflects what the just-completed handshake
+      // actually used; mock returns TrustBackend.platform on the
+      // happy path.
+      expect(h.state.lastHandshakeBackend.value, isNotNull);
+      expect(find.textContaining('last-handshake-backend: '), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'flipping TrustMode resets lastHandshakeBackend so the panel does '
+    'not show stale attribution from the dropped client',
+    (tester) async {
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      // Drive a successful query so the last-handshake row populates.
+      await tester.tap(find.text('NTS Query'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expect(h.state.lastHandshakeBackend.value, isNotNull);
+
+      // Flip the trust mode -- the controller mints a new NtsClient
+      // and must clear the now-stale attribution because the backend
+      // recorded earlier belongs to a session table that has just
+      // been dropped.
+      await tester.tap(find.text('Platform only'));
+      await tester.pump();
+
+      expect(h.state.trustMode.value, TrustMode.platformOnly);
+      expect(h.state.lastHandshakeBackend.value, isNull);
+      expect(
+        find.textContaining('last-handshake-backend: (no per-client'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('an in-flight query that completes after a TrustMode flip does '
+      'not overwrite the new client\'s attribution', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Kick off a query against the default (PlatformWithFallback)
+    // client and immediately flip the toggle while the future is
+    // still suspended on the mock's 25-65ms delay.
+    await tester.tap(find.text('NTS Query'));
+    await tester.pump();
+    await tester.tap(find.text('Platform only'));
+    await tester.pump();
+
+    // Flush the in-flight future.
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump();
+
+    // Active client is the new (PlatformOnly) one, which has run
+    // no handshake of its own; the in-flight query's completion
+    // landed against a dropped client, so lastHandshakeBackend
+    // must stay at its post-toggle sentinel `null`.
+    expect(h.state.trustMode.value, TrustMode.platformOnly);
+    expect(h.state.lastHandshakeBackend.value, isNull);
+
+    // The success line still rides into the log (the protocol
+    // event happened, the user wants to see it) but is annotated
+    // so the reader knows the state-write was suppressed.
+    final logs = h.state.log.entries.value
+        .where((e) => e.source == 'nts_query')
+        .toList();
+    expect(
+      logs.any((e) => e.message.contains('from previous TrustMode')),
+      isTrue,
+      reason: 'stale completion should be tagged in the log',
+    );
   });
 }

@@ -16,7 +16,8 @@
 // rather than into separate result signals — the on-screen log is
 // the single canonical surface for query outcomes.
 
-import 'package:nts/nts.dart' show NtsError, ntsQuery, ntsWarmCookies;
+import 'package:nts/nts.dart'
+    show NtsClient, NtsError, TrustMode, ntsTrustStatus;
 
 import '../data/server_entry.dart';
 import 'app_state.dart';
@@ -31,9 +32,75 @@ import 'nts_format.dart';
 const int _kTimeoutMs = 5000;
 
 class NtsController {
-  NtsController(this.state);
+  NtsController(this.state)
+    : _client = NtsClient(trustMode: state.trustMode.value),
+      // Initialize from the same source-of-truth that built `_client`
+      // so the two cannot diverge if the caller starts the app under
+      // a non-default trust mode (e.g. a future deeplink that pre-
+      // populates `state.trustMode` to `platformOnly` before the
+      // controller is constructed).
+      _activeMode = state.trustMode.value {
+    // Re-mint the per-instance NtsClient whenever the user toggles
+    // the trust-mode signal. TrustMode is a construction-time
+    // parameter on the Rust side; replacing the handle is the only
+    // way to switch policies without restarting the app. The
+    // previous client's cached cookie pool is dropped on the floor
+    // intentionally — the demo's whole point is to make the cold-
+    // start cost of each policy visible.
+    state.trustMode.subscribe((_) => _onTrustModeChanged());
+  }
 
   final AppState state;
+
+  /// Active per-instance NTS client. Owns its own per-host session
+  /// table so the demo's trust-mode toggle doesn't bleed cookies /
+  /// keys between policies.
+  NtsClient _client;
+
+  /// Trust mode the active [_client] was constructed with. Tracked
+  /// independently of [AppState.trustMode] so the subscription
+  /// callback can short-circuit redundant reconstructions when the
+  /// signal fires with the same value (e.g. during initial
+  /// listener attachment). Initialized from [AppState.trustMode] so
+  /// the two stay in lockstep from construction onward.
+  TrustMode _activeMode;
+
+  void _onTrustModeChanged() {
+    final next = state.trustMode.value;
+    if (next == _activeMode) return;
+    _activeMode = next;
+    _client = NtsClient(trustMode: next);
+    // The previous client's last-handshake backend belongs to a
+    // policy that no longer applies; clearing the signal puts the
+    // panel back to its "no per-client handshake yet" sentinel
+    // until the new client completes a query / warm. Anything else
+    // would let the panel display a backend attribution from a
+    // session table that has just been dropped.
+    state.lastHandshakeBackend.value = null;
+    state.log.info(
+      'system',
+      'TrustMode → ${formatTrustMode(next)} '
+          '(new NtsClient minted; cached sessions dropped)',
+    );
+  }
+
+  /// Refresh the singleton-side process-wide trust-status snapshot.
+  ///
+  /// Important: `ntsTrustStatus().defaultClientBackend` only updates
+  /// when the *top-level* `ntsQuery` / `ntsWarmCookies` (the default-
+  /// singleton client) runs a handshake. This controller dispatches
+  /// every query through a caller-minted [NtsClient], so the
+  /// singleton snapshot stays at its sentinel `null` for as long as
+  /// only this controller is driving the bridge. The per-handshake
+  /// backend that the controller's last query / warm actually used
+  /// is tracked separately on [AppState.lastHandshakeBackend], which
+  /// is the load-bearing field for the trust-status panel's "last
+  /// handshake" row. Bound to the panel's refresh button so a
+  /// curious user can still verify the singleton-side state on
+  /// demand.
+  void refreshTrustStatus() {
+    state.trustStatus.value = ntsTrustStatus();
+  }
 
   /// Run a single authenticated NTPv4 query against `entry`.
   ///
@@ -83,17 +150,41 @@ class NtsController {
   /// meant to illustrate.
   Future<void> runQuery(NtsServerEntry entry) async {
     state.log.info('nts_query', 'Starting query', host: entry.hostname);
+    // Capture the active client identity at start. If the user flips
+    // the trust-mode toggle while this query is in-flight,
+    // `_onTrustModeChanged` will mint a new `_client`; the in-flight
+    // future then completes against a session that has been dropped.
+    // Comparing identity on resume lets the success / state-write
+    // path tell stale completions apart from live ones.
+    final clientAtStart = _client;
     try {
-      final sample = await ntsQuery(
+      final sample = await clientAtStart.query(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
         dnsConcurrencyCap: 0,
       );
+      final stale = !identical(clientAtStart, _client);
       state.log.info(
         'nts_query',
-        formatQuerySuccess(sample),
+        stale
+            ? '${formatQuerySuccess(sample)}\n'
+                  '    \u2514\u2500 (from previous TrustMode; '
+                  'state intentionally not updated)'
+            : formatQuerySuccess(sample),
         host: entry.hostname,
       );
+      // Per-handshake backend goes straight onto AppState so the
+      // trust-status panel's "last handshake" row reflects what
+      // *the currently-active* caller-minted client used. Singleton
+      // snapshot is refreshed too for users who also poke the top-
+      // level ntsQuery / ntsWarmCookies in another path; on a
+      // controller-only run it stays at its sentinel `null`, which
+      // is correct. Stale completions skip both writes so a dropped
+      // client cannot overwrite the active client's attribution.
+      if (!stale) {
+        state.lastHandshakeBackend.value = sample.trustBackend;
+        refreshTrustStatus();
+      }
     } on NtsError catch (err) {
       _logError('nts_query', err, entry.hostname);
     } catch (err, stack) {
@@ -110,17 +201,27 @@ class NtsController {
 
   Future<void> warmCookies(NtsServerEntry entry) async {
     state.log.info('nts_warm_cookies', 'Starting warm', host: entry.hostname);
+    final clientAtStart = _client;
     try {
-      final outcome = await ntsWarmCookies(
+      final outcome = await clientAtStart.warmCookies(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
         dnsConcurrencyCap: 0,
       );
+      final stale = !identical(clientAtStart, _client);
       state.log.info(
         'nts_warm_cookies',
-        formatWarmSuccess(outcome.freshCookies),
+        stale
+            ? '${formatWarmSuccess(outcome)}\n'
+                  '    \u2514\u2500 (from previous TrustMode; '
+                  'state intentionally not updated)'
+            : formatWarmSuccess(outcome),
         host: entry.hostname,
       );
+      if (!stale) {
+        state.lastHandshakeBackend.value = outcome.trustBackend;
+        refreshTrustStatus();
+      }
     } on NtsError catch (err) {
       _logError('nts_warm_cookies', err, entry.hostname);
     } catch (err, stack) {
