@@ -344,6 +344,14 @@ class NtsClient {
 
   /// Trust-anchor policy this client was constructed with.
   /// Synchronous: backed by a one-byte read on the Rust side.
+  ///
+  /// Requires `await RustLib.init()` to have completed on the
+  /// calling isolate before invocation: the read happens on the Rust
+  /// side and dispatches through the FRB v2 dispatch table even
+  /// though the call returns synchronously, so a missed
+  /// initialization fails with a low-level FRB error rather than a
+  /// structured [NtsError]. See the "Initialization has two layers"
+  /// section of `README.md` for the full bootstrap contract.
   TrustMode get trustMode => _publicTrustMode(_inner.trustMode());
 
   /// Per-client equivalent of the top-level [ntsQuery]. The cookie
@@ -429,6 +437,15 @@ class NtsClient {
   /// `HashMap::remove` on the Rust side; no isolate hop. Does not
   /// validate `spec` — an invalid spec (empty host or zero port)
   /// trivially has no cached entry and returns `false`.
+  ///
+  /// Requires `await RustLib.init()` to have completed on the
+  /// calling isolate before invocation: the mutex acquisition and
+  /// `HashMap::remove` happen on the Rust side and dispatch through
+  /// the FRB v2 dispatch table even though the call returns
+  /// synchronously, so a missed initialization fails with a
+  /// low-level FRB error rather than a structured [NtsError]. See
+  /// the "Initialization has two layers" section of `README.md` for
+  /// the full bootstrap contract.
   bool invalidate(NtsServerSpec spec) =>
       _inner.invalidate(spec: _ffiSpec(spec));
 
@@ -439,6 +456,15 @@ class NtsClient {
   ///
   /// Synchronous: backed by one mutex acquisition and one
   /// `HashMap::clear` on the Rust side; no isolate hop.
+  ///
+  /// Requires `await RustLib.init()` to have completed on the
+  /// calling isolate before invocation: the mutex acquisition and
+  /// `HashMap::clear` happen on the Rust side and dispatch through
+  /// the FRB v2 dispatch table even though the call returns
+  /// synchronously, so a missed initialization fails with a
+  /// low-level FRB error rather than a structured [NtsError]. See
+  /// the "Initialization has two layers" section of `README.md` for
+  /// the full bootstrap contract.
   void clear() => _inner.clear();
 }
 

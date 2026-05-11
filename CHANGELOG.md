@@ -115,6 +115,18 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   `NtsError`. The note is crosslinked to README's "Initialization
   has two layers" section so the Android JNI bootstrap context is
   one click away.
+- The same `RustLib.init()` precondition note now also lives on the
+  three `NtsClient` synchronous methods that share the same FRB
+  dispatch path (`NtsClient.invalidate`, `NtsClient.clear`, and the
+  `NtsClient.trustMode` getter). Closes the residual scope of the
+  earlier sweep, which had only touched the two top-level
+  diagnostics functions.
+- README's "API summary" table gains rows for the two trust-related
+  enums (`TrustMode` and `TrustBackend`) that the prior table sweep
+  scoped out. Consumers reading the table can now resolve the
+  `trustBackend` field on `NtsTimeSample` / `NtsWarmCookiesOutcome`
+  and the `defaultClientBackend` field on `NtsTrustStatus` to a
+  concrete enum without leaving the README.
 
 ### Migration from 3.0.x
 
