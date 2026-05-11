@@ -14,6 +14,7 @@
 // `Watch` rebuilds fire exactly when the list reference changes
 // rather than relying on listeners noticing in-place edits.
 
+import 'package:nts/nts.dart' show TrustBackend, TrustMode;
 import 'package:signals/signals.dart' show Signal, signal;
 
 import 'log_entry.dart';
@@ -40,7 +41,13 @@ class NtsLogBuffer {
   }
 
   /// Convenience helper for an info-level row.
-  void info(String source, String message, {String? host}) {
+  void info(
+    String source,
+    String message, {
+    String? host,
+    TrustBackend? trustBackend,
+    TrustMode? trustMode,
+  }) {
     append(
       NtsLogEntry(
         timestamp: DateTime.now().toUtc(),
@@ -48,12 +55,20 @@ class NtsLogBuffer {
         source: source,
         message: message,
         host: host,
+        trustBackend: trustBackend,
+        trustMode: trustMode,
       ),
     );
   }
 
   /// Convenience helper for a warn-level row.
-  void warn(String source, String message, {String? host}) {
+  void warn(
+    String source,
+    String message, {
+    String? host,
+    TrustBackend? trustBackend,
+    TrustMode? trustMode,
+  }) {
     append(
       NtsLogEntry(
         timestamp: DateTime.now().toUtc(),
@@ -61,12 +76,20 @@ class NtsLogBuffer {
         source: source,
         message: message,
         host: host,
+        trustBackend: trustBackend,
+        trustMode: trustMode,
       ),
     );
   }
 
   /// Convenience helper for an error-level row.
-  void error(String source, String message, {String? host}) {
+  void error(
+    String source,
+    String message, {
+    String? host,
+    TrustBackend? trustBackend,
+    TrustMode? trustMode,
+  }) {
     append(
       NtsLogEntry(
         timestamp: DateTime.now().toUtc(),
@@ -74,6 +97,8 @@ class NtsLogBuffer {
         source: source,
         message: message,
         host: host,
+        trustBackend: trustBackend,
+        trustMode: trustMode,
       ),
     );
   }

@@ -131,19 +131,25 @@ void main() {
         .toList();
     expect(lines, isNotEmpty);
     expect(lines.any((e) => e.message.startsWith('Starting query')), isTrue);
-    expect(
-      lines.any(
-        (e) =>
-            e.message.startsWith('OK ') &&
-            e.message.contains('stratum=') &&
-            e.message.contains('aead=') &&
-            // 3.0.0: trust backend rides on the success line so a
-            // reader can spot a fallback path without consulting the
-            // dartdoc.
-            e.message.contains('trust='),
-      ),
-      isTrue,
-    );
+    final ok = lines.firstWhere((e) => e.message.startsWith('OK '));
+    expect(ok.message, contains('stratum='));
+    expect(ok.message, contains('aead='));
+    // 3.0.0: trust backend rides on the success line so a reader can
+    // spot a fallback path without consulting the dartdoc.
+    expect(ok.message, contains('trust='));
+    // Host context flows through to the structured field so the on-
+    // screen log and the share-export both attribute the line to a
+    // specific server.
+    expect(ok.host, 'time.cloudflare.com');
+    // Structured trust-backend metadata is preserved on the entry so
+    // log-scrapers / future filters can attribute backend-by-host
+    // without re-parsing the prose message.
+    expect(ok.trustBackend, isNotNull);
+    // Share-export carries the new `[host=...]` and `[backend=...]`
+    // tokens in their fixed columns.
+    final exported = ok.formatForExport();
+    expect(exported, contains('[host=time.cloudflare.com]'));
+    expect(exported, contains('[backend=${ok.trustBackend!.name}]'));
   });
 
   testWidgets('toggling favourites re-orders the list with pinned first', (

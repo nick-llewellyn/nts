@@ -10,6 +10,8 @@
 // useful even when the Rust-side `verbose_logs` toggle is off and the
 // underlying binary has been stripped down to `warn!`/`error!`.
 
+import 'package:nts/nts.dart' show TrustBackend, TrustMode;
+
 /// Severity tier for a log line. Mirrors the levels the underlying
 /// Rust crate would emit; used by the UI to colour-code entries and
 /// by the share export to label rows.
@@ -23,6 +25,8 @@ class NtsLogEntry {
     required this.source,
     required this.message,
     this.host,
+    this.trustBackend,
+    this.trustMode,
   });
 
   /// Wall-clock UTC at the moment the entry was appended. Stored
@@ -49,14 +53,38 @@ class NtsLogEntry {
   /// verbatim.
   final String message;
 
+  /// Per-handshake trust-anchor backend that authenticated the chain
+  /// for the action this entry describes. Populated by
+  /// [NtsController] from `NtsTimeSample.trustBackend` /
+  /// `NtsWarmCookiesOutcome.trustBackend` on success entries; `null`
+  /// for entries that don't describe a completed handshake (system
+  /// lines, error lines, "Starting query"). Carried as a structured
+  /// field rather than embedded purely in the message text so log
+  /// scrapers and the share export can attribute backend-by-host
+  /// without re-parsing free-form prose.
+  final TrustBackend? trustBackend;
+
+  /// Trust-mode configuration this entry was logged under. Currently
+  /// emitted only by the `system` source on TrustMode-toggle
+  /// transitions; `null` everywhere else. Carried for the same
+  /// reason as [trustBackend]: machine-readable attribution.
+  final TrustMode? trustMode;
+
   /// Single-line textual form used by the share-sheet export. Format
   /// is intentionally `grep`-friendly so the recipient (typically a
   /// support engineer) can pipe the pasted log through standard text
-  /// tools.
+  /// tools. Optional structured fields (`host`, `trustBackend`,
+  /// `trustMode`) appear in fixed positions between the source tag
+  /// and the message body so a regex / awk pipeline can split the
+  /// columns deterministically.
   String formatForExport() {
     final ts = timestamp.toIso8601String();
     final lvl = level.name.toUpperCase().padRight(5);
-    final hostPart = host == null ? '' : ' [$host]';
-    return '$ts $lvl $source$hostPart  $message';
+    final hostPart = host == null ? '' : ' [host=$host]';
+    final backendPart = trustBackend == null
+        ? ''
+        : ' [backend=${trustBackend!.name}]';
+    final modePart = trustMode == null ? '' : ' [mode=${trustMode!.name}]';
+    return '$ts $lvl $source$hostPart$backendPart$modePart  $message';
   }
 }

@@ -16,12 +16,25 @@
 // rather than into separate result signals — the on-screen log is
 // the single canonical surface for query outcomes.
 
+import 'dart:developer' as developer;
+
 import 'package:nts/nts.dart'
-    show NtsClient, NtsError, TrustMode, ntsTrustStatus;
+    show NtsClient, NtsError, TrustBackend, TrustMode, ntsTrustStatus;
 
 import '../data/server_entry.dart';
 import 'app_state.dart';
 import 'nts_format.dart';
+
+/// `dart:developer.log` channel name used for every host-tagged
+/// signal-update correlation line. Picked so a console reader can
+/// filter to just our correlation output (`name == 'nts.example
+/// .controller'`) and pair it against the unstructured
+/// `[log] signal updated: [...]` lines emitted by `package:signals`
+/// in debug mode. Signals' own console output carries no host
+/// context, so without these companion lines a console-side reader
+/// cannot tell which `runQuery` / `warmCookies` invocation produced
+/// a given `lastHandshakeBackend` mutation.
+const String _kDeveloperLogName = 'nts.example.controller';
 
 /// Per-request timeout in milliseconds. Single global wall-clock
 /// budget that spans DNS, NTS-KE (TCP connect, TLS handshake,
@@ -75,12 +88,54 @@ class NtsController {
     // panel back to its "no per-client handshake yet" sentinel
     // until the new client completes a query / warm. Anything else
     // would let the panel display a backend attribution from a
-    // session table that has just been dropped.
-    state.lastHandshakeBackend.value = null;
+    // session table that has just been dropped. The clear is routed
+    // through `_setLastHandshakeBackend` so the console-side
+    // correlation log records the reset alongside the new mode,
+    // matching the host-tagged trace shape used by query / warm
+    // success paths.
+    _setLastHandshakeBackend(
+      host: null,
+      backend: null,
+      source: 'trust_mode_toggle',
+    );
     state.log.info(
       'system',
       'TrustMode → ${formatTrustMode(next)} '
           '(new NtsClient minted; cached sessions dropped)',
+      trustMode: next,
+    );
+    developer.log(
+      'TrustMode toggled → ${next.name} '
+      '(new NtsClient minted; cached sessions dropped)',
+      name: _kDeveloperLogName,
+    );
+  }
+
+  /// Single mutation point for `state.lastHandshakeBackend`.
+  ///
+  /// Pairs every signal write with a `dart:developer.log` line that
+  /// carries explicit `host=` / `backend=` context, so a console
+  /// reader can correlate the otherwise host-less
+  /// `[log] signal updated: [N|null] => TrustBackend.<v>` lines that
+  /// `package:signals` emits in debug builds with the per-handshake
+  /// invocation that produced them. Without this companion trace it
+  /// is not possible from the console alone to attribute, e.g., a
+  /// `platformWithHybridFallback` reading to a specific host when
+  /// two queries fire back-to-back against different servers.
+  ///
+  /// `host == null` is reserved for resets (TrustMode toggle); the
+  /// emitted log line says `host=(reset)` so the trace is still
+  /// grep-friendly.
+  void _setLastHandshakeBackend({
+    required String? host,
+    required TrustBackend? backend,
+    required String source,
+  }) {
+    state.lastHandshakeBackend.value = backend;
+    developer.log(
+      'lastHandshakeBackend := ${backend?.name ?? '(null)'} '
+      '[host=${host ?? '(reset)'}] [source=$source]',
+      name: _kDeveloperLogName,
     );
   }
 
@@ -172,6 +227,7 @@ class NtsController {
                   'state intentionally not updated)'
             : formatQuerySuccess(sample),
         host: entry.hostname,
+        trustBackend: sample.trustBackend,
       );
       // Per-handshake backend goes straight onto AppState so the
       // trust-status panel's "last handshake" row reflects what
@@ -182,7 +238,11 @@ class NtsController {
       // is correct. Stale completions skip both writes so a dropped
       // client cannot overwrite the active client's attribution.
       if (!stale) {
-        state.lastHandshakeBackend.value = sample.trustBackend;
+        _setLastHandshakeBackend(
+          host: entry.hostname,
+          backend: sample.trustBackend,
+          source: 'nts_query',
+        );
         refreshTrustStatus();
       }
     } on NtsError catch (err) {
@@ -217,9 +277,14 @@ class NtsController {
                   'state intentionally not updated)'
             : formatWarmSuccess(outcome),
         host: entry.hostname,
+        trustBackend: outcome.trustBackend,
       );
       if (!stale) {
-        state.lastHandshakeBackend.value = outcome.trustBackend;
+        _setLastHandshakeBackend(
+          host: entry.hostname,
+          backend: outcome.trustBackend,
+          source: 'nts_warm_cookies',
+        );
         refreshTrustStatus();
       }
     } on NtsError catch (err) {
