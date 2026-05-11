@@ -146,17 +146,22 @@ sealed class NtsError implements Exception {
   /// phases. The [TimeoutPhase] payload identifies which phase tripped
   /// the deadline so callers can choose the right remediation.
   ///
-  /// `trustBackend` may be `null` if the failure occurred before the
-  /// per-handshake trust backend was resolved (i.e. before
-  /// `build_tls_config` succeeded). In practice that covers
-  /// `dnsSaturation` / `dnsTimeout` / `connect` failures before any
-  /// TLS work began, plus very-early `tls` timeouts that fired before
-  /// `ClientConnection::new` returned. Any later phase
-  /// (post-config-build `tls` write/flush deadlines, `keRecordIo`,
-  /// post-handshake UDP-leg timeouts surfaced via the `ntp` phase)
-  /// carries the resolved backend — including the Android
-  /// per-instance hybrid-fallback upgrade when it fired during the
-  /// TLS write/flush window.
+  /// `trustBackend` is typed as nullable to keep the Rust `KeFailure`
+  /// attribution contract honest at the FFI boundary, but in
+  /// practice every timeout-shaped phase fires after
+  /// `build_tls_config` returned `Ok` and therefore carries the
+  /// resolved backend. Rust `perform_handshake` calls
+  /// `build_tls_config` before any DNS, connect, or TLS I/O begins,
+  /// then attaches the resolved backend (via the per-call
+  /// `attribute` closure) to every subsequent failure site —
+  /// `dnsSaturation` and `dnsTimeout` from the bounded resolver,
+  /// `connect` from the per-address `TcpStream::connect_timeout`
+  /// loop, `tls` from the rustls handshake / write / flush window,
+  /// `keRecordIo` from the chunked record-read loop, and the
+  /// post-handshake UDP-leg `ntp` phase. The Android per-instance
+  /// hybrid-fallback upgrade is reflected when the
+  /// `HybridVerifier`'s fallback counter incremented during the TLS
+  /// write/flush window.
   const factory NtsError.timeout({
     required TimeoutPhase phase,
     TrustBackend? trustBackend,

@@ -288,22 +288,27 @@ shows the intended shape.
   `NtsError.keProtocol`, `NtsError.ntpProtocol`,
   `NtsError.authentication`, `NtsError.timeout`, and
   `NtsError.noCookies`. Populated whenever the failure fired after
-  the backend was resolved — every post-handshake site, including
-  the post-checkout UDP leg's bind / send / recv / recv-arm
-  failures and the cache-hit `NoCookies` short-circuits, plus
-  Android's per-instance `HybridVerifier` upgrade to
+  the backend was resolved — which, given that `perform_handshake`
+  calls `build_tls_config` before any DNS, connect, or TLS I/O
+  begins, covers every current failure site: KE-leg
+  `dnsSaturation` / `dnsTimeout` / pre-bind `connect` / `tls` /
+  `keRecordIo` failures (all attributed via the per-call
+  `attribute` closure in `perform_handshake`), every
+  post-checkout UDP leg's bind / send / recv / recv-arm failure,
+  the cache-hit `NoCookies` short-circuits, and Android's
+  per-instance `HybridVerifier` upgrade to
   `TrustBackend.platformWithHybridFallback` when the fallback
-  counter incremented during the TLS write/flush window. `null`
-  only for failures that fired before `build_tls_config` succeeded
-  (DNS-saturation, DNS-timeout, and pre-bind connect errors; very
-  early TLS-phase timeouts that fired before
-  `ClientConnection::new` returned). Variants whose precondition
-  rules out a backend (`invalidSpec`, `trustBackendUnavailable`,
-  `internal`) do not carry the field at all. Closes the
-  diagnostic gap where a server-side post-handshake failure (e.g.
-  an NTS-KE record parse error against an Android hybrid-fallback
-  chain) lost the fallback attribution and exported as
-  `[backend=null]`.
+  counter incremented during the TLS write/flush window. The
+  field is typed as nullable because the Rust `KeFailure` wrapper
+  attaches `None` for failures that fire before `build_tls_config`
+  returns `Ok`, but no current `perform_handshake` path produces
+  such a failure on the variants listed above. Variants whose
+  precondition rules out a backend (`invalidSpec`,
+  `trustBackendUnavailable`, `internal`) do not carry the field
+  at all. Closes the diagnostic gap where a server-side
+  post-handshake failure (e.g. an NTS-KE record parse error
+  against an Android hybrid-fallback chain) lost the fallback
+  attribution and exported as `[backend=null]`.
 
 ### Changed — trust-anchor diagnostics + strict mode
 
