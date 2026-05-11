@@ -56,12 +56,19 @@ class NtsLogEntry {
   /// Per-handshake trust-anchor backend that authenticated the chain
   /// for the action this entry describes. Populated by
   /// [NtsController] from `NtsTimeSample.trustBackend` /
-  /// `NtsWarmCookiesOutcome.trustBackend` on success entries; `null`
+  /// `NtsWarmCookiesOutcome.trustBackend` on success entries, and
+  /// from `NtsError.trustBackend` on error / warning entries whose
+  /// failure fired *after* `build_tls_config` resolved a backend
+  /// (so an `NtsError.keProtocol` raised by a server-side post-
+  /// handshake conformance bug can still be attributed to the
+  /// hybrid-fallback path that authenticated its TLS leg). `null`
   /// for entries that don't describe a completed handshake (system
-  /// lines, error lines, "Starting query"). Carried as a structured
-  /// field rather than embedded purely in the message text so log
-  /// scrapers and the share export can attribute backend-by-host
-  /// without re-parsing free-form prose.
+  /// lines, "Starting query") and for failures that pre-dated
+  /// backend resolution (DNS-saturation / DNS-timeout / connect /
+  /// pre-TLS errors). Carried as a structured field rather than
+  /// embedded purely in the message text so log scrapers and the
+  /// share export can attribute backend-by-host without re-parsing
+  /// free-form prose.
   final TrustBackend? trustBackend;
 
   /// Trust-mode configuration this entry was logged under. Currently

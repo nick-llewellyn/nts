@@ -1617,6 +1617,14 @@ impl SessionTable {
                     let outcome = do_handshake(spec, remaining, dns_concurrency_cap);
                     match outcome {
                         Ok((session, ke_timings)) => {
+                            // Capture the freshly-resolved backend before
+                            // `session` moves into the table below; both
+                            // `NoCookies` exit paths in this branch attach
+                            // it so post-handshake failures are
+                            // attributable to the same backend a
+                            // successful sample on this session would
+                            // surface.
+                            let session_backend = session.trust_backend;
                             // Refuse to install a 0-cookie session: the
                             // leader plus every waiter would immediately
                             // fall through to NoCookies, and the next
@@ -1627,8 +1635,11 @@ impl SessionTable {
                             // path, which already collapsed this case onto
                             // NoCookies for every concurrent caller.
                             if session.cookies_remaining() == 0 {
-                                guard.complete(Err(NtsError::NoCookies { trust_backend: None }));
-                                return Err(NtsError::NoCookies { trust_backend: None });
+                                let err = NtsError::NoCookies {
+                                    trust_backend: Some(session_backend),
+                                };
+                                guard.complete(Err(err.clone()));
+                                return Err(err);
                             }
                             // Same defensive `take`-shape as the
                             // cache-hit branch: the leader's
@@ -1657,8 +1668,11 @@ impl SessionTable {
                                     return Ok((ctx, ke_timings));
                                 }
                                 None => {
-                                    guard.complete(Err(NtsError::NoCookies { trust_backend: None }));
-                                    return Err(NtsError::NoCookies { trust_backend: None });
+                                    let err = NtsError::NoCookies {
+                                        trust_backend: Some(session_backend),
+                                    };
+                                    guard.complete(Err(err.clone()));
+                                    return Err(err);
                                 }
                             }
                         }

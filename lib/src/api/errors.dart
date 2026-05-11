@@ -145,10 +145,18 @@ sealed class NtsError implements Exception {
   /// Wall-clock budget elapsed inside one of the call's pre-NTP or NTP
   /// phases. The [TimeoutPhase] payload identifies which phase tripped
   /// the deadline so callers can choose the right remediation.
-  /// `trustBackend` is populated for post-TLS phases (`keRecordIo`,
-  /// `ntp`) and `null` for pre-TLS phases (`dnsSaturation`,
-  /// `dnsTimeout`, `connect`, `tls`) which fired before the trust
-  /// backend could be resolved.
+  ///
+  /// `trustBackend` may be `null` if the failure occurred before the
+  /// per-handshake trust backend was resolved (i.e. before
+  /// `build_tls_config` succeeded). In practice that covers
+  /// `dnsSaturation` / `dnsTimeout` / `connect` failures before any
+  /// TLS work began, plus very-early `tls` timeouts that fired before
+  /// `ClientConnection::new` returned. Any later phase
+  /// (post-config-build `tls` write/flush deadlines, `keRecordIo`,
+  /// post-handshake UDP-leg timeouts surfaced via the `ntp` phase)
+  /// carries the resolved backend — including the Android
+  /// per-instance hybrid-fallback upgrade when it fired during the
+  /// TLS write/flush window.
   const factory NtsError.timeout({
     required TimeoutPhase phase,
     TrustBackend? trustBackend,

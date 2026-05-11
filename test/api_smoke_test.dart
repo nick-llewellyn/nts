@@ -974,6 +974,82 @@ void main() {
 
       expect(a.toString(), 'NtsError.noCookies()');
     });
+
+    test('non-null trustBackend: ==, hashCode, toString format, '
+        'and round-trip through field accessors', () {
+      // Pin the new attribution semantics introduced for nts-rqp:
+      // every variant that grew the optional `trustBackend` field
+      // must (a) participate in equality / hashCode against an
+      // identical instance, (b) reject an otherwise-identical
+      // instance whose backend differs, and (c) render as
+      // `NtsError.<variant>(<payload>, backend: <name>)` in
+      // `toString` so log scrapers can pull the attribution back
+      // off the formatted line.
+      const network = NtsError.network(
+        message: 'eof',
+        trustBackend: TrustBackend.platformWithHybridFallback,
+      );
+      const networkSame = NtsError.network(
+        message: 'eof',
+        trustBackend: TrustBackend.platformWithHybridFallback,
+      );
+      const networkOtherBackend = NtsError.network(
+        message: 'eof',
+        trustBackend: TrustBackend.platform,
+      );
+      const networkNullBackend = NtsError.network(message: 'eof');
+
+      expect(network, equals(networkSame));
+      expect(network.hashCode, networkSame.hashCode);
+      expect(network, isNot(equals(networkOtherBackend)));
+      expect(network, isNot(equals(networkNullBackend)));
+      expect(
+        network.toString(),
+        'NtsError.network(eof, backend: platformWithHybridFallback)',
+      );
+      // Field accessors expose the backend on the variant subclass.
+      expect(
+        (network as NtsErrorNetwork).trustBackend,
+        TrustBackend.platformWithHybridFallback,
+      );
+      expect((networkNullBackend as NtsErrorNetwork).trustBackend, isNull);
+
+      // Timeout is the second variant that gained the field; cover
+      // it explicitly because it carries `phase` rather than
+      // `message`, so the toString format differs.
+      const timeout = NtsError.timeout(
+        phase: TimeoutPhase.keRecordIo,
+        trustBackend: TrustBackend.webpkiRoots,
+      );
+      const timeoutSame = NtsError.timeout(
+        phase: TimeoutPhase.keRecordIo,
+        trustBackend: TrustBackend.webpkiRoots,
+      );
+      const timeoutOtherBackend = NtsError.timeout(
+        phase: TimeoutPhase.keRecordIo,
+        trustBackend: TrustBackend.platform,
+      );
+      expect(timeout, equals(timeoutSame));
+      expect(timeout.hashCode, timeoutSame.hashCode);
+      expect(timeout, isNot(equals(timeoutOtherBackend)));
+      expect(
+        timeout.toString(),
+        'NtsError.timeout(keRecordIo, backend: webpkiRoots)',
+      );
+      expect(
+        (timeout as NtsErrorTimeout).trustBackend,
+        TrustBackend.webpkiRoots,
+      );
+
+      // NoCookies has no other payload, so the toString reduces to
+      // just the backend tag when it is set.
+      const noCookies = NtsError.noCookies(trustBackend: TrustBackend.platform);
+      expect(noCookies.toString(), 'NtsError.noCookies(backend: platform)');
+      expect(
+        (noCookies as NtsErrorNoCookies).trustBackend,
+        TrustBackend.platform,
+      );
+    });
   });
 
   group('NtsClient handle', () {

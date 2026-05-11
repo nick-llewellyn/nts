@@ -41,8 +41,8 @@ import 'nts_format.dart';
 
 /// `dart:developer.log` channel name used for every host-tagged
 /// signal-update correlation line. Picked so a console reader can
-/// filter to just our correlation output (`name == 'nts.example
-/// .controller'`) and pair it against the unstructured
+/// filter on the channel name (matched verbatim against the constant
+/// below) and pair the result against the unstructured
 /// `[log] signal updated: [...]` lines emitted by `package:signals`
 /// in debug mode. Signals' own console output carries no host
 /// context, so without these companion lines a console-side reader
