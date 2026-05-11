@@ -350,7 +350,14 @@ final class NtsErrorTimeout extends NtsError {
   final TimeoutPhase phase;
 
   /// Per-handshake trust-anchor backend resolved before the timeout
-  /// fired (post-TLS phases only), or `null` for pre-TLS phases.
+  /// fired. Typed as nullable to keep the Rust `KeFailure`
+  /// attribution contract honest at the FFI boundary, but in
+  /// practice every `TimeoutPhase` value (`dnsSaturation`,
+  /// `dnsTimeout`, `connect`, `tls`, `keRecordIo`, post-handshake
+  /// `ntp`) fires after `build_tls_config` returned `Ok` and
+  /// therefore carries the resolved backend — see the
+  /// constructor-level [NtsError.timeout] dartdoc above for the
+  /// per-phase attribution map.
   final TrustBackend? trustBackend;
 
   /// Construct a `Timeout` variant.
@@ -379,8 +386,14 @@ final class NtsErrorTimeout extends NtsError {
 /// Variant: cookie jar empty after a handshake (server delivered none).
 final class NtsErrorNoCookies extends NtsError {
   /// Per-handshake trust-anchor backend resolved before the failure
-  /// fired. Always populated for post-handshake failures (which is
-  /// every `noCookies` failure by definition).
+  /// fired. Populated for every library-originated `NoCookies`
+  /// failure (cache-hit short-circuit and the singleflight Leader
+  /// arm both attach the resolved backend), but typed as nullable
+  /// because the public factory `NtsError.noCookies()` accepts the
+  /// no-backend form for callers (e.g. test fixtures) that need to
+  /// construct the variant without a chain having authenticated.
+  /// `toString()` preserves the no-backend form when the field is
+  /// `null`.
   final TrustBackend? trustBackend;
 
   /// Construct a `NoCookies` variant.

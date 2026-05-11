@@ -63,12 +63,15 @@ class NtsLogEntry {
   /// handshake conformance bug can still be attributed to the
   /// hybrid-fallback path that authenticated its TLS leg). `null`
   /// for entries that don't describe a completed handshake (system
-  /// lines, "Starting query") and for failures that pre-dated
-  /// backend resolution (DNS-saturation / DNS-timeout / connect /
-  /// pre-TLS errors). Carried as a structured field rather than
-  /// embedded purely in the message text so log scrapers and the
-  /// share export can attribute backend-by-host without re-parsing
-  /// free-form prose.
+  /// lines, "Starting query") and for the narrow set of failures
+  /// that fired before `build_tls_config` returned `Ok` (which in
+  /// the current Rust `perform_handshake` is only the pre-build
+  /// `MissingAead` and `build_tls_config` itself failing — every
+  /// DNS / connect / TLS / KE / UDP failure site fires after that
+  /// point and carries the resolved backend). Carried as a
+  /// structured field rather than embedded purely in the message
+  /// text so log scrapers and the share export can attribute
+  /// backend-by-host without re-parsing free-form prose.
   final TrustBackend? trustBackend;
 
   /// Trust-mode configuration this entry was logged under. Currently
