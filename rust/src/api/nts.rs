@@ -42,7 +42,7 @@ use crate::nts::aead::{AeadError, AeadKey};
 use crate::nts::cookies::CookieJar;
 use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
 use crate::nts::ke::{
-    perform_handshake, KeError, KeOutcome, KePhaseTimings, KeRequest, KeTimeoutPhase,
+    perform_handshake, KeError, KeFailure, KeOutcome, KePhaseTimings, KeRequest, KeTimeoutPhase,
 };
 use crate::nts::ntp::{build_client_request, parse_server_response, ClientRequest, NtpError};
 use crate::nts::records::aead as aead_ids;
@@ -532,16 +532,42 @@ pub struct NtsTrustStatus {
 
 /// Failure modes for `nts_query` (Dart: `ntsQuery`) and
 /// `nts_warm_cookies` (Dart: `ntsWarmCookies`).
+///
+/// Variants whose precondition is "the TLS handshake had at least
+/// reached config-build time" carry an optional `trust_backend`
+/// field with the per-handshake trust-anchor backend resolved by
+/// `build_tls_config` (a crate-internal helper in
+/// `crate::nts::ke`; rendered as inline code rather than as a
+/// rustdoc intra-doc link to match the convention spelled out on
+/// the `Authentication` variant below — crate-internal Rust items
+/// are not navigable from a Dart reader's vantage point), and on
+/// Android upgraded to [`TrustBackend::PlatformWithHybridFallback`]
+/// when the hybrid verifier's per-instance fallback counter
+/// incremented during the handshake. `None` on those variants
+/// means the backend was not yet resolved when the failure fired
+/// (typically a pre-build error that was wrapped by a later
+/// layer). Variants whose precondition rules out backend
+/// attribution (`InvalidSpec`, `TrustBackendUnavailable`,
+/// `Internal`) do not carry the field at all. New in 3.0.0.
 #[derive(Debug, Clone)]
 pub enum NtsError {
     /// `spec` was rejected before any I/O happened.
     InvalidSpec(String),
     /// TCP/UDP I/O error or connection failure.
-    Network(String),
+    Network {
+        message: String,
+        trust_backend: Option<TrustBackend>,
+    },
     /// TLS handshake or NTS-KE record exchange failed.
-    KeProtocol(String),
+    KeProtocol {
+        message: String,
+        trust_backend: Option<TrustBackend>,
+    },
     /// NTPv4 packet parsing or extension validation failed.
-    NtpProtocol(String),
+    NtpProtocol {
+        message: String,
+        trust_backend: Option<TrustBackend>,
+    },
     /// AEAD seal/open failed (tag mismatch, malformed input).
     ///
     /// Reserved for cryptographic-verification failures of the AEAD
@@ -575,7 +601,10 @@ pub enum NtsError {
     /// can find them via crate-internal navigation; a Dart reader
     /// has the parallel dartdoc on `NtsError.authentication` in
     /// `lib/src/api/errors.dart`.
-    Authentication(String),
+    Authentication {
+        message: String,
+        trust_backend: Option<TrustBackend>,
+    },
     /// Wall-clock budget elapsed inside one of the call's pre-NTP or
     /// NTP phases. The [`TimeoutPhase`] payload identifies which
     /// phase tripped the deadline so callers can choose the right
@@ -583,9 +612,14 @@ pub enum NtsError {
     /// lengthen `timeout_ms` on `DnsTimeout` / `Connect` / `Tls` /
     /// `KeRecordIo` / `Ntp`, etc.). See [`TimeoutPhase`] for the full
     /// taxonomy.
-    Timeout(TimeoutPhase),
+    Timeout {
+        phase: TimeoutPhase,
+        trust_backend: Option<TrustBackend>,
+    },
     /// Cookie jar empty after a handshake (server delivered none).
-    NoCookies,
+    NoCookies {
+        trust_backend: Option<TrustBackend>,
+    },
     /// Caller selected [`TrustMode::PlatformOnly`] and
     /// `build_with_native_verifier` could not construct a
     /// platform-backed `ClientConfig`. Surfaced instead of silently
@@ -598,16 +632,49 @@ pub enum NtsError {
     Internal(String),
 }
 
+impl NtsError {
+    /// Override the per-handshake trust-anchor backend on a freshly
+    /// constructed `NtsError`. No-op for variants whose precondition
+    /// rules out a backend; for the variants that do carry the field,
+    /// replaces whatever the constructing site set (typically `None`
+    /// from the `From<X>` impls). Used by `From<KeFailure> for
+    /// NtsError` to attach the resolution computed inside
+    /// `perform_handshake` after construction has already chosen the
+    /// variant.
+    ///
+    /// `pub(crate)` rather than `pub` to keep the FRB-generated Dart
+    /// class clean of helper-method boilerplate that would clash with
+    /// the per-variant `trustBackend` fields freezed already emits.
+    /// Dart consumers read the attribution off the per-variant field
+    /// directly via the hand-written wrapper in
+    /// `lib/src/api/errors.dart`.
+    #[must_use]
+    pub(crate) fn with_trust_backend(mut self, next: Option<TrustBackend>) -> Self {
+        match &mut self {
+            Self::InvalidSpec(_) | Self::TrustBackendUnavailable(_) | Self::Internal(_) => {}
+            Self::Network { trust_backend, .. }
+            | Self::KeProtocol { trust_backend, .. }
+            | Self::NtpProtocol { trust_backend, .. }
+            | Self::Authentication { trust_backend, .. }
+            | Self::Timeout { trust_backend, .. }
+            | Self::NoCookies { trust_backend } => {
+                *trust_backend = next;
+            }
+        }
+        self
+    }
+}
+
 impl std::fmt::Display for NtsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidSpec(m) => write!(f, "invalid NtsServerSpec: {m}"),
-            Self::Network(m) => write!(f, "network: {m}"),
-            Self::KeProtocol(m) => write!(f, "NTS-KE: {m}"),
-            Self::NtpProtocol(m) => write!(f, "NTPv4: {m}"),
-            Self::Authentication(m) => write!(f, "AEAD: {m}"),
-            Self::Timeout(p) => write!(f, "operation timed out in phase {p:?}"),
-            Self::NoCookies => f.write_str("server delivered no cookies"),
+            Self::Network { message, .. } => write!(f, "network: {message}"),
+            Self::KeProtocol { message, .. } => write!(f, "NTS-KE: {message}"),
+            Self::NtpProtocol { message, .. } => write!(f, "NTPv4: {message}"),
+            Self::Authentication { message, .. } => write!(f, "AEAD: {message}"),
+            Self::Timeout { phase, .. } => write!(f, "operation timed out in phase {phase:?}"),
+            Self::NoCookies { .. } => f.write_str("server delivered no cookies"),
             Self::TrustBackendUnavailable(m) => write!(f, "trust backend unavailable: {m}"),
             Self::Internal(m) => write!(f, "internal: {m}"),
         }
@@ -624,10 +691,21 @@ impl From<KeError> for NtsError {
             // without parsing the diagnostic string. Non-timeout I/O
             // failures (NXDOMAIN, ECONNREFUSED, …) reach Dart as
             // `Network` with the underlying message preserved.
-            KeError::PhaseTimeout(p) => Self::Timeout(p.into()),
-            KeError::Io(io) => Self::Network(io.to_string()),
-            KeError::Tls(t) => Self::KeProtocol(format!("TLS: {t}")),
-            KeError::NoCookies => Self::NoCookies,
+            KeError::PhaseTimeout(p) => Self::Timeout {
+                phase: p.into(),
+                trust_backend: None,
+            },
+            KeError::Io(io) => Self::Network {
+                message: io.to_string(),
+                trust_backend: None,
+            },
+            KeError::Tls(t) => Self::KeProtocol {
+                message: format!("TLS: {t}"),
+                trust_backend: None,
+            },
+            KeError::NoCookies => Self::NoCookies {
+                trust_backend: None,
+            },
             // `TrustBackendUnavailable` only fires on the
             // `TrustMode::PlatformOnly` strict path; surface it as the
             // dedicated typed variant rather than collapsing onto
@@ -635,15 +713,44 @@ impl From<KeError> for NtsError {
             // construction failure from a genuine TLS / KE protocol
             // failure without inspecting free-form diagnostic strings.
             KeError::TrustBackendUnavailable(m) => Self::TrustBackendUnavailable(m),
-            other => Self::KeProtocol(other.to_string()),
+            other => Self::KeProtocol {
+                message: other.to_string(),
+                trust_backend: None,
+            },
         }
+    }
+}
+
+/// Conversion from the wrapped failure type returned by
+/// [`crate::nts::ke::perform_handshake`]. Delegates the variant
+/// dispatch to `From<KeError> for NtsError` and then attaches the
+/// per-handshake trust-backend attribution from
+/// `KeFailure.trust_backend` to the resulting `NtsError` (when
+/// applicable). Variants that have no `trust_backend` field
+/// (`InvalidSpec`, `TrustBackendUnavailable`, `Internal`) silently
+/// drop the attribution — by construction those variants either fire
+/// before any backend is resolved or describe the backend itself
+/// being unusable, so attribution would be meaningless anyway.
+impl From<KeFailure> for NtsError {
+    fn from(f: KeFailure) -> Self {
+        let public_backend = f.trust_backend.map(|b| match b {
+            crate::nts::ke::KeTrustBackend::Platform => TrustBackend::Platform,
+            crate::nts::ke::KeTrustBackend::PlatformWithHybridFallback => {
+                TrustBackend::PlatformWithHybridFallback
+            }
+            crate::nts::ke::KeTrustBackend::WebpkiRoots => TrustBackend::WebpkiRoots,
+        });
+        Self::from(f.error).with_trust_backend(public_backend)
     }
 }
 
 impl From<NtpError> for NtsError {
     fn from(e: NtpError) -> Self {
         match e {
-            NtpError::Aead(a) => Self::Authentication(a.to_string()),
+            NtpError::Aead(a) => Self::Authentication {
+                message: a.to_string(),
+                trust_backend: None,
+            },
             // Server-attested "no usable time" signals (RFC 5905 §7.3 LI=3
             // and §7.4 stratum-0 KoD) reach Dart as `NtpProtocol` with the
             // diagnostic string preserved verbatim — for KoD this includes
@@ -652,8 +759,14 @@ impl From<NtpError> for NtsError {
             // We list them explicitly so a future split into dedicated
             // `NtsError` variants is a localised change rather than a hunt
             // through the catch-all arm.
-            e @ NtpError::Unsynchronized => Self::NtpProtocol(e.to_string()),
-            e @ NtpError::KissOfDeath(_) => Self::NtpProtocol(e.to_string()),
+            e @ NtpError::Unsynchronized => Self::NtpProtocol {
+                message: e.to_string(),
+                trust_backend: None,
+            },
+            e @ NtpError::KissOfDeath(_) => Self::NtpProtocol {
+                message: e.to_string(),
+                trust_backend: None,
+            },
             // RFC 8915 §5.7 unauthenticated NTSN with matching UID — a
             // request-correlated rekey signal that the cached cookie is
             // no longer valid. The matching UID echoed from the request
@@ -664,8 +777,14 @@ impl From<NtpError> for NtsError {
             // Dart-facing `NtsError` enum stays stable; the eviction-side
             // effect is handled inside `nts_query` before this conversion
             // happens (see the `evict_on_rekey_signal` closure).
-            e @ NtpError::StaleCookie => Self::NtpProtocol(e.to_string()),
-            other => Self::NtpProtocol(other.to_string()),
+            e @ NtpError::StaleCookie => Self::NtpProtocol {
+                message: e.to_string(),
+                trust_backend: None,
+            },
+            other => Self::NtpProtocol {
+                message: other.to_string(),
+                trust_backend: None,
+            },
         }
     }
 }
@@ -680,8 +799,14 @@ impl From<AeadError> for NtsError {
             // honest: `Authentication` is reserved for tag mismatches
             // and other cryptographic verification failures, not for
             // "this server picked an algorithm we don't implement".
-            AeadError::UnsupportedAlgorithm(_) => Self::KeProtocol(e.to_string()),
-            other => Self::Authentication(other.to_string()),
+            AeadError::UnsupportedAlgorithm(_) => Self::KeProtocol {
+                message: e.to_string(),
+                trust_backend: None,
+            },
+            other => Self::Authentication {
+                message: other.to_string(),
+                trust_backend: None,
+            },
         }
     }
 }
@@ -699,10 +824,14 @@ impl From<AeadError> for NtsError {
 impl From<std::io::Error> for NtsError {
     fn from(e: std::io::Error) -> Self {
         match e.kind() {
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
-                Self::Timeout(TimeoutPhase::Ntp)
-            }
-            _ => Self::Network(e.to_string()),
+            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => Self::Timeout {
+                phase: TimeoutPhase::Ntp,
+                trust_backend: None,
+            },
+            _ => Self::Network {
+                message: e.to_string(),
+                trust_backend: None,
+            },
         }
     }
 }
@@ -1186,7 +1315,7 @@ fn effective_timeout(timeout_ms: u32) -> Duration {
 /// Compute the budget left for the UDP-setup leg of [`nts_query`]
 /// given the call-wide `total` and the wall-clock already consumed by
 /// the KE phases (`elapsed`). Returns
-/// `NtsError::Timeout(TimeoutPhase::Ntp)` when the call-wide budget
+/// `NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }` when the call-wide budget
 /// has already been exhausted, since the next blocking syscall after
 /// this point is the AEAD-NTPv4 `send`/`recv` round-trip — the same
 /// phase tag `bind_connected_udp_using` would emit post-DNS once it
@@ -1204,7 +1333,7 @@ fn remaining_budget_or_ntp_timeout(
     total
         .checked_sub(elapsed)
         .filter(|d| !d.is_zero())
-        .ok_or(NtsError::Timeout(TimeoutPhase::Ntp))
+        .ok_or(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None })
 }
 
 /// Re-arm a connected UDP socket's read timeout against the
@@ -1234,7 +1363,10 @@ fn arm_recv_against_call_deadline(
     let remaining = remaining_budget_or_ntp_timeout(total, elapsed)?;
     socket
         .set_read_timeout(Some(remaining))
-        .map_err(|e| NtsError::Network(format!("set_read_timeout for recv: {e}")))?;
+        .map_err(|e| NtsError::Network {
+            message: format!("set_read_timeout for recv: {e}"),
+            trust_backend: None,
+        })?;
     Ok(remaining)
 }
 
@@ -1286,7 +1418,12 @@ fn establish_session(
         .map_err(|e| NtsError::Internal(format!("KE produced unusable S2C key: {e}")))?;
     let mut jar = CookieJar::new();
     if outcome.cookies.is_empty() {
-        return Err(NtsError::NoCookies);
+        // Handshake itself succeeded — the empty cookie pool is the
+        // server's choice, so the failure carries the same trust-
+        // backend attribution a successful sample would have shown.
+        return Err(NtsError::NoCookies {
+            trust_backend: Some(trust_backend),
+        });
     }
     jar.put_many(&outcome.ntpv4_host, outcome.cookies);
     let session = Session {
@@ -1430,7 +1567,14 @@ impl SessionTable {
                                 let ctx = build_query_context(s, cookie);
                                 return Ok((ctx, KePhaseTimings::default()));
                             }
-                            None => return Err(NtsError::NoCookies),
+                            // Cache hit but the jar is unexpectedly empty —
+                            // the cached session had completed a handshake,
+                            // so the failure carries that session's backend.
+                            None => {
+                                return Err(NtsError::NoCookies {
+                                    trust_backend: Some(s.trust_backend),
+                                });
+                            }
                         }
                     }
                 }
@@ -1470,13 +1614,21 @@ impl SessionTable {
                     let remaining = match timeout.checked_sub(started.elapsed()) {
                         Some(d) if !d.is_zero() => d,
                         _ => {
-                            guard.complete(Err(NtsError::Timeout(TimeoutPhase::KeRecordIo)));
-                            return Err(NtsError::Timeout(TimeoutPhase::KeRecordIo));
+                            guard.complete(Err(NtsError::Timeout { phase: TimeoutPhase::KeRecordIo, trust_backend: None }));
+                            return Err(NtsError::Timeout { phase: TimeoutPhase::KeRecordIo, trust_backend: None });
                         }
                     };
                     let outcome = do_handshake(spec, remaining, dns_concurrency_cap);
                     match outcome {
                         Ok((session, ke_timings)) => {
+                            // Capture the freshly-resolved backend before
+                            // `session` moves into the table below; both
+                            // `NoCookies` exit paths in this branch attach
+                            // it so post-handshake failures are
+                            // attributable to the same backend a
+                            // successful sample on this session would
+                            // surface.
+                            let session_backend = session.trust_backend;
                             // Refuse to install a 0-cookie session: the
                             // leader plus every waiter would immediately
                             // fall through to NoCookies, and the next
@@ -1487,8 +1639,11 @@ impl SessionTable {
                             // path, which already collapsed this case onto
                             // NoCookies for every concurrent caller.
                             if session.cookies_remaining() == 0 {
-                                guard.complete(Err(NtsError::NoCookies));
-                                return Err(NtsError::NoCookies);
+                                let err = NtsError::NoCookies {
+                                    trust_backend: Some(session_backend),
+                                };
+                                guard.complete(Err(err.clone()));
+                                return Err(err);
                             }
                             // Same defensive `take`-shape as the
                             // cache-hit branch: the leader's
@@ -1517,8 +1672,11 @@ impl SessionTable {
                                     return Ok((ctx, ke_timings));
                                 }
                                 None => {
-                                    guard.complete(Err(NtsError::NoCookies));
-                                    return Err(NtsError::NoCookies);
+                                    let err = NtsError::NoCookies {
+                                        trust_backend: Some(session_backend),
+                                    };
+                                    guard.complete(Err(err.clone()));
+                                    return Err(err);
                                 }
                             }
                         }
@@ -1550,7 +1708,7 @@ impl SessionTable {
                         Some(Ok(())) => continue,
                         Some(Err(e)) => return Err(e),
                         None => {
-                            return Err(NtsError::Timeout(TimeoutPhase::KeRecordIo));
+                            return Err(NtsError::Timeout { phase: TimeoutPhase::KeRecordIo, trust_backend: None });
                         }
                     }
                 }
@@ -1727,7 +1885,7 @@ impl UdpDeadline {
     }
 
     /// Convenience wrapper that yields the remaining budget when there
-    /// is still time on the clock and `NtsError::Timeout(phase)` once
+    /// is still time on the clock and `NtsError::Timeout { phase, trust_backend: None }` once
     /// the deadline has elapsed. Callers use this immediately before a
     /// blocking step so an already-blown budget short-circuits cleanly
     /// instead of re-arming a zero-length socket timeout (which the
@@ -1740,7 +1898,7 @@ impl UdpDeadline {
     fn remaining_or_timeout(&self, phase: TimeoutPhase) -> Result<Duration, NtsError> {
         let remaining = self.remaining();
         if remaining.is_zero() {
-            return Err(NtsError::Timeout(phase));
+            return Err(NtsError::Timeout { phase, trust_backend: None });
         }
         Ok(remaining)
     }
@@ -1803,18 +1961,22 @@ where
                 // diagnostic preserved.
                 return Err(match e.kind() {
                     std::io::ErrorKind::WouldBlock => {
-                        NtsError::Timeout(TimeoutPhase::DnsSaturation)
+                        NtsError::Timeout { phase: TimeoutPhase::DnsSaturation, trust_backend: None }
                     }
-                    std::io::ErrorKind::TimedOut => NtsError::Timeout(TimeoutPhase::DnsTimeout),
-                    _ => NtsError::Network(format!("DNS lookup failed for {host}:{port}: {e}")),
+                    std::io::ErrorKind::TimedOut => NtsError::Timeout { phase: TimeoutPhase::DnsTimeout, trust_backend: None },
+                    _ => NtsError::Network {
+                        message: format!("DNS lookup failed for {host}:{port}: {e}"),
+                        trust_backend: None,
+                    },
                 });
             }
         };
     let dns_micros = dns_started.elapsed().as_micros() as i64;
     if candidates.is_empty() {
-        return Err(NtsError::Network(format!(
-            "no addresses resolved for {host}:{port}"
-        )));
+        return Err(NtsError::Network {
+            message: format!("no addresses resolved for {host}:{port}"),
+            trust_backend: None,
+        });
     }
     let mut errors: Vec<String> = Vec::with_capacity(candidates.len());
     for addr in &candidates {
@@ -1858,11 +2020,14 @@ where
             Err(e) => errors.push(format!("connect {addr}: {e}")),
         }
     }
-    Err(NtsError::Network(format!(
-        "failed to bind/connect any of {} resolved addresses for {host}:{port}: [{}]",
-        candidates.len(),
-        errors.join("; "),
-    )))
+    Err(NtsError::Network {
+        message: format!(
+            "failed to bind/connect any of {} resolved addresses for {host}:{port}: [{}]",
+            candidates.len(),
+            errors.join("; "),
+        ),
+        trust_backend: None,
+    })
 }
 
 /// Run a complete authenticated NTPv4 exchange against `spec`.
@@ -1982,11 +2147,23 @@ fn nts_query_inner(
     // own re-handshake) installed a fresh session under the same key
     // while this query was on the wire, the in-flight failure belongs
     // to the old keys and the new session must survive untouched.
+    // Post-handshake attribution helper. The handshake that produced
+    // `ctx` already resolved its trust-backend (recorded in
+    // `ctx.trust_backend`); every error fired on this leg should carry
+    // that attribution so a Dart-side failure log can pair an
+    // `NtsError.network`/`keProtocol`/`timeout` with the same
+    // `TrustBackend` a successful sample would have surfaced.
+    // Variants whose precondition rules out a backend
+    // (`InvalidSpec`, `TrustBackendUnavailable`, `Internal`) silently
+    // drop the attribution — see `NtsError::with_trust_backend`.
+    let attribute_post_handshake = |e: NtsError| -> NtsError {
+        e.with_trust_backend(Some(ctx.trust_backend))
+    };
     let evict_on_rekey_signal = |err: NtpError| -> NtsError {
         if matches!(&err, NtpError::Aead(_) | NtpError::StaleCookie) {
             table.evict_session(&key, session_generation);
         }
-        NtsError::from(err)
+        attribute_post_handshake(NtsError::from(err))
     };
 
     let mut uid = [0u8; UID_LEN];
@@ -2019,14 +2196,19 @@ fn nts_query_inner(
     // syscall after this point is the AEAD-NTPv4 `send`/`recv`,
     // which is the same phase `bind_connected_udp_using` would tag
     // post-DNS (see its `remaining_or_timeout` comment).
-    let udp_budget = remaining_budget_or_ntp_timeout(timeout, started.elapsed())?;
+    let udp_budget =
+        remaining_budget_or_ntp_timeout(timeout, started.elapsed()).map_err(attribute_post_handshake)?;
     let UdpBindOutcome {
         socket,
         dns_micros: udp_dns_micros,
-    } = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, udp_budget, cap)?;
+    } = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, udp_budget, cap)
+        .map_err(attribute_post_handshake)?;
 
     let send_at = Instant::now();
-    socket.send(&packet)?;
+    socket
+        .send(&packet)
+        .map_err(NtsError::from)
+        .map_err(attribute_post_handshake)?;
 
     // Re-arm the socket's read timeout against the call-wide deadline
     // before the only blocking syscall on this leg. The bind-time
@@ -2038,10 +2220,14 @@ fn nts_query_inner(
     // `timeout_ms`. Short-circuits to `Timeout(Ntp)` if the call-wide
     // budget is already exhausted by the time we get here. See
     // `arm_recv_against_call_deadline` for the full rationale.
-    arm_recv_against_call_deadline(&socket, timeout, started.elapsed())?;
+    arm_recv_against_call_deadline(&socket, timeout, started.elapsed())
+        .map_err(attribute_post_handshake)?;
 
     let mut buf = [0u8; 2048];
-    let n = socket.recv(&mut buf)?;
+    let n = socket
+        .recv(&mut buf)
+        .map_err(NtsError::from)
+        .map_err(attribute_post_handshake)?;
     let rtt_micros = send_at.elapsed().as_micros() as i64;
 
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
@@ -2609,7 +2795,7 @@ mod tests {
         handler.join().expect("faux server thread panicked");
 
         match result {
-            Err(NtsError::Authentication(_)) => {}
+            Err(NtsError::Authentication { .. }) => {}
             other => panic!("expected NtsError::Authentication, got {other:?}"),
         }
 
@@ -2673,7 +2859,7 @@ mod tests {
         handler.join().expect("faux server thread panicked");
 
         match result {
-            Err(NtsError::NtpProtocol(_)) => {}
+            Err(NtsError::NtpProtocol { .. }) => {}
             other => panic!("expected NtsError::NtpProtocol, got {other:?}"),
         }
 
@@ -2784,7 +2970,7 @@ mod tests {
         // `NtpProtocol` for the Dart-facing diagnostic, but eviction
         // already fired pre-conversion inside `evict_on_rekey_signal`.
         match result {
-            Err(NtsError::NtpProtocol(ref msg)) if msg.contains("NTSN") => {}
+            Err(NtsError::NtpProtocol { message: msg, .. }) if msg.contains("NTSN") => {}
             other => panic!("expected NtpProtocol(StaleCookie) for NTSN reply, got {other:?}"),
         }
 
@@ -2860,7 +3046,7 @@ mod tests {
         // the parser, which maps to `NtpProtocol` and bypasses the
         // eviction match arm.
         match result {
-            Err(NtsError::NtpProtocol(_)) => {}
+            Err(NtsError::NtpProtocol { .. }) => {}
             other => panic!("expected NtpProtocol for wrong-UID NTSN, got {other:?}"),
         }
 
@@ -2890,7 +3076,7 @@ mod tests {
         let err = bind_connected_udp("no-such-host.invalid", 123, Duration::from_millis(500), 64)
             .expect_err("must fail");
         match err {
-            NtsError::Network(msg) => {
+            NtsError::Network { message: msg, .. } => {
                 assert!(
                     msg.contains("no-such-host.invalid"),
                     "expected hostname in error, got {msg}",
@@ -2902,7 +3088,7 @@ mod tests {
 
     /// Slow-DNS regression guard for [`bind_connected_udp`]. Injects a
     /// resolver that blocks past the budget and asserts the call
-    /// returns `NtsError::Timeout(TimeoutPhase::DnsTimeout)` (not
+    /// returns `NtsError::Timeout { phase: TimeoutPhase::DnsTimeout, trust_backend: None }` (not
     /// `NtsError::Network`) well inside the cap. Pinning the phase
     /// tag here is what consumers of the post-`nts-r2l` API rely on
     /// to attribute the failure to a stalled `getaddrinfo` rather
@@ -2921,7 +3107,7 @@ mod tests {
         let elapsed = started.elapsed();
 
         match result {
-            Err(NtsError::Timeout(TimeoutPhase::DnsTimeout)) => {}
+            Err(NtsError::Timeout { phase: TimeoutPhase::DnsTimeout, trust_backend: None }) => {}
             other => panic!("slow-DNS path must surface as Timeout(DnsTimeout), got {other:?}",),
         }
         let cap = budget * 5;
@@ -2946,7 +3132,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         assert!(d.remaining().is_zero(), "expired deadline must saturate");
         match d.remaining_or_timeout(TimeoutPhase::Ntp) {
-            Err(NtsError::Timeout(TimeoutPhase::Ntp)) => {}
+            Err(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }) => {}
             other => panic!("expired deadline must yield Timeout(Ntp), got {other:?}"),
         }
     }
@@ -3076,7 +3262,7 @@ mod tests {
         let total = Duration::from_millis(100);
         let elapsed = Duration::from_millis(150);
         match arm_recv_against_call_deadline(&socket, total, elapsed) {
-            Err(NtsError::Timeout(TimeoutPhase::Ntp)) => {}
+            Err(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }) => {}
             other => panic!("expired call-wide deadline must yield Timeout(Ntp), got {other:?}",),
         }
         let read_t = socket
@@ -3113,7 +3299,7 @@ mod tests {
         for (ke_phase, expected) in cases {
             let mapped = NtsError::from(KeError::PhaseTimeout(ke_phase));
             match mapped {
-                NtsError::Timeout(got) => assert_eq!(
+                NtsError::Timeout { phase: got, .. } => assert_eq!(
                     got, expected,
                     "KeTimeoutPhase::{ke_phase:?} mapped to NtsError::Timeout({got:?}); \
                      expected NtsError::Timeout({expected:?})",
@@ -3139,7 +3325,7 @@ mod tests {
         for kind in [std::io::ErrorKind::TimedOut, std::io::ErrorKind::WouldBlock] {
             let io_err = std::io::Error::from(kind);
             match NtsError::from(io_err) {
-                NtsError::Timeout(TimeoutPhase::Ntp) => {}
+                NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None } => {}
                 other => panic!(
                     "io::Error of {kind:?} mapped to {other:?}; \
                      expected NtsError::Timeout(Ntp)",
@@ -3188,7 +3374,7 @@ mod tests {
             "recv took {elapsed:?}; SO_RCVTIMEO did not fire",
         );
         match NtsError::from(io_err) {
-            NtsError::Timeout(TimeoutPhase::Ntp) => {}
+            NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None } => {}
             other => panic!(
                 "UDP recv timeout mapped to {other:?}; \
                  expected NtsError::Timeout(Ntp)",
@@ -3231,7 +3417,7 @@ mod tests {
             TimeoutPhase::KeRecordIo,
             TimeoutPhase::Ntp,
         ] {
-            let rendered = format!("{}", NtsError::Timeout(phase));
+            let rendered = format!("{}", NtsError::Timeout { phase, trust_backend: None });
             let tag = format!("{phase:?}");
             assert!(
                 rendered.contains(&tag),
@@ -3253,7 +3439,7 @@ mod tests {
     fn from_ke_error_io_routes_to_network_with_diagnostic() {
         let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "kex-refused");
         match NtsError::from(KeError::Io(io)) {
-            NtsError::Network(msg) => assert!(
+            NtsError::Network { message: msg, .. } => assert!(
                 msg.contains("kex-refused"),
                 "Network message {msg:?} dropped the underlying diagnostic",
             ),
@@ -3284,13 +3470,13 @@ mod tests {
 
         // Budget exactly consumed: short-circuit with Timeout(Ntp).
         match remaining_budget_or_ntp_timeout(total, total) {
-            Err(NtsError::Timeout(TimeoutPhase::Ntp)) => {}
+            Err(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }) => {}
             other => panic!("elapsed == total must yield Timeout(Ntp), got {other:?}"),
         }
 
         // Budget overrun: same short-circuit, no panic on saturating sub.
         match remaining_budget_or_ntp_timeout(total, total + Duration::from_millis(50)) {
-            Err(NtsError::Timeout(TimeoutPhase::Ntp)) => {}
+            Err(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }) => {}
             other => panic!("elapsed > total must yield Timeout(Ntp), got {other:?}"),
         }
 
@@ -3592,7 +3778,7 @@ mod tests {
         handler.join().expect("faux server thread panicked");
 
         match result {
-            Err(NtsError::Authentication(_)) => {}
+            Err(NtsError::Authentication { .. }) => {}
             other => panic!("expected NtsError::Authentication, got {other:?}"),
         }
 
@@ -3672,7 +3858,7 @@ mod tests {
                 assert!(sample.server_stratum > 0 && sample.server_stratum < 16);
                 assert!(sample.round_trip_micros > 0);
             }
-            Err(NtsError::Network(msg)) => {
+            Err(NtsError::Network { message: msg, .. }) => {
                 eprintln!("skipping: no IPv6 path to ptbtime1.ptb.de ({msg})");
             }
             Err(other) => panic!("unexpected non-network failure: {other:?}"),
@@ -4064,7 +4250,7 @@ mod tests {
         let waiter_elapsed = waiter_started.elapsed();
 
         match waiter_outcome {
-            Err(NtsError::Timeout(TimeoutPhase::KeRecordIo)) => {}
+            Err(NtsError::Timeout { phase: TimeoutPhase::KeRecordIo, trust_backend: None }) => {}
             Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
             Ok(_) => panic!("waiter returned Ok despite a parked leader"),
         }
@@ -4108,9 +4294,10 @@ mod tests {
                 release_handle
                     .wait_release(Duration::from_secs(10))
                     .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
-                Err(NtsError::KeProtocol(
-                    "synthetic leader-failure for singleflight test".into(),
-                ))
+                Err(NtsError::KeProtocol {
+                    message: "synthetic leader-failure for singleflight test".into(),
+                    trust_backend: None,
+                })
             }
         };
 
@@ -4144,7 +4331,7 @@ mod tests {
         for h in handles {
             let result = h.join().expect("thread panicked");
             match result {
-                Err(NtsError::KeProtocol(msg)) => {
+                Err(NtsError::KeProtocol { message: msg, .. }) => {
                     assert_eq!(msg, "synthetic leader-failure for singleflight test");
                 }
                 Err(other) => {

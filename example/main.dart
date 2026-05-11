@@ -97,11 +97,11 @@ Future<void> main() async {
     // failures through this same hierarchy.
     final detail = switch (err) {
       NtsErrorInvalidSpec(:final field0) => 'invalid spec: $field0',
-      NtsErrorNetwork(:final field0) => 'network: $field0',
-      NtsErrorKeProtocol(:final field0) => 'NTS-KE: $field0',
-      NtsErrorNtpProtocol(:final field0) => 'NTP: $field0',
-      NtsErrorAuthentication(:final field0) => 'AEAD auth: $field0',
-      NtsErrorTimeout(:final field0) => 'timeout in phase ${field0.name}',
+      NtsErrorNetwork(:final message) => 'network: $message',
+      NtsErrorKeProtocol(:final message) => 'NTS-KE: $message',
+      NtsErrorNtpProtocol(:final message) => 'NTP: $message',
+      NtsErrorAuthentication(:final message) => 'AEAD auth: $message',
+      NtsErrorTimeout(:final phase) => 'timeout in phase ${phase.name}',
       NtsErrorNoCookies() => 'no cookies returned',
       NtsErrorTrustBackendUnavailable(:final field0) =>
         'trust backend unavailable (PlatformOnly mode): $field0',

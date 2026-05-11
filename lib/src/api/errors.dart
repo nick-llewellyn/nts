@@ -10,13 +10,26 @@
 // - `NtsError` is a Dart 3 `sealed class`, not a `freezed` class, so
 //   exhaustive `switch (err) { ... }` in consumers does not require
 //   `freezed_annotation` on the consumer side.
-// - Each variant exposes its payload through a `field0` field (and,
-//   where applicable, an `is`-narrowable subclass) for source-level
-//   parity with the pre-3.0 freezed-generated shape.
+// - Variants whose precondition is "the TLS handshake had at least
+//   reached config-build time" carry an optional `trustBackend`
+//   field with the per-handshake trust-anchor backend resolved by
+//   the Rust-side handshake (and on Android upgraded to
+//   `TrustBackend.platformWithHybridFallback` if the hybrid
+//   verifier's per-instance fallback counter incremented during the
+//   handshake). New in 3.0.0; unaffected variants
+//   (`invalidSpec`, `trustBackendUnavailable`, `internal`) keep
+//   their pre-3.0 single-payload shape.
+// - Each variant that received the `trustBackend` field also gained
+//   a named-parameter constructor (`NtsError.keProtocol(message:
+//   ..., trustBackend: ...)`) — the pre-3.0 single-positional shape
+//   is preserved as a `field0` getter on the same variant for
+//   source-level back-compat.
 // - For SemVer compatibility with pre-3.0 callers, the underscore-
 //   prefixed names (`NtsError_InvalidSpec`, ...) survive as deprecated
 //   typedef aliases at the bottom of this file. They will be removed
 //   at the next major bump.
+
+import 'models.dart' show TrustBackend;
 
 /// Phase of an `ntsQuery` or `ntsWarmCookies` call whose wall-clock
 /// budget elapsed.
@@ -77,14 +90,28 @@ sealed class NtsError implements Exception {
   /// `spec` was rejected before any I/O happened.
   const factory NtsError.invalidSpec(String field0) = NtsErrorInvalidSpec;
 
-  /// TCP/UDP I/O error or connection failure.
-  const factory NtsError.network(String field0) = NtsErrorNetwork;
+  /// TCP/UDP I/O error or connection failure. `trustBackend` carries
+  /// the per-handshake trust-anchor backend resolved before the
+  /// failure fired (when the failure happened post-`build_tls_config`),
+  /// or `null` when the failure pre-dated config construction.
+  const factory NtsError.network({
+    required String message,
+    TrustBackend? trustBackend,
+  }) = NtsErrorNetwork;
 
-  /// TLS handshake or NTS-KE record exchange failed.
-  const factory NtsError.keProtocol(String field0) = NtsErrorKeProtocol;
+  /// TLS handshake or NTS-KE record exchange failed. See
+  /// [NtsError.network] for `trustBackend` semantics.
+  const factory NtsError.keProtocol({
+    required String message,
+    TrustBackend? trustBackend,
+  }) = NtsErrorKeProtocol;
 
-  /// NTPv4 packet parsing or extension validation failed.
-  const factory NtsError.ntpProtocol(String field0) = NtsErrorNtpProtocol;
+  /// NTPv4 packet parsing or extension validation failed. See
+  /// [NtsError.network] for `trustBackend` semantics.
+  const factory NtsError.ntpProtocol({
+    required String message,
+    TrustBackend? trustBackend,
+  }) = NtsErrorNtpProtocol;
 
   /// AEAD seal/open failed (tag mismatch, malformed input).
   ///
@@ -110,15 +137,42 @@ sealed class NtsError implements Exception {
   /// `describeError` dartdoc in
   /// `example/lib/src/state/nts_format.dart` for the example app's
   /// rendering of the same routing.
-  const factory NtsError.authentication(String field0) = NtsErrorAuthentication;
+  const factory NtsError.authentication({
+    required String message,
+    TrustBackend? trustBackend,
+  }) = NtsErrorAuthentication;
 
   /// Wall-clock budget elapsed inside one of the call's pre-NTP or NTP
   /// phases. The [TimeoutPhase] payload identifies which phase tripped
   /// the deadline so callers can choose the right remediation.
-  const factory NtsError.timeout(TimeoutPhase field0) = NtsErrorTimeout;
+  ///
+  /// `trustBackend` is typed as nullable to keep the Rust `KeFailure`
+  /// attribution contract honest at the FFI boundary, but in
+  /// practice every timeout-shaped phase fires after
+  /// `build_tls_config` returned `Ok` and therefore carries the
+  /// resolved backend. Rust `perform_handshake` calls
+  /// `build_tls_config` before any DNS, connect, or TLS I/O begins,
+  /// then attaches the resolved backend (via the per-call
+  /// `attribute` closure) to every subsequent failure site —
+  /// `dnsSaturation` and `dnsTimeout` from the bounded resolver,
+  /// `connect` from the per-address `TcpStream::connect_timeout`
+  /// loop, `tls` from the rustls handshake / write / flush window,
+  /// `keRecordIo` from the chunked record-read loop, and the
+  /// post-handshake UDP-leg `ntp` phase. The Android per-instance
+  /// hybrid-fallback upgrade is reflected when the
+  /// `HybridVerifier`'s fallback counter incremented during the TLS
+  /// write/flush window.
+  const factory NtsError.timeout({
+    required TimeoutPhase phase,
+    TrustBackend? trustBackend,
+  }) = NtsErrorTimeout;
 
   /// Cookie jar empty after a handshake (server delivered none).
-  const factory NtsError.noCookies() = NtsErrorNoCookies;
+  /// Always post-handshake, so `trustBackend` is populated when the
+  /// caller cares to inspect which backend authenticated the chain
+  /// that produced the empty pool.
+  const factory NtsError.noCookies({TrustBackend? trustBackend}) =
+      NtsErrorNoCookies;
 
   /// Caller selected `TrustMode.platformOnly` and the platform
   /// trust-anchor backend could not be constructed. Surfaced
@@ -159,119 +213,204 @@ final class NtsErrorInvalidSpec extends NtsError {
 /// Variant: TCP/UDP I/O error or connection failure.
 final class NtsErrorNetwork extends NtsError {
   /// Diagnostic from the underlying `io::Error`.
-  final String field0;
+  final String message;
+
+  /// Per-handshake trust-anchor backend resolved before the failure
+  /// fired, or `null` if the failure pre-dated config construction.
+  final TrustBackend? trustBackend;
 
   /// Construct a `Network` variant.
-  const NtsErrorNetwork(this.field0) : super._();
+  const NtsErrorNetwork({required this.message, this.trustBackend}) : super._();
+
+  /// Pre-3.0 alias for [message]. Will be removed in a future major.
+  @Deprecated('Renamed to message; the positional payload is now named.')
+  String get field0 => message;
 
   @override
-  int get hashCode => Object.hash(NtsErrorNetwork, field0);
+  int get hashCode => Object.hash(NtsErrorNetwork, message, trustBackend);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is NtsErrorNetwork && field0 == other.field0);
+      (other is NtsErrorNetwork &&
+          message == other.message &&
+          trustBackend == other.trustBackend);
 
   @override
-  String toString() => 'NtsError.network($field0)';
+  String toString() => trustBackend == null
+      ? 'NtsError.network($message)'
+      : 'NtsError.network($message, backend: ${trustBackend!.name})';
 }
 
 /// Variant: TLS handshake or NTS-KE record exchange failed.
 final class NtsErrorKeProtocol extends NtsError {
   /// TLS / NTS-KE record diagnostic.
-  final String field0;
+  final String message;
+
+  /// Per-handshake trust-anchor backend resolved before the failure
+  /// fired, or `null` if the failure pre-dated config construction.
+  final TrustBackend? trustBackend;
 
   /// Construct a `KeProtocol` variant.
-  const NtsErrorKeProtocol(this.field0) : super._();
+  const NtsErrorKeProtocol({required this.message, this.trustBackend})
+    : super._();
+
+  /// Pre-3.0 alias for [message]. Will be removed in a future major.
+  @Deprecated('Renamed to message; the positional payload is now named.')
+  String get field0 => message;
 
   @override
-  int get hashCode => Object.hash(NtsErrorKeProtocol, field0);
+  int get hashCode => Object.hash(NtsErrorKeProtocol, message, trustBackend);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is NtsErrorKeProtocol && field0 == other.field0);
+      (other is NtsErrorKeProtocol &&
+          message == other.message &&
+          trustBackend == other.trustBackend);
 
   @override
-  String toString() => 'NtsError.keProtocol($field0)';
+  String toString() => trustBackend == null
+      ? 'NtsError.keProtocol($message)'
+      : 'NtsError.keProtocol($message, backend: ${trustBackend!.name})';
 }
 
 /// Variant: NTPv4 packet parsing or extension validation failed.
 final class NtsErrorNtpProtocol extends NtsError {
   /// NTPv4 parse / extension / KoD diagnostic. KoD kiss codes
   /// (`RATE`, `DENY`, `RSTR`, `NTSN`, ...) are preserved verbatim.
-  final String field0;
+  final String message;
+
+  /// Per-handshake trust-anchor backend resolved before the failure
+  /// fired, or `null` if the failure pre-dated config construction.
+  final TrustBackend? trustBackend;
 
   /// Construct an `NtpProtocol` variant.
-  const NtsErrorNtpProtocol(this.field0) : super._();
+  const NtsErrorNtpProtocol({required this.message, this.trustBackend})
+    : super._();
+
+  /// Pre-3.0 alias for [message]. Will be removed in a future major.
+  @Deprecated('Renamed to message; the positional payload is now named.')
+  String get field0 => message;
 
   @override
-  int get hashCode => Object.hash(NtsErrorNtpProtocol, field0);
+  int get hashCode => Object.hash(NtsErrorNtpProtocol, message, trustBackend);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is NtsErrorNtpProtocol && field0 == other.field0);
+      (other is NtsErrorNtpProtocol &&
+          message == other.message &&
+          trustBackend == other.trustBackend);
 
   @override
-  String toString() => 'NtsError.ntpProtocol($field0)';
+  String toString() => trustBackend == null
+      ? 'NtsError.ntpProtocol($message)'
+      : 'NtsError.ntpProtocol($message, backend: ${trustBackend!.name})';
 }
 
 /// Variant: AEAD seal/open failed (tag mismatch or malformed input).
 final class NtsErrorAuthentication extends NtsError {
   /// AEAD seal/open diagnostic.
-  final String field0;
+  final String message;
+
+  /// Per-handshake trust-anchor backend resolved before the failure
+  /// fired, or `null` if the failure pre-dated config construction.
+  final TrustBackend? trustBackend;
 
   /// Construct an `Authentication` variant.
-  const NtsErrorAuthentication(this.field0) : super._();
+  const NtsErrorAuthentication({required this.message, this.trustBackend})
+    : super._();
+
+  /// Pre-3.0 alias for [message]. Will be removed in a future major.
+  @Deprecated('Renamed to message; the positional payload is now named.')
+  String get field0 => message;
 
   @override
-  int get hashCode => Object.hash(NtsErrorAuthentication, field0);
+  int get hashCode =>
+      Object.hash(NtsErrorAuthentication, message, trustBackend);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is NtsErrorAuthentication && field0 == other.field0);
+      (other is NtsErrorAuthentication &&
+          message == other.message &&
+          trustBackend == other.trustBackend);
 
   @override
-  String toString() => 'NtsError.authentication($field0)';
+  String toString() => trustBackend == null
+      ? 'NtsError.authentication($message)'
+      : 'NtsError.authentication($message, backend: ${trustBackend!.name})';
 }
 
 /// Variant: wall-clock budget elapsed inside one of the call's pre-NTP
 /// or NTP phases.
 final class NtsErrorTimeout extends NtsError {
   /// Phase whose deadline tripped. See [TimeoutPhase] for the taxonomy.
-  final TimeoutPhase field0;
+  final TimeoutPhase phase;
+
+  /// Per-handshake trust-anchor backend resolved before the timeout
+  /// fired. Typed as nullable to keep the Rust `KeFailure`
+  /// attribution contract honest at the FFI boundary, but in
+  /// practice every `TimeoutPhase` value (`dnsSaturation`,
+  /// `dnsTimeout`, `connect`, `tls`, `keRecordIo`, post-handshake
+  /// `ntp`) fires after `build_tls_config` returned `Ok` and
+  /// therefore carries the resolved backend — see the
+  /// constructor-level [NtsError.timeout] dartdoc above for the
+  /// per-phase attribution map.
+  final TrustBackend? trustBackend;
 
   /// Construct a `Timeout` variant.
-  const NtsErrorTimeout(this.field0) : super._();
+  const NtsErrorTimeout({required this.phase, this.trustBackend}) : super._();
+
+  /// Pre-3.0 alias for [phase]. Will be removed in a future major.
+  @Deprecated('Renamed to phase; the positional payload is now named.')
+  TimeoutPhase get field0 => phase;
 
   @override
-  int get hashCode => Object.hash(NtsErrorTimeout, field0);
+  int get hashCode => Object.hash(NtsErrorTimeout, phase, trustBackend);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is NtsErrorTimeout && field0 == other.field0);
+      (other is NtsErrorTimeout &&
+          phase == other.phase &&
+          trustBackend == other.trustBackend);
 
   @override
-  String toString() => 'NtsError.timeout(${field0.name})';
+  String toString() => trustBackend == null
+      ? 'NtsError.timeout(${phase.name})'
+      : 'NtsError.timeout(${phase.name}, backend: ${trustBackend!.name})';
 }
 
 /// Variant: cookie jar empty after a handshake (server delivered none).
 final class NtsErrorNoCookies extends NtsError {
+  /// Per-handshake trust-anchor backend resolved before the failure
+  /// fired. Populated for every library-originated `NoCookies`
+  /// failure (cache-hit short-circuit and the singleflight Leader
+  /// arm both attach the resolved backend), but typed as nullable
+  /// because the public factory `NtsError.noCookies()` accepts the
+  /// no-backend form for callers (e.g. test fixtures) that need to
+  /// construct the variant without a chain having authenticated.
+  /// `toString()` preserves the no-backend form when the field is
+  /// `null`.
+  final TrustBackend? trustBackend;
+
   /// Construct a `NoCookies` variant.
-  const NtsErrorNoCookies() : super._();
+  const NtsErrorNoCookies({this.trustBackend}) : super._();
 
   @override
-  int get hashCode => (NtsErrorNoCookies).hashCode;
+  int get hashCode => Object.hash(NtsErrorNoCookies, trustBackend);
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) || other is NtsErrorNoCookies;
+      identical(this, other) ||
+      (other is NtsErrorNoCookies && trustBackend == other.trustBackend);
 
   @override
-  String toString() => 'NtsError.noCookies()';
+  String toString() => trustBackend == null
+      ? 'NtsError.noCookies()'
+      : 'NtsError.noCookies(backend: ${trustBackend!.name})';
 }
 
 /// Variant: caller selected `TrustMode.platformOnly` and the

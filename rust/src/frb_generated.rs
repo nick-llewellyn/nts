@@ -665,27 +665,56 @@ impl SseDecode for crate::api::nts::NtsError {
                 return crate::api::nts::NtsError::InvalidSpec(var_field0);
             }
             1 => {
-                let mut var_field0 = <String>::sse_decode(deserializer);
-                return crate::api::nts::NtsError::Network(var_field0);
+                let mut var_message = <String>::sse_decode(deserializer);
+                let mut var_trustBackend =
+                    <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::Network {
+                    message: var_message,
+                    trust_backend: var_trustBackend,
+                };
             }
             2 => {
-                let mut var_field0 = <String>::sse_decode(deserializer);
-                return crate::api::nts::NtsError::KeProtocol(var_field0);
+                let mut var_message = <String>::sse_decode(deserializer);
+                let mut var_trustBackend =
+                    <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::KeProtocol {
+                    message: var_message,
+                    trust_backend: var_trustBackend,
+                };
             }
             3 => {
-                let mut var_field0 = <String>::sse_decode(deserializer);
-                return crate::api::nts::NtsError::NtpProtocol(var_field0);
+                let mut var_message = <String>::sse_decode(deserializer);
+                let mut var_trustBackend =
+                    <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::NtpProtocol {
+                    message: var_message,
+                    trust_backend: var_trustBackend,
+                };
             }
             4 => {
-                let mut var_field0 = <String>::sse_decode(deserializer);
-                return crate::api::nts::NtsError::Authentication(var_field0);
+                let mut var_message = <String>::sse_decode(deserializer);
+                let mut var_trustBackend =
+                    <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::Authentication {
+                    message: var_message,
+                    trust_backend: var_trustBackend,
+                };
             }
             5 => {
-                let mut var_field0 = <crate::api::nts::TimeoutPhase>::sse_decode(deserializer);
-                return crate::api::nts::NtsError::Timeout(var_field0);
+                let mut var_phase = <crate::api::nts::TimeoutPhase>::sse_decode(deserializer);
+                let mut var_trustBackend =
+                    <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::Timeout {
+                    phase: var_phase,
+                    trust_backend: var_trustBackend,
+                };
             }
             6 => {
-                return crate::api::nts::NtsError::NoCookies;
+                let mut var_trustBackend =
+                    <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::NoCookies {
+                    trust_backend: var_trustBackend,
+                };
             }
             7 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
@@ -958,22 +987,54 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsError {
             crate::api::nts::NtsError::InvalidSpec(field0) => {
                 [0.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::nts::NtsError::Network(field0) => {
-                [1.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            crate::api::nts::NtsError::Network {
+                message,
+                trust_backend,
+            } => [
+                1.into_dart(),
+                message.into_into_dart().into_dart(),
+                trust_backend.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::nts::NtsError::KeProtocol {
+                message,
+                trust_backend,
+            } => [
+                2.into_dart(),
+                message.into_into_dart().into_dart(),
+                trust_backend.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::nts::NtsError::NtpProtocol {
+                message,
+                trust_backend,
+            } => [
+                3.into_dart(),
+                message.into_into_dart().into_dart(),
+                trust_backend.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::nts::NtsError::Authentication {
+                message,
+                trust_backend,
+            } => [
+                4.into_dart(),
+                message.into_into_dart().into_dart(),
+                trust_backend.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::nts::NtsError::Timeout {
+                phase,
+                trust_backend,
+            } => [
+                5.into_dart(),
+                phase.into_into_dart().into_dart(),
+                trust_backend.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::nts::NtsError::NoCookies { trust_backend } => {
+                [6.into_dart(), trust_backend.into_into_dart().into_dart()].into_dart()
             }
-            crate::api::nts::NtsError::KeProtocol(field0) => {
-                [2.into_dart(), field0.into_into_dart().into_dart()].into_dart()
-            }
-            crate::api::nts::NtsError::NtpProtocol(field0) => {
-                [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
-            }
-            crate::api::nts::NtsError::Authentication(field0) => {
-                [4.into_dart(), field0.into_into_dart().into_dart()].into_dart()
-            }
-            crate::api::nts::NtsError::Timeout(field0) => {
-                [5.into_dart(), field0.into_into_dart().into_dart()].into_dart()
-            }
-            crate::api::nts::NtsError::NoCookies => [6.into_dart()].into_dart(),
             crate::api::nts::NtsError::TrustBackendUnavailable(field0) => {
                 [7.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
@@ -1239,28 +1300,49 @@ impl SseEncode for crate::api::nts::NtsError {
                 <i32>::sse_encode(0, serializer);
                 <String>::sse_encode(field0, serializer);
             }
-            crate::api::nts::NtsError::Network(field0) => {
+            crate::api::nts::NtsError::Network {
+                message,
+                trust_backend,
+            } => {
                 <i32>::sse_encode(1, serializer);
-                <String>::sse_encode(field0, serializer);
+                <String>::sse_encode(message, serializer);
+                <Option<crate::api::nts::TrustBackend>>::sse_encode(trust_backend, serializer);
             }
-            crate::api::nts::NtsError::KeProtocol(field0) => {
+            crate::api::nts::NtsError::KeProtocol {
+                message,
+                trust_backend,
+            } => {
                 <i32>::sse_encode(2, serializer);
-                <String>::sse_encode(field0, serializer);
+                <String>::sse_encode(message, serializer);
+                <Option<crate::api::nts::TrustBackend>>::sse_encode(trust_backend, serializer);
             }
-            crate::api::nts::NtsError::NtpProtocol(field0) => {
+            crate::api::nts::NtsError::NtpProtocol {
+                message,
+                trust_backend,
+            } => {
                 <i32>::sse_encode(3, serializer);
-                <String>::sse_encode(field0, serializer);
+                <String>::sse_encode(message, serializer);
+                <Option<crate::api::nts::TrustBackend>>::sse_encode(trust_backend, serializer);
             }
-            crate::api::nts::NtsError::Authentication(field0) => {
+            crate::api::nts::NtsError::Authentication {
+                message,
+                trust_backend,
+            } => {
                 <i32>::sse_encode(4, serializer);
-                <String>::sse_encode(field0, serializer);
+                <String>::sse_encode(message, serializer);
+                <Option<crate::api::nts::TrustBackend>>::sse_encode(trust_backend, serializer);
             }
-            crate::api::nts::NtsError::Timeout(field0) => {
+            crate::api::nts::NtsError::Timeout {
+                phase,
+                trust_backend,
+            } => {
                 <i32>::sse_encode(5, serializer);
-                <crate::api::nts::TimeoutPhase>::sse_encode(field0, serializer);
+                <crate::api::nts::TimeoutPhase>::sse_encode(phase, serializer);
+                <Option<crate::api::nts::TrustBackend>>::sse_encode(trust_backend, serializer);
             }
-            crate::api::nts::NtsError::NoCookies => {
+            crate::api::nts::NtsError::NoCookies { trust_backend } => {
                 <i32>::sse_encode(6, serializer);
+                <Option<crate::api::nts::TrustBackend>>::sse_encode(trust_backend, serializer);
             }
             crate::api::nts::NtsError::TrustBackendUnavailable(field0) => {
                 <i32>::sse_encode(7, serializer);

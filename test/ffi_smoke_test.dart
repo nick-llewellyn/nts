@@ -111,10 +111,10 @@ void main() {
     });
 
     test('NtsError variants construct and equality is value-based', () {
-      const a = NtsError.timeout(TimeoutPhase.ntp);
-      const b = NtsError.timeout(TimeoutPhase.ntp);
+      const a = NtsError.timeout(phase: TimeoutPhase.ntp);
+      const b = NtsError.timeout(phase: TimeoutPhase.ntp);
       const c = NtsError.invalidSpec('host empty');
-      const d = NtsError.timeout(TimeoutPhase.dnsSaturation);
+      const d = NtsError.timeout(phase: TimeoutPhase.dnsSaturation);
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
       expect(a, isNot(equals(d)));

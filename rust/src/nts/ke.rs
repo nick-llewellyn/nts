@@ -364,6 +364,60 @@ pub enum KeError {
     MessageTooLarge,
 }
 
+/// A [`KeError`] paired with the trust-anchor backend resolved by
+/// [`build_tls_config`] before the failure fired.
+///
+/// Always `None` for failures that fired *before* `build_tls_config`
+/// returned `Ok` (no TLS configuration existed yet, so no backend can
+/// be attributed). Always `Some(b)` for post-build failures that
+/// happened after the configuration was assembled — including TLS
+/// handshake failures, KE record-exchange failures, and any
+/// derived-key extraction failures. On Android, when the
+/// `HybridVerifier`'s per-instance fallback counter incremented during
+/// the handshake, `b == PlatformWithHybridFallback`; otherwise it
+/// matches `build.initial_backend`.
+///
+/// `pub` because it sits on `perform_handshake`'s public signature
+/// and threads through `From<KeFailure> for crate::api::nts::NtsError`
+/// at the API boundary so the public-API error variants can carry
+/// per-handshake trust-backend attribution on the wire.
+///
+/// `From<KeError> for KeFailure` exists so internal `?`-sites that
+/// happen *before* `build_tls_config` succeeds auto-convert with
+/// `trust_backend: None` (which is the only correct attribution at
+/// that point); post-build sites in `perform_handshake` use
+/// [`KeFailure::with_backend`] explicitly so the resolved backend is
+/// attached.
+#[derive(Debug)]
+pub struct KeFailure {
+    pub error: KeError,
+    pub trust_backend: Option<KeTrustBackend>,
+}
+
+impl KeFailure {
+    /// Construct a failure with the resolved trust-backend attached.
+    /// Used at every `map_err` site in [`perform_handshake`] that fires
+    /// after `build_tls_config` has succeeded.
+    pub fn with_backend(error: KeError, trust_backend: Option<KeTrustBackend>) -> Self {
+        Self {
+            error,
+            trust_backend,
+        }
+    }
+}
+
+/// Auto-conversion for `?`-propagated errors that fire *before*
+/// `build_tls_config` returns `Ok` — there is no resolved backend yet,
+/// so `None` is the only honest attribution.
+impl From<KeError> for KeFailure {
+    fn from(error: KeError) -> Self {
+        Self {
+            error,
+            trust_backend: None,
+        }
+    }
+}
+
 impl std::fmt::Display for KeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -738,9 +792,9 @@ fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {
 /// how time is distributed across phases. `req.timeout = None` keeps
 /// the prior unbounded behaviour for callers that opt out of timeout
 /// enforcement entirely.
-pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
+pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     if req.aead_algorithms.is_empty() {
-        return Err(KeError::MissingAead);
+        return Err(KeError::MissingAead.into());
     }
     let build = build_tls_config(req.trust_mode)?;
     // Snapshot the per-instance hybrid-fallback counter *before* the
@@ -749,10 +803,55 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     // on other platforms and on the WebpkiRoots hard-fallback path.
     #[cfg(target_os = "android")]
     let pre_fallback = build.hybrid.as_ref().map(|h| h.fallback_count());
+    let initial_backend = build.initial_backend;
+
+    // Closure that resolves the trust-backend attribution given the
+    // handshake's current observable state. Called both in the success
+    // path (to populate `KeOutcome.trust_backend`) and in every
+    // post-build error path (to populate `KeFailure.trust_backend`),
+    // so the same attribution logic produces the same answer for the
+    // same chain whether the handshake succeeded or failed downstream.
+    //
+    // On non-Android the answer is fully determined at config-build
+    // time. On Android the platform path is initially `Platform` and
+    // upgrades to `PlatformWithHybridFallback` if and only if
+    // `HybridVerifier::verify_server_cert` bumped its per-instance
+    // counter past the snapshot we took above — which can only have
+    // happened during the TLS handshake `write_all`/`flush` window
+    // that completes before `read_to_end_capped` reads the first
+    // KE record byte. That means a `KeFailure` raised by record
+    // parsing or any later step correctly inherits the same
+    // upgraded attribution that a successful handshake would have
+    // recorded.
+    let resolve_backend = || -> KeTrustBackend {
+        #[cfg(target_os = "android")]
+        {
+            match (initial_backend, &build.hybrid, pre_fallback) {
+                (KeTrustBackend::Platform, Some(h), Some(pre)) if h.fallback_count() > pre => {
+                    KeTrustBackend::PlatformWithHybridFallback
+                }
+                (b, _, _) => b,
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            initial_backend
+        }
+    };
+    // Closure that attaches the resolved backend to a `KeError`. Used
+    // at every `map_err` site below so post-build failures carry the
+    // same attribution a successful handshake would have produced.
+    let attribute = |error: KeError| -> KeFailure {
+        KeFailure::with_backend(error, Some(resolve_backend()))
+    };
+
     let server_name = ServerName::try_from(req.host.as_str())
-        .map_err(|_| KeError::InvalidServerName)?
-        .to_owned();
-    let mut conn = ClientConnection::new(build.config.clone(), server_name)?;
+        .map_err(|_| KeError::InvalidServerName)
+        .map_err(attribute)?;
+    let server_name = server_name.to_owned();
+    let mut conn = ClientConnection::new(build.config.clone(), server_name)
+        .map_err(KeError::from)
+        .map_err(attribute)?;
 
     let deadline = req.timeout.map(Deadline::new);
     let connected = connect_with_deadline_using(
@@ -761,14 +860,16 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
         deadline,
         req.dns_concurrency_cap,
         system_lookup,
-    )?;
+    )
+    .map_err(attribute)?;
     let ConnectedTcp {
         stream: mut tcp,
         dns_micros,
         connect_micros,
     } = connected;
     if let Some(d) = deadline.as_ref() {
-        d.apply_to_with_phase(&tcp, KeTimeoutPhase::Tls)?;
+        d.apply_to_with_phase(&tcp, KeTimeoutPhase::Tls)
+            .map_err(attribute)?;
     }
 
     let request = build_request(&req.aead_algorithms);
@@ -782,55 +883,46 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeError> {
     let response = {
         let mut stream = Stream::new(&mut conn, &mut tcp);
         if let Some(d) = deadline.as_ref() {
-            d.apply_to_with_phase(stream.sock, KeTimeoutPhase::Tls)?;
+            d.apply_to_with_phase(stream.sock, KeTimeoutPhase::Tls)
+                .map_err(attribute)?;
         }
         stream
             .write_all(&request)
-            .map_err(|e| phase_io_to_ke(e, KeTimeoutPhase::Tls))?;
+            .map_err(|e| attribute(phase_io_to_ke(e, KeTimeoutPhase::Tls)))?;
         if let Some(d) = deadline.as_ref() {
-            d.apply_to_with_phase(stream.sock, KeTimeoutPhase::Tls)?;
+            d.apply_to_with_phase(stream.sock, KeTimeoutPhase::Tls)
+                .map_err(attribute)?;
         }
         stream
             .flush()
-            .map_err(|e| phase_io_to_ke(e, KeTimeoutPhase::Tls))?;
+            .map_err(|e| attribute(phase_io_to_ke(e, KeTimeoutPhase::Tls)))?;
         let tls_handshake_micros = tls_started.elapsed().as_micros() as i64;
         let record_started = Instant::now();
-        let response = read_to_end_capped(&mut stream, deadline.as_ref())?;
+        let response = read_to_end_capped(&mut stream, deadline.as_ref()).map_err(attribute)?;
         let ke_record_io_micros = record_started.elapsed().as_micros() as i64;
         (response, tls_handshake_micros, ke_record_io_micros)
     };
     let (response, tls_handshake_micros, ke_record_io_micros) = response;
 
-    let records = parse_message(&response)?;
-    let partial = validate_response(&req.host, &req.aead_algorithms, &records)?;
+    let records = parse_message(&response).map_err(KeError::from).map_err(attribute)?;
+    let partial = validate_response(&req.host, &req.aead_algorithms, &records).map_err(attribute)?;
 
     let key_len = aead_key_len(partial.aead_id).expect("validated above");
     let c2s_ctx = exporter_context(partial.aead_id, false);
     let s2c_ctx = exporter_context(partial.aead_id, true);
-    let c2s_key =
-        conn.export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&c2s_ctx))?;
-    let s2c_key =
-        conn.export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&s2c_ctx))?;
+    let c2s_key = conn
+        .export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&c2s_ctx))
+        .map_err(KeError::from)
+        .map_err(attribute)?;
+    let s2c_key = conn
+        .export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&s2c_ctx))
+        .map_err(KeError::from)
+        .map_err(attribute)?;
 
     conn.send_close_notify();
     let _ = Stream::new(&mut conn, &mut tcp).flush();
 
-    // Resolve the per-handshake trust-backend attribution. On
-    // non-Android platforms (and on the WebpkiRoots hard-fallback
-    // path) the answer is fully determined at config-build time. On
-    // Android the platform path is initially `Platform`; it upgrades
-    // to `PlatformWithHybridFallback` if and only if
-    // `HybridVerifier::verify_server_cert` bumped its per-instance
-    // counter during the TLS handshake we just completed.
-    #[cfg(target_os = "android")]
-    let trust_backend = match (build.initial_backend, &build.hybrid, pre_fallback) {
-        (KeTrustBackend::Platform, Some(h), Some(pre)) if h.fallback_count() > pre => {
-            KeTrustBackend::PlatformWithHybridFallback
-        }
-        (b, _, _) => b,
-    };
-    #[cfg(not(target_os = "android"))]
-    let trust_backend = build.initial_backend;
+    let trust_backend = resolve_backend();
 
     // `ntp_host` / `ntp_port` are emitted as separate `key=value`
     // pairs rather than a combined `host:port` token because

@@ -282,6 +282,33 @@ shows the intended shape.
   only on the strict-mode `TrustMode.platformOnly` path; the
   payload carries the underlying `build_with_native_verifier`
   construction-failure diagnostic.
+- Per-handshake `trustBackend: TrustBackend?` attribution is now
+  carried on every error variant whose precondition is "the TLS
+  handshake reached `build_tls_config` time": `NtsError.network`,
+  `NtsError.keProtocol`, `NtsError.ntpProtocol`,
+  `NtsError.authentication`, `NtsError.timeout`, and
+  `NtsError.noCookies`. Populated whenever the failure fired after
+  the backend was resolved — which, given that `perform_handshake`
+  calls `build_tls_config` before any DNS, connect, or TLS I/O
+  begins, covers every current failure site: KE-leg
+  `dnsSaturation` / `dnsTimeout` / pre-bind `connect` / `tls` /
+  `keRecordIo` failures (all attributed via the per-call
+  `attribute` closure in `perform_handshake`), every
+  post-checkout UDP leg's bind / send / recv / recv-arm failure,
+  the cache-hit `NoCookies` short-circuits, and Android's
+  per-instance `HybridVerifier` upgrade to
+  `TrustBackend.platformWithHybridFallback` when the fallback
+  counter incremented during the TLS write/flush window. The
+  field is typed as nullable because the Rust `KeFailure` wrapper
+  attaches `None` for failures that fire before `build_tls_config`
+  returns `Ok`, but no current `perform_handshake` path produces
+  such a failure on the variants listed above. Variants whose
+  precondition rules out a backend (`invalidSpec`,
+  `trustBackendUnavailable`, `internal`) do not carry the field
+  at all. Closes the diagnostic gap where a server-side
+  post-handshake failure (e.g. an NTS-KE record parse error
+  against an Android hybrid-fallback chain) lost the fallback
+  attribution and exported as `[backend=null]`.
 
 ### Changed — trust-anchor diagnostics + strict mode
 
@@ -302,6 +329,21 @@ shows the intended shape.
   call. Used by `ntsTrustStatus()` to report
   `androidPlatformInitSucceeded`; idempotent (the flag only ever
   flips false → true).
+- **BREAKING** — sealed `NtsError` variants whose payload grew the
+  `trustBackend` field (`network`, `keProtocol`, `ntpProtocol`,
+  `authentication`, `timeout`, `noCookies`) now use named-parameter
+  constructors (`NtsError.network(message: ..., trustBackend: ...)`
+  rather than `NtsError.network(...)`). The pre-3.0 single positional
+  payload survives as a `@Deprecated` `field0` getter on each
+  variant subclass so 2.x consumers keep compiling under a
+  deprecation warning, but all *construction* sites must move to
+  the named form. `toString()` preserves the pre-3.0 format
+  (`NtsError.network(message)`) when `trustBackend` is `null` and
+  appends `, backend: <name>` otherwise, so existing equality /
+  string assertions for backend-less variants do not need to
+  change. `invalidSpec`, `trustBackendUnavailable`, and `internal`
+  retain their pre-3.0 single-positional shape (no behavioural
+  change there).
 
 ### Out of scope
 

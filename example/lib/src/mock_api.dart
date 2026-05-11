@@ -91,7 +91,9 @@ class MockNtsApi implements RustLibApi {
     // 0.5% of mock calls fail with an authentication error so devs can
     // exercise the NtsError rendering path without a real server.
     if (_random.nextInt(200) == 0) {
-      throw const NtsError.authentication('mock: synthetic AEAD tag mismatch');
+      throw const NtsError.authentication(
+        message: 'mock: synthetic AEAD tag mismatch',
+      );
     }
 
     // Singleton path -- record the backend on the snapshot so
