@@ -145,9 +145,9 @@ Drop the underscore from `NtsError_*` variant subclasses in
 `NtsErrorInvalidSpec`, etc. The factory-constructor syntax
 (`const NtsError.invalidSpec('x')`, `const NtsError.timeout(TimeoutPhase.ntp)`,
 …) is unchanged. Deprecated typedef aliases let the old names
-keep compiling for one release with a deprecation warning, so
-the migration can be done at the consumer's pace before the next
-major bump removes them.
+keep compiling with a deprecation warning until the next major
+bump removes them, so the migration can be done at the
+consumer's pace anywhere across the 3.x line.
 
 #### Drop `.toInt()` and `PlatformInt64Util.from(...)` in DTO sites
 
