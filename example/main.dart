@@ -96,16 +96,16 @@ Future<void> main() async {
     // ever grows them. Both `ntsWarmCookies` and `ntsQuery` surface
     // failures through this same hierarchy.
     final detail = switch (err) {
-      NtsErrorInvalidSpec(:final field0) => 'invalid spec: $field0',
+      NtsErrorInvalidSpec(:final message) => 'invalid spec: $message',
       NtsErrorNetwork(:final message) => 'network: $message',
       NtsErrorKeProtocol(:final message) => 'NTS-KE: $message',
       NtsErrorNtpProtocol(:final message) => 'NTP: $message',
       NtsErrorAuthentication(:final message) => 'AEAD auth: $message',
       NtsErrorTimeout(:final phase) => 'timeout in phase ${phase.name}',
       NtsErrorNoCookies() => 'no cookies returned',
-      NtsErrorTrustBackendUnavailable(:final field0) =>
-        'trust backend unavailable (PlatformOnly mode): $field0',
-      NtsErrorInternal(:final field0) => 'internal: $field0',
+      NtsErrorTrustBackendUnavailable(:final message) =>
+        'trust backend unavailable (PlatformOnly mode): $message',
+      NtsErrorInternal(:final message) => 'internal: $message',
     };
     print('nts call failed: $detail');
   }

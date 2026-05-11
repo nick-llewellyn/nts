@@ -1,5 +1,97 @@
 # Changelog
 
+## 3.1.0
+
+Surface-uniformity follow-up to `3.0.0`. Promotes the three
+remaining single-payload `NtsError` variants
+(`invalidSpec`, `trustBackendUnavailable`, `internal`) to the same
+named-parameter constructor shape that `network`, `keProtocol`,
+`ntpProtocol`, `authentication`, and `timeout` adopted in `3.0.0`.
+Every `String`-payloaded variant now binds to the same name
+(`message`) and every variant with a non-`trustBackend` payload is
+constructed with named arguments. No Rust source touched; the
+`nts_rust` crate stays at `0.4.0` and the on-the-wire NTS-KE /
+NTPv4 framing is unchanged.
+
+### Changed — `NtsError` variant constructors
+
+- **BREAKING** — the three previously single-positional `NtsError`
+  variants now use named-parameter constructors:
+  - `NtsError.invalidSpec(String x)` →
+    `NtsError.invalidSpec(message: x)`
+  - `NtsError.trustBackendUnavailable(String x)` →
+    `NtsError.trustBackendUnavailable(message: x)`
+  - `NtsError.internal(String x)` →
+    `NtsError.internal(message: x)`
+
+  Same shape change `3.0.0` made for the other five variants;
+  applied here for surface uniformity. The pre-3.1 single-positional
+  shape survives as a `@Deprecated` `field0` getter on each variant
+  subclass so 2.x and 3.0.x callers that *read* the payload (in
+  pattern-match destructurings or direct field reads) keep
+  compiling under a deprecation warning, but all *construction*
+  sites must move to the named form. `toString()` output is
+  unchanged: `NtsError.invalidSpec(message)` /
+  `NtsError.trustBackendUnavailable(message)` /
+  `NtsError.internal(message)` render exactly as in 3.0.x.
+- The five 3.0.0 named-parameter variants (`network`, `keProtocol`,
+  `ntpProtocol`, `authentication`, `timeout`) are unchanged in
+  3.1.0; their `field0` getters retain their existing deprecation.
+
+### Migration from 3.0.x
+
+#### Move positional construction calls to the named form
+
+Three constructors changed shape; the migration is one named
+parameter per call site:
+
+```dart
+// 3.0.x
+const NtsError.invalidSpec('host is empty')
+const NtsError.trustBackendUnavailable('platform CA bundle missing')
+const NtsError.internal('unreachable')
+
+// 3.1.0
+const NtsError.invalidSpec(message: 'host is empty')
+const NtsError.trustBackendUnavailable(message: 'platform CA bundle missing')
+const NtsError.internal(message: 'unreachable')
+```
+
+The analyzer reports a "missing required argument" plus an
+"extra positional argument" diagnostic pair at every old-shape
+call site, so the diff is mechanical and each affected line is
+flagged exactly.
+
+#### Rename payload binders in pattern destructurings
+
+If your code pattern-matches with `:final field0`, switch to
+`:final message` to follow the descriptive name. The old binder
+keeps working because `field0` survives as a `@Deprecated` getter
+alias, so this is optional, not required:
+
+```dart
+// Both compile in 3.1.0; the new form drops the deprecation
+// warning and matches the binder name used by every other
+// `String`-payloaded variant in the same switch.
+final detail = switch (err) {
+  // ... existing arms unchanged ...
+  NtsErrorInvalidSpec(:final message) => 'invalid spec: $message',
+  NtsErrorTrustBackendUnavailable(:final message) =>
+      'trust backend unavailable: $message',
+  NtsErrorInternal(:final message) => 'internal: $message',
+};
+```
+
+### Out of scope
+
+- The deprecated `NtsError_*` underscore-prefixed typedefs (e.g.
+  `NtsError_InvalidSpec`) are unchanged in 3.1.0; their removal
+  remains a 4.0.0 sweep.
+- The `@Deprecated` `field0` getter aliases on every variant
+  remain too — they are the read-side back-compat for 2.x / 3.0.x
+  callers and will be removed in the same 4.0.0 sweep that drops
+  the underscore typedefs.
+
 ## 3.0.0
 
 The first release after `2.0.0` consolidates four chunks of work
@@ -53,9 +145,9 @@ Drop the underscore from `NtsError_*` variant subclasses in
 `NtsErrorInvalidSpec`, etc. The factory-constructor syntax
 (`const NtsError.invalidSpec('x')`, `const NtsError.timeout(TimeoutPhase.ntp)`,
 …) is unchanged. Deprecated typedef aliases let the old names
-keep compiling for one release with a deprecation warning, so
-the migration can be done at the consumer's pace before the next
-major bump removes them.
+keep compiling with a deprecation warning until the next major
+bump removes them, so the migration can be done at the
+consumer's pace anywhere across the 3.x line.
 
 #### Drop `.toInt()` and `PlatformInt64Util.from(...)` in DTO sites
 

@@ -17,13 +17,17 @@
 //   `TrustBackend.platformWithHybridFallback` if the hybrid
 //   verifier's per-instance fallback counter incremented during the
 //   handshake). New in 3.0.0; unaffected variants
-//   (`invalidSpec`, `trustBackendUnavailable`, `internal`) keep
-//   their pre-3.0 single-payload shape.
-// - Each variant that received the `trustBackend` field also gained
-//   a named-parameter constructor (`NtsError.keProtocol(message:
-//   ..., trustBackend: ...)`) — the pre-3.0 single-positional shape
-//   is preserved as a `field0` getter on the same variant for
-//   source-level back-compat.
+//   (`invalidSpec`, `trustBackendUnavailable`, `internal`) carry
+//   no `trustBackend` field.
+// - Every variant with a non-`trustBackend` payload uses a
+//   named-parameter constructor (`NtsError.keProtocol(message: ...,
+//   trustBackend: ...)`, `NtsError.invalidSpec(message: ...)`,
+//   etc.). The pre-3.x single-positional shape is preserved as a
+//   `field0` getter on the same variant for source-level
+//   back-compat. The five `trustBackend`-carrying variants made the
+//   move in 3.0.0; the three remaining single-payload variants
+//   (`invalidSpec`, `trustBackendUnavailable`, `internal`) made the
+//   move in 3.1.0 for surface uniformity.
 // - For SemVer compatibility with pre-3.0 callers, the underscore-
 //   prefixed names (`NtsError_InvalidSpec`, ...) survive as deprecated
 //   typedef aliases at the bottom of this file. They will be removed
@@ -88,7 +92,8 @@ sealed class NtsError implements Exception {
   const NtsError._();
 
   /// `spec` was rejected before any I/O happened.
-  const factory NtsError.invalidSpec(String field0) = NtsErrorInvalidSpec;
+  const factory NtsError.invalidSpec({required String message}) =
+      NtsErrorInvalidSpec;
 
   /// TCP/UDP I/O error or connection failure. `trustBackend` carries
   /// the per-handshake trust-anchor backend resolved before the
@@ -181,11 +186,11 @@ sealed class NtsError implements Exception {
   /// diagnostic. New in 3.0.0; consumers using exhaustive
   /// `switch (err) { ... }` on `NtsError` must add an arm for this
   /// variant.
-  const factory NtsError.trustBackendUnavailable(String field0) =
+  const factory NtsError.trustBackendUnavailable({required String message}) =
       NtsErrorTrustBackendUnavailable;
 
   /// Bug guard for unreachable internal states.
-  const factory NtsError.internal(String field0) = NtsErrorInternal;
+  const factory NtsError.internal({required String message}) = NtsErrorInternal;
 }
 
 /// Variant: `spec` was rejected before any I/O happened. The check
@@ -193,21 +198,25 @@ sealed class NtsError implements Exception {
 /// not in the Dart wrapper, which forwards `spec` verbatim.
 final class NtsErrorInvalidSpec extends NtsError {
   /// Reason the spec was rejected.
-  final String field0;
+  final String message;
 
   /// Construct an `InvalidSpec` variant.
-  const NtsErrorInvalidSpec(this.field0) : super._();
+  const NtsErrorInvalidSpec({required this.message}) : super._();
+
+  /// Pre-3.1 alias for [message]. Will be removed in a future major.
+  @Deprecated('Renamed to message; the positional payload is now named.')
+  String get field0 => message;
 
   @override
-  int get hashCode => Object.hash(NtsErrorInvalidSpec, field0);
+  int get hashCode => Object.hash(NtsErrorInvalidSpec, message);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is NtsErrorInvalidSpec && field0 == other.field0);
+      (other is NtsErrorInvalidSpec && message == other.message);
 
   @override
-  String toString() => 'NtsError.invalidSpec($field0)';
+  String toString() => 'NtsError.invalidSpec($message)';
 }
 
 /// Variant: TCP/UDP I/O error or connection failure.
@@ -420,41 +429,49 @@ final class NtsErrorTrustBackendUnavailable extends NtsError {
   /// Underlying construction-failure diagnostic from
   /// `build_with_native_verifier` (typically a `rustls::Error`
   /// rendered as a string).
-  final String field0;
+  final String message;
 
   /// Construct a `TrustBackendUnavailable` variant.
-  const NtsErrorTrustBackendUnavailable(this.field0) : super._();
+  const NtsErrorTrustBackendUnavailable({required this.message}) : super._();
+
+  /// Pre-3.1 alias for [message]. Will be removed in a future major.
+  @Deprecated('Renamed to message; the positional payload is now named.')
+  String get field0 => message;
 
   @override
-  int get hashCode => Object.hash(NtsErrorTrustBackendUnavailable, field0);
+  int get hashCode => Object.hash(NtsErrorTrustBackendUnavailable, message);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is NtsErrorTrustBackendUnavailable && field0 == other.field0);
+      (other is NtsErrorTrustBackendUnavailable && message == other.message);
 
   @override
-  String toString() => 'NtsError.trustBackendUnavailable($field0)';
+  String toString() => 'NtsError.trustBackendUnavailable($message)';
 }
 
 /// Variant: bug guard for unreachable internal states.
 final class NtsErrorInternal extends NtsError {
   /// Bug-guard diagnostic.
-  final String field0;
+  final String message;
 
   /// Construct an `Internal` variant.
-  const NtsErrorInternal(this.field0) : super._();
+  const NtsErrorInternal({required this.message}) : super._();
+
+  /// Pre-3.1 alias for [message]. Will be removed in a future major.
+  @Deprecated('Renamed to message; the positional payload is now named.')
+  String get field0 => message;
 
   @override
-  int get hashCode => Object.hash(NtsErrorInternal, field0);
+  int get hashCode => Object.hash(NtsErrorInternal, message);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is NtsErrorInternal && field0 == other.field0);
+      (other is NtsErrorInternal && message == other.message);
 
   @override
-  String toString() => 'NtsError.internal($field0)';
+  String toString() => 'NtsError.internal($message)';
 }
 
 // Deprecated underscore-prefixed aliases for the pre-3.0 freezed-style

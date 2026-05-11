@@ -420,7 +420,9 @@ TimeoutPhase _publicTimeoutPhase(ffi.TimeoutPhase phase) => switch (phase) {
 };
 
 NtsError _publicError(ffi.NtsError err) => switch (err) {
-  ffi.NtsError_InvalidSpec(:final field0) => NtsError.invalidSpec(field0),
+  ffi.NtsError_InvalidSpec(:final field0) => NtsError.invalidSpec(
+    message: field0,
+  ),
   ffi.NtsError_Network(:final message, :final trustBackend) => NtsError.network(
     message: message,
     trustBackend: _maybePublicTrustBackend(trustBackend),
@@ -448,8 +450,8 @@ NtsError _publicError(ffi.NtsError err) => switch (err) {
     trustBackend: _maybePublicTrustBackend(trustBackend),
   ),
   ffi.NtsError_TrustBackendUnavailable(:final field0) =>
-    NtsError.trustBackendUnavailable(field0),
-  ffi.NtsError_Internal(:final field0) => NtsError.internal(field0),
+    NtsError.trustBackendUnavailable(message: field0),
+  ffi.NtsError_Internal(:final field0) => NtsError.internal(message: field0),
 };
 
 TrustBackend? _maybePublicTrustBackend(ffi.TrustBackend? b) =>
