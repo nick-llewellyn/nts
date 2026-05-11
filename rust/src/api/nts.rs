@@ -536,15 +536,19 @@ pub struct NtsTrustStatus {
 /// Variants whose precondition is "the TLS handshake had at least
 /// reached config-build time" carry an optional `trust_backend`
 /// field with the per-handshake trust-anchor backend resolved by
-/// [`crate::nts::ke::build_tls_config`] (and, on Android, upgraded
-/// to [`TrustBackend::PlatformWithHybridFallback`] when the hybrid
-/// verifier's per-instance fallback counter incremented during the
-/// handshake). `None` on those variants means the backend was not
-/// yet resolved when the failure fired (typically a pre-build error
-/// that was wrapped by a later layer). Variants whose precondition
-/// rules out backend attribution (`InvalidSpec`,
-/// `TrustBackendUnavailable`, `Internal`) do not carry the field at
-/// all. New in 3.0.0.
+/// `build_tls_config` (a crate-internal helper in
+/// `crate::nts::ke`; rendered as inline code rather than as a
+/// rustdoc intra-doc link to match the convention spelled out on
+/// the `Authentication` variant below — crate-internal Rust items
+/// are not navigable from a Dart reader's vantage point), and on
+/// Android upgraded to [`TrustBackend::PlatformWithHybridFallback`]
+/// when the hybrid verifier's per-instance fallback counter
+/// incremented during the handshake. `None` on those variants
+/// means the backend was not yet resolved when the failure fired
+/// (typically a pre-build error that was wrapped by a later
+/// layer). Variants whose precondition rules out backend
+/// attribution (`InvalidSpec`, `TrustBackendUnavailable`,
+/// `Internal`) do not carry the field at all. New in 3.0.0.
 #[derive(Debug, Clone)]
 pub enum NtsError {
     /// `spec` was rejected before any I/O happened.
