@@ -1217,6 +1217,41 @@ void main() {
       expect(api.clientInvalidateCalls, 2);
     });
 
+    test(
+      'invalidate rejects port outside 1..65535 with NtsError.invalidSpec',
+      () {
+        // Wrapper-side range validation matches the surface PR #34
+        // gave the four async wrappers; out-of-range ports throw
+        // NtsError.invalidSpec from the wrapper before reaching the
+        // FRB u16 encoder, so `api.lastClientInvalidate*` stay null
+        // and `api.clientInvalidateCalls` does not advance.
+        final client = NtsClient();
+        final invalidatesBefore = api.clientInvalidateCalls;
+        expect(
+          () => client.invalidate(const NtsServerSpec(host: 'h', port: 0)),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('port 0 is outside the valid range 1..65535'),
+            ),
+          ),
+        );
+        expect(
+          () => client.invalidate(const NtsServerSpec(host: 'h', port: 70000)),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('port 70000 is outside the valid range 1..65535'),
+            ),
+          ),
+        );
+        expect(api.clientInvalidateCalls, invalidatesBefore);
+        expect(api.lastClientInvalidateSpec, isNull);
+      },
+    );
+
     test('clear delegates to the FFI', () {
       final client = NtsClient();
       client.clear();
