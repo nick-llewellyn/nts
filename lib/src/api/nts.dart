@@ -457,12 +457,14 @@ class NtsClient {
 // rather than the encoder's `0..65535`: Rust's spec validator already
 // rejects `port == 0` with its own `InvalidSpec("port must be
 // non-zero")`, and front-loading the check produces a wrapper-authored
-// message at a synchronous call site instead of a Rust-authored one
-// after a futile FFI hop. `timeoutMs` and `dnsConcurrencyCap` are
-// restricted to `1..0xFFFFFFFF`: zero used to be a sentinel for
-// "inherit the Rust-side default" in 1.x and 3.0.x, but consumers are
-// now steered toward the named `kDefault*` constants which expose the
-// actual numeric values.
+// `NtsError.invalidSpec` on the returned `Future` (the four wrapper
+// entry points are `async`, so the error materialises on `await`)
+// before any FFI dispatch instead of a Rust-authored one after a
+// futile FFI hop. `timeoutMs` and `dnsConcurrencyCap` are restricted
+// to `1..0xFFFFFFFF`: zero used to be a sentinel for "inherit the
+// Rust-side default" in 1.x and 3.0.x, but consumers are now steered
+// toward the named `kDefault*` constants which expose the actual
+// numeric values.
 
 const int _kU32Max = 0xFFFFFFFF;
 

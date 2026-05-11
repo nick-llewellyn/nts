@@ -90,9 +90,11 @@ void main() {
       const spec = NtsServerSpec(host: 'time.example', port: 4460);
       // FFI surface: every parameter is `required` per FRB v2 codegen,
       // so the wrapper-layer omission convenience does not apply here.
-      // The literal `4` mirrors the wrapper-layer
-      // `kDefaultDnsConcurrencyCap` value but is intentionally
-      // hard-coded — this file imports nothing from the public layer.
+      // The literal `4` is an arbitrary in-range non-zero value chosen
+      // because `_FakeRustLibApi` ignores the parameter; this file
+      // intentionally imports nothing from the public layer (see the
+      // file-level comment), so the wrapper's `kDefaultDnsConcurrencyCap`
+      // is deliberately not referenced here.
       final sample = await ntsQuery(
         spec: spec,
         timeoutMs: 5000,

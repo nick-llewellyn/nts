@@ -56,8 +56,9 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   the FFI encoding range before dispatching into the FRB layer:
   - `port`: rejected unless in `1..65535`. Mirrors the existing
     Rust-side `port must be non-zero` spec validator with a
-    wrapper-authored message at a synchronous call site rather than
-    a Rust-authored one after a futile FFI hop.
+    wrapper-authored message produced before any FFI dispatch
+    rather than a Rust-authored one returned after a futile FFI
+    hop.
   - `timeoutMs`: rejected unless in `1..4294967295` (i.e. the `u32`
     encoding range, with `0` no longer treated as a sentinel for
     "inherit the Rust-side default").
