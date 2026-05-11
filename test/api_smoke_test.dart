@@ -387,13 +387,17 @@ void main() {
 
     test(
       'ntsQuery rejects port outside 1..65535 with NtsError.invalidSpec',
-      () {
+      () async {
         // Port=0 used to fall through to Rust's `port must be non-zero`
-        // spec validator; from 3.1.0 the wrapper rejects it synchronously
-        // with a wrapper-authored message before any FFI dispatch, so
-        // there is no `await` here and `api.lastQuery*` stay null.
-        expect(
-          () => ntsQuery(spec: const NtsServerSpec(host: 'h', port: 0)),
+        // spec validator; from 3.1.0 the wrapper rejects it before any
+        // FFI dispatch, so the returned Future completes with
+        // NtsError.invalidSpec carrying a wrapper-authored message and
+        // `api.lastQuery*` stay null. `expectLater` is awaited so the
+        // assertion order is deterministic and the post-await
+        // `api.lastQueryTimeoutMs` check happens after the rejected
+        // Future has fully resolved -- not in parallel with it.
+        await expectLater(
+          ntsQuery(spec: const NtsServerSpec(host: 'h', port: 0)),
           throwsA(
             isA<NtsErrorInvalidSpec>().having(
               (e) => e.message,
@@ -402,8 +406,8 @@ void main() {
             ),
           ),
         );
-        expect(
-          () => ntsQuery(spec: const NtsServerSpec(host: 'h', port: 70000)),
+        await expectLater(
+          ntsQuery(spec: const NtsServerSpec(host: 'h', port: 70000)),
           throwsA(isA<NtsErrorInvalidSpec>()),
         );
         expect(api.lastQueryTimeoutMs, isNull);
@@ -411,9 +415,9 @@ void main() {
     );
 
     test('ntsQuery rejects timeoutMs outside 1..0xFFFFFFFF with '
-        'NtsError.invalidSpec', () {
-      expect(
-        () => ntsQuery(spec: spec, timeoutMs: 0),
+        'NtsError.invalidSpec', () async {
+      await expectLater(
+        ntsQuery(spec: spec, timeoutMs: 0),
         throwsA(
           isA<NtsErrorInvalidSpec>().having(
             (e) => e.message,
@@ -422,17 +426,17 @@ void main() {
           ),
         ),
       );
-      expect(
-        () => ntsQuery(spec: spec, timeoutMs: 0x1_0000_0000),
+      await expectLater(
+        ntsQuery(spec: spec, timeoutMs: 0x1_0000_0000),
         throwsA(isA<NtsErrorInvalidSpec>()),
       );
       expect(api.lastQueryTimeoutMs, isNull);
     });
 
     test('ntsQuery rejects dnsConcurrencyCap outside 1..0xFFFFFFFF with '
-        'NtsError.invalidSpec', () {
-      expect(
-        () => ntsQuery(spec: spec, dnsConcurrencyCap: 0),
+        'NtsError.invalidSpec', () async {
+      await expectLater(
+        ntsQuery(spec: spec, dnsConcurrencyCap: 0),
         throwsA(
           isA<NtsErrorInvalidSpec>().having(
             (e) => e.message,
@@ -441,24 +445,24 @@ void main() {
           ),
         ),
       );
-      expect(
-        () => ntsQuery(spec: spec, dnsConcurrencyCap: 0x1_0000_0000),
+      await expectLater(
+        ntsQuery(spec: spec, dnsConcurrencyCap: 0x1_0000_0000),
         throwsA(isA<NtsErrorInvalidSpec>()),
       );
       expect(api.lastQueryDnsCap, isNull);
     });
 
-    test('ntsWarmCookies applies the same range validation', () {
-      expect(
-        () => ntsWarmCookies(spec: const NtsServerSpec(host: 'h', port: 0)),
+    test('ntsWarmCookies applies the same range validation', () async {
+      await expectLater(
+        ntsWarmCookies(spec: const NtsServerSpec(host: 'h', port: 0)),
         throwsA(isA<NtsErrorInvalidSpec>()),
       );
-      expect(
-        () => ntsWarmCookies(spec: spec, timeoutMs: -1),
+      await expectLater(
+        ntsWarmCookies(spec: spec, timeoutMs: -1),
         throwsA(isA<NtsErrorInvalidSpec>()),
       );
-      expect(
-        () => ntsWarmCookies(spec: spec, dnsConcurrencyCap: -5),
+      await expectLater(
+        ntsWarmCookies(spec: spec, dnsConcurrencyCap: -5),
         throwsA(isA<NtsErrorInvalidSpec>()),
       );
       expect(api.lastWarmTimeoutMs, isNull);
