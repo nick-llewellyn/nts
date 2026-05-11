@@ -344,6 +344,14 @@ class NtsClient {
 
   /// Trust-anchor policy this client was constructed with.
   /// Synchronous: backed by a one-byte read on the Rust side.
+  ///
+  /// Requires `await RustLib.init()` to have completed on the
+  /// calling isolate before invocation: the read happens on the Rust
+  /// side and dispatches through the FRB v2 dispatch table even
+  /// though the call returns synchronously, so a missed
+  /// initialization fails with a low-level FRB error rather than a
+  /// structured [NtsError]. See the "Initialization has two layers"
+  /// section of `README.md` for the full bootstrap contract.
   TrustMode get trustMode => _publicTrustMode(_inner.trustMode());
 
   /// Per-client equivalent of the top-level [ntsQuery]. The cookie
@@ -426,11 +434,27 @@ class NtsClient {
   /// [warmCookies] for that spec triggers a fresh NTS-KE handshake.
   ///
   /// Synchronous: backed by one mutex acquisition and one
-  /// `HashMap::remove` on the Rust side; no isolate hop. Does not
-  /// validate `spec` — an invalid spec (empty host or zero port)
-  /// trivially has no cached entry and returns `false`.
-  bool invalidate(NtsServerSpec spec) =>
-      _inner.invalidate(spec: _ffiSpec(spec));
+  /// `HashMap::remove` on the Rust side; no isolate hop. The
+  /// wrapper validates `spec.port` against the FRB-encodable range
+  /// `1..65535` first; out-of-range ports throw
+  /// [NtsError.invalidSpec] with a wrapper-authored message before
+  /// any FFI dispatch (matching the surface the four async wrappers
+  /// expose via [ntsQuery] / [ntsWarmCookies]). Empty host and any
+  /// other semantically-invalid-but-encodable spec trivially have
+  /// no cached entry and return `false`.
+  ///
+  /// Requires `await RustLib.init()` to have completed on the
+  /// calling isolate before invocation: the mutex acquisition and
+  /// `HashMap::remove` happen on the Rust side and dispatch through
+  /// the FRB v2 dispatch table even though the call returns
+  /// synchronously, so a missed initialization fails with a
+  /// low-level FRB error rather than a structured [NtsError]. See
+  /// the "Initialization has two layers" section of `README.md` for
+  /// the full bootstrap contract.
+  bool invalidate(NtsServerSpec spec) {
+    _validatePort(spec);
+    return _inner.invalidate(spec: _ffiSpec(spec));
+  }
 
   /// Drop every cached session in this client's table. Cheap;
   /// intended for test cleanup and for apps that want to bound
@@ -439,6 +463,15 @@ class NtsClient {
   ///
   /// Synchronous: backed by one mutex acquisition and one
   /// `HashMap::clear` on the Rust side; no isolate hop.
+  ///
+  /// Requires `await RustLib.init()` to have completed on the
+  /// calling isolate before invocation: the mutex acquisition and
+  /// `HashMap::clear` happen on the Rust side and dispatch through
+  /// the FRB v2 dispatch table even though the call returns
+  /// synchronously, so a missed initialization fails with a
+  /// low-level FRB error rather than a structured [NtsError]. See
+  /// the "Initialization has two layers" section of `README.md` for
+  /// the full bootstrap contract.
   void clear() => _inner.clear();
 }
 
@@ -468,16 +501,20 @@ class NtsClient {
 
 const int _kU32Max = 0xFFFFFFFF;
 
-void _validateRanges({
-  required NtsServerSpec spec,
-  required int timeoutMs,
-  required int dnsConcurrencyCap,
-}) {
+void _validatePort(NtsServerSpec spec) {
   if (spec.port < 1 || spec.port > 65535) {
     throw NtsError.invalidSpec(
       message: 'port ${spec.port} is outside the valid range 1..65535',
     );
   }
+}
+
+void _validateRanges({
+  required NtsServerSpec spec,
+  required int timeoutMs,
+  required int dnsConcurrencyCap,
+}) {
+  _validatePort(spec);
   if (timeoutMs < 1 || timeoutMs > _kU32Max) {
     throw NtsError.invalidSpec(
       message:

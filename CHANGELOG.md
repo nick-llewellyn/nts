@@ -81,6 +81,21 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   now see `NtsError.invalidSpec` on `await` and must switch to the
   named constants — see the migration section below.
 
+- **BREAKING (additive)** — `NtsClient.invalidate` now applies the
+  same `port ∈ 1..65535` validation as the four async wrappers
+  above. The pre-3.1 sync sister bypassed `_validateRanges` and
+  forwarded `spec.port` directly into the FRB `u16` encoder, so
+  out-of-range ports (negative, or `>65535`) escaped the documented
+  `NtsError`-only contract as `RangeError` from the FFI bridge.
+  Out-of-range ports now throw `NtsError.invalidSpec`
+  *synchronously* (the call returns `bool`, so the throw site is
+  the call expression itself, not an `await`). `clear()` and the
+  `trustMode` getter take no spec and are unchanged. Callers who
+  passed literal `port: 0` to `invalidate` to "trivially return
+  false" now see `NtsError.invalidSpec` synchronously and should
+  pass a real port instead — the previous behaviour was a quirk of
+  the unvalidated path, not a documented contract.
+
 ### Changed — `kDefaultDnsConcurrencyCap` exposes the actual numeric default
 
 - **BREAKING (constant-value change)** — `kDefaultDnsConcurrencyCap`
@@ -115,6 +130,18 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   `NtsError`. The note is crosslinked to README's "Initialization
   has two layers" section so the Android JNI bootstrap context is
   one click away.
+- The same `RustLib.init()` precondition note now also lives on the
+  three `NtsClient` synchronous methods that share the same FRB
+  dispatch path (`NtsClient.invalidate`, `NtsClient.clear`, and the
+  `NtsClient.trustMode` getter). Closes the residual scope of the
+  earlier sweep, which had only touched the two top-level
+  diagnostics functions.
+- README's "API summary" table gains rows for the two trust-related
+  enums (`TrustMode` and `TrustBackend`) that the prior table sweep
+  scoped out. Consumers reading the table can now resolve the
+  `trustBackend` field on `NtsTimeSample` / `NtsWarmCookiesOutcome`
+  and the `defaultClientBackend` field on `NtsTrustStatus` to a
+  concrete enum without leaving the README.
 
 ### Migration from 3.0.x
 
