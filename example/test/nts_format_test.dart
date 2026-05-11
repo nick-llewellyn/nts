@@ -156,10 +156,10 @@ void main() {
       // misconfiguration rather than treating it as a transient
       // network blip.
       expect(
-        isErrorSeverity(const NtsError.trustBackendUnavailable('x')),
+        isErrorSeverity(const NtsError.trustBackendUnavailable(message: 'x')),
         isTrue,
       );
-      expect(isErrorSeverity(const NtsError.internal('x')), isTrue);
+      expect(isErrorSeverity(const NtsError.internal(message: 'x')), isTrue);
     });
 
     test('network / timeout / spec / no-cookies errors are warn-severity', () {
@@ -168,7 +168,10 @@ void main() {
         isErrorSeverity(const NtsError.timeout(phase: TimeoutPhase.ntp)),
         isFalse,
       );
-      expect(isErrorSeverity(const NtsError.invalidSpec('x')), isFalse);
+      expect(
+        isErrorSeverity(const NtsError.invalidSpec(message: 'x')),
+        isFalse,
+      );
       expect(isErrorSeverity(const NtsError.noCookies()), isFalse);
     });
 
@@ -187,7 +190,9 @@ void main() {
       );
       expect(
         describeError(
-          const NtsError.trustBackendUnavailable('platform CA bundle missing'),
+          const NtsError.trustBackendUnavailable(
+            message: 'platform CA bundle missing',
+          ),
         ),
         'TrustBackendUnavailable (PlatformOnly mode rejected fallback): '
         'platform CA bundle missing',
@@ -197,7 +202,10 @@ void main() {
 
   group('errorTypeName', () {
     test('returns the stable variant tag for every NtsError shape', () {
-      expect(errorTypeName(const NtsError.invalidSpec('x')), 'InvalidSpec');
+      expect(
+        errorTypeName(const NtsError.invalidSpec(message: 'x')),
+        'InvalidSpec',
+      );
       expect(errorTypeName(const NtsError.network(message: 'x')), 'Network');
       expect(
         errorTypeName(const NtsError.keProtocol(message: 'x')),
@@ -217,10 +225,10 @@ void main() {
       );
       expect(errorTypeName(const NtsError.noCookies()), 'NoCookies');
       expect(
-        errorTypeName(const NtsError.trustBackendUnavailable('x')),
+        errorTypeName(const NtsError.trustBackendUnavailable(message: 'x')),
         'TrustBackendUnavailable',
       );
-      expect(errorTypeName(const NtsError.internal('x')), 'Internal');
+      expect(errorTypeName(const NtsError.internal(message: 'x')), 'Internal');
     });
   });
 
@@ -343,11 +351,11 @@ void main() {
       for (final err in <NtsError>[
         const NtsError.network(message: 'x'),
         const NtsError.noCookies(),
-        const NtsError.invalidSpec('x'),
+        const NtsError.invalidSpec(message: 'x'),
         const NtsError.authentication(message: 'x'),
         const NtsError.keProtocol(message: 'x'),
         const NtsError.ntpProtocol(message: 'x'),
-        const NtsError.internal('x'),
+        const NtsError.internal(message: 'x'),
       ]) {
         expect(jsonError(err), isNot(contains('phase')));
       }
@@ -368,7 +376,10 @@ void main() {
         jsonError(const NtsError.ntpProtocol(message: 'bad pkt'))['severity'],
         'error',
       );
-      expect(jsonError(const NtsError.internal('panic'))['severity'], 'error');
+      expect(
+        jsonError(const NtsError.internal(message: 'panic'))['severity'],
+        'error',
+      );
     });
   });
 }

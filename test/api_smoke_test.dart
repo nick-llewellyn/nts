@@ -466,7 +466,7 @@ void main() {
       // single test so any *real* use of the old names elsewhere in
       // the package still trips the warning.
       // ignore: deprecated_member_use_from_same_package
-      const NtsError_InvalidSpec a = NtsErrorInvalidSpec('x');
+      const NtsError_InvalidSpec a = NtsErrorInvalidSpec(message: 'x');
       // ignore: deprecated_member_use_from_same_package
       const NtsError_NoCookies b = NtsErrorNoCookies();
       // ignore: deprecated_member_use_from_same_package
@@ -482,7 +482,7 @@ void main() {
         final cases = <(ffi.NtsError, NtsError)>[
           (
             const ffi.NtsError.invalidSpec('bad'),
-            const NtsError.invalidSpec('bad'),
+            const NtsError.invalidSpec(message: 'bad'),
           ),
           (
             const ffi.NtsError.network(message: 'eof'),
@@ -511,7 +511,7 @@ void main() {
           (const ffi.NtsError.noCookies(), const NtsError.noCookies()),
           (
             const ffi.NtsError.internal('panic'),
-            const NtsError.internal('panic'),
+            const NtsError.internal(message: 'panic'),
           ),
         ];
         for (final (ffiErr, publicErr) in cases) {
@@ -857,9 +857,9 @@ void main() {
 
     final stringPayloadCases = <(NtsError, NtsError, NtsError, Type, String)>[
       (
-        const NtsError.invalidSpec('a'),
-        const NtsError.invalidSpec('a'),
-        const NtsError.invalidSpec('b'),
+        const NtsError.invalidSpec(message: 'a'),
+        const NtsError.invalidSpec(message: 'a'),
+        const NtsError.invalidSpec(message: 'b'),
         NtsErrorInvalidSpec,
         'NtsError.invalidSpec(a)',
       ),
@@ -892,16 +892,16 @@ void main() {
         'NtsError.authentication(a)',
       ),
       (
-        const NtsError.trustBackendUnavailable('a'),
-        const NtsError.trustBackendUnavailable('a'),
-        const NtsError.trustBackendUnavailable('b'),
+        const NtsError.trustBackendUnavailable(message: 'a'),
+        const NtsError.trustBackendUnavailable(message: 'a'),
+        const NtsError.trustBackendUnavailable(message: 'b'),
         NtsErrorTrustBackendUnavailable,
         'NtsError.trustBackendUnavailable(a)',
       ),
       (
-        const NtsError.internal('a'),
-        const NtsError.internal('a'),
-        const NtsError.internal('b'),
+        const NtsError.internal(message: 'a'),
+        const NtsError.internal(message: 'a'),
+        const NtsError.internal(message: 'b'),
         NtsErrorInternal,
         'NtsError.internal(a)',
       ),

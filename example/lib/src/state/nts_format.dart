@@ -157,7 +157,7 @@ bool isErrorSeverity(NtsError err) =>
 ///   render the message verbatim under the `NtpProtocol:` prefix so a
 ///   reader sees the raw KoD text for free.
 String describeError(NtsError err) => switch (err) {
-  NtsErrorInvalidSpec(:final field0) => 'InvalidSpec: $field0',
+  NtsErrorInvalidSpec(:final message) => 'InvalidSpec: $message',
   NtsErrorNetwork(:final message) => 'Network: $message',
   NtsErrorKeProtocol(:final message) => 'KeProtocol: $message',
   NtsErrorNtpProtocol(:final message) => 'NtpProtocol: $message',
@@ -166,9 +166,9 @@ String describeError(NtsError err) => switch (err) {
     'Timeout (deadline expired in phase ${phase.name})',
   NtsErrorNoCookies() =>
     'NoCookies (server completed KE but issued zero cookies)',
-  NtsErrorTrustBackendUnavailable(:final field0) =>
-    'TrustBackendUnavailable (PlatformOnly mode rejected fallback): $field0',
-  NtsErrorInternal(:final field0) => 'Internal: $field0',
+  NtsErrorTrustBackendUnavailable(:final message) =>
+    'TrustBackendUnavailable (PlatformOnly mode rejected fallback): $message',
+  NtsErrorInternal(:final message) => 'Internal: $message',
 };
 
 /// Stable variant tag for an [NtsError], used as the `error_type`
