@@ -2,16 +2,26 @@
 
 ## 3.1.0
 
-Surface-uniformity follow-up to `3.0.0`. Promotes the three
-remaining single-payload `NtsError` variants
+Surface-uniformity follow-up to `3.0.0`, plus the three review
+findings raised against the merged 3.1.0 branch before the tag.
+Promotes the three remaining single-payload `NtsError` variants
 (`invalidSpec`, `trustBackendUnavailable`, `internal`) to the same
 named-parameter constructor shape that `network`, `keProtocol`,
-`ntpProtocol`, `authentication`, and `timeout` adopted in `3.0.0`.
-Every `String`-payloaded variant now binds to the same name
+`ntpProtocol`, `authentication`, and `timeout` adopted in `3.0.0`;
+every `String`-payloaded variant now binds to the same name
 (`message`) and every variant with a non-`trustBackend` payload is
-constructed with named arguments. No Rust source touched; the
-`nts_rust` crate stays at `0.4.0` and the on-the-wire NTS-KE /
-NTPv4 framing is unchanged.
+constructed with named arguments. The wrapper now validates the
+three integer arguments (`spec.port`, `timeoutMs`,
+`dnsConcurrencyCap`) against the FFI encoding range before any
+dispatch and rejects out-of-range values as
+`NtsError.invalidSpec`, closing the gap where a `RangeError`
+thrown by the FRB encoder used to escape the wrapper's "single
+error surface" contract. `kDefaultDnsConcurrencyCap` is bumped
+from the `0` sentinel to the actual numeric default (`4`) so
+consumers reading the constant value see what the package
+actually applies. README and dartdoc are refreshed in lockstep.
+No Rust source touched; the `nts_rust` crate stays at `0.4.0` and
+the on-the-wire NTS-KE / NTPv4 framing is unchanged.
 
 ### Changed — `NtsError` variant constructors
 
@@ -37,6 +47,74 @@ NTPv4 framing is unchanged.
 - The five 3.0.0 named-parameter variants (`network`, `keProtocol`,
   `ntpProtocol`, `authentication`, `timeout`) are unchanged in
   3.1.0; their `field0` getters retain their existing deprecation.
+
+### Changed — wrapper now validates integer ranges before FFI dispatch
+
+- **BREAKING (additive)** — the four wrapper entry points (`ntsQuery`,
+  `ntsWarmCookies`, `NtsClient.query`, `NtsClient.warmCookies`) now
+  validate `spec.port`, `timeoutMs`, and `dnsConcurrencyCap` against
+  the FFI encoding range before dispatching into the FRB layer:
+  - `port`: rejected unless in `1..65535`. Mirrors the existing
+    Rust-side `port must be non-zero` spec validator with a
+    wrapper-authored message produced before any FFI dispatch
+    rather than a Rust-authored one returned after a futile FFI
+    hop.
+  - `timeoutMs`: rejected unless in `1..4294967295` (i.e. the `u32`
+    encoding range, with `0` no longer treated as a sentinel for
+    "inherit the Rust-side default").
+  - `dnsConcurrencyCap`: rejected unless in `1..4294967295` on the
+    same terms.
+
+  Out-of-range values cause the returned `Future` to complete with
+  `NtsError.invalidSpec` (the four wrapper entry points are `async`,
+  so the error materialises on `await` rather than as a synchronous
+  throw at the call site) instead of escaping as `RangeError` from
+  the FRB encoder. This closes the contract gap where the wrapper's
+  `try { … } on ffi.NtsError catch { … }` previously could not catch
+  encoder-side range errors, and is the change the wrapper's
+  "throws an `NtsError` on every failure path" dartdoc has always
+  claimed.
+
+  Strictly additive for callers who already passed in-range values:
+  no behavioural change. Callers who passed literal `0` for
+  `timeoutMs` or `dnsConcurrencyCap` to ride the pre-3.1 sentinel
+  now see `NtsError.invalidSpec` on `await` and must switch to the
+  named constants — see the migration section below.
+
+### Changed — `kDefaultDnsConcurrencyCap` exposes the actual numeric default
+
+- **BREAKING (constant-value change)** — `kDefaultDnsConcurrencyCap`
+  changes from `0` (the pre-3.1 sentinel that delegated to the
+  Rust-side `DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`) to `4` (the actual
+  numeric value the Rust side substituted). Callers who omit the
+  parameter or who reference the constant by name see no behavioural
+  change — they get the same `4` they got in 3.0.x. Callers who
+  embedded the literal `0` in their code (typically because they
+  followed older docs that described `0` as the package default) now
+  trip the new range validator above.
+
+### Documentation
+
+- README's "API summary" table now includes:
+  - The `trustBackend` field on `NtsTimeSample` and
+    `NtsWarmCookiesOutcome` (added in 3.0.0 but missing from the
+    table).
+  - The `trustBackendUnavailable` variant on `NtsError` (likewise).
+  - A row for `ntsTrustStatus()` and a row for the `NtsTrustStatus`
+    DTO it returns (the entire trust-diagnostic surface was absent
+    from the table).
+- The dartdoc on `kDefaultTimeoutMs` and `kDefaultDnsConcurrencyCap`
+  no longer points at `0` as a way to inherit the Rust-side default.
+  The two constants now state their actual numeric values (5000 and
+  4) and the operational rationale for each.
+- The dartdoc on the synchronous diagnostics `ntsDnsPoolStats()` and
+  `ntsTrustStatus()` now states the `RustLib.init()` precondition
+  explicitly. Both calls dispatch through the FRB v2 dispatch table
+  even though they return synchronously, so a missed initialization
+  fails with a low-level FRB error rather than a structured
+  `NtsError`. The note is crosslinked to README's "Initialization
+  has two layers" section so the Android JNI bootstrap context is
+  one click away.
 
 ### Migration from 3.0.x
 
@@ -81,6 +159,37 @@ final detail = switch (err) {
   NtsErrorInternal(:final message) => 'internal: $message',
 };
 ```
+
+#### Replace literal `0` for `timeoutMs` / `dnsConcurrencyCap`
+
+The wrapper now rejects literal `0` for either `u32` argument with
+`NtsError.invalidSpec`. The migration is one of two equivalent
+moves per call site, depending on whether you care about explicit
+documentation of intent:
+
+```dart
+// 3.0.x
+await ntsQuery(
+  spec: spec,
+  timeoutMs: 0,            // deprecated sentinel: "use the package default"
+  dnsConcurrencyCap: 0,    // same
+);
+
+// 3.1.0 — option A: omit, inherit the constant default
+await ntsQuery(spec: spec);
+
+// 3.1.0 — option B: name the constant explicitly
+await ntsQuery(
+  spec: spec,
+  timeoutMs: kDefaultTimeoutMs,
+  dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+);
+```
+
+The two new constants resolve to `5000` and `4` respectively; both
+match the values the Rust side previously substituted when it saw
+`0`, so neither option changes runtime behaviour — only the visible
+failure mode for code that *meant* something else by `0`.
 
 ### Out of scope
 

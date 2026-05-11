@@ -30,23 +30,34 @@ import 'models.dart';
 export 'errors.dart';
 export 'models.dart';
 
-/// Default per-call wall-clock budget, in milliseconds.
+/// Default per-call wall-clock budget for [ntsQuery] / [ntsWarmCookies]
+/// / [NtsClient.query] / [NtsClient.warmCookies], in milliseconds.
 ///
-/// Matches what 1.2.0 callers got when they passed `timeoutMs: 5000`
-/// (or, equivalently, `0` to inherit the Rust-side default). Centralising
-/// the constant gives callers a stable name to refer to "whatever the
-/// package's tuned default is" without hardcoding the number, and gives
-/// the package a single edit site if the default ever has to move.
+/// Sized to cover one DNS lookup plus the NTS-KE TLS 1.3 handshake plus
+/// the NTPv4 UDP round-trip against a public server over a typical
+/// consumer network, while still failing fast against an unreachable
+/// host. Centralising the constant gives callers a stable name to refer
+/// to "the package's tuned default" rather than hardcoding the number.
+/// Override per-call by passing an explicit `timeoutMs` argument; values
+/// must lie in `1..4294967295` (the FFI encoding range, validated at
+/// the wrapper boundary).
 const int kDefaultTimeoutMs = 5000;
 
-/// Default per-call ceiling on in-flight DNS resolver workers.
+/// Default per-call ceiling on in-flight DNS resolver workers, applied
+/// process-wide by [ntsQuery] / [ntsWarmCookies] / [NtsClient.query] /
+/// [NtsClient.warmCookies].
 ///
-/// `0` is the sentinel that selects the Rust-side default (currently 4,
-/// chosen for mobile pthread-stack accumulation budgets — see
-/// `rust/src/nts/dns.rs`). Centralising the constant gives callers a
-/// stable name to refer to "whatever the package's tuned default is"
-/// rather than the literal `0` whose meaning is non-obvious.
-const int kDefaultDnsConcurrencyCap = 0;
+/// Sized for mobile devices: each in-flight `getaddrinfo` worker holds
+/// an OS thread plus a 512 KB-1 MB pthread stack, and `getaddrinfo`
+/// itself is non-cancellable, so a stalled lookup is detached and
+/// finishes in the background. The cap bounds how many such workers
+/// can accumulate before subsequent calls short-circuit with
+/// [NtsError.timeout] ([TimeoutPhase.dnsSaturation]) rather than
+/// spawning another. Raise per-call on hosts with more headroom by
+/// passing an explicit `dnsConcurrencyCap` argument; values must lie
+/// in `1..4294967295` (the FFI encoding range, validated at the
+/// wrapper boundary).
+const int kDefaultDnsConcurrencyCap = 4;
 
 /// Run a complete authenticated NTPv4 exchange against `spec`.
 ///
@@ -82,12 +93,25 @@ const int kDefaultDnsConcurrencyCap = 0;
 /// and pick the one with the smallest `roundTripMicros` before applying
 /// that adjustment.
 ///
+/// All integer arguments (`spec.port`, `timeoutMs`, `dnsConcurrencyCap`)
+/// are validated against the FFI encoding range (`1..65535` for the
+/// port, `1..4294967295` for the two `u32` parameters) before any FFI
+/// dispatch; out-of-range values cause the returned `Future` to
+/// complete with [NtsError.invalidSpec] without reaching the Rust
+/// boundary, on the same `await`/`catch` shape as every other failure
+/// mode this wrapper surfaces.
+///
 /// Throws an [NtsError] on every failure path.
 Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   int timeoutMs = kDefaultTimeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
 }) async {
+  _validateRanges(
+    spec: spec,
+    timeoutMs: timeoutMs,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+  );
   try {
     final ffiSample = await ffi.ntsQuery(
       spec: _ffiSpec(spec),
@@ -118,12 +142,22 @@ Future<NtsTimeSample> ntsQuery({
 /// names the four pre-NTP phases — so "implicitly zero" here is
 /// shorthand for "the UDP send/recv leg never ran on this code path."
 ///
+/// All integer arguments are validated against the FFI encoding range
+/// before dispatch on the same terms as [ntsQuery]; out-of-range values
+/// cause the returned `Future` to complete with [NtsError.invalidSpec]
+/// without reaching the Rust boundary.
+///
 /// Throws an [NtsError] on every failure path.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   int timeoutMs = kDefaultTimeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
 }) async {
+  _validateRanges(
+    spec: spec,
+    timeoutMs: timeoutMs,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+  );
   try {
     final ffiOutcome = await ffi.ntsWarmCookies(
       spec: _ffiSpec(spec),
@@ -141,6 +175,15 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 /// Snapshot the bounded DNS resolver pool counters. Synchronous (no
 /// future / isolate hop): backed by four atomic-relaxed loads, cheap
 /// enough to call from a UI poll loop.
+///
+/// Requires `await RustLib.init()` to have completed on the calling
+/// isolate before invocation: the four atomic reads happen on the Rust
+/// side and dispatch through the FRB v2 dispatch table even though the
+/// call returns synchronously, so a missed initialization fails with a
+/// low-level FRB error rather than a structured [NtsError]. See the
+/// "Initialization has two layers" section of `README.md` for the full
+/// bootstrap contract (including the separate Android `NtsPlugin` JNI
+/// bootstrap that runs before `main()`).
 ///
 /// Counters are process-wide and include workers spawned by every
 /// concurrent caller, including those passing different
@@ -183,6 +226,18 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// Synchronous (no future / isolate hop): backed by three atomic
 /// loads, cheap enough to call from a UI poll loop or a pre-flight
 /// "can I even validate against the platform store?" check.
+///
+/// Requires `await RustLib.init()` to have completed on the calling
+/// isolate before invocation: the three atomic reads happen on the
+/// Rust side and dispatch through the FRB v2 dispatch table even
+/// though the call returns synchronously, so a missed initialization
+/// fails with a low-level FRB error rather than a structured
+/// [NtsError]. See the "Initialization has two layers" section of
+/// `README.md` for the full bootstrap contract; the
+/// `androidPlatformInitSucceeded` and `androidHybridFallbackCount`
+/// observables below are populated by the separate Android
+/// `NtsPlugin` JNI bootstrap that runs before `main()`, distinct from
+/// `RustLib.init()`.
 ///
 /// Returns three observables that callers cannot recover from a
 /// per-query [NtsTimeSample] alone:
@@ -299,9 +354,11 @@ class NtsClient {
   ///
   /// Parameter semantics for `timeoutMs` and `dnsConcurrencyCap` are
   /// identical to [ntsQuery]; defaults come from [kDefaultTimeoutMs]
-  /// and [kDefaultDnsConcurrencyCap]. The [NtsTimeSample] return
-  /// shape is identical too — see [ntsQuery]'s dartdoc for the raw
-  /// protocol primitives the sample exposes and how to apply the
+  /// and [kDefaultDnsConcurrencyCap], and out-of-range values cause
+  /// the returned `Future` to complete with [NtsError.invalidSpec] on
+  /// the same terms as the top-level wrapper. The [NtsTimeSample]
+  /// return shape is identical too — see [ntsQuery]'s dartdoc for the
+  /// raw protocol primitives the sample exposes and how to apply the
   /// one-way-delay correction.
   ///
   /// Throws an [NtsError] on every failure path.
@@ -310,6 +367,11 @@ class NtsClient {
     int timeoutMs = kDefaultTimeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
   }) async {
+    _validateRanges(
+      spec: spec,
+      timeoutMs: timeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+    );
     try {
       final ffiSample = await _inner.query(
         spec: _ffiSpec(spec),
@@ -329,12 +391,23 @@ class NtsClient {
   /// into this client's table, replacing any previously cached
   /// session for the spec.
   ///
+  /// All integer arguments are validated against the FFI encoding
+  /// range before dispatch on the same terms as [ntsQuery] /
+  /// [ntsWarmCookies]; out-of-range values cause the returned `Future`
+  /// to complete with [NtsError.invalidSpec] without reaching the
+  /// Rust boundary.
+  ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsWarmCookiesOutcome> warmCookies({
     required NtsServerSpec spec,
     int timeoutMs = kDefaultTimeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
   }) async {
+    _validateRanges(
+      spec: spec,
+      timeoutMs: timeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+    );
     try {
       final ffiOutcome = await _inner.warmCookies(
         spec: _ffiSpec(spec),
@@ -367,6 +440,60 @@ class NtsClient {
   /// Synchronous: backed by one mutex acquisition and one
   /// `HashMap::clear` on the Rust side; no isolate hop.
   void clear() => _inner.clear();
+}
+
+// --- input validation -----------------------------------------------
+//
+// Run before every wrapper dispatches into the FFI layer. The three
+// integer arguments hit FRB-generated `sse_encode_u_16` /
+// `sse_encode_u_32` codecs that `RangeError` on out-of-range values
+// before the Rust code ever runs, which would escape the wrapper's
+// `on ffi.NtsError catch` contract and surface to consumers as a
+// non-`NtsError` exception. Validating up front and translating to
+// `NtsError.invalidSpec` keeps the wrapper's "single error surface"
+// promise honest.
+//
+// `port` is restricted to the semantically meaningful range `1..65535`
+// rather than the encoder's `0..65535`: Rust's spec validator already
+// rejects `port == 0` with its own `InvalidSpec("port must be
+// non-zero")`, and front-loading the check produces a wrapper-authored
+// `NtsError.invalidSpec` on the returned `Future` (the four wrapper
+// entry points are `async`, so the error materialises on `await`)
+// before any FFI dispatch instead of a Rust-authored one after a
+// futile FFI hop. `timeoutMs` and `dnsConcurrencyCap` are restricted
+// to `1..0xFFFFFFFF`: zero used to be a sentinel for "inherit the
+// Rust-side default" in 1.x and 3.0.x, but consumers are now steered
+// toward the named `kDefault*` constants which expose the actual
+// numeric values.
+
+const int _kU32Max = 0xFFFFFFFF;
+
+void _validateRanges({
+  required NtsServerSpec spec,
+  required int timeoutMs,
+  required int dnsConcurrencyCap,
+}) {
+  if (spec.port < 1 || spec.port > 65535) {
+    throw NtsError.invalidSpec(
+      message: 'port ${spec.port} is outside the valid range 1..65535',
+    );
+  }
+  if (timeoutMs < 1 || timeoutMs > _kU32Max) {
+    throw NtsError.invalidSpec(
+      message:
+          'timeoutMs $timeoutMs is outside the valid range 1..$_kU32Max; '
+          'pass kDefaultTimeoutMs ($kDefaultTimeoutMs) to inherit the '
+          'package default',
+    );
+  }
+  if (dnsConcurrencyCap < 1 || dnsConcurrencyCap > _kU32Max) {
+    throw NtsError.invalidSpec(
+      message:
+          'dnsConcurrencyCap $dnsConcurrencyCap is outside the valid '
+          'range 1..$_kU32Max; pass kDefaultDnsConcurrencyCap '
+          '($kDefaultDnsConcurrencyCap) to inherit the package default',
+    );
+  }
 }
 
 // --- conversion layer (FFI <-> public) -------------------------------

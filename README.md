@@ -227,15 +227,17 @@ burst-filter-compensate flow described above.
 | `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
 | `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | Force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
+| `ntsTrustStatus()` | Synchronous snapshot of the process-global trust-anchor diagnostic state. Returns the default singleton's most-recent backend, the Android JNI bootstrap success flag, and the cumulative Android hybrid-fallback acceptance count. Cheap enough for a UI poll loop. |
 | `kDefaultTimeoutMs` | Package default for `timeoutMs` (5000). |
-| `kDefaultDnsConcurrencyCap` | Package default for `dnsConcurrencyCap` (`0`, the sentinel that selects the Rust-side default). |
+| `kDefaultDnsConcurrencyCap` | Package default for `dnsConcurrencyCap` (`4`, sized for mobile pthread-stack budgets — see the constant's dartdoc). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
-| `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`. |
-| `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`. The UDP phase does not run on this path, so only KE-pipeline timings are populated. |
+| `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`, `trustBackend`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`; `trustBackend` records which trust-anchor backend the post-handshake TLS verification chose. |
+| `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`, `trustBackend`. The UDP phase does not run on this path, so only KE-pipeline timings are populated; `trustBackend` carries the same per-handshake attribution as on `NtsTimeSample`. |
 | `PhaseTimings` | `dnsMicros`, `connectMicros`, `tlsHandshakeMicros`, `keRecordIoMicros`. Microsecond-resolution wall-clock breakdown of the four pre-NTP phases of an `ntsQuery` / `ntsWarmCookies` call. Phases that did not run report `0`. See ARCHITECTURE.md's "Phase attribution and timings" section. |
 | `TimeoutPhase` | `dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`, `ntp`. Carried as the payload of `NtsError.timeout` so callers can attribute a budget exhaustion to a specific phase without parsing diagnostic strings. |
 | `NtsDnsPoolStats` | `inFlight`, `highWaterMark`, `recovered`, `refused`. Process-wide pool counters; relaxed-atomic snapshot. |
-| `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout(TimeoutPhase)`, `noCookies`, `internal`. |
+| `NtsTrustStatus` | `defaultClientBackend`, `androidPlatformInitSucceeded`, `androidHybridFallbackCount`. Returned by `ntsTrustStatus()`; per-counter monotonic across consecutive snapshots. |
+| `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout(TimeoutPhase)`, `noCookies`, `trustBackendUnavailable`, `internal`. |
 
 `ntsQuery` and `ntsWarmCookies` ship as a hand-written wrapper around
 the bundled FFI surface; consumers can omit `timeoutMs` and
@@ -259,11 +261,14 @@ phase surfaces as `NtsError.timeout`.
 resolver is bounded by design — `getaddrinfo` is non-cancellable, so a
 stalled lookup is detached and finishes in the background; this cap is
 the primary defense against thread-stack accumulation when a recursive
-resolver blackholes traffic. Omit the parameter (or pass `0`
-explicitly) to inherit the built-in default of **4**, sized for the
-worst case on iOS / Android (~512 KB-1 MB of committed pthread stack
-per leaked worker). Server-side callers that legitimately need higher
-fan-out can override per call (`32`, `64`, etc.). The cap is compared
+resolver blackholes traffic. Omit the parameter (or pass
+`kDefaultDnsConcurrencyCap`) to inherit the built-in default of **4**,
+sized for the worst case on iOS / Android (~512 KB-1 MB of committed
+pthread stack per leaked worker). Server-side callers that
+legitimately need higher fan-out can override per call (`32`, `64`,
+etc.); values must lie in `1..4294967295`, with literal `0` rejected
+as `NtsError.invalidSpec` rather than silently substituting the
+default the way the pre-3.1.0 wrapper did. The cap is compared
 against the *global* counter, so two concurrent callers passing
 different values share the same in-flight pool: the effective ceiling
 at any moment is whichever caller is currently being admitted.
