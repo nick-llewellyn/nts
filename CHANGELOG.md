@@ -108,6 +108,49 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   followed older docs that described `0` as the package default) now
   trip the new range validator above.
 
+### Changed — `nts_warm_cookies` collapses concurrent forced refreshes via singleflight
+
+- **No behaviour change for the dartdoc'd contract** —
+  `nts_warm_cookies` (Dart: `ntsWarmCookies`) and
+  `NtsClient.warm_cookies` still "force a fresh handshake," still
+  return `NtsWarmCookiesOutcome { freshCookies, phaseTimings,
+  trustBackend }`, and still install the freshly-handshaken session
+  under the spec's `host:port` key. The public Rust and Dart
+  signatures are unchanged.
+
+- **Internal behaviour change** — the implementation now routes
+  through `SessionTable::warm_cookies`, which shares the
+  singleflight `inflight` registry with the cache-aware
+  `SessionTable::checkout` machinery used by `nts_query`. Pre-3.1
+  `nts_warm_cookies` called `establish_session` directly, so N
+  concurrent `nts_warm_cookies` calls against the same `host:port`
+  produced N parallel KE handshakes. As of 3.1.0:
+  - N concurrent `nts_warm_cookies` against the same `host:port`
+    collapse onto exactly one KE handshake. The first arrival
+    becomes the singleflight leader, runs the handshake without
+    holding any lock, and installs its session; concurrent callers
+    park on the same slot bounded by their own per-call `timeout_ms`
+    budget and, on success, snapshot the just-installed session's
+    cookie count and `trustBackend`.
+  - Waiters report `phaseTimings` with every field at `0` (same
+    convention `nts_query` already uses for cache-hit and
+    waiter-wake paths) because they did not perform KE work
+    themselves. Only the leader observes its own handshake's phase
+    timings.
+  - `nts_warm_cookies` and `nts_query` share the singleflight key
+    space, so a concurrent warm + query against the same `host:port`
+    *also* collapses onto one handshake; whichever caller arrives
+    first becomes the leader and the other observes its result.
+  - Operationally relevant for UI bindings that hook
+    `ntsWarmCookies` to a button: rapid taps no longer fan out to
+    parallel KE handshakes, which avoids both wasted bandwidth and
+    server-side per-IP rate-limit triggers (e.g. NTSN-style KoD on
+    the NTPv4 leg, or per-IP throttling on the KE port).
+  - Failure-fan-out semantic preserved: when the leader's handshake
+    fails, every waiter receives a cloned `NtsError` with the same
+    variant and payload, so waiters do not silently retry against a
+    server that just rejected the leader.
+
 ### Documentation
 
 - README's "API summary" table now includes:
