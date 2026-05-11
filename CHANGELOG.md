@@ -57,9 +57,10 @@ const NtsError.trustBackendUnavailable(message: 'platform CA bundle missing')
 const NtsError.internal(message: 'unreachable')
 ```
 
-The Dart compiler reports a `not_enough_positional_arguments` /
-`undefined_named_parameter` pair at every old-shape call site, so
-the diff is mechanical and the analyzer surfaces the exact line.
+The analyzer reports a "missing required argument" plus an
+"extra positional argument" diagnostic pair at every old-shape
+call site, so the diff is mechanical and each affected line is
+flagged exactly.
 
 #### Rename payload binders in pattern destructurings
 

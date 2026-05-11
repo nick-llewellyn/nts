@@ -461,10 +461,13 @@ void main() {
 
     test('deprecated underscore-prefixed typedefs alias the new names', () {
       // The 3.0 rename retains the pre-3.0 freezed-style names as
-      // deprecated typedefs for one release. The deprecation is
-      // intentional; the lint suppression below is scoped to this
-      // single test so any *real* use of the old names elsewhere in
-      // the package still trips the warning.
+      // deprecated typedefs scheduled for removal at the next major
+      // bump (see the typedef declarations in
+      // `lib/src/api/errors.dart` and the `## 3.0.0` migration block
+      // in `CHANGELOG.md`). The deprecation is intentional; the
+      // lint suppression below is scoped to this single test so any
+      // *real* use of the old names elsewhere in the package still
+      // trips the warning.
       // ignore: deprecated_member_use_from_same_package
       const NtsError_InvalidSpec a = NtsErrorInvalidSpec(message: 'x');
       // ignore: deprecated_member_use_from_same_package
