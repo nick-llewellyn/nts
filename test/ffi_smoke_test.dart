@@ -88,10 +88,15 @@ void main() {
   group('FRB toolchain smoke test', () {
     test('ntsQuery() dispatches through the mock api', () async {
       const spec = NtsServerSpec(host: 'time.example', port: 4460);
+      // FFI surface: every parameter is `required` per FRB v2 codegen,
+      // so the wrapper-layer omission convenience does not apply here.
+      // The literal `4` mirrors the wrapper-layer
+      // `kDefaultDnsConcurrencyCap` value but is intentionally
+      // hard-coded — this file imports nothing from the public layer.
       final sample = await ntsQuery(
         spec: spec,
         timeoutMs: 5000,
-        dnsConcurrencyCap: 0,
+        dnsConcurrencyCap: 4,
       );
       expect(sample.aeadId, 15);
       expect(sample.serverStratum, 1);
@@ -101,10 +106,12 @@ void main() {
 
     test('ntsWarmCookies() dispatches through the mock api', () async {
       const spec = NtsServerSpec(host: 'time.example', port: 4460);
+      // See the comment on the matching ntsQuery test above for why
+      // `dnsConcurrencyCap` is hard-coded rather than omitted here.
       final outcome = await ntsWarmCookies(
         spec: spec,
         timeoutMs: 5000,
-        dnsConcurrencyCap: 0,
+        dnsConcurrencyCap: 4,
       );
       expect(outcome.freshCookies, 8);
       expect(outcome.phaseTimings, isA<PhaseTimings>());

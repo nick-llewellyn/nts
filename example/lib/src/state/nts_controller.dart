@@ -230,7 +230,6 @@ class NtsController {
       final sample = await clientAtStart.query(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
-        dnsConcurrencyCap: 0,
       );
       final stale = !identical(clientAtStart, _client);
       state.log.info(
@@ -280,7 +279,6 @@ class NtsController {
       final outcome = await clientAtStart.warmCookies(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
-        dnsConcurrencyCap: 0,
       );
       final stale = !identical(clientAtStart, _client);
       state.log.info(
