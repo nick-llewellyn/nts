@@ -484,7 +484,10 @@ void main() {
             const ffi.NtsError.invalidSpec('bad'),
             const NtsError.invalidSpec('bad'),
           ),
-          (const ffi.NtsError.network(message: 'eof'), const NtsError.network(message: 'eof')),
+          (
+            const ffi.NtsError.network(message: 'eof'),
+            const NtsError.network(message: 'eof'),
+          ),
           (
             const ffi.NtsError.keProtocol(message: 'tls'),
             const NtsError.keProtocol(message: 'tls'),
@@ -533,7 +536,8 @@ void main() {
         throwsA(
           predicate<Object>(
             (e) =>
-                e is NtsError && e == const NtsError.timeout(phase: TimeoutPhase.tls),
+                e is NtsError &&
+                e == const NtsError.timeout(phase: TimeoutPhase.tls),
           ),
         ),
       );
@@ -932,7 +936,9 @@ void main() {
         'toString uses .name', () {
       const a = NtsError.timeout(phase: TimeoutPhase.ntp);
       const sameValue = NtsError.timeout(phase: TimeoutPhase.ntp);
-      const differentPhase = NtsError.timeout(phase: TimeoutPhase.dnsSaturation);
+      const differentPhase = NtsError.timeout(
+        phase: TimeoutPhase.dnsSaturation,
+      );
 
       expect(a.runtimeType, NtsErrorTimeout);
       expect(a, isA<NtsError>());

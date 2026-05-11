@@ -144,7 +144,10 @@ void main() {
   group('NtsError severity + description', () {
     test('authentication / KE / NTP / trust-backend / internal errors are '
         'error-severity', () {
-      expect(isErrorSeverity(const NtsError.authentication(message: 'x')), isTrue);
+      expect(
+        isErrorSeverity(const NtsError.authentication(message: 'x')),
+        isTrue,
+      );
       expect(isErrorSeverity(const NtsError.keProtocol(message: 'x')), isTrue);
       expect(isErrorSeverity(const NtsError.ntpProtocol(message: 'x')), isTrue);
       // TrustBackendUnavailable is a deliberate caller-side
@@ -170,7 +173,10 @@ void main() {
     });
 
     test('describe round-trips the variant payload', () {
-      expect(describeError(const NtsError.network(message: 'boom')), 'Network: boom');
+      expect(
+        describeError(const NtsError.network(message: 'boom')),
+        'Network: boom',
+      );
       expect(
         describeError(const NtsError.timeout(phase: TimeoutPhase.dnsTimeout)),
         startsWith('Timeout'),
@@ -193,8 +199,14 @@ void main() {
     test('returns the stable variant tag for every NtsError shape', () {
       expect(errorTypeName(const NtsError.invalidSpec('x')), 'InvalidSpec');
       expect(errorTypeName(const NtsError.network(message: 'x')), 'Network');
-      expect(errorTypeName(const NtsError.keProtocol(message: 'x')), 'KeProtocol');
-      expect(errorTypeName(const NtsError.ntpProtocol(message: 'x')), 'NtpProtocol');
+      expect(
+        errorTypeName(const NtsError.keProtocol(message: 'x')),
+        'KeProtocol',
+      );
+      expect(
+        errorTypeName(const NtsError.ntpProtocol(message: 'x')),
+        'NtpProtocol',
+      );
       expect(
         errorTypeName(const NtsError.authentication(message: 'x')),
         'Authentication',
@@ -306,12 +318,15 @@ void main() {
       // (dnsTimeout — chosen because it's a frequent operator-action
       // signal in the field) and the post-bind variant (ntp) so a
       // future edit that hard-codes one phase is caught.
-      expect(jsonError(const NtsError.timeout(phase: TimeoutPhase.dnsTimeout)), {
-        'error_type': 'Timeout',
-        'message': 'Timeout (deadline expired in phase dnsTimeout)',
-        'severity': 'warn',
-        'phase': 'dnsTimeout',
-      });
+      expect(
+        jsonError(const NtsError.timeout(phase: TimeoutPhase.dnsTimeout)),
+        {
+          'error_type': 'Timeout',
+          'message': 'Timeout (deadline expired in phase dnsTimeout)',
+          'severity': 'warn',
+          'phase': 'dnsTimeout',
+        },
+      );
       expect(jsonError(const NtsError.timeout(phase: TimeoutPhase.ntp)), {
         'error_type': 'Timeout',
         'message': 'Timeout (deadline expired in phase ntp)',
@@ -340,7 +355,9 @@ void main() {
 
     test('error-severity errors carry severity=error', () {
       expect(
-        jsonError(const NtsError.authentication(message: 'bad mac'))['severity'],
+        jsonError(
+          const NtsError.authentication(message: 'bad mac'),
+        )['severity'],
         'error',
       );
       expect(
