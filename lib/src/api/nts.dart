@@ -96,8 +96,10 @@ const int kDefaultDnsConcurrencyCap = 4;
 /// All integer arguments (`spec.port`, `timeoutMs`, `dnsConcurrencyCap`)
 /// are validated against the FFI encoding range (`1..65535` for the
 /// port, `1..4294967295` for the two `u32` parameters) before any FFI
-/// dispatch; out-of-range values throw [NtsError.invalidSpec]
-/// synchronously without reaching the Rust boundary.
+/// dispatch; out-of-range values cause the returned `Future` to
+/// complete with [NtsError.invalidSpec] without reaching the Rust
+/// boundary, on the same `await`/`catch` shape as every other failure
+/// mode this wrapper surfaces.
 ///
 /// Throws an [NtsError] on every failure path.
 Future<NtsTimeSample> ntsQuery({
@@ -142,7 +144,8 @@ Future<NtsTimeSample> ntsQuery({
 ///
 /// All integer arguments are validated against the FFI encoding range
 /// before dispatch on the same terms as [ntsQuery]; out-of-range values
-/// throw [NtsError.invalidSpec] synchronously.
+/// cause the returned `Future` to complete with [NtsError.invalidSpec]
+/// without reaching the Rust boundary.
 ///
 /// Throws an [NtsError] on every failure path.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
@@ -351,11 +354,12 @@ class NtsClient {
   ///
   /// Parameter semantics for `timeoutMs` and `dnsConcurrencyCap` are
   /// identical to [ntsQuery]; defaults come from [kDefaultTimeoutMs]
-  /// and [kDefaultDnsConcurrencyCap], and out-of-range values throw
-  /// [NtsError.invalidSpec] synchronously on the same terms as the
-  /// top-level wrapper. The [NtsTimeSample] return shape is identical
-  /// too — see [ntsQuery]'s dartdoc for the raw protocol primitives
-  /// the sample exposes and how to apply the one-way-delay correction.
+  /// and [kDefaultDnsConcurrencyCap], and out-of-range values cause
+  /// the returned `Future` to complete with [NtsError.invalidSpec] on
+  /// the same terms as the top-level wrapper. The [NtsTimeSample]
+  /// return shape is identical too — see [ntsQuery]'s dartdoc for the
+  /// raw protocol primitives the sample exposes and how to apply the
+  /// one-way-delay correction.
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsTimeSample> query({
@@ -389,8 +393,9 @@ class NtsClient {
   ///
   /// All integer arguments are validated against the FFI encoding
   /// range before dispatch on the same terms as [ntsQuery] /
-  /// [ntsWarmCookies]; out-of-range values throw [NtsError.invalidSpec]
-  /// synchronously.
+  /// [ntsWarmCookies]; out-of-range values cause the returned `Future`
+  /// to complete with [NtsError.invalidSpec] without reaching the
+  /// Rust boundary.
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsWarmCookiesOutcome> warmCookies({

@@ -261,11 +261,14 @@ phase surfaces as `NtsError.timeout`.
 resolver is bounded by design — `getaddrinfo` is non-cancellable, so a
 stalled lookup is detached and finishes in the background; this cap is
 the primary defense against thread-stack accumulation when a recursive
-resolver blackholes traffic. Omit the parameter (or pass `0`
-explicitly) to inherit the built-in default of **4**, sized for the
-worst case on iOS / Android (~512 KB-1 MB of committed pthread stack
-per leaked worker). Server-side callers that legitimately need higher
-fan-out can override per call (`32`, `64`, etc.). The cap is compared
+resolver blackholes traffic. Omit the parameter (or pass
+`kDefaultDnsConcurrencyCap`) to inherit the built-in default of **4**,
+sized for the worst case on iOS / Android (~512 KB-1 MB of committed
+pthread stack per leaked worker). Server-side callers that
+legitimately need higher fan-out can override per call (`32`, `64`,
+etc.); values must lie in `1..4294967295`, with literal `0` rejected
+as `NtsError.invalidSpec` rather than silently substituting the
+default the way the pre-3.1.0 wrapper did. The cap is compared
 against the *global* counter, so two concurrent callers passing
 different values share the same in-flight pool: the effective ceiling
 at any moment is whichever caller is currently being admitted.

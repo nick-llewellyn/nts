@@ -64,18 +64,21 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   - `dnsConcurrencyCap`: rejected unless in `1..4294967295` on the
     same terms.
 
-  Out-of-range values throw `NtsError.invalidSpec` synchronously
-  instead of escaping as `RangeError` from the FRB encoder. This
-  closes the contract gap where the wrapper's `try { … } on
-  ffi.NtsError catch { … }` previously could not catch encoder-side
-  range errors, and is the change the wrapper's "throws an
-  `NtsError` on every failure path" dartdoc has always claimed.
+  Out-of-range values cause the returned `Future` to complete with
+  `NtsError.invalidSpec` (the four wrapper entry points are `async`,
+  so the error materialises on `await` rather than as a synchronous
+  throw at the call site) instead of escaping as `RangeError` from
+  the FRB encoder. This closes the contract gap where the wrapper's
+  `try { … } on ffi.NtsError catch { … }` previously could not catch
+  encoder-side range errors, and is the change the wrapper's
+  "throws an `NtsError` on every failure path" dartdoc has always
+  claimed.
 
   Strictly additive for callers who already passed in-range values:
   no behavioural change. Callers who passed literal `0` for
   `timeoutMs` or `dnsConcurrencyCap` to ride the pre-3.1 sentinel
-  now see `NtsError.invalidSpec` synchronously and must switch to
-  the named constants — see the migration section below.
+  now see `NtsError.invalidSpec` on `await` and must switch to the
+  named constants — see the migration section below.
 
 ### Changed — `kDefaultDnsConcurrencyCap` exposes the actual numeric default
 
