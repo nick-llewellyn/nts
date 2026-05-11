@@ -470,7 +470,7 @@ void main() {
       // ignore: deprecated_member_use_from_same_package
       const NtsError_NoCookies b = NtsErrorNoCookies();
       // ignore: deprecated_member_use_from_same_package
-      const NtsError_Timeout c = NtsErrorTimeout(TimeoutPhase.ntp);
+      const NtsError_Timeout c = NtsErrorTimeout(phase: TimeoutPhase.ntp);
       expect(a, isA<NtsErrorInvalidSpec>());
       expect(b, isA<NtsErrorNoCookies>());
       expect(c, isA<NtsErrorTimeout>());
@@ -484,26 +484,26 @@ void main() {
             const ffi.NtsError.invalidSpec('bad'),
             const NtsError.invalidSpec('bad'),
           ),
-          (const ffi.NtsError.network('eof'), const NtsError.network('eof')),
+          (const ffi.NtsError.network(message: 'eof'), const NtsError.network(message: 'eof')),
           (
-            const ffi.NtsError.keProtocol('tls'),
-            const NtsError.keProtocol('tls'),
+            const ffi.NtsError.keProtocol(message: 'tls'),
+            const NtsError.keProtocol(message: 'tls'),
           ),
           (
-            const ffi.NtsError.ntpProtocol('kod'),
-            const NtsError.ntpProtocol('kod'),
+            const ffi.NtsError.ntpProtocol(message: 'kod'),
+            const NtsError.ntpProtocol(message: 'kod'),
           ),
           (
-            const ffi.NtsError.authentication('mac'),
-            const NtsError.authentication('mac'),
+            const ffi.NtsError.authentication(message: 'mac'),
+            const NtsError.authentication(message: 'mac'),
           ),
           (
-            const ffi.NtsError.timeout(ffi.TimeoutPhase.ntp),
-            const NtsError.timeout(TimeoutPhase.ntp),
+            const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.ntp),
+            const NtsError.timeout(phase: TimeoutPhase.ntp),
           ),
           (
-            const ffi.NtsError.timeout(ffi.TimeoutPhase.dnsSaturation),
-            const NtsError.timeout(TimeoutPhase.dnsSaturation),
+            const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.dnsSaturation),
+            const NtsError.timeout(phase: TimeoutPhase.dnsSaturation),
           ),
           (const ffi.NtsError.noCookies(), const NtsError.noCookies()),
           (
@@ -527,13 +527,13 @@ void main() {
       // sample is sufficient because the conversion helper is shared
       // with `ntsQuery` (verified exhaustively by the case above);
       // this test pins the wrapper-level wiring on the warm path.
-      api.nextThrow = const ffi.NtsError.timeout(ffi.TimeoutPhase.tls);
+      api.nextThrow = const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.tls);
       await expectLater(
         ntsWarmCookies(spec: spec),
         throwsA(
           predicate<Object>(
             (e) =>
-                e is NtsError && e == const NtsError.timeout(TimeoutPhase.tls),
+                e is NtsError && e == const NtsError.timeout(phase: TimeoutPhase.tls),
           ),
         ),
       );
@@ -860,30 +860,30 @@ void main() {
         'NtsError.invalidSpec(a)',
       ),
       (
-        const NtsError.network('a'),
-        const NtsError.network('a'),
-        const NtsError.network('b'),
+        const NtsError.network(message: 'a'),
+        const NtsError.network(message: 'a'),
+        const NtsError.network(message: 'b'),
         NtsErrorNetwork,
         'NtsError.network(a)',
       ),
       (
-        const NtsError.keProtocol('a'),
-        const NtsError.keProtocol('a'),
-        const NtsError.keProtocol('b'),
+        const NtsError.keProtocol(message: 'a'),
+        const NtsError.keProtocol(message: 'a'),
+        const NtsError.keProtocol(message: 'b'),
         NtsErrorKeProtocol,
         'NtsError.keProtocol(a)',
       ),
       (
-        const NtsError.ntpProtocol('a'),
-        const NtsError.ntpProtocol('a'),
-        const NtsError.ntpProtocol('b'),
+        const NtsError.ntpProtocol(message: 'a'),
+        const NtsError.ntpProtocol(message: 'a'),
+        const NtsError.ntpProtocol(message: 'b'),
         NtsErrorNtpProtocol,
         'NtsError.ntpProtocol(a)',
       ),
       (
-        const NtsError.authentication('a'),
-        const NtsError.authentication('a'),
-        const NtsError.authentication('b'),
+        const NtsError.authentication(message: 'a'),
+        const NtsError.authentication(message: 'a'),
+        const NtsError.authentication(message: 'b'),
         NtsErrorAuthentication,
         'NtsError.authentication(a)',
       ),
@@ -930,9 +930,9 @@ void main() {
 
     test('NtsError.timeout: factory→subclass, ==, hashCode, '
         'toString uses .name', () {
-      const a = NtsError.timeout(TimeoutPhase.ntp);
-      const sameValue = NtsError.timeout(TimeoutPhase.ntp);
-      const differentPhase = NtsError.timeout(TimeoutPhase.dnsSaturation);
+      const a = NtsError.timeout(phase: TimeoutPhase.ntp);
+      const sameValue = NtsError.timeout(phase: TimeoutPhase.ntp);
+      const differentPhase = NtsError.timeout(phase: TimeoutPhase.dnsSaturation);
 
       expect(a.runtimeType, NtsErrorTimeout);
       expect(a, isA<NtsError>());
@@ -962,7 +962,7 @@ void main() {
       expect(a.hashCode, b.hashCode);
 
       // Cross-variant inequality.
-      expect(a, isNot(equals(const NtsError.network('x'))));
+      expect(a, isNot(equals(const NtsError.network(message: 'x'))));
       // ignore: unrelated_type_equality_checks
       expect(a == 'noCookies', isFalse);
 
@@ -1059,14 +1059,14 @@ void main() {
       'query converts FFI NtsError to the public sealed class with stack',
       () async {
         final client = NtsClient();
-        api.nextThrow = const ffi.NtsError.timeout(ffi.TimeoutPhase.tls);
+        api.nextThrow = const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.tls);
         await expectLater(
           client.query(spec: spec),
           throwsA(
             isA<NtsError>().having(
               (e) => e,
               'is timeout(tls)',
-              equals(const NtsError.timeout(TimeoutPhase.tls)),
+              equals(const NtsError.timeout(phase: TimeoutPhase.tls)),
             ),
           ),
         );

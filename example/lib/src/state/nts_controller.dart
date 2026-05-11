@@ -19,7 +19,21 @@
 import 'dart:developer' as developer;
 
 import 'package:nts/nts.dart'
-    show NtsClient, NtsError, TrustBackend, TrustMode, ntsTrustStatus;
+    show
+        NtsClient,
+        NtsError,
+        NtsErrorAuthentication,
+        NtsErrorInternal,
+        NtsErrorInvalidSpec,
+        NtsErrorKeProtocol,
+        NtsErrorNetwork,
+        NtsErrorNoCookies,
+        NtsErrorNtpProtocol,
+        NtsErrorTimeout,
+        NtsErrorTrustBackendUnavailable,
+        TrustBackend,
+        TrustMode,
+        ntsTrustStatus;
 
 import '../data/server_entry.dart';
 import 'app_state.dart';
@@ -300,10 +314,27 @@ class NtsController {
 
   void _logError(String source, NtsError err, String host) {
     final message = describeError(err);
+    // Variants whose precondition is "TLS handshake reached config-
+    // build time" carry the per-handshake trust-backend; thread it
+    // into the log entry so the on-screen log can attribute the
+    // failure to the same backend the success path would have shown.
+    // Variants that pre-date config construction have a `null`
+    // backend; the LogEntry just leaves the field unset.
+    final backend = switch (err) {
+      NtsErrorNetwork(:final trustBackend) => trustBackend,
+      NtsErrorKeProtocol(:final trustBackend) => trustBackend,
+      NtsErrorNtpProtocol(:final trustBackend) => trustBackend,
+      NtsErrorAuthentication(:final trustBackend) => trustBackend,
+      NtsErrorTimeout(:final trustBackend) => trustBackend,
+      NtsErrorNoCookies(:final trustBackend) => trustBackend,
+      NtsErrorInvalidSpec() ||
+      NtsErrorTrustBackendUnavailable() ||
+      NtsErrorInternal() => null,
+    };
     if (isErrorSeverity(err)) {
-      state.log.error(source, message, host: host);
+      state.log.error(source, message, host: host, trustBackend: backend);
     } else {
-      state.log.warn(source, message, host: host);
+      state.log.warn(source, message, host: host, trustBackend: backend);
     }
   }
 }

@@ -421,18 +421,39 @@ TimeoutPhase _publicTimeoutPhase(ffi.TimeoutPhase phase) => switch (phase) {
 
 NtsError _publicError(ffi.NtsError err) => switch (err) {
   ffi.NtsError_InvalidSpec(:final field0) => NtsError.invalidSpec(field0),
-  ffi.NtsError_Network(:final field0) => NtsError.network(field0),
-  ffi.NtsError_KeProtocol(:final field0) => NtsError.keProtocol(field0),
-  ffi.NtsError_NtpProtocol(:final field0) => NtsError.ntpProtocol(field0),
-  ffi.NtsError_Authentication(:final field0) => NtsError.authentication(field0),
-  ffi.NtsError_Timeout(:final field0) => NtsError.timeout(
-    _publicTimeoutPhase(field0),
+  ffi.NtsError_Network(:final message, :final trustBackend) => NtsError.network(
+    message: message,
+    trustBackend: _maybePublicTrustBackend(trustBackend),
   ),
-  ffi.NtsError_NoCookies() => const NtsError.noCookies(),
+  ffi.NtsError_KeProtocol(:final message, :final trustBackend) =>
+    NtsError.keProtocol(
+      message: message,
+      trustBackend: _maybePublicTrustBackend(trustBackend),
+    ),
+  ffi.NtsError_NtpProtocol(:final message, :final trustBackend) =>
+    NtsError.ntpProtocol(
+      message: message,
+      trustBackend: _maybePublicTrustBackend(trustBackend),
+    ),
+  ffi.NtsError_Authentication(:final message, :final trustBackend) =>
+    NtsError.authentication(
+      message: message,
+      trustBackend: _maybePublicTrustBackend(trustBackend),
+    ),
+  ffi.NtsError_Timeout(:final phase, :final trustBackend) => NtsError.timeout(
+    phase: _publicTimeoutPhase(phase),
+    trustBackend: _maybePublicTrustBackend(trustBackend),
+  ),
+  ffi.NtsError_NoCookies(:final trustBackend) => NtsError.noCookies(
+    trustBackend: _maybePublicTrustBackend(trustBackend),
+  ),
   ffi.NtsError_TrustBackendUnavailable(:final field0) =>
     NtsError.trustBackendUnavailable(field0),
   ffi.NtsError_Internal(:final field0) => NtsError.internal(field0),
 };
+
+TrustBackend? _maybePublicTrustBackend(ffi.TrustBackend? b) =>
+    b == null ? null : _publicTrustBackend(b);
 
 TrustBackend _publicTrustBackend(ffi.TrustBackend b) => switch (b) {
   ffi.TrustBackend.platform => TrustBackend.platform,

@@ -8,9 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `install`, `invalidate`, `new`, `new`, `new`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`, `wait_until`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `install`, `invalidate`, `new`, `new`, `new`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`, `wait_until`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
 /// with `Relaxed` ordering; the snapshot is intended for
@@ -302,13 +302,22 @@ sealed class NtsError with _$NtsError implements FrbException {
   const factory NtsError.invalidSpec(String field0) = NtsError_InvalidSpec;
 
   /// TCP/UDP I/O error or connection failure.
-  const factory NtsError.network(String field0) = NtsError_Network;
+  const factory NtsError.network({
+    required String message,
+    TrustBackend? trustBackend,
+  }) = NtsError_Network;
 
   /// TLS handshake or NTS-KE record exchange failed.
-  const factory NtsError.keProtocol(String field0) = NtsError_KeProtocol;
+  const factory NtsError.keProtocol({
+    required String message,
+    TrustBackend? trustBackend,
+  }) = NtsError_KeProtocol;
 
   /// NTPv4 packet parsing or extension validation failed.
-  const factory NtsError.ntpProtocol(String field0) = NtsError_NtpProtocol;
+  const factory NtsError.ntpProtocol({
+    required String message,
+    TrustBackend? trustBackend,
+  }) = NtsError_NtpProtocol;
 
   /// AEAD seal/open failed (tag mismatch, malformed input).
   ///
@@ -343,8 +352,10 @@ sealed class NtsError with _$NtsError implements FrbException {
   /// can find them via crate-internal navigation; a Dart reader
   /// has the parallel dartdoc on `NtsError.authentication` in
   /// `lib/src/api/errors.dart`.
-  const factory NtsError.authentication(String field0) =
-      NtsError_Authentication;
+  const factory NtsError.authentication({
+    required String message,
+    TrustBackend? trustBackend,
+  }) = NtsError_Authentication;
 
   /// Wall-clock budget elapsed inside one of the call's pre-NTP or
   /// NTP phases. The [`TimeoutPhase`] payload identifies which
@@ -353,10 +364,14 @@ sealed class NtsError with _$NtsError implements FrbException {
   /// lengthen `timeout_ms` on `DnsTimeout` / `Connect` / `Tls` /
   /// `KeRecordIo` / `Ntp`, etc.). See [`TimeoutPhase`] for the full
   /// taxonomy.
-  const factory NtsError.timeout(TimeoutPhase field0) = NtsError_Timeout;
+  const factory NtsError.timeout({
+    required TimeoutPhase phase,
+    TrustBackend? trustBackend,
+  }) = NtsError_Timeout;
 
   /// Cookie jar empty after a handshake (server delivered none).
-  const factory NtsError.noCookies() = NtsError_NoCookies;
+  const factory NtsError.noCookies({TrustBackend? trustBackend}) =
+      NtsError_NoCookies;
 
   /// Caller selected [`TrustMode::PlatformOnly`] and
   /// `build_with_native_verifier` could not construct a

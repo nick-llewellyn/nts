@@ -140,16 +140,16 @@ return internal(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String field0)?  invalidSpec,TResult Function( String field0)?  network,TResult Function( String field0)?  keProtocol,TResult Function( String field0)?  ntpProtocol,TResult Function( String field0)?  authentication,TResult Function( TimeoutPhase field0)?  timeout,TResult Function()?  noCookies,TResult Function( String field0)?  trustBackendUnavailable,TResult Function( String field0)?  internal,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String field0)?  invalidSpec,TResult Function( String message,  TrustBackend? trustBackend)?  network,TResult Function( String message,  TrustBackend? trustBackend)?  keProtocol,TResult Function( String message,  TrustBackend? trustBackend)?  ntpProtocol,TResult Function( String message,  TrustBackend? trustBackend)?  authentication,TResult Function( TimeoutPhase phase,  TrustBackend? trustBackend)?  timeout,TResult Function( TrustBackend? trustBackend)?  noCookies,TResult Function( String field0)?  trustBackendUnavailable,TResult Function( String field0)?  internal,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
 return invalidSpec(_that.field0);case NtsError_Network() when network != null:
-return network(_that.field0);case NtsError_KeProtocol() when keProtocol != null:
-return keProtocol(_that.field0);case NtsError_NtpProtocol() when ntpProtocol != null:
-return ntpProtocol(_that.field0);case NtsError_Authentication() when authentication != null:
-return authentication(_that.field0);case NtsError_Timeout() when timeout != null:
-return timeout(_that.field0);case NtsError_NoCookies() when noCookies != null:
-return noCookies();case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
+return network(_that.message,_that.trustBackend);case NtsError_KeProtocol() when keProtocol != null:
+return keProtocol(_that.message,_that.trustBackend);case NtsError_NtpProtocol() when ntpProtocol != null:
+return ntpProtocol(_that.message,_that.trustBackend);case NtsError_Authentication() when authentication != null:
+return authentication(_that.message,_that.trustBackend);case NtsError_Timeout() when timeout != null:
+return timeout(_that.phase,_that.trustBackend);case NtsError_NoCookies() when noCookies != null:
+return noCookies(_that.trustBackend);case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
 return trustBackendUnavailable(_that.field0);case NtsError_Internal() when internal != null:
 return internal(_that.field0);case _:
   return orElse();
@@ -169,16 +169,16 @@ return internal(_that.field0);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String field0)  invalidSpec,required TResult Function( String field0)  network,required TResult Function( String field0)  keProtocol,required TResult Function( String field0)  ntpProtocol,required TResult Function( String field0)  authentication,required TResult Function( TimeoutPhase field0)  timeout,required TResult Function()  noCookies,required TResult Function( String field0)  trustBackendUnavailable,required TResult Function( String field0)  internal,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String field0)  invalidSpec,required TResult Function( String message,  TrustBackend? trustBackend)  network,required TResult Function( String message,  TrustBackend? trustBackend)  keProtocol,required TResult Function( String message,  TrustBackend? trustBackend)  ntpProtocol,required TResult Function( String message,  TrustBackend? trustBackend)  authentication,required TResult Function( TimeoutPhase phase,  TrustBackend? trustBackend)  timeout,required TResult Function( TrustBackend? trustBackend)  noCookies,required TResult Function( String field0)  trustBackendUnavailable,required TResult Function( String field0)  internal,}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec():
 return invalidSpec(_that.field0);case NtsError_Network():
-return network(_that.field0);case NtsError_KeProtocol():
-return keProtocol(_that.field0);case NtsError_NtpProtocol():
-return ntpProtocol(_that.field0);case NtsError_Authentication():
-return authentication(_that.field0);case NtsError_Timeout():
-return timeout(_that.field0);case NtsError_NoCookies():
-return noCookies();case NtsError_TrustBackendUnavailable():
+return network(_that.message,_that.trustBackend);case NtsError_KeProtocol():
+return keProtocol(_that.message,_that.trustBackend);case NtsError_NtpProtocol():
+return ntpProtocol(_that.message,_that.trustBackend);case NtsError_Authentication():
+return authentication(_that.message,_that.trustBackend);case NtsError_Timeout():
+return timeout(_that.phase,_that.trustBackend);case NtsError_NoCookies():
+return noCookies(_that.trustBackend);case NtsError_TrustBackendUnavailable():
 return trustBackendUnavailable(_that.field0);case NtsError_Internal():
 return internal(_that.field0);}
 }
@@ -194,16 +194,16 @@ return internal(_that.field0);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String field0)?  invalidSpec,TResult? Function( String field0)?  network,TResult? Function( String field0)?  keProtocol,TResult? Function( String field0)?  ntpProtocol,TResult? Function( String field0)?  authentication,TResult? Function( TimeoutPhase field0)?  timeout,TResult? Function()?  noCookies,TResult? Function( String field0)?  trustBackendUnavailable,TResult? Function( String field0)?  internal,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String field0)?  invalidSpec,TResult? Function( String message,  TrustBackend? trustBackend)?  network,TResult? Function( String message,  TrustBackend? trustBackend)?  keProtocol,TResult? Function( String message,  TrustBackend? trustBackend)?  ntpProtocol,TResult? Function( String message,  TrustBackend? trustBackend)?  authentication,TResult? Function( TimeoutPhase phase,  TrustBackend? trustBackend)?  timeout,TResult? Function( TrustBackend? trustBackend)?  noCookies,TResult? Function( String field0)?  trustBackendUnavailable,TResult? Function( String field0)?  internal,}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
 return invalidSpec(_that.field0);case NtsError_Network() when network != null:
-return network(_that.field0);case NtsError_KeProtocol() when keProtocol != null:
-return keProtocol(_that.field0);case NtsError_NtpProtocol() when ntpProtocol != null:
-return ntpProtocol(_that.field0);case NtsError_Authentication() when authentication != null:
-return authentication(_that.field0);case NtsError_Timeout() when timeout != null:
-return timeout(_that.field0);case NtsError_NoCookies() when noCookies != null:
-return noCookies();case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
+return network(_that.message,_that.trustBackend);case NtsError_KeProtocol() when keProtocol != null:
+return keProtocol(_that.message,_that.trustBackend);case NtsError_NtpProtocol() when ntpProtocol != null:
+return ntpProtocol(_that.message,_that.trustBackend);case NtsError_Authentication() when authentication != null:
+return authentication(_that.message,_that.trustBackend);case NtsError_Timeout() when timeout != null:
+return timeout(_that.phase,_that.trustBackend);case NtsError_NoCookies() when noCookies != null:
+return noCookies(_that.trustBackend);case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
 return trustBackendUnavailable(_that.field0);case NtsError_Internal() when internal != null:
 return internal(_that.field0);case _:
   return null;
@@ -283,10 +283,11 @@ as String,
 
 
 class NtsError_Network extends NtsError {
-  const NtsError_Network(this.field0): super._();
+  const NtsError_Network({required this.message, this.trustBackend}): super._();
   
 
- final  String field0;
+ final  String message;
+ final  TrustBackend? trustBackend;
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
@@ -298,16 +299,16 @@ $NtsError_NetworkCopyWith<NtsError_Network> get copyWith => _$NtsError_NetworkCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Network&&(identical(other.field0, field0) || other.field0 == field0));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Network&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,field0);
+int get hashCode => Object.hash(runtimeType,message,trustBackend);
 
 @override
 String toString() {
-  return 'NtsError.network(field0: $field0)';
+  return 'NtsError.network(message: $message, trustBackend: $trustBackend)';
 }
 
 
@@ -318,7 +319,7 @@ abstract mixin class $NtsError_NetworkCopyWith<$Res> implements $NtsErrorCopyWit
   factory $NtsError_NetworkCopyWith(NtsError_Network value, $Res Function(NtsError_Network) _then) = _$NtsError_NetworkCopyWithImpl;
 @useResult
 $Res call({
- String field0
+ String message, TrustBackend? trustBackend
 });
 
 
@@ -335,10 +336,11 @@ class _$NtsError_NetworkCopyWithImpl<$Res>
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? message = null,Object? trustBackend = freezed,}) {
   return _then(NtsError_Network(
-null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
-as String,
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,trustBackend: freezed == trustBackend ? _self.trustBackend : trustBackend // ignore: cast_nullable_to_non_nullable
+as TrustBackend?,
   ));
 }
 
@@ -349,10 +351,11 @@ as String,
 
 
 class NtsError_KeProtocol extends NtsError {
-  const NtsError_KeProtocol(this.field0): super._();
+  const NtsError_KeProtocol({required this.message, this.trustBackend}): super._();
   
 
- final  String field0;
+ final  String message;
+ final  TrustBackend? trustBackend;
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
@@ -364,16 +367,16 @@ $NtsError_KeProtocolCopyWith<NtsError_KeProtocol> get copyWith => _$NtsError_KeP
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_KeProtocol&&(identical(other.field0, field0) || other.field0 == field0));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_KeProtocol&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,field0);
+int get hashCode => Object.hash(runtimeType,message,trustBackend);
 
 @override
 String toString() {
-  return 'NtsError.keProtocol(field0: $field0)';
+  return 'NtsError.keProtocol(message: $message, trustBackend: $trustBackend)';
 }
 
 
@@ -384,7 +387,7 @@ abstract mixin class $NtsError_KeProtocolCopyWith<$Res> implements $NtsErrorCopy
   factory $NtsError_KeProtocolCopyWith(NtsError_KeProtocol value, $Res Function(NtsError_KeProtocol) _then) = _$NtsError_KeProtocolCopyWithImpl;
 @useResult
 $Res call({
- String field0
+ String message, TrustBackend? trustBackend
 });
 
 
@@ -401,10 +404,11 @@ class _$NtsError_KeProtocolCopyWithImpl<$Res>
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? message = null,Object? trustBackend = freezed,}) {
   return _then(NtsError_KeProtocol(
-null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
-as String,
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,trustBackend: freezed == trustBackend ? _self.trustBackend : trustBackend // ignore: cast_nullable_to_non_nullable
+as TrustBackend?,
   ));
 }
 
@@ -415,10 +419,11 @@ as String,
 
 
 class NtsError_NtpProtocol extends NtsError {
-  const NtsError_NtpProtocol(this.field0): super._();
+  const NtsError_NtpProtocol({required this.message, this.trustBackend}): super._();
   
 
- final  String field0;
+ final  String message;
+ final  TrustBackend? trustBackend;
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
@@ -430,16 +435,16 @@ $NtsError_NtpProtocolCopyWith<NtsError_NtpProtocol> get copyWith => _$NtsError_N
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_NtpProtocol&&(identical(other.field0, field0) || other.field0 == field0));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_NtpProtocol&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,field0);
+int get hashCode => Object.hash(runtimeType,message,trustBackend);
 
 @override
 String toString() {
-  return 'NtsError.ntpProtocol(field0: $field0)';
+  return 'NtsError.ntpProtocol(message: $message, trustBackend: $trustBackend)';
 }
 
 
@@ -450,7 +455,7 @@ abstract mixin class $NtsError_NtpProtocolCopyWith<$Res> implements $NtsErrorCop
   factory $NtsError_NtpProtocolCopyWith(NtsError_NtpProtocol value, $Res Function(NtsError_NtpProtocol) _then) = _$NtsError_NtpProtocolCopyWithImpl;
 @useResult
 $Res call({
- String field0
+ String message, TrustBackend? trustBackend
 });
 
 
@@ -467,10 +472,11 @@ class _$NtsError_NtpProtocolCopyWithImpl<$Res>
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? message = null,Object? trustBackend = freezed,}) {
   return _then(NtsError_NtpProtocol(
-null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
-as String,
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,trustBackend: freezed == trustBackend ? _self.trustBackend : trustBackend // ignore: cast_nullable_to_non_nullable
+as TrustBackend?,
   ));
 }
 
@@ -481,10 +487,11 @@ as String,
 
 
 class NtsError_Authentication extends NtsError {
-  const NtsError_Authentication(this.field0): super._();
+  const NtsError_Authentication({required this.message, this.trustBackend}): super._();
   
 
- final  String field0;
+ final  String message;
+ final  TrustBackend? trustBackend;
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
@@ -496,16 +503,16 @@ $NtsError_AuthenticationCopyWith<NtsError_Authentication> get copyWith => _$NtsE
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Authentication&&(identical(other.field0, field0) || other.field0 == field0));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Authentication&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,field0);
+int get hashCode => Object.hash(runtimeType,message,trustBackend);
 
 @override
 String toString() {
-  return 'NtsError.authentication(field0: $field0)';
+  return 'NtsError.authentication(message: $message, trustBackend: $trustBackend)';
 }
 
 
@@ -516,7 +523,7 @@ abstract mixin class $NtsError_AuthenticationCopyWith<$Res> implements $NtsError
   factory $NtsError_AuthenticationCopyWith(NtsError_Authentication value, $Res Function(NtsError_Authentication) _then) = _$NtsError_AuthenticationCopyWithImpl;
 @useResult
 $Res call({
- String field0
+ String message, TrustBackend? trustBackend
 });
 
 
@@ -533,10 +540,11 @@ class _$NtsError_AuthenticationCopyWithImpl<$Res>
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? message = null,Object? trustBackend = freezed,}) {
   return _then(NtsError_Authentication(
-null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
-as String,
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,trustBackend: freezed == trustBackend ? _self.trustBackend : trustBackend // ignore: cast_nullable_to_non_nullable
+as TrustBackend?,
   ));
 }
 
@@ -547,10 +555,11 @@ as String,
 
 
 class NtsError_Timeout extends NtsError {
-  const NtsError_Timeout(this.field0): super._();
+  const NtsError_Timeout({required this.phase, this.trustBackend}): super._();
   
 
- final  TimeoutPhase field0;
+ final  TimeoutPhase phase;
+ final  TrustBackend? trustBackend;
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
@@ -562,16 +571,16 @@ $NtsError_TimeoutCopyWith<NtsError_Timeout> get copyWith => _$NtsError_TimeoutCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Timeout&&(identical(other.field0, field0) || other.field0 == field0));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Timeout&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,field0);
+int get hashCode => Object.hash(runtimeType,phase,trustBackend);
 
 @override
 String toString() {
-  return 'NtsError.timeout(field0: $field0)';
+  return 'NtsError.timeout(phase: $phase, trustBackend: $trustBackend)';
 }
 
 
@@ -582,7 +591,7 @@ abstract mixin class $NtsError_TimeoutCopyWith<$Res> implements $NtsErrorCopyWit
   factory $NtsError_TimeoutCopyWith(NtsError_Timeout value, $Res Function(NtsError_Timeout) _then) = _$NtsError_TimeoutCopyWithImpl;
 @useResult
 $Res call({
- TimeoutPhase field0
+ TimeoutPhase phase, TrustBackend? trustBackend
 });
 
 
@@ -599,10 +608,11 @@ class _$NtsError_TimeoutCopyWithImpl<$Res>
 
 /// Create a copy of NtsError
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? phase = null,Object? trustBackend = freezed,}) {
   return _then(NtsError_Timeout(
-null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
-as TimeoutPhase,
+phase: null == phase ? _self.phase : phase // ignore: cast_nullable_to_non_nullable
+as TimeoutPhase,trustBackend: freezed == trustBackend ? _self.trustBackend : trustBackend // ignore: cast_nullable_to_non_nullable
+as TrustBackend?,
   ));
 }
 
@@ -613,33 +623,67 @@ as TimeoutPhase,
 
 
 class NtsError_NoCookies extends NtsError {
-  const NtsError_NoCookies(): super._();
+  const NtsError_NoCookies({this.trustBackend}): super._();
   
 
+ final  TrustBackend? trustBackend;
 
-
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsError_NoCookiesCopyWith<NtsError_NoCookies> get copyWith => _$NtsError_NoCookiesCopyWithImpl<NtsError_NoCookies>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_NoCookies);
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_NoCookies&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => runtimeType.hashCode;
+int get hashCode => Object.hash(runtimeType,trustBackend);
 
 @override
 String toString() {
-  return 'NtsError.noCookies()';
+  return 'NtsError.noCookies(trustBackend: $trustBackend)';
 }
 
 
 }
 
+/// @nodoc
+abstract mixin class $NtsError_NoCookiesCopyWith<$Res> implements $NtsErrorCopyWith<$Res> {
+  factory $NtsError_NoCookiesCopyWith(NtsError_NoCookies value, $Res Function(NtsError_NoCookies) _then) = _$NtsError_NoCookiesCopyWithImpl;
+@useResult
+$Res call({
+ TrustBackend? trustBackend
+});
 
 
+
+
+}
+/// @nodoc
+class _$NtsError_NoCookiesCopyWithImpl<$Res>
+    implements $NtsError_NoCookiesCopyWith<$Res> {
+  _$NtsError_NoCookiesCopyWithImpl(this._self, this._then);
+
+  final NtsError_NoCookies _self;
+  final $Res Function(NtsError_NoCookies) _then;
+
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? trustBackend = freezed,}) {
+  return _then(NtsError_NoCookies(
+trustBackend: freezed == trustBackend ? _self.trustBackend : trustBackend // ignore: cast_nullable_to_non_nullable
+as TrustBackend?,
+  ));
+}
+
+
+}
 
 /// @nodoc
 

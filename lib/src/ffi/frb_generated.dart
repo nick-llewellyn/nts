@@ -631,17 +631,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 0:
         return NtsError_InvalidSpec(dco_decode_String(raw[1]));
       case 1:
-        return NtsError_Network(dco_decode_String(raw[1]));
+        return NtsError_Network(
+          message: dco_decode_String(raw[1]),
+          trustBackend: dco_decode_opt_box_autoadd_trust_backend(raw[2]),
+        );
       case 2:
-        return NtsError_KeProtocol(dco_decode_String(raw[1]));
+        return NtsError_KeProtocol(
+          message: dco_decode_String(raw[1]),
+          trustBackend: dco_decode_opt_box_autoadd_trust_backend(raw[2]),
+        );
       case 3:
-        return NtsError_NtpProtocol(dco_decode_String(raw[1]));
+        return NtsError_NtpProtocol(
+          message: dco_decode_String(raw[1]),
+          trustBackend: dco_decode_opt_box_autoadd_trust_backend(raw[2]),
+        );
       case 4:
-        return NtsError_Authentication(dco_decode_String(raw[1]));
+        return NtsError_Authentication(
+          message: dco_decode_String(raw[1]),
+          trustBackend: dco_decode_opt_box_autoadd_trust_backend(raw[2]),
+        );
       case 5:
-        return NtsError_Timeout(dco_decode_timeout_phase(raw[1]));
+        return NtsError_Timeout(
+          phase: dco_decode_timeout_phase(raw[1]),
+          trustBackend: dco_decode_opt_box_autoadd_trust_backend(raw[2]),
+        );
       case 6:
-        return const NtsError_NoCookies();
+        return NtsError_NoCookies(
+          trustBackend: dco_decode_opt_box_autoadd_trust_backend(raw[1]),
+        );
       case 7:
         return NtsError_TrustBackendUnavailable(dco_decode_String(raw[1]));
       case 8:
@@ -889,22 +906,55 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final var_field0 = sse_decode_String(deserializer);
         return NtsError_InvalidSpec(var_field0);
       case 1:
-        final var_field0 = sse_decode_String(deserializer);
-        return NtsError_Network(var_field0);
+        final var_message = sse_decode_String(deserializer);
+        final var_trustBackend = sse_decode_opt_box_autoadd_trust_backend(
+          deserializer,
+        );
+        return NtsError_Network(
+          message: var_message,
+          trustBackend: var_trustBackend,
+        );
       case 2:
-        final var_field0 = sse_decode_String(deserializer);
-        return NtsError_KeProtocol(var_field0);
+        final var_message = sse_decode_String(deserializer);
+        final var_trustBackend = sse_decode_opt_box_autoadd_trust_backend(
+          deserializer,
+        );
+        return NtsError_KeProtocol(
+          message: var_message,
+          trustBackend: var_trustBackend,
+        );
       case 3:
-        final var_field0 = sse_decode_String(deserializer);
-        return NtsError_NtpProtocol(var_field0);
+        final var_message = sse_decode_String(deserializer);
+        final var_trustBackend = sse_decode_opt_box_autoadd_trust_backend(
+          deserializer,
+        );
+        return NtsError_NtpProtocol(
+          message: var_message,
+          trustBackend: var_trustBackend,
+        );
       case 4:
-        final var_field0 = sse_decode_String(deserializer);
-        return NtsError_Authentication(var_field0);
+        final var_message = sse_decode_String(deserializer);
+        final var_trustBackend = sse_decode_opt_box_autoadd_trust_backend(
+          deserializer,
+        );
+        return NtsError_Authentication(
+          message: var_message,
+          trustBackend: var_trustBackend,
+        );
       case 5:
-        final var_field0 = sse_decode_timeout_phase(deserializer);
-        return NtsError_Timeout(var_field0);
+        final var_phase = sse_decode_timeout_phase(deserializer);
+        final var_trustBackend = sse_decode_opt_box_autoadd_trust_backend(
+          deserializer,
+        );
+        return NtsError_Timeout(
+          phase: var_phase,
+          trustBackend: var_trustBackend,
+        );
       case 6:
-        return const NtsError_NoCookies();
+        final var_trustBackend = sse_decode_opt_box_autoadd_trust_backend(
+          deserializer,
+        );
+        return NtsError_NoCookies(trustBackend: var_trustBackend);
       case 7:
         final var_field0 = sse_decode_String(deserializer);
         return NtsError_TrustBackendUnavailable(var_field0);
@@ -1169,23 +1219,44 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case NtsError_InvalidSpec(field0: final field0):
         sse_encode_i_32(0, serializer);
         sse_encode_String(field0, serializer);
-      case NtsError_Network(field0: final field0):
+      case NtsError_Network(
+        message: final message,
+        trustBackend: final trustBackend,
+      ):
         sse_encode_i_32(1, serializer);
-        sse_encode_String(field0, serializer);
-      case NtsError_KeProtocol(field0: final field0):
+        sse_encode_String(message, serializer);
+        sse_encode_opt_box_autoadd_trust_backend(trustBackend, serializer);
+      case NtsError_KeProtocol(
+        message: final message,
+        trustBackend: final trustBackend,
+      ):
         sse_encode_i_32(2, serializer);
-        sse_encode_String(field0, serializer);
-      case NtsError_NtpProtocol(field0: final field0):
+        sse_encode_String(message, serializer);
+        sse_encode_opt_box_autoadd_trust_backend(trustBackend, serializer);
+      case NtsError_NtpProtocol(
+        message: final message,
+        trustBackend: final trustBackend,
+      ):
         sse_encode_i_32(3, serializer);
-        sse_encode_String(field0, serializer);
-      case NtsError_Authentication(field0: final field0):
+        sse_encode_String(message, serializer);
+        sse_encode_opt_box_autoadd_trust_backend(trustBackend, serializer);
+      case NtsError_Authentication(
+        message: final message,
+        trustBackend: final trustBackend,
+      ):
         sse_encode_i_32(4, serializer);
-        sse_encode_String(field0, serializer);
-      case NtsError_Timeout(field0: final field0):
+        sse_encode_String(message, serializer);
+        sse_encode_opt_box_autoadd_trust_backend(trustBackend, serializer);
+      case NtsError_Timeout(
+        phase: final phase,
+        trustBackend: final trustBackend,
+      ):
         sse_encode_i_32(5, serializer);
-        sse_encode_timeout_phase(field0, serializer);
-      case NtsError_NoCookies():
+        sse_encode_timeout_phase(phase, serializer);
+        sse_encode_opt_box_autoadd_trust_backend(trustBackend, serializer);
+      case NtsError_NoCookies(trustBackend: final trustBackend):
         sse_encode_i_32(6, serializer);
+        sse_encode_opt_box_autoadd_trust_backend(trustBackend, serializer);
       case NtsError_TrustBackendUnavailable(field0: final field0):
         sse_encode_i_32(7, serializer);
         sse_encode_String(field0, serializer);

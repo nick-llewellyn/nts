@@ -158,12 +158,12 @@ bool isErrorSeverity(NtsError err) =>
 ///   reader sees the raw KoD text for free.
 String describeError(NtsError err) => switch (err) {
   NtsErrorInvalidSpec(:final field0) => 'InvalidSpec: $field0',
-  NtsErrorNetwork(:final field0) => 'Network: $field0',
-  NtsErrorKeProtocol(:final field0) => 'KeProtocol: $field0',
-  NtsErrorNtpProtocol(:final field0) => 'NtpProtocol: $field0',
-  NtsErrorAuthentication(:final field0) => 'Authentication: $field0',
-  NtsErrorTimeout(:final field0) =>
-    'Timeout (deadline expired in phase ${field0.name})',
+  NtsErrorNetwork(:final message) => 'Network: $message',
+  NtsErrorKeProtocol(:final message) => 'KeProtocol: $message',
+  NtsErrorNtpProtocol(:final message) => 'NtpProtocol: $message',
+  NtsErrorAuthentication(:final message) => 'Authentication: $message',
+  NtsErrorTimeout(:final phase) =>
+    'Timeout (deadline expired in phase ${phase.name})',
   NtsErrorNoCookies() =>
     'NoCookies (server completed KE but issued zero cookies)',
   NtsErrorTrustBackendUnavailable(:final field0) =>
@@ -230,5 +230,5 @@ Map<String, Object?> jsonError(NtsError err) => {
   'error_type': errorTypeName(err),
   'message': describeError(err),
   'severity': isErrorSeverity(err) ? 'error' : 'warn',
-  if (err is NtsErrorTimeout) 'phase': err.field0.name,
+  if (err is NtsErrorTimeout) 'phase': err.phase.name,
 };
