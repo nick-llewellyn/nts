@@ -476,4 +476,228 @@ mod tests {
     fn serialize_message_debug_asserts_empty_input() {
         let _ = serialize_message(&[]);
     }
+
+    /// Per-variant body-length boundary for the NTPv4-Port record
+    /// (RFC 8915 §4.1.7 — 2-octet u16 port). A buggy or hostile
+    /// server emitting a 1- or 3-byte body around the fixed 2-byte
+    /// payload must surface `BodyLengthMismatch` from
+    /// `decode_u16_scalar` rather than silently truncating or
+    /// over-reading; a body declared longer than the bytes actually
+    /// present must surface `BodyOverflow` from the message-frame
+    /// boundary check before `decode_kind` is even consulted. Mirrors
+    /// `ntpd-rs ntp-proto/src/nts/record.rs::test_port` (v1.7.2).
+    #[test]
+    fn rejects_wrong_length_port_record() {
+        // body_len declared as 1, body present is `[0x00]`.
+        let bytes = vec![0x00, record_type::NTPV4_PORT as u8, 0x00, 0x01, 0x00];
+        match parse_message(&bytes) {
+            Err(CodecError::BodyLengthMismatch {
+                actual: 1,
+                expected: 2,
+            }) => {}
+            other => panic!("len-1 Port: expected BodyLengthMismatch, got {other:?}"),
+        }
+
+        // body_len declared as 3, body present is `[0x00, 0x7B, 0x05]`.
+        let bytes = vec![
+            0x00,
+            record_type::NTPV4_PORT as u8,
+            0x00,
+            0x03,
+            0x00,
+            0x7B,
+            0x05,
+        ];
+        match parse_message(&bytes) {
+            Err(CodecError::BodyLengthMismatch {
+                actual: 3,
+                expected: 2,
+            }) => {}
+            other => panic!("len-3 Port: expected BodyLengthMismatch, got {other:?}"),
+        }
+
+        // body_len declared as 2, only 1 byte present after header.
+        let bytes = vec![0x00, record_type::NTPV4_PORT as u8, 0x00, 0x02, 0x00];
+        match parse_message(&bytes) {
+            Err(CodecError::BodyOverflow {
+                claimed: 2,
+                remaining: 1,
+            }) => {}
+            other => panic!("under-supplied Port: expected BodyOverflow, got {other:?}"),
+        }
+    }
+
+    /// Per-variant body-length boundary for the Warning record
+    /// (RFC 8915 §4.1.5 — 2-octet u16 warning code). Same shape as
+    /// `rejects_wrong_length_port_record`; both critical (`0x80, 3`)
+    /// and non-critical (`0x00, 3`) wire encodings must trip the
+    /// same `BodyLengthMismatch` so the codec layer's per-variant
+    /// length check is independent of the critical-bit setting.
+    /// Mirrors `ntpd-rs ntp-proto/src/nts/record.rs::test_warning`
+    /// (v1.7.2).
+    #[test]
+    fn rejects_wrong_length_warning_record() {
+        for first_byte in [0x80u8, 0x00u8] {
+            // body_len 1.
+            let bytes = vec![first_byte, record_type::WARNING as u8, 0x00, 0x01, 0x00];
+            match parse_message(&bytes) {
+                Err(CodecError::BodyLengthMismatch {
+                    actual: 1,
+                    expected: 2,
+                }) => {}
+                other => panic!(
+                    "Warning(critical={}, len=1): expected BodyLengthMismatch, got {other:?}",
+                    first_byte == 0x80,
+                ),
+            }
+
+            // body_len 3.
+            let bytes = vec![
+                first_byte,
+                record_type::WARNING as u8,
+                0x00,
+                0x03,
+                0x12,
+                0x34,
+                0x56,
+            ];
+            match parse_message(&bytes) {
+                Err(CodecError::BodyLengthMismatch {
+                    actual: 3,
+                    expected: 2,
+                }) => {}
+                other => panic!(
+                    "Warning(critical={}, len=3): expected BodyLengthMismatch, got {other:?}",
+                    first_byte == 0x80,
+                ),
+            }
+        }
+    }
+
+    /// Per-variant boundary for NewCookie (RFC 8915 §4.1.6). The
+    /// record carries an opaque cookie blob with no fixed payload
+    /// width, so the codec has no per-variant length to check; the
+    /// only failure mode at the codec layer is a body declared longer
+    /// than the bytes actually present, which must surface
+    /// `BodyOverflow` from the message-frame check before
+    /// `decode_kind` is consulted. Mirrors
+    /// `ntpd-rs ntp-proto/src/nts/record.rs::test_new_cookie`
+    /// (v1.7.2).
+    #[test]
+    fn rejects_truncated_new_cookie_record() {
+        // critical=true, type=NEW_COOKIE(5), body_len=3, body present
+        // is only `[0x01, 0x02]` (2 bytes).
+        let bytes = vec![0x80, record_type::NEW_COOKIE as u8, 0x00, 0x03, 0x01, 0x02];
+        match parse_message(&bytes) {
+            Err(CodecError::BodyOverflow {
+                claimed: 3,
+                remaining: 2,
+            }) => {}
+            other => panic!("under-supplied NewCookie: expected BodyOverflow, got {other:?}"),
+        }
+    }
+
+    /// Per-variant boundary for the NTPv4-Server record
+    /// (RFC 8915 §4.1.7 — variable-length UTF-8 hostname). The codec
+    /// has no per-variant length to enforce (the UTF-8 check fires
+    /// only on a non-UTF-8 body, covered by
+    /// `rejects_invalid_utf8_in_server_record`), so the only failure
+    /// mode at the codec layer is a body declared longer than the
+    /// bytes actually present, which must surface `BodyOverflow`
+    /// from the message-frame check. Mirrors
+    /// `ntpd-rs ntp-proto/src/nts/record.rs::test_server` (v1.7.2).
+    #[test]
+    fn rejects_truncated_server_record() {
+        // critical=true, type=NTPV4_SERVER(6), body_len=5, body
+        // present is only `[b'h', b'e', b'l']` (3 bytes).
+        let bytes = vec![
+            0x80,
+            record_type::NTPV4_SERVER as u8,
+            0x00,
+            0x05,
+            b'h',
+            b'e',
+            b'l',
+        ];
+        match parse_message(&bytes) {
+            Err(CodecError::BodyOverflow {
+                claimed: 5,
+                remaining: 3,
+            }) => {}
+            other => panic!("under-supplied Server: expected BodyOverflow, got {other:?}"),
+        }
+    }
+
+    /// The codec layer must preserve the critical bit verbatim for
+    /// every known record type, regardless of whether the variant
+    /// carries an RFC 8915 §4.1 critical-bit requirement. The
+    /// `validate_response` layer in `nts::ke` is the one that rejects
+    /// `NextProtocol`/`AeadAlgorithm` records without the critical
+    /// bit set (RFC 8915 §4.1.2 / §4.1.5); the codec itself must
+    /// tolerate either setting and round-trip it faithfully so the
+    /// validation logic can see the actual on-wire bit. A future edit
+    /// that pushes the critical-bit policy down into the codec would
+    /// silently re-classify a non-compliant server response as a
+    /// codec-level failure rather than a protocol-level one, losing
+    /// the attribution; this parameterised round-trip pins the
+    /// separation. Mirrors the implicit "parser tolerates either
+    /// critical-bit setting on known record types" property exercised
+    /// across `ntpd-rs ntp-proto/src/nts/record.rs::test_*` (v1.7.2).
+    #[test]
+    fn parser_tolerates_either_critical_bit_per_known_variant() {
+        // Per-variant minimal-body samples for each non-EOM record
+        // type. Each kind is paired with both critical settings;
+        // EndOfMessage is exercised separately below because it
+        // doubles as the message terminator.
+        let kinds: Vec<RecordKind> = vec![
+            RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4]),
+            RecordKind::Error(2),
+            RecordKind::Warning(0),
+            RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
+            RecordKind::NewCookie(vec![0xAB; 4]),
+            RecordKind::Server("h".to_owned()),
+            RecordKind::Port(123),
+        ];
+        for kind in kinds {
+            for critical in [true, false] {
+                let msg = vec![
+                    rec(critical, kind.clone()),
+                    rec(true, RecordKind::EndOfMessage),
+                ];
+                let bytes = serialize_message(&msg);
+                let parsed = parse_message(&bytes).unwrap_or_else(|e| {
+                    panic!("kind={kind:?} critical={critical}: parse failed with {e:?}",)
+                });
+                assert_eq!(
+                    parsed.len(),
+                    2,
+                    "kind={kind:?} critical={critical}: expected 2 records, got {}",
+                    parsed.len(),
+                );
+                assert_eq!(
+                    parsed[0].critical, critical,
+                    "kind={kind:?}: critical bit not round-tripped",
+                );
+                assert_eq!(
+                    parsed[0].kind, kind,
+                    "kind={kind:?}: payload not round-tripped under critical={critical}",
+                );
+            }
+        }
+
+        // EndOfMessage as the sole record under both critical
+        // settings. RFC 8915 §4 says the EOM record SHOULD have the
+        // critical bit set; the codec must preserve whichever bit the
+        // peer sent so the validation layer can apply policy.
+        for critical in [true, false] {
+            let msg = vec![rec(critical, RecordKind::EndOfMessage)];
+            let bytes = serialize_message(&msg);
+            let parsed = parse_message(&bytes).unwrap_or_else(|e| {
+                panic!("EndOfMessage critical={critical}: parse failed with {e:?}",)
+            });
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].critical, critical);
+            assert_eq!(parsed[0].kind, RecordKind::EndOfMessage);
+        }
+    }
 }

@@ -363,6 +363,36 @@ mod tests {
         }
     }
 
+    /// Pairs with [`rejects_short_key`]: the per-algorithm key
+    /// constructors must also reject material *longer* than the
+    /// expected length rather than silently truncating to the
+    /// algorithm's key size. A constructor that quietly accepts a
+    /// 64-byte buffer for AES-SIV-CMAC-256 (32-byte key) by copying
+    /// only the first 32 bytes would discard the higher-entropy half
+    /// of an exporter result, weaken the resulting key in any flow
+    /// that derives a single buffer for both keys, and silently
+    /// hide bugs in the upstream slicing logic. The same shape
+    /// applies to `Aes128GcmSivKey` (16-byte key, 32 bytes supplied).
+    #[test]
+    fn rejects_over_length_key_material() {
+        match SivKey::from_slice(&[0u8; 64]) {
+            Err(AeadError::InvalidKeyLength {
+                actual: 64,
+                expected: KEY_LEN,
+            }) => {}
+            other => panic!("SivKey: expected InvalidKeyLength(64, {KEY_LEN}), got {other:?}",),
+        }
+        match Aes128GcmSivKey::from_slice(&[0u8; 32]) {
+            Err(AeadError::InvalidKeyLength {
+                actual: 32,
+                expected: KEY_LEN_GCM_SIV,
+            }) => {}
+            other => panic!(
+                "Aes128GcmSivKey: expected InvalidKeyLength(32, {KEY_LEN_GCM_SIV}), got {other:?}",
+            ),
+        }
+    }
+
     #[test]
     fn debug_does_not_leak_key_material() {
         let key = SivKey::from_slice(&[0x55; KEY_LEN]).unwrap();
