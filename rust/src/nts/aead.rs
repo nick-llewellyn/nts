@@ -216,6 +216,18 @@ impl AeadKey {
     /// than the legacy `InvalidKeyLength { expected: 0 }` sentinel) so
     /// callers can distinguish "wrong-sized key for a known algorithm"
     /// from "this crate has never heard of that algorithm".
+    ///
+    /// **Cross-surface invariant:** the set of IDs accepted here must
+    /// match exactly the set returned by `crate::nts::ke::aead_key_len`
+    /// (and, by extension, the IDs listed in
+    /// `crate::nts::ke::OFFERED_AEAD_IDS`). Adding a new AEAD here
+    /// without also adding its key length to `aead_key_len` would let
+    /// `validate_response` reject the ID at the lookup-table check
+    /// even though we can construct the key; removing one without
+    /// updating the lookup table would let `validate_response` accept
+    /// the ID and then fail in derivation. The
+    /// `aead_key_len_agrees_with_constructor` test in
+    /// `crate::nts::ke::tests` pins this invariant at CI time.
     pub fn from_keying_material(aead_id: u16, material: &[u8]) -> Result<Self, AeadError> {
         match aead_id {
             15 => SivKey::from_slice(material).map(Self::SivCmac256),

@@ -575,13 +575,52 @@ impl From<CodecError> for KeError {
     }
 }
 
+/// AEAD algorithms `establish_session` offers to the server in the
+/// NTS-KE handshake, in order of preference.
+///
+/// **Cross-surface invariant** (pinned by
+/// [`tests::offered_aead_ids_are_supported_end_to_end`]): every
+/// entry here must satisfy
+///
+/// 1. [`aead_key_len`] returns `Some(n)` for the ID, AND
+/// 2. `AeadKey::from_keying_material` (in `crate::nts::aead`)
+///    constructs successfully when handed `n` bytes of keying
+///    material.
+///
+/// A drift between this list and either of those two surfaces would
+/// let `validate_response` accept a server-picked AEAD that the
+/// exporter-key derivation immediately fails to construct, surfacing
+/// as a confusing `KeError::Internal` instead of the correct
+/// `KeError::UnsupportedAead`.
+///
+/// `establish_session` (in `rust/src/api/nts.rs`) reads from this
+/// constant rather than re-listing the IDs inline so that adding or
+/// removing an offered AEAD is a single-site edit that the
+/// invariant test catches at CI time if it leaves the three surfaces
+/// out of step.
+pub(crate) const OFFERED_AEAD_IDS: &[u16] = &[
+    aead::AES_SIV_CMAC_256,
+    aead::AES_128_GCM_SIV,
+];
+
 /// AEAD key length in octets per RFC 8915 §5.1 (SIV-CMAC family) and
 /// RFC 8452 §4 (GCM-SIV).
+///
+/// Currently entries match exactly the IDs we both *offer* in the KE
+/// handshake (see [`OFFERED_AEAD_IDS`]) and can *construct* in the
+/// AEAD layer (`AeadKey::from_keying_material` in
+/// `crate::nts::aead`). The 384- and 512-bit SIV-CMAC variants
+/// (IANA IDs 16 and 17) are deliberately absent: although they are
+/// valid IANA registry values and used by [`exporter_context`] for
+/// context-string round-trips, the AEAD constructor does not
+/// implement them, so listing them here would let `validate_response`
+/// accept an offered AEAD that derivation immediately fails on. Any
+/// future expansion must update all three surfaces
+/// (`OFFERED_AEAD_IDS`, this table, and the AEAD constructor)
+/// together; the invariant tests in this module fail otherwise.
 fn aead_key_len(id: u16) -> Option<usize> {
     match id {
         aead::AES_SIV_CMAC_256 => Some(32),
-        aead::AES_SIV_CMAC_384 => Some(48),
-        aead::AES_SIV_CMAC_512 => Some(64),
         aead::AES_128_GCM_SIV => Some(16),
         _ => None,
     }
@@ -1393,12 +1432,86 @@ mod tests {
     #[test]
     fn aead_key_lengths_match_rfc_8915() {
         assert_eq!(aead_key_len(aead::AES_SIV_CMAC_256), Some(32));
-        assert_eq!(aead_key_len(aead::AES_SIV_CMAC_384), Some(48));
-        assert_eq!(aead_key_len(aead::AES_SIV_CMAC_512), Some(64));
         // RFC 8452 §4 — AES-128-GCM-SIV uses a 128-bit key.
         assert_eq!(aead_key_len(aead::AES_128_GCM_SIV), Some(16));
+        // SIV-CMAC-384 and SIV-CMAC-512 are valid IANA registry
+        // entries (RFC 8915 §5.1) but are not in the supported set:
+        // the AEAD constructor in `crate::nts::aead` does not
+        // implement them, so listing them here would let
+        // `validate_response` accept an offered AEAD that
+        // exporter-key derivation immediately fails on. The
+        // `aead_key_len_agrees_with_constructor` test below pins
+        // the cross-surface invariant.
+        assert_eq!(aead_key_len(aead::AES_SIV_CMAC_384), None);
+        assert_eq!(aead_key_len(aead::AES_SIV_CMAC_512), None);
         assert_eq!(aead_key_len(0xFFFF), None);
         assert_eq!(aead_key_len(14), None);
+    }
+
+    /// Pin the cross-surface invariant documented on
+    /// [`super::OFFERED_AEAD_IDS`]: every IANA AEAD ID that
+    /// [`super::aead_key_len`] reports as supported must also be
+    /// constructible by `AeadKey::from_keying_material` in
+    /// `crate::nts::aead`, and every ID that the constructor
+    /// rejects must also be absent from the lookup table. Drift
+    /// between the two surfaces would let `validate_response`
+    /// accept a server-picked AEAD that the exporter-key
+    /// derivation immediately fails on, surfacing as a confusing
+    /// `KeError::Internal` rather than the correct
+    /// `KeError::UnsupportedAead`.
+    ///
+    /// The walked set covers the full IANA SIV-CMAC family (15-17)
+    /// plus AES-128-GCM-SIV (30) plus a handful of out-of-registry
+    /// IDs (0, 14, 31, 0xFFFF) so both arms of the invariant
+    /// (positive and negative) are pinned.
+    #[test]
+    fn aead_key_len_agrees_with_constructor() {
+        use crate::nts::aead::AeadKey;
+        for id in [
+            aead::AES_SIV_CMAC_256, // 15 — both Some/Ok
+            aead::AES_SIV_CMAC_384, // 16 — both None/Err
+            aead::AES_SIV_CMAC_512, // 17 — both None/Err
+            aead::AES_128_GCM_SIV,  // 30 — both Some/Ok
+            0,
+            14,
+            31,
+            0xFFFF,
+        ] {
+            let len = aead_key_len(id);
+            // Use the table's reported length when the ID is supported,
+            // and a 64-byte buffer (covers any conceivable AEAD key
+            // length) otherwise — the constructor must reject the ID
+            // for an "unsupported algorithm" reason, not a wrong-
+            // length reason, when `aead_key_len` returns `None`.
+            let key_buf = vec![0u8; len.unwrap_or(64)];
+            let constructor_ok = AeadKey::from_keying_material(id, &key_buf).is_ok();
+            assert_eq!(
+                len.is_some(),
+                constructor_ok,
+                "aead_key_len({id}) = {len:?} but constructor returned ok={constructor_ok} \
+                 — the lookup table and the AEAD constructor must agree on the supported set",
+            );
+        }
+    }
+
+    /// Stronger pin specifically for the offered-list surface:
+    /// every AEAD ID that `establish_session` is currently
+    /// configured to offer to the server (via
+    /// [`super::OFFERED_AEAD_IDS`]) must round-trip cleanly through
+    /// both [`super::aead_key_len`] and the AEAD constructor, so
+    /// the actual handshake path can never reach the
+    /// `KeError::Internal` branch on a server pick from the
+    /// offered list.
+    #[test]
+    fn offered_aead_ids_are_supported_end_to_end() {
+        use crate::nts::aead::AeadKey;
+        for &id in OFFERED_AEAD_IDS {
+            let len = aead_key_len(id)
+                .unwrap_or_else(|| panic!("offered AEAD {id} has no aead_key_len entry"));
+            let key_buf = vec![0u8; len];
+            AeadKey::from_keying_material(id, &key_buf)
+                .unwrap_or_else(|e| panic!("offered AEAD {id} is not constructible: {e:?}"));
+        }
     }
 
     fn well_formed_response() -> Vec<Record> {
