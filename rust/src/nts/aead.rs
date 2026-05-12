@@ -19,6 +19,7 @@ use aes_gcm_siv::Nonce;
 use aes_siv::aead::generic_array::GenericArray;
 use aes_siv::siv::Aes128Siv;
 use aes_siv::KeyInit;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// AES-SIV-CMAC-256 key length (RFC 8915 §5.1, AEAD ID 15).
 pub const KEY_LEN: usize = 32;
@@ -79,8 +80,17 @@ impl std::fmt::Display for AeadError {
 
 impl std::error::Error for AeadError {}
 
-/// AES-SIV-CMAC-256 key material wrapped to enforce length once on construction.
-#[derive(Clone)]
+/// AES-SIV-CMAC-256 key material wrapped to enforce length once on
+/// construction. Derives [`Zeroize`] and [`ZeroizeOnDrop`] from the
+/// `zeroize` crate so the secret bytes are wiped from RAM on `Drop`
+/// rather than lingering in freed allocations until the next
+/// allocator overwrite. Defends against memory-scraping attacks
+/// (cold-boot, swap inspection, post-process-crash core dumps); on
+/// mobile this matters because long-lived foreground processes get
+/// paged to disk under memory pressure. The derives compose with
+/// [`Clone`] — each clone carries its own `Drop` and is zeroized
+/// independently.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct SivKey {
     bytes: [u8; KEY_LEN],
 }
@@ -111,8 +121,10 @@ impl std::fmt::Debug for SivKey {
     }
 }
 
-/// AES-128-GCM-SIV key material wrapped to enforce length once on construction.
-#[derive(Clone)]
+/// AES-128-GCM-SIV key material wrapped to enforce length once on
+/// construction. Same [`Zeroize`] / [`ZeroizeOnDrop`] derives as
+/// [`SivKey`]; see that type's rustdoc for the rationale.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct Aes128GcmSivKey {
     bytes: [u8; KEY_LEN_GCM_SIV],
 }
@@ -479,6 +491,85 @@ mod tests {
         let rendered = format!("{key:?}");
         assert!(!rendered.contains("66"));
         assert!(rendered.contains("redacted"));
+    }
+
+    /// Compile-time pin that [`SivKey`] and [`Aes128GcmSivKey`]
+    /// implement [`zeroize::ZeroizeOnDrop`]. The trait bound is the
+    /// load-bearing contract on both types — removing the
+    /// `#[derive(Zeroize, ZeroizeOnDrop)]` would silently let the
+    /// raw key bytes leak back to the heap with their material
+    /// intact. A future edit that drops the derive (or replaces the
+    /// fixed-size byte array with a type that doesn't itself
+    /// `Zeroize`) would fail to compile this test, so the
+    /// regression cannot land without surfacing.
+    #[test]
+    fn aead_keys_implement_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<SivKey>();
+        assert_zeroize_on_drop::<Aes128GcmSivKey>();
+    }
+
+    /// Behavioural pin for [`SivKey`]'s derived [`zeroize::Zeroize`]
+    /// implementation: invoking `zeroize` on a key constructed from
+    /// non-zero material must leave the key behaviourally
+    /// equivalent to one constructed from all-zero material. Proves
+    /// the derive actually wipes the bytes without needing private-
+    /// field access — by comparing AEAD ciphertexts under both keys
+    /// for the same `(ad, plaintext)` input. The same pre-zeroize
+    /// pair is asserted to differ first so a regression that
+    /// produced equal ciphertexts under any two distinct keys would
+    /// not falsely pass this test.
+    #[test]
+    fn siv_key_zeroize_method_yields_all_zero_key_behaviour() {
+        use zeroize::Zeroize;
+        let mut key_aa = SivKey::from_slice(&[0xAA; KEY_LEN]).unwrap();
+        let key_zero = SivKey::from_slice(&[0u8; KEY_LEN]).unwrap();
+        let ct_aa_before = siv_seal(&key_aa, &[b"ad"], b"pt").unwrap();
+        let ct_zero = siv_seal(&key_zero, &[b"ad"], b"pt").unwrap();
+        assert_ne!(
+            ct_aa_before, ct_zero,
+            "pre-zeroize ciphertexts under distinct keys must differ",
+        );
+        key_aa.zeroize();
+        let ct_aa_after = siv_seal(&key_aa, &[b"ad"], b"pt").unwrap();
+        assert_eq!(
+            ct_aa_after, ct_zero,
+            "post-zeroize SivKey must behave as the all-zero key",
+        );
+    }
+
+    /// Same shape as [`siv_key_zeroize_method_yields_all_zero_key_behaviour`]
+    /// for [`Aes128GcmSivKey`]. AES-128-GCM-SIV requires a 12-byte
+    /// nonce (`NONCE_LEN_GCM_SIV`); the test uses one fixed nonce
+    /// for all three seal calls because nonce-misuse-resistance is
+    /// the whole point of GCM-SIV and the assertion is about key
+    /// material, not nonce handling.
+    #[test]
+    fn aes_128_gcm_siv_key_zeroize_method_yields_all_zero_key_behaviour() {
+        use zeroize::Zeroize;
+        let mut key_aa = AeadKey::from_keying_material(30, &[0xAA; KEY_LEN_GCM_SIV]).unwrap();
+        let key_zero = AeadKey::from_keying_material(30, &[0u8; KEY_LEN_GCM_SIV]).unwrap();
+        let nonce = [0x55u8; NONCE_LEN_GCM_SIV];
+        let ct_aa_before = key_aa.seal_packet(b"ad", &nonce, b"pt").unwrap();
+        let ct_zero = key_zero.seal_packet(b"ad", &nonce, b"pt").unwrap();
+        assert_ne!(
+            ct_aa_before, ct_zero,
+            "pre-zeroize ciphertexts under distinct GCM-SIV keys must differ",
+        );
+        // Reach into the inner key type to exercise its derived
+        // `Zeroize` impl directly. `AeadKey` itself does not derive
+        // `Zeroize` (the enum carries algorithm-id semantics that are
+        // not secret, only the inner key bytes are), so the wipe is
+        // dispatched through the wrapped `Aes128GcmSivKey`.
+        match &mut key_aa {
+            AeadKey::Aes128GcmSiv(inner) => inner.zeroize(),
+            other => panic!("expected AeadKey::Aes128GcmSiv, got {other:?}"),
+        }
+        let ct_aa_after = key_aa.seal_packet(b"ad", &nonce, b"pt").unwrap();
+        assert_eq!(
+            ct_aa_after, ct_zero,
+            "post-zeroize Aes128GcmSivKey must behave as the all-zero key",
+        );
     }
 
     fn hex(s: &str) -> Vec<u8> {

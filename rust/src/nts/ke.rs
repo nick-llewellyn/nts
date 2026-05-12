@@ -15,6 +15,7 @@ use super::dns::{resolve_with_global, system_lookup};
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, SupportedProtocolVersion};
+use zeroize::Zeroizing;
 
 use super::records::{
     aead, parse_message, serialize_message, CodecError, Record, RecordKind, NEXT_PROTO_NTPV4,
@@ -312,10 +313,22 @@ pub struct KeOutcome {
     pub ntpv4_port: u16,
     /// AEAD algorithm IANA ID the server selected.
     pub aead_id: u16,
-    /// Client-to-server AEAD key exported from the TLS session.
-    pub c2s_key: Vec<u8>,
+    /// Client-to-server AEAD key exported from the TLS session
+    /// (RFC 8915 §5.1 EXPORTER label `EXPORTER-network-time-security`,
+    /// context `0x0000 || aead_id || c2s_marker`). Wrapped in
+    /// [`Zeroizing`] so the raw key bytes are wiped from RAM on
+    /// `Drop` rather than lingering in the freed allocation; the
+    /// wrapper transparently `Deref`s to `Vec<u8>` so existing
+    /// callers (`AeadKey::from_keying_material(outcome.aead_id,
+    /// &outcome.c2s_key)` in `crate::api::nts::establish_session`)
+    /// continue to compile unchanged. Defends against memory-
+    /// scraping attacks (cold-boot, swap inspection, post-process-
+    /// crash core dumps); on mobile this matters because long-lived
+    /// foreground processes get paged to disk under memory pressure.
+    pub c2s_key: Zeroizing<Vec<u8>>,
     /// Server-to-client AEAD key exported from the TLS session.
-    pub s2c_key: Vec<u8>,
+    /// Same [`Zeroizing`] wrapper and rationale as `c2s_key`.
+    pub s2c_key: Zeroizing<Vec<u8>>,
     /// Initial cookie pool delivered with the response.
     pub cookies: Vec<Vec<u8>>,
     /// Non-fatal warning codes (RFC 8915 §4.1.5 record type 3).
@@ -949,14 +962,23 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     let key_len = aead_key_len(partial.aead_id).expect("validated above");
     let c2s_ctx = exporter_context(partial.aead_id, false);
     let s2c_ctx = exporter_context(partial.aead_id, true);
-    let c2s_key = conn
-        .export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&c2s_ctx))
-        .map_err(KeError::from)
-        .map_err(attribute)?;
-    let s2c_key = conn
-        .export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&s2c_ctx))
-        .map_err(KeError::from)
-        .map_err(attribute)?;
+    // Wrap exporter outputs in `Zeroizing` immediately on receipt
+    // from `export_keying_material` so the secret bytes are wiped
+    // on `Drop` even if a downstream `?` short-circuits before the
+    // `KeOutcome` is constructed. Without the wrap, an early return
+    // between this point and the final `Ok(KeOutcome { ... })`
+    // would leak the raw `Vec<u8>` allocation back to the heap with
+    // the bytes still intact.
+    let c2s_key = Zeroizing::new(
+        conn.export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&c2s_ctx))
+            .map_err(KeError::from)
+            .map_err(attribute)?,
+    );
+    let s2c_key = Zeroizing::new(
+        conn.export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&s2c_ctx))
+            .map_err(KeError::from)
+            .map_err(attribute)?,
+    );
 
     conn.send_close_notify();
     let _ = Stream::new(&mut conn, &mut tcp).flush();
@@ -2014,5 +2036,41 @@ mod tests {
             received <= NTS_KE_READ_BUDGET,
             "accumulator {received} must not have grown past cap {cap} before the trip",
         );
+    }
+
+    /// Compile-time pin that [`KeOutcome::c2s_key`] and
+    /// [`KeOutcome::s2c_key`] are wrapped in [`zeroize::Zeroizing`].
+    /// The wrapper's `Drop` impl wipes the underlying `Vec<u8>`
+    /// allocation when the outcome is dropped, so the raw exporter
+    /// material does not linger in freed heap pages until the next
+    /// allocator overwrite.
+    ///
+    /// The function-signature trick (`assert_zeroizing_vec` accepts
+    /// only `&Zeroizing<Vec<u8>>`) makes the test fail at compile
+    /// time if either field is reverted to a bare `Vec<u8>`. The
+    /// runtime construction is just enough to produce a value whose
+    /// references can be passed to the assertion helper; nothing
+    /// downstream of the field types is being asserted.
+    #[test]
+    fn ke_outcome_exporter_keys_are_zeroizing_wrapped() {
+        fn assert_zeroizing_vec(_: &Zeroizing<Vec<u8>>) {}
+        let outcome = KeOutcome {
+            ntpv4_host: String::new(),
+            ntpv4_port: 0,
+            aead_id: 0,
+            c2s_key: Zeroizing::new(vec![0u8; 1]),
+            s2c_key: Zeroizing::new(vec![0u8; 1]),
+            cookies: Vec::new(),
+            warnings: Vec::new(),
+            phase_timings: KePhaseTimings {
+                dns_micros: 0,
+                connect_micros: 0,
+                tls_handshake_micros: 0,
+                ke_record_io_micros: 0,
+            },
+            trust_backend: KeTrustBackend::Platform,
+        };
+        assert_zeroizing_vec(&outcome.c2s_key);
+        assert_zeroizing_vec(&outcome.s2c_key);
     }
 }
