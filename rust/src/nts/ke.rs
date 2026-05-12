@@ -588,10 +588,16 @@ impl From<CodecError> for KeError {
 ///    material.
 ///
 /// A drift between this list and either of those two surfaces would
-/// let `validate_response` accept a server-picked AEAD that the
-/// exporter-key derivation immediately fails to construct, surfacing
-/// as a confusing `KeError::Internal` instead of the correct
-/// `KeError::UnsupportedAead`.
+/// let `validate_response` accept a server-picked AEAD whose key the
+/// downstream constructor cannot build. The actual surfacing path is
+/// `establish_session` (in `rust/src/api/nts.rs`), which calls
+/// `AeadKey::from_keying_material` after the KE handshake completes
+/// and `map_err`s a constructor failure into
+/// `NtsError::Internal("KE produced unusable C2S/S2C key: …")` —
+/// confusing for the caller because the handshake itself succeeded.
+/// The correct surfacing for a server-picked AEAD outside the
+/// supported set is `KeError::UnsupportedAead(id)`, which the bd
+/// invariant tests below pin.
 ///
 /// `establish_session` (in `rust/src/api/nts.rs`) reads from this
 /// constant rather than re-listing the IDs inline so that adding or
@@ -1455,10 +1461,12 @@ mod tests {
     /// `crate::nts::aead`, and every ID that the constructor
     /// rejects must also be absent from the lookup table. Drift
     /// between the two surfaces would let `validate_response`
-    /// accept a server-picked AEAD that the exporter-key
-    /// derivation immediately fails on, surfacing as a confusing
-    /// `KeError::Internal` rather than the correct
-    /// `KeError::UnsupportedAead`.
+    /// accept a server-picked AEAD that `establish_session` (in
+    /// `rust/src/api/nts.rs`) then `map_err`s into
+    /// `NtsError::Internal("KE produced unusable … key: …")` —
+    /// confusing for the caller because the handshake itself
+    /// succeeded — instead of the correct
+    /// `KeError::UnsupportedAead(id)`.
     ///
     /// The walked set covers the full IANA SIV-CMAC family (15-17)
     /// plus AES-128-GCM-SIV (30) plus a handful of out-of-registry
@@ -1466,31 +1474,63 @@ mod tests {
     /// (positive and negative) are pinned.
     #[test]
     fn aead_key_len_agrees_with_constructor() {
-        use crate::nts::aead::AeadKey;
+        use crate::nts::aead::{AeadError, AeadKey};
         for id in [
-            aead::AES_SIV_CMAC_256, // 15 — both Some/Ok
-            aead::AES_SIV_CMAC_384, // 16 — both None/Err
-            aead::AES_SIV_CMAC_512, // 17 — both None/Err
-            aead::AES_128_GCM_SIV,  // 30 — both Some/Ok
+            aead::AES_SIV_CMAC_256, // 15 — both Some / Ok
+            aead::AES_SIV_CMAC_384, // 16 — both None / UnsupportedAlgorithm
+            aead::AES_SIV_CMAC_512, // 17 — both None / UnsupportedAlgorithm
+            aead::AES_128_GCM_SIV,  // 30 — both Some / Ok
             0,
             14,
             31,
             0xFFFF,
         ] {
-            let len = aead_key_len(id);
-            // Use the table's reported length when the ID is supported,
-            // and a 64-byte buffer (covers any conceivable AEAD key
-            // length) otherwise — the constructor must reject the ID
-            // for an "unsupported algorithm" reason, not a wrong-
-            // length reason, when `aead_key_len` returns `None`.
-            let key_buf = vec![0u8; len.unwrap_or(64)];
-            let constructor_ok = AeadKey::from_keying_material(id, &key_buf).is_ok();
-            assert_eq!(
-                len.is_some(),
-                constructor_ok,
-                "aead_key_len({id}) = {len:?} but constructor returned ok={constructor_ok} \
-                 — the lookup table and the AEAD constructor must agree on the supported set",
-            );
+            match aead_key_len(id) {
+                Some(len) => {
+                    // Positive arm: the table reports a length, so
+                    // the constructor must accept a buffer of that
+                    // exact length.
+                    let key_buf = vec![0u8; len];
+                    AeadKey::from_keying_material(id, &key_buf).unwrap_or_else(|e| {
+                        panic!(
+                            "aead_key_len({id}) = Some({len}) but constructor rejected \
+                             a {len}-byte buffer with {e:?} — the lookup table and the \
+                             AEAD constructor must agree on the supported set",
+                        )
+                    });
+                }
+                None => {
+                    // Negative arm: the table rejects the ID, so the
+                    // constructor must also reject it — *specifically*
+                    // with `UnsupportedAlgorithm(id)`, not any other
+                    // error. Asserting the variant (rather than just
+                    // `is_err()`) closes the drift Copilot flagged on
+                    // PR #46: a hypothetical future arm in
+                    // `from_keying_material` that requires a
+                    // non-64-byte key would return
+                    // `Err(InvalidKeyLength { .. })` against any 64-
+                    // byte probe buffer, satisfying a loose `is_err()`
+                    // check while leaving the table-vs-constructor
+                    // drift unobserved.
+                    let probe = vec![0u8; 64];
+                    match AeadKey::from_keying_material(id, &probe) {
+                        Err(AeadError::UnsupportedAlgorithm(reported)) => {
+                            assert_eq!(
+                                reported, id,
+                                "constructor rejected ID {id} but reported \
+                                 UnsupportedAlgorithm({reported}) — variant payload \
+                                 must echo the ID under test",
+                            );
+                        }
+                        other => panic!(
+                            "aead_key_len({id}) = None but constructor returned {other:?} \
+                             — expected Err(UnsupportedAlgorithm({id})); a different error \
+                             variant means the constructor does recognise the ID, so the \
+                             lookup table is missing an entry",
+                        ),
+                    }
+                }
+            }
         }
     }
 
@@ -1500,8 +1540,9 @@ mod tests {
     /// [`super::OFFERED_AEAD_IDS`]) must round-trip cleanly through
     /// both [`super::aead_key_len`] and the AEAD constructor, so
     /// the actual handshake path can never reach the
-    /// `KeError::Internal` branch on a server pick from the
-    /// offered list.
+    /// `NtsError::Internal("KE produced unusable … key")` branch
+    /// (in `rust/src/api/nts.rs::establish_session`) on a server
+    /// pick from the offered list.
     #[test]
     fn offered_aead_ids_are_supported_end_to_end() {
         use crate::nts::aead::AeadKey;
