@@ -597,11 +597,13 @@ mod tests {
     ///
     /// `aad_extras`: each `(field_type, body)` pair is encoded as a
     /// wire extension and inserted between the canonical UID
-    /// extension and the Authenticator. The Authenticator's AAD
-    /// covers `bytes[..auth_idx]` (header + every preceding
-    /// extension; see `parse_server_response`), so these extras are
-    /// AAD-only — authenticated against tampering but **not**
-    /// AEAD-encrypted. Used by
+    /// extension and the Authenticator. Bodies are borrowed
+    /// (`&[u8]`) so callers can pass fixed-size byte arrays /
+    /// existing slices without allocating a fresh `Vec` per entry.
+    /// The Authenticator's AAD covers `bytes[..auth_idx]` (header +
+    /// every preceding extension; see `parse_server_response`), so
+    /// these extras are AAD-only — authenticated against tampering
+    /// but **not** AEAD-encrypted. Used by
     /// `parse_response_only_returns_cookies_from_decrypted_body` to
     /// pin the RFC 8915 §5.5 source-of-cookies invariant: even a
     /// well-formed `NTS_COOKIE` extension placed in the AAD slot
@@ -617,7 +619,7 @@ mod tests {
         uid: &[u8],
         fresh_cookies: &[&[u8]],
         s2c: &AeadKey,
-        aad_extras: &[(u16, Vec<u8>)],
+        aad_extras: &[(u16, &[u8])],
         tweak: impl FnOnce(&mut NtpHeader),
     ) -> Vec<u8> {
         let mut header = NtpHeader::client_request(0xCAFE_BABE_1234_5678);
@@ -784,11 +786,11 @@ mod tests {
     /// encrypted, so an off-path observer who sees one valid response
     /// could rewrite that slot to swap a client's cookie pool for
     /// attacker-minted bytes. The cookie-extraction sweep in
-    /// `parse_server_response` is scoped to the post-`s2c_open`
-    /// plaintext for exactly this reason; this test pins the
-    /// invariant so a future refactor that widens the sweep to the
-    /// full extension chain (cleartext + AAD + decrypted) breaks
-    /// loudly rather than silently.
+    /// `parse_server_response` is scoped to the plaintext returned
+    /// by `s2c_key.open_packet(...)` for exactly this reason; this
+    /// test pins the invariant so a future refactor that widens
+    /// the sweep to the full extension chain (cleartext + AAD +
+    /// decrypted) breaks loudly rather than silently.
     ///
     /// Mirrors the property pinned by ntpd-rs's
     /// `test_new_cookies_only_from_encrypted` (v1.7.2 lines
@@ -812,7 +814,7 @@ mod tests {
             &UID,
             &[&aead_cookie],
             &s2c,
-            &[(ext_type::NTS_COOKIE, aad_cookie.to_vec())],
+            &[(ext_type::NTS_COOKIE, &aad_cookie)],
             |_| {},
         );
         let parsed = parse_server_response(&packet, &UID, CLIENT_TX, &s2c).unwrap();
