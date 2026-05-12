@@ -366,11 +366,15 @@ mod tests {
     }
 
     /// Synthesise the input arguments for `verify_server_cert`.
-    /// The certificate bodies are intentionally non-conformant
-    /// (`b"x"`); the fake platform never inspects them, and the
-    /// fallback path is what we want to assert is *not* taken in
-    /// `PlatformOnly` mode (so the webpki-roots verifier never sees
-    /// these bytes either).
+    /// The leaf body is intentionally non-conformant (`b"leaf-stub"`):
+    /// the fake platform never inspects it, and the fallback path is
+    /// what we want to assert is *not* taken in `PlatformOnly` mode
+    /// (so the webpki-roots verifier never sees these bytes either).
+    /// The one test that *does* exercise the fallback path
+    /// (`platform_with_fallback_attempts_fallback_on_revoked`) uses
+    /// the verdict-shape — "result is no longer the platform's
+    /// `Revoked`" — rather than a successful chain validation, so a
+    /// non-conformant leaf is sufficient there too.
     fn dummy_args() -> (
         CertificateDer<'static>,
         Vec<CertificateDer<'static>>,
