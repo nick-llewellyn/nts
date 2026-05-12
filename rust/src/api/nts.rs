@@ -5026,6 +5026,168 @@ mod tests {
             .expect("warm_b returned Err — singleflight is serialising distinct hosts");
     }
 
+    /// Waiter timeout: when the leader's handshake outlasts the
+    /// waiter's per-call deadline, the waiter must surface
+    /// `Timeout(KeRecordIo)` — same `phase` taxonomy
+    /// `checkout_with`'s waiter path uses for the same shape.
+    /// Mirror of `checkout_waiter_returns_timeout_when_leader_outlasts_deadline`.
+    #[test]
+    fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "warm-singleflight-waiter-timeout.test".into(),
+            port: 4460,
+        };
+        let leader_release = BoundedRelease::new();
+        let leader_release_handle = leader_release.handle();
+        let do_handshake = move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+            leader_release_handle
+                .wait_release(Duration::from_secs(10))
+                .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                KePhaseTimings::default(),
+            ))
+        };
+
+        let leader = {
+            let table = table.clone();
+            let spec = spec.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+
+        // Wait until the leader has registered an inflight slot
+        // before spawning the waiter, otherwise the waiter could
+        // become the leader itself and run a handshake.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| slot.is_some());
+
+        let waiter_started = Instant::now();
+        let waiter_outcome = table.warm_cookies_with(
+            &spec,
+            Duration::from_millis(100),
+            4,
+            &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+                panic!("waiter should never run a handshake; it must park on the leader's slot")
+            },
+        );
+        let waiter_elapsed = waiter_started.elapsed();
+
+        match waiter_outcome {
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::KeRecordIo,
+                trust_backend: None,
+            }) => {}
+            Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
+            Ok(_) => panic!("waiter returned Ok despite a parked leader"),
+        }
+        assert!(
+            waiter_elapsed >= Duration::from_millis(100),
+            "waiter returned before its 100ms budget elapsed: {waiter_elapsed:?}",
+        );
+        assert!(
+            waiter_elapsed < Duration::from_millis(2_000),
+            "waiter overshot its budget by >2s; deadline plumbing is broken: {waiter_elapsed:?}",
+        );
+
+        leader_release.release();
+        if let Err(e) = leader.join().expect("leader thread panicked") {
+            panic!("leader warm_cookies failed: {e:?}");
+        }
+    }
+
+    /// Pre-handshake budget exhaustion on a re-elected leader: when
+    /// a thread enters `warm_cookies_with` with `started.elapsed()`
+    /// already exceeding `timeout`, the leader path must surface
+    /// `Timeout(KeRecordIo)` *before* invoking `do_handshake`, so a
+    /// caller's documented per-call wall-clock budget cannot be
+    /// silently extended by a re-leader's fresh `timeout`-long
+    /// window. Driven directly via a `Duration::ZERO` budget on a
+    /// fresh table so the leader's `checked_sub` returns `None`
+    /// on the very first iteration. The handshake closure asserts
+    /// it is never invoked.
+    #[test]
+    fn warm_cookies_leader_budget_exhausted_before_handshake_returns_timeout() {
+        let table = SessionTable::new();
+        let spec = NtsServerSpec {
+            host: "warm-singleflight-budget-exhausted.test".into(),
+            port: 4460,
+        };
+        let outcome = table.warm_cookies_with(
+            &spec,
+            Duration::ZERO,
+            4,
+            &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+                panic!("do_handshake must not be invoked when the per-call budget is exhausted")
+            },
+        );
+        match outcome {
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::KeRecordIo,
+                trust_backend: None,
+            }) => {}
+            Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
+            Ok(_) => panic!("warm_cookies returned Ok despite an exhausted budget"),
+        }
+        // The inflight slot must have been cleaned up by the
+        // LeaderGuard so a follow-up call against the same key can
+        // become a fresh leader; otherwise a single budget-exhaustion
+        // event would permanently strand future warms behind a
+        // slot whose result is `Timeout`.
+        let key = session_key(&spec);
+        let g = table
+            .inflight
+            .lock()
+            .expect("inflight singleflight map poisoned");
+        assert!(
+            !g.contains_key(&key),
+            "inflight slot leaked after budget-exhaustion path",
+        );
+    }
+
+    /// Defensive shape: a handshake that returns a `Session` with
+    /// zero cookies must surface `NtsError::NoCookies` from the
+    /// leader path — same shape `checkout_with` uses for the same
+    /// case. A regression that installed the empty session would
+    /// cause every concurrent waiter to fall through to a misleading
+    /// "warm succeeded with 0 cookies" outcome (`fresh_cookies: 0`),
+    /// which the pre-handshake guard exists to prevent.
+    #[test]
+    fn warm_cookies_leader_refuses_zero_cookie_session() {
+        let table = SessionTable::new();
+        let spec = NtsServerSpec {
+            host: "warm-singleflight-zero-cookie.test".into(),
+            port: 4460,
+        };
+        let do_handshake = |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+            // `make_test_session` returns a session whose `jar` has
+            // no cookies in it (cookie_count == 0); install would
+            // otherwise have written a useless session into the map.
+            let session = make_test_session(&spec.host, 123, next_session_generation());
+            Ok((session, KePhaseTimings::default()))
+        };
+        match table.warm_cookies_with(&spec, Duration::from_secs(5), 4, &do_handshake) {
+            Err(NtsError::NoCookies {
+                trust_backend: Some(_),
+            }) => {}
+            Err(other) => panic!("expected NoCookies(Some(_)); got {other:?}"),
+            Ok((count, _, _)) => panic!(
+                "warm_cookies returned Ok with count={count} despite a 0-cookie handshake",
+            ),
+        }
+        // The leader must NOT have installed the empty session, so
+        // a subsequent call sees an empty cache and re-elects.
+        let key = session_key(&spec);
+        let g = table.map.lock().expect("session table poisoned");
+        assert!(
+            !g.contains_key(&key),
+            "leader installed a 0-cookie session despite the defensive refusal",
+        );
+    }
+
     /// Round-trip every `TrustBackend` variant through the `From`
     /// conversion to `InternalTrustBackend` (used by the trust-state
     /// recording path) and back, pinning the bidirectional mapping. A
