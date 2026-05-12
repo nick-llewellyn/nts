@@ -1813,17 +1813,23 @@ impl SessionTable {
                                 guard.complete(Err(err.clone()));
                                 return Err(err);
                             }
-                            // Atomically install + capture count under
-                            // the map lock so a concurrent `checkout`
-                            // popping cookies cannot race the leader's
-                            // own count snapshot.
-                            let count = {
-                                let mut g = self.map.lock().expect("session table poisoned");
-                                g.insert(key.clone(), session);
-                                g.get(&key)
-                                    .map(|s| s.cookies_remaining() as u32)
-                                    .unwrap_or(0)
-                            };
+                            // Snapshot the freshly-handshaken cookie
+                            // count *before* the move. Deriving it
+                            // from the post-insert lookup would
+                            // either need an `expect` (the `get`
+                            // immediately following an `insert` under
+                            // the same lock cannot return `None`) or
+                            // an `unwrap_or(0)` that would silently
+                            // mask an invariant break as a misleading
+                            // "warm succeeded with 0 cookies" — the
+                            // exact shape the pre-handshake
+                            // `cookies_remaining() == 0` guard above
+                            // exists to suppress.
+                            let count = session.cookies_remaining() as u32;
+                            self.map
+                                .lock()
+                                .expect("session table poisoned")
+                                .insert(key.clone(), session);
                             guard.complete(Ok(()));
                             return Ok((count, ke_timings, session_backend));
                         }
