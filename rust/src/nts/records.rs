@@ -156,17 +156,24 @@ impl Record {
 
 /// Serialize a sequence of records, in order, into a single message.
 ///
-/// Caller is responsible for placing `RecordKind::EndOfMessage` last;
-/// the codec itself does not enforce framing semantics on the encode side.
+/// Caller is responsible for placing `RecordKind::EndOfMessage` last
+/// (RFC 8915 §4 — every NTS-KE message ends with an EndOfMessage
+/// record). Both an empty record slice and a non-empty slice whose
+/// last record is not `EndOfMessage` panic via `assert!`, which fires
+/// in both debug and release builds. The function runs at most once
+/// per KE handshake and the check is a single tail comparison plus a
+/// pattern match, so the runtime cost is irrelevant; the assertion
+/// is here to fail at the offending call site rather than emit a
+/// malformed wire packet that the peer would reject as an opaque
+/// parse error.
 ///
-/// In debug / test builds we additionally `debug_assert!` that the
-/// terminator is present so a self-inflicted regression at any call
-/// site (today: `nts::ke::build_request`) fails locally rather than
-/// surfacing as an opaque parse error on the peer. The check costs
-/// nothing in release builds (RFC 8915 §4 — every NTS-KE message ends
-/// with an EndOfMessage record).
+/// Earlier this check used `debug_assert!`, which compiles to nothing
+/// in release builds — so a release-mode regression in any call site
+/// (or in a future caller that builds the record list dynamically)
+/// would silently emit a malformed message. Promoted to `assert!` so
+/// the invariant is load-bearing in shipped binaries too.
 pub fn serialize_message(records: &[Record]) -> Vec<u8> {
-    debug_assert!(
+    assert!(
         records
             .last()
             .is_some_and(|r| matches!(r.kind, RecordKind::EndOfMessage)),
@@ -370,10 +377,9 @@ mod tests {
     fn rejects_missing_terminator() {
         // Single non-EOM record (Port=123) with no End-of-Message after
         // it. The bytes are hand-assembled rather than routed through
-        // `serialize_message` because the new debug_assert in that helper
-        // (RFC 8915 §4 EOM-terminator guard) would panic on the missing
-        // terminator before we ever exercised the parser path under
-        // test.
+        // `serialize_message` because the EOM-terminator guard in that
+        // helper (RFC 8915 §4) would panic on the missing terminator
+        // before we ever exercised the parser path under test.
         //
         // Wire layout: critical=0, type=NTPV4_PORT(7), len=2, body=0x007B.
         let bytes = vec![0x00, record_type::NTPV4_PORT as u8, 0x00, 0x02, 0x00, 0x7B];
@@ -440,11 +446,12 @@ mod tests {
         }
     }
 
-    /// `serialize_message` accepts (and the round-trip test above already
-    /// exercises) a properly terminated record list. Pin that the
-    /// debug-build assertion does *not* fire on a well-formed input —
-    /// otherwise the assert would produce a noisy false positive every
-    /// time the codec is exercised in the test suite.
+    /// `serialize_message` accepts (and the round-trip test above
+    /// already exercises) a properly terminated record list. Pin
+    /// that the EOM-terminator assertion does *not* fire on a well-
+    /// formed input — otherwise the `assert!` would produce a noisy
+    /// false positive every time the codec is exercised in the test
+    /// suite.
     #[test]
     fn serialize_message_accepts_terminated_input() {
         let msg = vec![
@@ -454,26 +461,29 @@ mod tests {
         let _ = serialize_message(&msg);
     }
 
-    /// In debug builds, calling `serialize_message` without an
-    /// `EndOfMessage` terminator must trip the `debug_assert!` and panic
-    /// at the offending call site rather than producing a malformed
-    /// message that would only fail at parse time on the peer. In
-    /// release builds the assertion is compiled out, so the test is
-    /// gated behind `debug_assertions`.
-    #[cfg(debug_assertions)]
+    /// Calling `serialize_message` without an `EndOfMessage`
+    /// terminator must panic at the offending call site rather than
+    /// producing a malformed message that would only fail at parse
+    /// time on the peer. The check uses `assert!` (not
+    /// `debug_assert!`) so the guard is load-bearing in both debug
+    /// and release builds — otherwise a release-mode regression in
+    /// any caller (or a future caller that builds the record list
+    /// dynamically) would silently emit a malformed wire packet.
+    /// This test runs in both build profiles to pin that contract.
     #[test]
     #[should_panic(expected = "RFC 8915 §4")]
-    fn serialize_message_debug_asserts_eom_terminator() {
+    fn serialize_message_panics_when_eom_terminator_missing() {
         let msg = vec![rec(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4]))];
         let _ = serialize_message(&msg);
     }
 
     /// An empty record slice has no last record at all; the same
-    /// terminator-required invariant must hold there too.
-    #[cfg(debug_assertions)]
+    /// terminator-required invariant must hold there too. Same
+    /// release-build coverage rationale as
+    /// [`serialize_message_panics_when_eom_terminator_missing`].
     #[test]
     #[should_panic(expected = "RFC 8915 §4")]
-    fn serialize_message_debug_asserts_empty_input() {
+    fn serialize_message_panics_on_empty_input() {
         let _ = serialize_message(&[]);
     }
 
