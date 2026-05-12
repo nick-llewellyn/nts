@@ -17,8 +17,7 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, SupportedProtocolVersion};
 
 use super::records::{
-    aead, parse_message, serialize_message, CodecError, Record, RecordKind, MAX_MESSAGE_BYTES,
-    NEXT_PROTO_NTPV4,
+    aead, parse_message, serialize_message, CodecError, Record, RecordKind, NEXT_PROTO_NTPV4,
 };
 
 /// RFC 8915 §5.1 fixed exporter label.
@@ -29,6 +28,27 @@ const DEFAULT_NTPV4_PORT: u16 = 123;
 
 /// IANA "NTS Key Establishment" ALPN protocol identifier (RFC 8915 §4).
 const ALPN_NTSKE: &[u8] = b"ntske/1";
+
+/// Per-handshake streaming-read budget for the NTS-KE response. The
+/// codec ([`super::records::parse_message`]) caps individual messages
+/// at [`super::records::MAX_MESSAGE_BYTES`] (64 KiB, the RFC 8915
+/// §4.1.4 upper bound for a *valid* message), but real NTS-KE
+/// responses from public servers (Cloudflare, Netnod, NTS.net.nz) are
+/// well under 1 KiB. A belt-and-braces deployment ceiling well below
+/// the codec ceiling keeps a malicious or buggy server from forcing
+/// the read accumulator in [`read_to_end_capped`] to grow toward the
+/// 64 KiB limit on every failed handshake — 64 KiB × N concurrent
+/// handshakes is a memory-pressure vector on a memory-constrained
+/// mobile process. Comparable Rust NTS implementations cap the
+/// streaming layer at 4 KiB
+/// (`ntpd-rs::ntp-proto::nts::messages::MAX_MESSAGE_SIZE`); 16 KiB is
+/// a more permissive ceiling that still rejects oversized responses
+/// in the streaming layer before the codec sees them. The codec
+/// ceiling stays at [`super::records::MAX_MESSAGE_BYTES`] because the
+/// codec is also reachable from non-streaming entry points (tests,
+/// file-based inputs) where the RFC's per-message bound is the right
+/// cap.
+pub const NTS_KE_READ_BUDGET: usize = 16_384;
 
 /// RFC 8915 §3 — "TLS 1.3 [RFC8446] is the minimum version of TLS that
 /// MUST be supported. Earlier versions of TLS MUST NOT be negotiated."
@@ -360,8 +380,21 @@ pub enum KeError {
     NonCriticalAeadAlgorithm,
     UnsupportedAead(u16),
     NoCookies,
-    /// Response exceeded the codec's hard cap before EOF.
-    MessageTooLarge,
+    /// Streaming-read accumulator in [`read_to_end_capped`] would
+    /// exceed [`NTS_KE_READ_BUDGET`] if the next chunk were appended.
+    /// `received` is the post-append length the offending read would
+    /// have produced; `cap` is the budget that was tripped. Distinct
+    /// from `Codec(CodecError::MessageTooLarge)` (which fires at the
+    /// 64 KiB RFC ceiling, an order of magnitude higher) so callers
+    /// can tell a streaming-layer DoS guard from a parser-level
+    /// rejection of a genuinely oversized but valid-shaped message.
+    /// Distinct from `PhaseTimeout(KeRecordIo)` so callers can tell
+    /// server misbehaviour (sending too much) from network latency
+    /// (sending too slowly).
+    ResponseTooLarge {
+        received: usize,
+        cap: usize,
+    },
 }
 
 /// A [`KeError`] paired with the trust-anchor backend resolved by
@@ -441,9 +474,11 @@ impl std::fmt::Display for KeError {
             }
             Self::UnsupportedAead(id) => write!(f, "server selected unsupported AEAD ID {id}"),
             Self::NoCookies => f.write_str("response delivered no cookies"),
-            Self::MessageTooLarge => {
-                write!(f, "NTS-KE response exceeded {MAX_MESSAGE_BYTES}-byte cap",)
-            }
+            Self::ResponseTooLarge { received, cap } => write!(
+                f,
+                "NTS-KE response exceeded {cap}-byte streaming budget \
+                 (next read would have produced {received} bytes)",
+            ),
             Self::TrustBackendUnavailable(m) => {
                 write!(f, "trust backend unavailable (PlatformOnly mode): {m}")
             }
@@ -1113,6 +1148,17 @@ where
 /// wall-clock cost past the caller's `req.timeout`. A deadline already
 /// expired before the next read is surfaced as
 /// `KeError::PhaseTimeout(KeRecordIo)`.
+///
+/// The accumulator is capped at [`NTS_KE_READ_BUDGET`] (16 KiB), an
+/// order of magnitude below the codec's
+/// [`super::records::MAX_MESSAGE_BYTES`] ceiling (64 KiB). A read
+/// that would push the post-append length past the budget short-
+/// circuits with [`KeError::ResponseTooLarge`] before the bytes are
+/// appended, so a malicious or buggy server cannot force the per-
+/// handshake heap allocation past 16 KiB regardless of how many
+/// chunks it sends. The budget decision is factored into
+/// [`next_chunk_within_budget`] for unit-test access without a TLS
+/// stream.
 fn read_to_end_capped(
     stream: &mut Stream<'_, ClientConnection, TcpStream>,
     deadline: Option<&Deadline>,
@@ -1126,14 +1172,29 @@ fn read_to_end_capped(
         match stream.read(&mut chunk) {
             Ok(0) => return Ok(buf),
             Ok(n) => {
-                if buf.len() + n > MAX_MESSAGE_BYTES {
-                    return Err(KeError::MessageTooLarge);
-                }
+                next_chunk_within_budget(buf.len(), n, NTS_KE_READ_BUDGET)?;
                 buf.extend_from_slice(&chunk[..n]);
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(phase_io_to_ke(e, KeTimeoutPhase::KeRecordIo)),
         }
+    }
+}
+
+/// Pure cap-budget decision extracted from [`read_to_end_capped`] so
+/// the streaming-budget guard can be exercised by a unit test without
+/// standing up a TLS stream. Returns `Ok(())` if appending `n` more
+/// bytes to a buffer of length `buf_len` would keep the total at or
+/// below `cap`; returns [`KeError::ResponseTooLarge`] otherwise, with
+/// `received` set to the would-be post-append length so the caller
+/// (and the operator looking at logs) can see how far over the budget
+/// the offending read pushed the accumulator.
+fn next_chunk_within_budget(buf_len: usize, n: usize, cap: usize) -> Result<(), KeError> {
+    let received = buf_len + n;
+    if received > cap {
+        Err(KeError::ResponseTooLarge { received, cap })
+    } else {
+        Ok(())
     }
 }
 
@@ -1861,5 +1922,97 @@ mod tests {
             outcome.cookies.len()
         );
         assert!(outcome.ntpv4_port > 0);
+    }
+
+    /// Pins the streaming-budget invariant: the per-handshake read
+    /// accumulator cap [`NTS_KE_READ_BUDGET`] must be strictly less
+    /// than the codec ceiling
+    /// [`crate::nts::records::MAX_MESSAGE_BYTES`], so the streaming
+    /// layer in [`read_to_end_capped`] rejects oversized responses
+    /// before [`super::records::parse_message`] ever sees them. A
+    /// future edit that lifts the streaming budget at or above the
+    /// codec ceiling would silently re-expose the memory-pressure
+    /// vector this cap exists to close (a malicious server forcing
+    /// 64 KiB per failed handshake), so pin the relationship in a
+    /// regression guard.
+    #[test]
+    fn nts_ke_read_budget_is_strictly_below_codec_ceiling() {
+        let codec_ceiling = crate::nts::records::MAX_MESSAGE_BYTES;
+        assert!(
+            NTS_KE_READ_BUDGET < codec_ceiling,
+            "streaming budget {NTS_KE_READ_BUDGET} must be strictly less than \
+             codec ceiling {codec_ceiling}",
+        );
+    }
+
+    /// Pins the cap-decision helper [`next_chunk_within_budget`]: an
+    /// exact-fit append (the boundary case where the next read takes
+    /// the accumulator to exactly `cap`) must succeed; a one-byte
+    /// overshoot must trip [`KeError::ResponseTooLarge`] with the
+    /// would-be post-append length surfaced as `received` so an
+    /// operator inspecting the diagnostic can tell how far over the
+    /// budget the offending read pushed the accumulator. The boundary
+    /// is asserted explicitly because off-by-one errors in cap checks
+    /// (`>` vs `>=`) are the canonical way these guards drift on
+    /// edits, and the codec layer's analogous cap is `>` not `>=`.
+    #[test]
+    fn next_chunk_within_budget_accepts_exact_fit_and_rejects_overshoot() {
+        next_chunk_within_budget(0, NTS_KE_READ_BUDGET, NTS_KE_READ_BUDGET)
+            .expect("exact-fit (n == cap on empty buffer) must be accepted");
+        next_chunk_within_budget(NTS_KE_READ_BUDGET - 1, 1, NTS_KE_READ_BUDGET)
+            .expect("exact-fit (buf_len + n == cap) must be accepted");
+        match next_chunk_within_budget(NTS_KE_READ_BUDGET, 1, NTS_KE_READ_BUDGET) {
+            Err(KeError::ResponseTooLarge { received, cap }) => {
+                assert_eq!(cap, NTS_KE_READ_BUDGET);
+                assert_eq!(received, NTS_KE_READ_BUDGET + 1);
+            }
+            other => panic!("one-byte overshoot must yield ResponseTooLarge; got {other:?}",),
+        }
+    }
+
+    /// Pins the cap-trip behaviour the bd-tracker entry calls out: a
+    /// server (real or faux) that streams more than [`NTS_KE_READ_BUDGET`]
+    /// bytes per handshake must be rejected mid-stream, before the
+    /// accumulator grows past the budget, with the overshoot length
+    /// surfaced in the diagnostic. Drives the cap-decision helper
+    /// over a 100 KB body in 4 KiB chunks (matching the chunk size in
+    /// [`read_to_end_capped`]) so the assertion exercises the same
+    /// stride pattern the streaming loop uses, and pins both the
+    /// trip-point (the chunk that crosses the budget) and the early-
+    /// return semantics (no further chunks consumed once the cap is
+    /// tripped).
+    #[test]
+    fn next_chunk_within_budget_trips_mid_stream_for_oversized_body() {
+        const BODY_SIZE: usize = 100_000;
+        const CHUNK_SIZE: usize = 4096;
+        let mut received = 0usize;
+        let mut tripped_at: Option<(usize, usize)> = None;
+        for _ in 0..(BODY_SIZE.div_ceil(CHUNK_SIZE)) {
+            let n = CHUNK_SIZE.min(BODY_SIZE - received);
+            match next_chunk_within_budget(received, n, NTS_KE_READ_BUDGET) {
+                Ok(()) => received += n,
+                Err(KeError::ResponseTooLarge {
+                    received: r,
+                    cap: c,
+                }) => {
+                    tripped_at = Some((r, c));
+                    break;
+                }
+                Err(other) => {
+                    panic!("expected ResponseTooLarge or Ok, got {other:?} after {received} bytes",)
+                }
+            }
+        }
+        let (overshoot, cap) = tripped_at
+            .expect("100 KB body must trip the 16 KiB streaming budget before the loop exits");
+        assert_eq!(cap, NTS_KE_READ_BUDGET);
+        assert!(
+            overshoot > NTS_KE_READ_BUDGET,
+            "overshoot {overshoot} must exceed cap {cap}",
+        );
+        assert!(
+            received <= NTS_KE_READ_BUDGET,
+            "accumulator {received} must not have grown past cap {cap} before the trip",
+        );
     }
 }
