@@ -5580,11 +5580,11 @@ mod tests {
     /// also serialises each UID into a `ClientRequest` and runs it
     /// through `build_client_request`, then parses the resulting
     /// wire bytes back to recover the on-wire UID extension and
-    /// asserts uniqueness on those bodies. This catches a hypo-
-    /// thetical regression where the helper returns distinct UIDs
-    /// but `build_client_request` pins them to a constant on the
-    /// wire (today the production wire encoding is a verbatim copy
-    /// of `req.unique_id`, but the test holds independently of that).
+    /// asserts uniqueness on those bodies. Catches a hypothetical
+    /// regression where the helper returns distinct UIDs but
+    /// `build_client_request` pins them to a constant on the wire
+    /// (today the production wire encoding is a verbatim copy of
+    /// `req.unique_id`, but the test holds independently of that).
     ///
     /// Why this lives in `api::nts::tests` rather than
     /// `nts::ntp::tests`: `nts::ntp` is intentionally
