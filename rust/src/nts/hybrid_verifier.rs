@@ -24,6 +24,19 @@
 //! of OCSP — while letting Let's Encrypt-style chains succeed against
 //! a static webpki-roots anchor set.
 //!
+//! # `TrustMode` gating (3.1.0)
+//!
+//! Both per-chain fallback arms are gated by the [`KeTrustMode`]
+//! plumbed in at `HybridVerifier::new(trust_mode)`. In
+//! [`KeTrustMode::PlatformWithFallback`] (the historic default) the
+//! safety net fires exactly as it did pre-3.1.0. In
+//! [`KeTrustMode::PlatformOnly`] both arms are suppressed and the
+//! platform verifier's error propagates verbatim — the `webpki-roots`
+//! anchor set is never consulted. This makes `PlatformOnly` honour
+//! its "no static-bundle downgrade" intent at the per-chain level on
+//! Android, not just at the build-time `build_with_native_verifier`
+//! decision fixed in 3.0.0.
+//!
 //! # Defence-in-depth: native-verifier JNI failures
 //!
 //! `rustls-platform-verifier` 0.5.x maps every `JNIError` raised while
@@ -57,6 +70,7 @@ use rustls::{
 
 use rustls_platform_verifier::Verifier as PlatformVerifier;
 
+use crate::nts::ke::KeTrustMode;
 use crate::nts::trust_state::TRUST_STATE;
 
 /// Substring uniquely identifying the `Error::General` variant that
@@ -75,9 +89,17 @@ const NATIVE_VERIFIER_JNI_MARKER: &str = "failed to call native verifier";
 /// trust anchor set is parsed lazily on first fallback (see
 /// [`HybridVerifier::fallback`]). A fresh instance per `ClientConfig`
 /// build is fine.
+///
+/// The per-chain fallback arms are gated by [`KeTrustMode`] passed at
+/// construction time. [`KeTrustMode::PlatformWithFallback`] preserves
+/// the historical safety-net behaviour; [`KeTrustMode::PlatformOnly`]
+/// suppresses both fallback arms and propagates the platform verifier's
+/// error verbatim. This makes `PlatformOnly` honour its
+/// "no `webpki-roots` downgrade" intent at the per-chain level, not
+/// just the build-time level fixed in 3.0.0.
 #[derive(Debug)]
 pub struct HybridVerifier {
-    platform: Arc<PlatformVerifier>,
+    platform: Arc<dyn ServerCertVerifier>,
     /// Lazily built; the parsing cost of the bundled trust-anchor set is
     /// paid once, only on the first `Revoked` we actually see in the wild.
     fallback: OnceLock<Arc<WebPkiServerVerifier>>,
@@ -91,14 +113,36 @@ pub struct HybridVerifier {
     /// lockstep so [`crate::api::nts::nts_trust_status`] sees the
     /// same fallback as a deployment-wide signal.
     fallback_count: AtomicU64,
+    /// Trust-anchor policy for this verifier instance. Gates both
+    /// per-chain fallback arms in [`Self::verify_server_cert`].
+    trust_mode: KeTrustMode,
 }
 
 impl HybridVerifier {
-    pub fn new() -> Self {
+    pub fn new(trust_mode: KeTrustMode) -> Self {
         Self {
             platform: Arc::new(PlatformVerifier::new()),
             fallback: OnceLock::new(),
             fallback_count: AtomicU64::new(0),
+            trust_mode,
+        }
+    }
+
+    /// Test-only constructor that injects a fake [`ServerCertVerifier`]
+    /// in place of the real platform verifier. Lets unit tests pin the
+    /// `trust_mode` gating on synthesised platform errors without
+    /// standing up a real platform-verifier dependency or an Android
+    /// runtime.
+    #[cfg(test)]
+    pub(crate) fn with_platform(
+        trust_mode: KeTrustMode,
+        platform: Arc<dyn ServerCertVerifier>,
+    ) -> Self {
+        Self {
+            platform,
+            fallback: OnceLock::new(),
+            fallback_count: AtomicU64::new(0),
+            trust_mode,
         }
     }
 
@@ -130,12 +174,6 @@ impl HybridVerifier {
     }
 }
 
-impl Default for HybridVerifier {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ServerCertVerifier for HybridVerifier {
     fn verify_server_cert(
         &self,
@@ -145,15 +183,18 @@ impl ServerCertVerifier for HybridVerifier {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        match self.platform.verify_server_cert(
+        let platform_result = self.platform.verify_server_cert(
             end_entity,
             intermediates,
             server_name,
             ocsp_response,
             now,
-        ) {
+        );
+        match platform_result {
             Ok(v) => Ok(v),
-            Err(Error::InvalidCertificate(CertificateError::Revoked)) => {
+            Err(Error::InvalidCertificate(CertificateError::Revoked))
+                if self.trust_mode == KeTrustMode::PlatformWithFallback =>
+            {
                 let host = host_for_log(server_name);
                 log::warn!(
                     target: "nts::hybrid_verifier",
@@ -178,7 +219,10 @@ impl ServerCertVerifier for HybridVerifier {
                 }
                 result
             }
-            Err(Error::General(msg)) if msg.contains(NATIVE_VERIFIER_JNI_MARKER) => {
+            Err(Error::General(ref msg))
+                if msg.contains(NATIVE_VERIFIER_JNI_MARKER)
+                    && self.trust_mode == KeTrustMode::PlatformWithFallback =>
+            {
                 let host = host_for_log(server_name);
                 log::warn!(
                     target: "nts::hybrid_verifier",
@@ -249,7 +293,95 @@ fn host_for_log(server_name: &ServerName<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::NATIVE_VERIFIER_JNI_MARKER;
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Configurable fake [`ServerCertVerifier`] for unit tests. A
+    /// closure produces the result returned for each
+    /// `verify_server_cert` call so a single test can synthesise
+    /// `Revoked`, `General(JNI_MARKER)`, `Ok`, etc. on demand. The
+    /// other trait methods are not exercised by `HybridVerifier`'s
+    /// `verify_server_cert` path, so they are stubbed minimally.
+    struct FakePlatform {
+        result: Mutex<Box<dyn Fn() -> Result<ServerCertVerified, Error> + Send>>,
+        call_count: AtomicU64,
+    }
+
+    impl std::fmt::Debug for FakePlatform {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("FakePlatform")
+                .field("call_count", &self.call_count.load(Ordering::Relaxed))
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl FakePlatform {
+        fn new<F>(result: F) -> Arc<Self>
+        where
+            F: Fn() -> Result<ServerCertVerified, Error> + Send + 'static,
+        {
+            Arc::new(Self {
+                result: Mutex::new(Box::new(result)),
+                call_count: AtomicU64::new(0),
+            })
+        }
+    }
+
+    impl ServerCertVerifier for FakePlatform {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: UnixTime,
+        ) -> Result<ServerCertVerified, Error> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            (self.result.lock().expect("FakePlatform poisoned"))()
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, Error> {
+            Err(Error::PeerIncompatible(
+                PeerIncompatible::Tls12NotOfferedOrEnabled,
+            ))
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            Vec::new()
+        }
+    }
+
+    /// Synthesise the input arguments for `verify_server_cert`.
+    /// The certificate bodies are intentionally non-conformant
+    /// (`b"x"`); the fake platform never inspects them, and the
+    /// fallback path is what we want to assert is *not* taken in
+    /// `PlatformOnly` mode (so the webpki-roots verifier never sees
+    /// these bytes either).
+    fn dummy_args() -> (
+        CertificateDer<'static>,
+        Vec<CertificateDer<'static>>,
+        ServerName<'static>,
+        UnixTime,
+    ) {
+        let leaf = CertificateDer::from_slice(b"leaf-stub").into_owned();
+        let server_name = ServerName::try_from("nts.example.test").expect("dns name");
+        let now = UnixTime::since_unix_epoch(std::time::Duration::from_secs(1_700_000_000));
+        (leaf, Vec::new(), server_name, now)
+    }
 
     /// Pin the marker substring against the exact format string upstream
     /// emits in `rustls-platform-verifier-0.5.x`. If the upstream wording
@@ -268,5 +400,109 @@ mod tests {
             synthesised.contains(NATIVE_VERIFIER_JNI_MARKER),
             "upstream format string drifted; expected to contain `{NATIVE_VERIFIER_JNI_MARKER}`, got `{synthesised}`",
         );
+    }
+
+    /// `nts-2lh` acceptance criterion: when constructed with
+    /// `KeTrustMode::PlatformOnly`, the verifier propagates the
+    /// platform's `Revoked` verdict verbatim. The `webpki-roots`
+    /// fallback must not run, so `fallback_count` stays at 0.
+    #[test]
+    fn platform_only_propagates_revoked_without_fallback() {
+        let fake = FakePlatform::new(|| Err(Error::InvalidCertificate(CertificateError::Revoked)));
+        let verifier = HybridVerifier::with_platform(KeTrustMode::PlatformOnly, fake.clone());
+        let (leaf, intermediates, server_name, now) = dummy_args();
+        let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+        assert!(
+            matches!(
+                result,
+                Err(Error::InvalidCertificate(CertificateError::Revoked))
+            ),
+            "expected Revoked propagated verbatim; got {result:?}",
+        );
+        assert_eq!(fake.call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.fallback_count(), 0);
+    }
+
+    /// `nts-2lh` acceptance criterion: when constructed with
+    /// `KeTrustMode::PlatformOnly`, an `Error::General` carrying the
+    /// JNI marker (R8 / ProGuard stripped the AAR's
+    /// `org.rustls.platformverifier.*` glue) propagates verbatim
+    /// without consulting `webpki-roots`.
+    #[test]
+    fn platform_only_propagates_jni_marker_without_fallback() {
+        let fake = FakePlatform::new(|| {
+            Err(Error::General(format!(
+                "{NATIVE_VERIFIER_JNI_MARKER}: synthetic-jni-failure",
+            )))
+        });
+        let verifier = HybridVerifier::with_platform(KeTrustMode::PlatformOnly, fake.clone());
+        let (leaf, intermediates, server_name, now) = dummy_args();
+        let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+        match result {
+            Err(Error::General(msg)) => {
+                assert!(
+                    msg.contains(NATIVE_VERIFIER_JNI_MARKER),
+                    "expected JNI-marker General propagated verbatim; got {msg:?}",
+                );
+            }
+            other => panic!("expected Err(General(JNI marker)); got {other:?}"),
+        }
+        assert_eq!(fake.call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(verifier.fallback_count(), 0);
+    }
+
+    /// `nts-2lh` acceptance criterion: a non-fallback-eligible
+    /// platform error (e.g. `UnknownIssuer`) propagates verbatim in
+    /// both `PlatformWithFallback` and `PlatformOnly` modes; the
+    /// `trust_mode` gating only affects the two curated arms.
+    #[test]
+    fn unknown_issuer_propagates_in_both_modes() {
+        for trust_mode in [KeTrustMode::PlatformWithFallback, KeTrustMode::PlatformOnly] {
+            let fake = FakePlatform::new(|| {
+                Err(Error::InvalidCertificate(CertificateError::UnknownIssuer))
+            });
+            let verifier = HybridVerifier::with_platform(trust_mode, fake.clone());
+            let (leaf, intermediates, server_name, now) = dummy_args();
+            let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::InvalidCertificate(CertificateError::UnknownIssuer))
+                ),
+                "{trust_mode:?}: expected UnknownIssuer verbatim; got {result:?}",
+            );
+            assert_eq!(verifier.fallback_count(), 0);
+        }
+    }
+
+    /// `PlatformWithFallback` regression test: the historical safety
+    /// net still fires for `Revoked` so that 3.1.0's strict
+    /// `PlatformOnly` change does not accidentally regress the
+    /// default behaviour. We assert the *attempt* (not its
+    /// success) by observing that the fallback path is *taken*: the
+    /// platform-result error transforms into a `webpki`-flavoured
+    /// error rather than the original `Revoked`. The exact error
+    /// shape from the webpki-roots verifier on a stub `b"leaf-stub"`
+    /// chain is unimportant; what matters is that it is *not* the
+    /// `Revoked` returned by the fake, which would prove the
+    /// fallback path was never taken.
+    #[test]
+    fn platform_with_fallback_attempts_fallback_on_revoked() {
+        let fake = FakePlatform::new(|| Err(Error::InvalidCertificate(CertificateError::Revoked)));
+        let verifier =
+            HybridVerifier::with_platform(KeTrustMode::PlatformWithFallback, fake.clone());
+        let (leaf, intermediates, server_name, now) = dummy_args();
+        let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+        assert!(
+            !matches!(
+                result,
+                Err(Error::InvalidCertificate(CertificateError::Revoked))
+            ),
+            "fallback path was not taken: result still carries the platform's Revoked verdict ({result:?})",
+        );
+        assert_eq!(fake.call_count.load(Ordering::Relaxed), 1);
+        // `fallback_count` only bumps on a successful fallback, and
+        // a stub leaf will not validate against webpki-roots, so we
+        // don't assert on its value here.
     }
 }
