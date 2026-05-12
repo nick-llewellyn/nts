@@ -112,11 +112,11 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
 
 - **No behaviour change for the dartdoc'd contract** —
   `nts_warm_cookies` (Dart: `ntsWarmCookies`) and
-  `NtsClient.warm_cookies` still "force a fresh handshake," still
-  return `NtsWarmCookiesOutcome { freshCookies, phaseTimings,
-  trustBackend }`, and still install the freshly-handshaken session
-  under the spec's `host:port` key. The public Rust and Dart
-  signatures are unchanged.
+  `NtsClient::warm_cookies` (Dart: `NtsClient.warmCookies`) still
+  "force a fresh handshake," still return `NtsWarmCookiesOutcome
+  { freshCookies, phaseTimings, trustBackend }`, and still install
+  the freshly-handshaken session under the spec's `host:port` key.
+  The public Rust and Dart signatures are unchanged.
 
 - **Internal behaviour change** — the implementation now routes
   through `SessionTable::warm_cookies`, which shares the
@@ -141,6 +141,17 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
     space, so a concurrent warm + query against the same `host:port`
     *also* collapses onto one handshake; whichever caller arrives
     first becomes the leader and the other observes its result.
+  - **`freshCookies` contract pinned**: the singleflight slot now
+    publishes the leader's *harvested* cookie count alongside the
+    `Ok` signal, so a `nts_warm_cookies` waiter surfaces the value
+    the server delivered with the KE response even when the leader
+    happens to be a `nts_query` caller that pops one cookie out of
+    the freshly installed jar before the warm waiter wakes.
+    Previously the waiter snapshot-read `cookies_remaining()` from
+    the cache and could report `delivered - 1`, contradicting the
+    documented `NtsWarmCookiesOutcome.fresh_cookies` /
+    `NtsTimeSample.freshCookies` dartdoc ("Number of fresh cookies
+    the server delivered with the KE response").
   - Operationally relevant for UI bindings that hook
     `ntsWarmCookies` to a button: rapid taps no longer fan out to
     parallel KE handshakes, which avoids both wasted bandwidth and
