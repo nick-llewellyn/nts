@@ -617,9 +617,7 @@ pub enum NtsError {
         trust_backend: Option<TrustBackend>,
     },
     /// Cookie jar empty after a handshake (server delivered none).
-    NoCookies {
-        trust_backend: Option<TrustBackend>,
-    },
+    NoCookies { trust_backend: Option<TrustBackend> },
     /// Caller selected [`TrustMode::PlatformOnly`] and
     /// `build_with_native_verifier` could not construct a
     /// platform-backed `ClientConfig`. Surfaced instead of silently
@@ -890,29 +888,48 @@ fn next_session_generation() -> u64 {
     GEN.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Success payload published on the singleflight slot. Carries the
+/// leader's freshly-harvested cookie count and resolved trust-anchor
+/// backend so waiters on the warm-cookies path can return the
+/// "delivered with the KE response" value (per the documented
+/// `NtsWarmCookiesOutcome.fresh_cookies` contract) rather than a
+/// post-publish snapshot of the cache that a concurrent query waiter
+/// could have already drained by one cookie. The query waiter side
+/// ignores the payload because its own contract is to pop a cookie
+/// out of the cache anyway.
+#[derive(Clone, Debug)]
+struct HandshakeSlotOk {
+    fresh_cookies: u32,
+    trust_backend: TrustBackend,
+}
+
 /// Per-key singleflight slot. One slot exists per `host:port` while a
 /// leader is mid-handshake, so concurrent `checkout` calls against the
 /// same key park on the slot rather than each running their own
-/// duplicate KE handshake. The leader publishes a `Result<(), NtsError>`
-/// when it finishes; waiters receive a `Clone` of that result. Errors
-/// propagate to every waiter so a leader's KE failure does not
-/// silently retry — followers see the same error semantics they would
-/// have observed had they run the handshake themselves.
+/// duplicate KE handshake. The leader publishes a
+/// `Result<HandshakeSlotOk, NtsError>` when it finishes; waiters
+/// receive a `Clone` of that result. Errors propagate to every waiter
+/// so a leader's KE failure does not silently retry — followers see
+/// the same error semantics they would have observed had they run the
+/// handshake themselves.
 ///
-/// The slot does *not* carry the `Session` itself; the leader installs
-/// the session into `SessionTable::map` and the waiters re-acquire
-/// `map`, look up the freshly installed session, and pop a cookie of
-/// their own. This naturally handles the "cookie pool exhausted"
-/// case: if more waiters wake than the pool has cookies, the extras
-/// simply re-enter the role-election loop and elect a new leader for
-/// the next handshake. Each successful KE handshake adds N fresh
-/// cookies (typically 8 per RFC 8915) so the loop converges in
-/// `ceil(waiters / N)` handshake rounds, not infinitely.
+/// On the warm-cookies path the success payload carries enough state
+/// that waiters can return the leader's harvested count without
+/// re-acquiring `SessionTable::map`. On the query path the leader
+/// still installs the `Session` into `map`; query waiters loop back
+/// to phase A, look up the freshly installed session, and pop a
+/// cookie of their own. This naturally handles the "cookie pool
+/// exhausted" case for query waiters: if more wake than the pool
+/// has cookies, the extras simply re-enter the role-election loop
+/// and elect a new leader for the next handshake. Each successful KE
+/// handshake adds N fresh cookies (typically 8 per RFC 8915) so the
+/// loop converges in `ceil(waiters / N)` handshake rounds, not
+/// infinitely.
 struct HandshakeSlot {
     /// `None` while the leader is mid-handshake; `Some(...)` once the
     /// leader publishes a result. Waiters block on `cv` until this is
     /// non-empty or their per-call deadline elapses.
-    result: Mutex<Option<Result<(), NtsError>>>,
+    result: Mutex<Option<Result<HandshakeSlotOk, NtsError>>>,
     cv: Condvar,
 }
 
@@ -928,7 +945,7 @@ impl HandshakeSlot {
     /// Returns `Some(result_clone)` when a result is available, `None`
     /// on deadline expiry. Each waiter receives an independent
     /// `Clone` of the leader's `Result`.
-    fn wait_until(&self, deadline: Instant) -> Option<Result<(), NtsError>> {
+    fn wait_until(&self, deadline: Instant) -> Option<Result<HandshakeSlotOk, NtsError>> {
         let mut g = self.result.lock().expect("singleflight slot poisoned");
         loop {
             if let Some(r) = g.as_ref() {
@@ -950,7 +967,7 @@ impl HandshakeSlot {
     /// a second `complete` is silently ignored so the LeaderGuard's Drop
     /// path can fire after a normal explicit completion without
     /// clobbering the published value.
-    fn complete(&self, result: Result<(), NtsError>) {
+    fn complete(&self, result: Result<HandshakeSlotOk, NtsError>) {
         let mut g = self.result.lock().expect("singleflight slot poisoned");
         if g.is_none() {
             *g = Some(result);
@@ -1004,7 +1021,7 @@ impl<'a> LeaderGuard<'a> {
     /// site acquires both, so this is the only site that fixes the
     /// ordering and there is no deadlock risk against the waiter
     /// path (which releases `inflight` before parking on the slot).
-    fn complete(&mut self, result: Result<(), NtsError>) {
+    fn complete(&mut self, result: Result<HandshakeSlotOk, NtsError>) {
         let mut g = self
             .table
             .inflight
@@ -1333,7 +1350,10 @@ fn remaining_budget_or_ntp_timeout(
     total
         .checked_sub(elapsed)
         .filter(|d| !d.is_zero())
-        .ok_or(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None })
+        .ok_or(NtsError::Timeout {
+            phase: TimeoutPhase::Ntp,
+            trust_backend: None,
+        })
 }
 
 /// Re-arm a connected UDP socket's read timeout against the
@@ -1614,8 +1634,14 @@ impl SessionTable {
                     let remaining = match timeout.checked_sub(started.elapsed()) {
                         Some(d) if !d.is_zero() => d,
                         _ => {
-                            guard.complete(Err(NtsError::Timeout { phase: TimeoutPhase::KeRecordIo, trust_backend: None }));
-                            return Err(NtsError::Timeout { phase: TimeoutPhase::KeRecordIo, trust_backend: None });
+                            guard.complete(Err(NtsError::Timeout {
+                                phase: TimeoutPhase::KeRecordIo,
+                                trust_backend: None,
+                            }));
+                            return Err(NtsError::Timeout {
+                                phase: TimeoutPhase::KeRecordIo,
+                                trust_backend: None,
+                            });
                         }
                     };
                     let outcome = do_handshake(spec, remaining, dns_concurrency_cap);
@@ -1645,6 +1671,17 @@ impl SessionTable {
                                 guard.complete(Err(err.clone()));
                                 return Err(err);
                             }
+                            // Capture the leader's freshly-harvested
+                            // cookie count *before* the pop below.
+                            // This is the "delivered with the KE
+                            // response" value warm-cookies waiters
+                            // surface as `NtsWarmCookiesOutcome.
+                            // fresh_cookies`; capturing here lets the
+                            // waiter return that value verbatim
+                            // without re-acquiring `map` and without
+                            // racing a query waiter that might pop
+                            // a cookie before the warm waiter wakes.
+                            let harvested_cookies = session.cookies_remaining() as u32;
                             // Same defensive `take`-shape as the
                             // cache-hit branch: the leader's
                             // `cookies_remaining() == 0` check above
@@ -1668,7 +1705,10 @@ impl SessionTable {
                             };
                             match cookie_opt {
                                 Some((ctx, ())) => {
-                                    guard.complete(Ok(()));
+                                    guard.complete(Ok(HandshakeSlotOk {
+                                        fresh_cookies: harvested_cookies,
+                                        trust_backend: session_backend,
+                                    }));
                                     return Ok((ctx, ke_timings));
                                 }
                                 None => {
@@ -1698,22 +1738,206 @@ impl SessionTable {
                     let deadline = started + timeout;
                     match slot.wait_until(deadline) {
                         // Leader installed a session; loop back to phase
-                        // A and pop a cookie. If the new session was
-                        // already drained by other concurrently waking
-                        // waiters, we fall through to phase B again and
-                        // either become the next leader or wait on the
-                        // next leader's handshake — `ceil(waiters / N)`
+                        // A and pop a cookie. The slot's `Ok` payload
+                        // carries the leader's harvested count and
+                        // trust-backend for warm-cookies waiters; on
+                        // the query path we ignore it and re-acquire
+                        // `map` for our own cookie pop. If the new
+                        // session was already drained by other
+                        // concurrently waking waiters, we fall
+                        // through to phase B again and either become
+                        // the next leader or wait on the next
+                        // leader's handshake — `ceil(waiters / N)`
                         // handshake rounds in the worst case, where N is
                         // the cookie-pool size per handshake.
-                        Some(Ok(())) => continue,
+                        Some(Ok(_)) => continue,
                         Some(Err(e)) => return Err(e),
                         None => {
-                            return Err(NtsError::Timeout { phase: TimeoutPhase::KeRecordIo, trust_backend: None });
+                            return Err(NtsError::Timeout {
+                                phase: TimeoutPhase::KeRecordIo,
+                                trust_backend: None,
+                            });
                         }
                     }
                 }
             }
         }
+    }
+
+    /// Singleflight-aware forced KE handshake. Same per-key role
+    /// election as [`checkout_with`], but always runs the leader's
+    /// handshake (skips the cache-hit fast-path) and returns the
+    /// fresh-cookie count plus the resolved [`TrustBackend`] instead
+    /// of a [`QueryContext`]. Production callers go through
+    /// [`Self::warm_cookies`], which binds the handshake closure to
+    /// the real [`establish_session`]; cache-layer unit tests pass
+    /// a controllable closure so the singleflight role-election
+    /// state machine is exercisable without standing up a faux
+    /// NTS-KE responder.
+    ///
+    /// Concurrent forced refreshes against the same `host:port`
+    /// collapse onto one KE handshake: the first arrival becomes
+    /// the singleflight leader, runs the handshake without holding
+    /// any lock, installs the freshly-handshaken session under the
+    /// `map` lock, then publishes its harvested cookie count and
+    /// resolved [`TrustBackend`] on the singleflight slot via
+    /// [`HandshakeSlotOk`]; concurrent callers park on the slot
+    /// bounded by their own per-call `timeout` budget and, on
+    /// success, return the leader's payload verbatim without
+    /// re-acquiring the session map. Waiters report
+    /// `KePhaseTimings::default()` because they did not perform KE
+    /// work themselves — same convention [`checkout_with`] uses for
+    /// cache-hit and waiter-wake paths.
+    ///
+    /// Shares the singleflight key space with [`checkout_with`]:
+    /// concurrent `nts_query` and `nts_warm_cookies` against the
+    /// same `host:port` collapse onto one handshake, with whichever
+    /// caller arrived first becoming the leader. A `nts_query`
+    /// waiter ignores the slot's `HandshakeSlotOk` payload and loops
+    /// back to the cache to pop a cookie of its own; a
+    /// `nts_warm_cookies` waiter returns `payload.fresh_cookies` and
+    /// `payload.trust_backend` directly. The warm waiter never
+    /// re-reads the cache, so a concurrent `nts_query` waiter that
+    /// pops one cookie out of the freshly installed jar between the
+    /// leader's install and the warm waiter's wake cannot reduce the
+    /// "delivered with the KE response" count surfaced as
+    /// [`NtsWarmCookiesOutcome::fresh_cookies`].
+    fn warm_cookies_with(
+        &self,
+        spec: &NtsServerSpec,
+        timeout: Duration,
+        dns_concurrency_cap: usize,
+        do_handshake: &HandshakeFn,
+    ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
+        let key = session_key(spec);
+        let started = Instant::now();
+        // Phase B: leader-or-waiter election. No Phase A — the
+        // contract is "force a fresh handshake," so the cache is
+        // intentionally bypassed on the leader path. Waiters
+        // receive the leader's harvested cookie count and
+        // trust-backend via the singleflight slot's `Ok` payload
+        // (`HandshakeSlotOk`), so they never re-acquire the session
+        // map and the role-election runs at most once per call.
+        let role = {
+            let mut g = self
+                .inflight
+                .lock()
+                .expect("inflight singleflight map poisoned");
+            if let Some(slot) = g.get(&key) {
+                Role::Waiter(slot.clone())
+            } else {
+                let slot = Arc::new(HandshakeSlot::new());
+                g.insert(key.clone(), slot.clone());
+                Role::Leader(slot)
+            }
+        };
+
+        match role {
+            Role::Leader(slot) => {
+                let mut guard = LeaderGuard::new(self, key.clone(), slot);
+                let remaining = match timeout.checked_sub(started.elapsed()) {
+                    Some(d) if !d.is_zero() => d,
+                    _ => {
+                        let err = NtsError::Timeout {
+                            phase: TimeoutPhase::KeRecordIo,
+                            trust_backend: None,
+                        };
+                        guard.complete(Err(err.clone()));
+                        return Err(err);
+                    }
+                };
+                match do_handshake(spec, remaining, dns_concurrency_cap) {
+                    Ok((session, ke_timings)) => {
+                        let session_backend = session.trust_backend;
+                        // Refuse to install a 0-cookie session;
+                        // same defensive shape as `checkout_with`.
+                        if session.cookies_remaining() == 0 {
+                            let err = NtsError::NoCookies {
+                                trust_backend: Some(session_backend),
+                            };
+                            guard.complete(Err(err.clone()));
+                            return Err(err);
+                        }
+                        // Snapshot the freshly-handshaken cookie
+                        // count *before* the move. Deriving it
+                        // from the post-insert lookup would
+                        // either need an `expect` (the `get`
+                        // immediately following an `insert` under
+                        // the same lock cannot return `None`) or
+                        // an `unwrap_or(0)` that would silently
+                        // mask an invariant break as a misleading
+                        // "warm succeeded with 0 cookies" — the
+                        // exact shape the pre-handshake
+                        // `cookies_remaining() == 0` guard above
+                        // exists to suppress.
+                        let count = session.cookies_remaining() as u32;
+                        self.map
+                            .lock()
+                            .expect("session table poisoned")
+                            .insert(key.clone(), session);
+                        // Publish the leader's harvested count
+                        // and trust-backend on the singleflight
+                        // slot so warm-cookies waiters can return
+                        // the "delivered with the KE response"
+                        // value verbatim, independent of any
+                        // cookie pops a concurrent query waiter
+                        // might race in between this install and
+                        // the warm waiter's wake.
+                        guard.complete(Ok(HandshakeSlotOk {
+                            fresh_cookies: count,
+                            trust_backend: session_backend,
+                        }));
+                        Ok((count, ke_timings, session_backend))
+                    }
+                    Err(e) => {
+                        guard.complete(Err(e.clone()));
+                        Err(e)
+                    }
+                }
+            }
+            Role::Waiter(slot) => {
+                let deadline = started + timeout;
+                match slot.wait_until(deadline) {
+                    Some(Ok(payload)) => {
+                        // Return the leader's harvested count
+                        // verbatim from the slot payload — never
+                        // re-snapshot from `map`, because a
+                        // concurrent query waiter that wakes from
+                        // the same slot may have already popped
+                        // a cookie between the leader's install
+                        // and our wake. `KePhaseTimings::default()`
+                        // because we did not perform KE work
+                        // ourselves (matches the convention
+                        // `checkout_with` already established for
+                        // its waiter and cache-hit paths).
+                        Ok((
+                            payload.fresh_cookies,
+                            KePhaseTimings::default(),
+                            payload.trust_backend,
+                        ))
+                    }
+                    Some(Err(e)) => Err(e),
+                    None => Err(NtsError::Timeout {
+                        phase: TimeoutPhase::KeRecordIo,
+                        trust_backend: None,
+                    }),
+                }
+            }
+        }
+    }
+
+    /// Production wrapper around [`Self::warm_cookies_with`] that
+    /// binds the handshake closure to the real [`establish_session`].
+    fn warm_cookies(
+        &self,
+        spec: &NtsServerSpec,
+        timeout: Duration,
+        dns_concurrency_cap: usize,
+        trust_mode: TrustMode,
+    ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
+        self.warm_cookies_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
+            establish_session(s, t, c, trust_mode)
+        })
     }
 
     /// Deposit fresh cookies harvested from a verified server reply.
@@ -1777,7 +2001,16 @@ impl SessionTable {
     }
 
     /// Replace any existing entry for `spec`'s `host:port` with `session`.
-    /// Used by [`nts_warm_cookies_inner`] after a successful KE handshake.
+    /// Test-only since 3.1.0: `nts_warm_cookies_inner` now installs
+    /// through [`Self::warm_cookies_with`]'s singleflight leader path,
+    /// which inserts under the `map` lock and then publishes the
+    /// leader's harvested count on the singleflight slot, so cache
+    /// installation and slot publication land in a fixed
+    /// install-then-publish order even though they occur under
+    /// different mutexes. The cache-layer unit tests still use this
+    /// shim to seed the table directly without standing up a faux
+    /// NTS-KE responder.
+    #[cfg(test)]
     fn install(&self, spec: &NtsServerSpec, session: Session) {
         let key = session_key(spec);
         self.map
@@ -1898,7 +2131,10 @@ impl UdpDeadline {
     fn remaining_or_timeout(&self, phase: TimeoutPhase) -> Result<Duration, NtsError> {
         let remaining = self.remaining();
         if remaining.is_zero() {
-            return Err(NtsError::Timeout { phase, trust_backend: None });
+            return Err(NtsError::Timeout {
+                phase,
+                trust_backend: None,
+            });
         }
         Ok(remaining)
     }
@@ -1960,10 +2196,14 @@ where
                 // failures and surface as `Network` with the
                 // diagnostic preserved.
                 return Err(match e.kind() {
-                    std::io::ErrorKind::WouldBlock => {
-                        NtsError::Timeout { phase: TimeoutPhase::DnsSaturation, trust_backend: None }
-                    }
-                    std::io::ErrorKind::TimedOut => NtsError::Timeout { phase: TimeoutPhase::DnsTimeout, trust_backend: None },
+                    std::io::ErrorKind::WouldBlock => NtsError::Timeout {
+                        phase: TimeoutPhase::DnsSaturation,
+                        trust_backend: None,
+                    },
+                    std::io::ErrorKind::TimedOut => NtsError::Timeout {
+                        phase: TimeoutPhase::DnsTimeout,
+                        trust_backend: None,
+                    },
                     _ => NtsError::Network {
                         message: format!("DNS lookup failed for {host}:{port}: {e}"),
                         trust_backend: None,
@@ -2156,9 +2396,8 @@ fn nts_query_inner(
     // Variants whose precondition rules out a backend
     // (`InvalidSpec`, `TrustBackendUnavailable`, `Internal`) silently
     // drop the attribution — see `NtsError::with_trust_backend`.
-    let attribute_post_handshake = |e: NtsError| -> NtsError {
-        e.with_trust_backend(Some(ctx.trust_backend))
-    };
+    let attribute_post_handshake =
+        |e: NtsError| -> NtsError { e.with_trust_backend(Some(ctx.trust_backend)) };
     let evict_on_rekey_signal = |err: NtpError| -> NtsError {
         if matches!(&err, NtpError::Aead(_) | NtpError::StaleCookie) {
             table.evict_session(&key, session_generation);
@@ -2196,8 +2435,8 @@ fn nts_query_inner(
     // syscall after this point is the AEAD-NTPv4 `send`/`recv`,
     // which is the same phase `bind_connected_udp_using` would tag
     // post-DNS (see its `remaining_or_timeout` comment).
-    let udp_budget =
-        remaining_budget_or_ntp_timeout(timeout, started.elapsed()).map_err(attribute_post_handshake)?;
+    let udp_budget = remaining_budget_or_ntp_timeout(timeout, started.elapsed())
+        .map_err(attribute_post_handshake)?;
     let UdpBindOutcome {
         socket,
         dns_micros: udp_dns_micros,
@@ -2303,13 +2542,20 @@ fn nts_warm_cookies_inner(
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
-    let (session, ke_timings) = establish_session(&spec, timeout, cap, trust_mode)?;
-    let trust_backend = session.trust_backend;
+    // Route through `SessionTable::warm_cookies` so concurrent forced
+    // refreshes against the same `host:port` collapse onto one KE
+    // handshake via the singleflight machinery shared with `checkout`.
+    // The leader runs a fresh handshake, installs its session, and
+    // publishes its harvested cookie count + resolved trust-backend
+    // on the singleflight slot via `HandshakeSlotOk`; waiters return
+    // those values verbatim from the slot payload (no cache re-read)
+    // and report `KePhaseTimings::default()` because they did not
+    // perform KE work themselves. See `SessionTable::warm_cookies_with`
+    // for the full state-machine documentation.
+    let (count, ke_timings, trust_backend) = table.warm_cookies(&spec, timeout, cap, trust_mode)?;
     if is_default_client {
         crate::nts::trust_state::TRUST_STATE.record_default_backend(trust_backend.into());
     }
-    let count = session.cookies_remaining() as u32;
-    table.install(&spec, session);
     log::info!(
         target: "nts::warm",
         "warm cookies: host={} cookies_in_jar={} trust_backend={:?}",
@@ -3107,7 +3353,10 @@ mod tests {
         let elapsed = started.elapsed();
 
         match result {
-            Err(NtsError::Timeout { phase: TimeoutPhase::DnsTimeout, trust_backend: None }) => {}
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::DnsTimeout,
+                trust_backend: None,
+            }) => {}
             other => panic!("slow-DNS path must surface as Timeout(DnsTimeout), got {other:?}",),
         }
         let cap = budget * 5;
@@ -3132,7 +3381,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         assert!(d.remaining().is_zero(), "expired deadline must saturate");
         match d.remaining_or_timeout(TimeoutPhase::Ntp) {
-            Err(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }) => {}
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::Ntp,
+                trust_backend: None,
+            }) => {}
             other => panic!("expired deadline must yield Timeout(Ntp), got {other:?}"),
         }
     }
@@ -3262,7 +3514,10 @@ mod tests {
         let total = Duration::from_millis(100);
         let elapsed = Duration::from_millis(150);
         match arm_recv_against_call_deadline(&socket, total, elapsed) {
-            Err(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }) => {}
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::Ntp,
+                trust_backend: None,
+            }) => {}
             other => panic!("expired call-wide deadline must yield Timeout(Ntp), got {other:?}",),
         }
         let read_t = socket
@@ -3325,7 +3580,10 @@ mod tests {
         for kind in [std::io::ErrorKind::TimedOut, std::io::ErrorKind::WouldBlock] {
             let io_err = std::io::Error::from(kind);
             match NtsError::from(io_err) {
-                NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None } => {}
+                NtsError::Timeout {
+                    phase: TimeoutPhase::Ntp,
+                    trust_backend: None,
+                } => {}
                 other => panic!(
                     "io::Error of {kind:?} mapped to {other:?}; \
                      expected NtsError::Timeout(Ntp)",
@@ -3374,7 +3632,10 @@ mod tests {
             "recv took {elapsed:?}; SO_RCVTIMEO did not fire",
         );
         match NtsError::from(io_err) {
-            NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None } => {}
+            NtsError::Timeout {
+                phase: TimeoutPhase::Ntp,
+                trust_backend: None,
+            } => {}
             other => panic!(
                 "UDP recv timeout mapped to {other:?}; \
                  expected NtsError::Timeout(Ntp)",
@@ -3417,7 +3678,13 @@ mod tests {
             TimeoutPhase::KeRecordIo,
             TimeoutPhase::Ntp,
         ] {
-            let rendered = format!("{}", NtsError::Timeout { phase, trust_backend: None });
+            let rendered = format!(
+                "{}",
+                NtsError::Timeout {
+                    phase,
+                    trust_backend: None
+                }
+            );
             let tag = format!("{phase:?}");
             assert!(
                 rendered.contains(&tag),
@@ -3470,13 +3737,19 @@ mod tests {
 
         // Budget exactly consumed: short-circuit with Timeout(Ntp).
         match remaining_budget_or_ntp_timeout(total, total) {
-            Err(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }) => {}
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::Ntp,
+                trust_backend: None,
+            }) => {}
             other => panic!("elapsed == total must yield Timeout(Ntp), got {other:?}"),
         }
 
         // Budget overrun: same short-circuit, no panic on saturating sub.
         match remaining_budget_or_ntp_timeout(total, total + Duration::from_millis(50)) {
-            Err(NtsError::Timeout { phase: TimeoutPhase::Ntp, trust_backend: None }) => {}
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::Ntp,
+                trust_backend: None,
+            }) => {}
             other => panic!("elapsed > total must yield Timeout(Ntp), got {other:?}"),
         }
 
@@ -4250,7 +4523,10 @@ mod tests {
         let waiter_elapsed = waiter_started.elapsed();
 
         match waiter_outcome {
-            Err(NtsError::Timeout { phase: TimeoutPhase::KeRecordIo, trust_backend: None }) => {}
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::KeRecordIo,
+                trust_backend: None,
+            }) => {}
             Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
             Ok(_) => panic!("waiter returned Ok despite a parked leader"),
         }
@@ -4539,6 +4815,598 @@ mod tests {
         assert_eq!(ctx.trust_backend, TrustBackend::PlatformWithHybridFallback);
     }
 
+    /// `nts-upv` acceptance criterion: N concurrent
+    /// `warm_cookies_with` calls against the same `host:port`
+    /// collapse onto exactly ONE KE handshake. Pre-3.1.0
+    /// `nts_warm_cookies` called `establish_session` directly,
+    /// bypassing the singleflight machinery and producing N parallel
+    /// handshakes. Same `BoundedRelease` + `await_singleflight_state`
+    /// test pattern as `checkout_collapses_concurrent_cold_queries_*`
+    /// so the deterministic-release shape stays uniform across the
+    /// two singleflight entry points.
+    #[test]
+    fn warm_cookies_collapses_concurrent_forced_refreshes_onto_one_handshake() {
+        const N: usize = 6;
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "warm-singleflight-collapse.test".into(),
+            port: 4460,
+        };
+        let handshake_count = Arc::new(AtomicUsize::new(0));
+        let release = BoundedRelease::new();
+        let release_handle = release.handle();
+        // Synthetic non-default KePhaseTimings sentinel returned by
+        // the test handshake closure. The leader surfaces these
+        // verbatim from `do_handshake`; waiters surface
+        // `KePhaseTimings::default()` because they did not perform KE
+        // work themselves. The two are observationally
+        // distinguishable, so the test can assert exactly 1 leader
+        // and N-1 waiters by inspecting `phase_timings` alongside
+        // counting handshake-closure invocations.
+        let leader_timings = KePhaseTimings {
+            dns_micros: 11,
+            connect_micros: 22,
+            tls_handshake_micros: 33,
+            ke_record_io_micros: 44,
+        };
+        let do_handshake = {
+            let handshake_count = handshake_count.clone();
+            move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+                handshake_count.fetch_add(1, Ordering::SeqCst);
+                release_handle
+                    .wait_release(Duration::from_secs(10))
+                    .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+                Ok((
+                    make_test_session_with_cookies(
+                        &spec.host,
+                        123,
+                        next_session_generation(),
+                        N + 2,
+                    ),
+                    leader_timings,
+                ))
+            }
+        };
+
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                let table = table.clone();
+                let spec = spec.clone();
+                let do_handshake = do_handshake.clone();
+                thread::spawn(move || {
+                    table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                })
+            })
+            .collect();
+
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == N + 1)
+        });
+        release.release();
+
+        let mut leader_count = 0;
+        let mut waiter_count = 0;
+        for h in handles {
+            let (count, timings, _backend) = h
+                .join()
+                .expect("warm_cookies thread panicked")
+                .expect("warm_cookies returned Err");
+            assert!(
+                count > 0,
+                "every concurrent warm reported a non-zero cookie count",
+            );
+            if timings == KePhaseTimings::default() {
+                waiter_count += 1;
+            } else {
+                assert_eq!(
+                    timings, leader_timings,
+                    "leader surfaced unexpected KePhaseTimings",
+                );
+                leader_count += 1;
+            }
+        }
+        assert_eq!(
+            leader_count, 1,
+            "exactly one caller observed leader timings"
+        );
+        assert_eq!(
+            waiter_count,
+            N - 1,
+            "the remaining N-1 callers observed waiter (default) timings",
+        );
+        assert_eq!(
+            handshake_count.load(Ordering::SeqCst),
+            1,
+            "exactly one handshake ran across {N} concurrent warm_cookies",
+        );
+    }
+
+    /// Singleflight failure-fan-out semantic: when the leader's
+    /// handshake fails, every waiter receives a cloned `NtsError`
+    /// with the same variant/payload as the leader. Mirrors
+    /// `checkout_propagates_leader_failure_to_every_waiter`.
+    #[test]
+    fn warm_cookies_propagates_leader_failure_to_every_waiter() {
+        const N: usize = 4;
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "warm-singleflight-leader-fail.test".into(),
+            port: 4460,
+        };
+        let handshake_count = Arc::new(AtomicUsize::new(0));
+        let release = BoundedRelease::new();
+        let release_handle = release.handle();
+        let do_handshake = {
+            let handshake_count = handshake_count.clone();
+            move |_: &NtsServerSpec, _t: Duration, _c: usize| {
+                handshake_count.fetch_add(1, Ordering::SeqCst);
+                release_handle
+                    .wait_release(Duration::from_secs(10))
+                    .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+                Err(NtsError::KeProtocol {
+                    message: "synthetic warm-leader-failure for singleflight test".into(),
+                    trust_backend: None,
+                })
+            }
+        };
+
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                let table = table.clone();
+                let spec = spec.clone();
+                let do_handshake = do_handshake.clone();
+                thread::spawn(move || {
+                    table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                })
+            })
+            .collect();
+
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == N + 1)
+        });
+        release.release();
+
+        for h in handles {
+            match h.join().expect("thread panicked") {
+                Err(NtsError::KeProtocol { message: msg, .. }) => {
+                    assert_eq!(msg, "synthetic warm-leader-failure for singleflight test");
+                }
+                Err(other) => panic!("expected KeProtocol; got {other:?}"),
+                Ok(_) => panic!("warm_cookies returned Ok despite leader failure"),
+            }
+        }
+        assert_eq!(
+            handshake_count.load(Ordering::SeqCst),
+            1,
+            "waiters did not silently retry the failed handshake",
+        );
+    }
+
+    /// Cross-API singleflight collapse: a concurrent `checkout_with`
+    /// (NTP-query path) and `warm_cookies_with` (forced-refresh path)
+    /// against the same `host:port` collapse onto exactly ONE KE
+    /// handshake. Both APIs share the same `inflight` registry keyed
+    /// off `session_key(spec)`, so whichever caller arrives first
+    /// becomes the leader and the other parks on the same slot.
+    /// This is the property that lets a UI binding both a
+    /// "refresh time" button (warm) and an underlying poll (query)
+    /// keep its KE-wire footprint bounded under rapid taps.
+    #[test]
+    fn warm_cookies_collapses_with_concurrent_query_against_same_host() {
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "warm-and-query-singleflight-collapse.test".into(),
+            port: 4460,
+        };
+        let handshake_count = Arc::new(AtomicUsize::new(0));
+        let release = BoundedRelease::new();
+        let release_handle = release.handle();
+        let do_handshake = {
+            let handshake_count = handshake_count.clone();
+            move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+                handshake_count.fetch_add(1, Ordering::SeqCst);
+                release_handle
+                    .wait_release(Duration::from_secs(10))
+                    .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+                Ok((
+                    make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                    KePhaseTimings::default(),
+                ))
+            }
+        };
+
+        let warm = {
+            let table = table.clone();
+            let spec = spec.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+        let query = {
+            let table = table.clone();
+            let spec = spec.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table
+                    .checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                    .map(|(ctx, _)| ctx)
+            })
+        };
+
+        // Wait until both threads have registered against the same
+        // inflight slot (one as leader, one as waiter); strong count
+        // = 1 (inflight map) + 1 (LeaderGuard) + 1 (waiter Arc clone)
+        // = 3, regardless of which API arrived first.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == 3)
+        });
+        release.release();
+
+        let warm_outcome = warm
+            .join()
+            .expect("warm thread panicked")
+            .expect("warm_cookies returned Err");
+        let query_outcome = query
+            .join()
+            .expect("query thread panicked")
+            .expect("checkout returned Err");
+        assert!(warm_outcome.0 > 0, "warm reported a non-zero cookie count");
+        assert!(
+            !query_outcome.cookie.is_empty(),
+            "query returned a non-empty cookie",
+        );
+        assert_eq!(
+            handshake_count.load(Ordering::SeqCst),
+            1,
+            "concurrent warm + query collapsed onto one handshake",
+        );
+    }
+
+    /// Contract test for `NtsWarmCookiesOutcome.fresh_cookies` /
+    /// `NtsTimeSample.freshCookies` ("Number of fresh cookies the
+    /// server delivered with the KE response"): a `warm_cookies_with`
+    /// waiter must surface the leader's *harvested* cookie count even
+    /// when a concurrent `checkout_with` leader has popped one
+    /// cookie out of the freshly installed jar before the warm
+    /// waiter wakes.
+    ///
+    /// Forces query-leader-first ordering by spawning the query
+    /// thread, awaiting its `LeaderGuard` registration via the
+    /// `Arc::strong_count == 2` rendezvous, then spawning the warm
+    /// waiter. The leader's `checkout_with` install-then-pop happens
+    /// under the `map` lock and *before* `HandshakeSlot::complete`
+    /// publishes the slot result, so by the time the warm waiter
+    /// wakes the cache holds `delivered - 1` cookies — observably
+    /// fewer than the contract value. Pre-fix code (warm waiter
+    /// snapshots `cookies_remaining()` from the cache) reports
+    /// `delivered - 1`; post-fix code (warm waiter reads
+    /// `HandshakeSlotOk.fresh_cookies` from the slot payload)
+    /// reports `delivered`.
+    #[test]
+    fn warm_cookies_waiter_reports_delivered_count_when_query_leader_pops_first() {
+        const DELIVERED: usize = 4;
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "warm-waiter-vs-query-leader-pop.test".into(),
+            port: 4460,
+        };
+        let handshake_count = Arc::new(AtomicUsize::new(0));
+        let release = BoundedRelease::new();
+        let release_handle = release.handle();
+        let do_handshake = {
+            let handshake_count = handshake_count.clone();
+            move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+                handshake_count.fetch_add(1, Ordering::SeqCst);
+                release_handle
+                    .wait_release(Duration::from_secs(10))
+                    .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+                Ok((
+                    make_test_session_with_cookies(
+                        &spec.host,
+                        123,
+                        next_session_generation(),
+                        DELIVERED,
+                    ),
+                    KePhaseTimings::default(),
+                ))
+            }
+        };
+
+        // Phase 1: spawn query, wait for it to register as leader.
+        // Strong count = 1 (inflight map) + 1 (LeaderGuard) = 2.
+        let key = session_key(&spec);
+        let query = {
+            let table = table.clone();
+            let spec = spec.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table
+                    .checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                    .map(|(ctx, _)| ctx)
+            })
+        };
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == 2)
+        });
+
+        // Phase 2: spawn warm waiter. Strong count rises to 3.
+        let warm = {
+            let table = table.clone();
+            let spec = spec.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+            slot.is_some_and(|s| Arc::strong_count(s) == 3)
+        });
+
+        // Phase 3: release the leader. It installs the session,
+        // pops one cookie under the `map` lock, then publishes the
+        // slot result. The warm waiter wakes after the pop has
+        // already landed in the cache.
+        release.release();
+
+        let warm_outcome = warm
+            .join()
+            .expect("warm thread panicked")
+            .expect("warm_cookies returned Err");
+        let query_outcome = query
+            .join()
+            .expect("query thread panicked")
+            .expect("checkout returned Err");
+
+        assert!(
+            !query_outcome.cookie.is_empty(),
+            "query leader returned a non-empty cookie",
+        );
+        assert_eq!(
+            warm_outcome.0, DELIVERED as u32,
+            "warm waiter reported the leader's harvested count, \
+             not a post-pop snapshot of the cache",
+        );
+        assert_eq!(
+            handshake_count.load(Ordering::SeqCst),
+            1,
+            "query leader + warm waiter collapsed onto one handshake",
+        );
+    }
+
+    /// Singleflight is keyed by `session_key(spec)`, so concurrent
+    /// `warm_cookies_with` calls against *different* hosts continue to
+    /// run their handshakes in parallel. Mirrors
+    /// `checkout_does_not_serialize_handshakes_across_distinct_hosts`.
+    #[test]
+    fn warm_cookies_does_not_serialize_across_distinct_hosts() {
+        let table = Arc::new(SessionTable::new());
+        let spec_a = NtsServerSpec {
+            host: "warm-host-a.test".into(),
+            port: 4460,
+        };
+        let spec_b = NtsServerSpec {
+            host: "warm-host-b.test".into(),
+            port: 4460,
+        };
+        // Bounded rendezvous: each leader bumps `arrived_count`, then
+        // polls until it reaches 2. If singleflight ever regresses
+        // and serialises the two warms, the second leader never
+        // arrives, the first leader's poll deadline elapses, and the
+        // closure returns a synthetic `Internal` so the test fails
+        // fast instead of hanging the CI job.
+        let arrived_count = Arc::new(AtomicUsize::new(0));
+        let do_handshake = {
+            let arrived_count = arrived_count.clone();
+            move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+                arrived_count.fetch_add(1, Ordering::SeqCst);
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while arrived_count.load(Ordering::SeqCst) < 2 {
+                    if Instant::now() >= deadline {
+                        return Err(NtsError::Internal(
+                            "second handshake never arrived; singleflight is serialising hosts"
+                                .into(),
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Ok((
+                    make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                    KePhaseTimings::default(),
+                ))
+            }
+        };
+
+        let warm_a = {
+            let table = table.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.warm_cookies_with(&spec_a, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+        let warm_b = {
+            let table = table.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.warm_cookies_with(&spec_b, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+
+        warm_a
+            .join()
+            .expect("warm_a panicked")
+            .expect("warm_a returned Err — singleflight is serialising distinct hosts");
+        warm_b
+            .join()
+            .expect("warm_b panicked")
+            .expect("warm_b returned Err — singleflight is serialising distinct hosts");
+    }
+
+    /// Waiter timeout: when the leader's handshake outlasts the
+    /// waiter's per-call deadline, the waiter must surface
+    /// `Timeout(KeRecordIo)` — same `phase` taxonomy
+    /// `checkout_with`'s waiter path uses for the same shape.
+    /// Mirror of `checkout_waiter_returns_timeout_when_leader_outlasts_deadline`.
+    #[test]
+    fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
+        let table = Arc::new(SessionTable::new());
+        let spec = NtsServerSpec {
+            host: "warm-singleflight-waiter-timeout.test".into(),
+            port: 4460,
+        };
+        let leader_release = BoundedRelease::new();
+        let leader_release_handle = leader_release.handle();
+        let do_handshake = move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+            leader_release_handle
+                .wait_release(Duration::from_secs(10))
+                .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                KePhaseTimings::default(),
+            ))
+        };
+
+        let leader = {
+            let table = table.clone();
+            let spec = spec.clone();
+            let do_handshake = do_handshake.clone();
+            thread::spawn(move || {
+                table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+            })
+        };
+
+        // Wait until the leader has registered an inflight slot
+        // before spawning the waiter, otherwise the waiter could
+        // become the leader itself and run a handshake.
+        let key = session_key(&spec);
+        await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| slot.is_some());
+
+        let waiter_started = Instant::now();
+        let waiter_outcome = table.warm_cookies_with(
+            &spec,
+            Duration::from_millis(100),
+            4,
+            &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+                panic!("waiter should never run a handshake; it must park on the leader's slot")
+            },
+        );
+        let waiter_elapsed = waiter_started.elapsed();
+
+        match waiter_outcome {
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::KeRecordIo,
+                trust_backend: None,
+            }) => {}
+            Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
+            Ok(_) => panic!("waiter returned Ok despite a parked leader"),
+        }
+        assert!(
+            waiter_elapsed >= Duration::from_millis(100),
+            "waiter returned before its 100ms budget elapsed: {waiter_elapsed:?}",
+        );
+        assert!(
+            waiter_elapsed < Duration::from_millis(2_000),
+            "waiter overshot its budget by >2s; deadline plumbing is broken: {waiter_elapsed:?}",
+        );
+
+        leader_release.release();
+        if let Err(e) = leader.join().expect("leader thread panicked") {
+            panic!("leader warm_cookies failed: {e:?}");
+        }
+    }
+
+    /// Pre-handshake budget exhaustion on a re-elected leader: when
+    /// a thread enters `warm_cookies_with` with `started.elapsed()`
+    /// already exceeding `timeout`, the leader path must surface
+    /// `Timeout(KeRecordIo)` *before* invoking `do_handshake`, so a
+    /// caller's documented per-call wall-clock budget cannot be
+    /// silently extended by a re-leader's fresh `timeout`-long
+    /// window. Driven directly via a `Duration::ZERO` budget on a
+    /// fresh table so the leader's `checked_sub` returns `None`
+    /// on the very first iteration. The handshake closure asserts
+    /// it is never invoked.
+    #[test]
+    fn warm_cookies_leader_budget_exhausted_before_handshake_returns_timeout() {
+        let table = SessionTable::new();
+        let spec = NtsServerSpec {
+            host: "warm-singleflight-budget-exhausted.test".into(),
+            port: 4460,
+        };
+        let outcome = table.warm_cookies_with(
+            &spec,
+            Duration::ZERO,
+            4,
+            &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+                panic!("do_handshake must not be invoked when the per-call budget is exhausted")
+            },
+        );
+        match outcome {
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::KeRecordIo,
+                trust_backend: None,
+            }) => {}
+            Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
+            Ok(_) => panic!("warm_cookies returned Ok despite an exhausted budget"),
+        }
+        // The inflight slot must have been cleaned up by the
+        // LeaderGuard so a follow-up call against the same key can
+        // become a fresh leader; otherwise a single budget-exhaustion
+        // event would permanently strand future warms behind a
+        // slot whose result is `Timeout`.
+        let key = session_key(&spec);
+        let g = table
+            .inflight
+            .lock()
+            .expect("inflight singleflight map poisoned");
+        assert!(
+            !g.contains_key(&key),
+            "inflight slot leaked after budget-exhaustion path",
+        );
+    }
+
+    /// Defensive shape: a handshake that returns a `Session` with
+    /// zero cookies must surface `NtsError::NoCookies` from the
+    /// leader path — same shape `checkout_with` uses for the same
+    /// case. A regression that installed the empty session would
+    /// cause every concurrent waiter to fall through to a misleading
+    /// "warm succeeded with 0 cookies" outcome (`fresh_cookies: 0`),
+    /// which the pre-handshake guard exists to prevent.
+    #[test]
+    fn warm_cookies_leader_refuses_zero_cookie_session() {
+        let table = SessionTable::new();
+        let spec = NtsServerSpec {
+            host: "warm-singleflight-zero-cookie.test".into(),
+            port: 4460,
+        };
+        let do_handshake = |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+            // `make_test_session` returns a session whose `jar` has
+            // no cookies in it (cookie_count == 0); install would
+            // otherwise have written a useless session into the map.
+            let session = make_test_session(&spec.host, 123, next_session_generation());
+            Ok((session, KePhaseTimings::default()))
+        };
+        match table.warm_cookies_with(&spec, Duration::from_secs(5), 4, &do_handshake) {
+            Err(NtsError::NoCookies {
+                trust_backend: Some(_),
+            }) => {}
+            Err(other) => panic!("expected NoCookies(Some(_)); got {other:?}"),
+            Ok((count, _, _)) => {
+                panic!("warm_cookies returned Ok with count={count} despite a 0-cookie handshake",)
+            }
+        }
+        // The leader must NOT have installed the empty session, so
+        // a subsequent call sees an empty cache and re-elects.
+        let key = session_key(&spec);
+        let g = table.map.lock().expect("session table poisoned");
+        assert!(
+            !g.contains_key(&key),
+            "leader installed a 0-cookie session despite the defensive refusal",
+        );
+    }
+
     /// Round-trip every `TrustBackend` variant through the `From`
     /// conversion to `InternalTrustBackend` (used by the trust-state
     /// recording path) and back, pinning the bidirectional mapping. A
@@ -4589,7 +5457,10 @@ mod tests {
     fn trust_mode_maps_to_ke_trust_mode() {
         use crate::nts::ke::KeTrustMode;
         for (public_variant, ke_variant) in [
-            (TrustMode::PlatformWithFallback, KeTrustMode::PlatformWithFallback),
+            (
+                TrustMode::PlatformWithFallback,
+                KeTrustMode::PlatformWithFallback,
+            ),
             (TrustMode::PlatformOnly, KeTrustMode::PlatformOnly),
         ] {
             let mapped: KeTrustMode = public_variant.into();
@@ -4643,7 +5514,10 @@ mod tests {
     /// caller's policy through the FRB boundary.
     #[test]
     fn nts_client_trust_mode_round_trips_construction_choice() {
-        assert_eq!(NtsClient::new().trust_mode(), TrustMode::PlatformWithFallback);
+        assert_eq!(
+            NtsClient::new().trust_mode(),
+            TrustMode::PlatformWithFallback
+        );
         assert_eq!(
             NtsClient::with_trust_mode(TrustMode::PlatformWithFallback).trust_mode(),
             TrustMode::PlatformWithFallback,

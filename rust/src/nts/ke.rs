@@ -841,9 +841,8 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     // Closure that attaches the resolved backend to a `KeError`. Used
     // at every `map_err` site below so post-build failures carry the
     // same attribution a successful handshake would have produced.
-    let attribute = |error: KeError| -> KeFailure {
-        KeFailure::with_backend(error, Some(resolve_backend()))
-    };
+    let attribute =
+        |error: KeError| -> KeFailure { KeFailure::with_backend(error, Some(resolve_backend())) };
 
     let server_name = ServerName::try_from(req.host.as_str())
         .map_err(|_| KeError::InvalidServerName)
@@ -904,8 +903,11 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     };
     let (response, tls_handshake_micros, ke_record_io_micros) = response;
 
-    let records = parse_message(&response).map_err(KeError::from).map_err(attribute)?;
-    let partial = validate_response(&req.host, &req.aead_algorithms, &records).map_err(attribute)?;
+    let records = parse_message(&response)
+        .map_err(KeError::from)
+        .map_err(attribute)?;
+    let partial =
+        validate_response(&req.host, &req.aead_algorithms, &records).map_err(attribute)?;
 
     let key_len = aead_key_len(partial.aead_id).expect("validated above");
     let c2s_ctx = exporter_context(partial.aead_id, false);
