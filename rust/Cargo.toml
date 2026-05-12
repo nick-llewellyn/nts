@@ -63,6 +63,7 @@ rustls-platform-verifier = "0.5"
 # silently dropped, so this dep adds no host-side noise.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 webpki-roots = "0.26"
+zeroize = { version = "1.8", default-features = false, features = ["alloc", "derive"] }
 
 # Android-only: JNI handles for bootstrapping `rustls-platform-verifier`'s
 # Java glue layer. The verifier delegates X.509 chain validation to the

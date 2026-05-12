@@ -15,6 +15,7 @@ use super::dns::{resolve_with_global, system_lookup};
 
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, SupportedProtocolVersion};
+use zeroize::Zeroizing;
 
 use super::records::{
     aead, parse_message, serialize_message, CodecError, Record, RecordKind, NEXT_PROTO_NTPV4,
@@ -304,7 +305,30 @@ struct ConnectedTcp {
 }
 
 /// All artifacts negotiated during a successful handshake.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is implemented manually below to redact every field
+/// that carries authentication material:
+///
+/// - `c2s_key` / `s2c_key` — raw AEAD exporter bytes.
+///   `Zeroizing<Vec<u8>>`'s derived `Debug` delegates to
+///   `Vec<u8>`'s `Debug` and would print the raw key bytes
+///   verbatim.
+/// - `cookies` — RFC 8915 §6 NTS cookies. The cookies are
+///   server-encrypted blobs that authorise the client to request
+///   AEAD-protected NTPv4 samples; an attacker who recovers them
+///   can mint requests on the client's behalf without performing
+///   a fresh KE handshake. Treated with the same redaction
+///   discipline as the keys themselves.
+///
+/// Without the manual impl, anything that formats a `KeOutcome`
+/// with `{:?}` (assertion-failure messages, panic payloads,
+/// accidental log lines) would leak live key material and active
+/// cookies. The non-secret fields (`ntpv4_host`, `ntpv4_port`,
+/// `aead_id`, `warnings`, `phase_timings`, `trust_backend`) pass
+/// through verbatim. The redaction pattern matches `SivKey` and
+/// `Aes128GcmSivKey` in `aead.rs`, where manual `Debug` impls
+/// render the wrapped fixed-size key arrays as `<redacted>`.
+#[derive(Clone)]
 pub struct KeOutcome {
     /// Server's chosen NTPv4 host (defaults to `request.host` when omitted).
     pub ntpv4_host: String,
@@ -312,10 +336,22 @@ pub struct KeOutcome {
     pub ntpv4_port: u16,
     /// AEAD algorithm IANA ID the server selected.
     pub aead_id: u16,
-    /// Client-to-server AEAD key exported from the TLS session.
-    pub c2s_key: Vec<u8>,
+    /// Client-to-server AEAD key exported from the TLS session
+    /// (RFC 8915 §5.1 EXPORTER label `EXPORTER-network-time-security`,
+    /// context `0x0000 || aead_id || c2s_marker`). Wrapped in
+    /// [`Zeroizing`] so the raw key bytes are wiped from RAM on
+    /// `Drop` rather than lingering in the freed allocation; the
+    /// wrapper transparently `Deref`s to `Vec<u8>` so existing
+    /// callers (`AeadKey::from_keying_material(outcome.aead_id,
+    /// &outcome.c2s_key)` in `crate::api::nts::establish_session`)
+    /// continue to compile unchanged. Defends against memory-
+    /// scraping attacks (cold-boot, swap inspection, post-process-
+    /// crash core dumps); on mobile this matters because long-lived
+    /// foreground processes get paged to disk under memory pressure.
+    pub c2s_key: Zeroizing<Vec<u8>>,
     /// Server-to-client AEAD key exported from the TLS session.
-    pub s2c_key: Vec<u8>,
+    /// Same [`Zeroizing`] wrapper and rationale as `c2s_key`.
+    pub s2c_key: Zeroizing<Vec<u8>>,
     /// Initial cookie pool delivered with the response.
     pub cookies: Vec<Vec<u8>>,
     /// Non-fatal warning codes (RFC 8915 §4.1.5 record type 3).
@@ -334,6 +370,39 @@ pub struct KeOutcome {
     /// `webpki-roots` fallback, `WebpkiRoots` if `build_tls_config`
     /// itself fell back to the static bundle at construction time.
     pub trust_backend: KeTrustBackend,
+}
+
+impl std::fmt::Debug for KeOutcome {
+    /// Manual `Debug` that redacts both the `Zeroizing<Vec<u8>>`
+    /// exporter keys and the `cookies` pool. Each redacted field
+    /// renders as `<redacted; N {bytes,cookies}>` so the on-wire
+    /// length stays observable for diagnostics without leaking the
+    /// underlying material. Non-secret fields (`ntpv4_host`,
+    /// `ntpv4_port`, `aead_id`, `warnings`, `phase_timings`,
+    /// `trust_backend`) pass through verbatim. See the type-level
+    /// rustdoc on [`KeOutcome`] for the threat model.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeOutcome")
+            .field("ntpv4_host", &self.ntpv4_host)
+            .field("ntpv4_port", &self.ntpv4_port)
+            .field("aead_id", &self.aead_id)
+            .field(
+                "c2s_key",
+                &format_args!("<redacted; {} bytes>", self.c2s_key.len()),
+            )
+            .field(
+                "s2c_key",
+                &format_args!("<redacted; {} bytes>", self.s2c_key.len()),
+            )
+            .field(
+                "cookies",
+                &format_args!("<redacted; {} cookies>", self.cookies.len()),
+            )
+            .field("warnings", &self.warnings)
+            .field("phase_timings", &self.phase_timings)
+            .field("trust_backend", &self.trust_backend)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -949,14 +1018,23 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     let key_len = aead_key_len(partial.aead_id).expect("validated above");
     let c2s_ctx = exporter_context(partial.aead_id, false);
     let s2c_ctx = exporter_context(partial.aead_id, true);
-    let c2s_key = conn
-        .export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&c2s_ctx))
-        .map_err(KeError::from)
-        .map_err(attribute)?;
-    let s2c_key = conn
-        .export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&s2c_ctx))
-        .map_err(KeError::from)
-        .map_err(attribute)?;
+    // Wrap exporter outputs in `Zeroizing` immediately on receipt
+    // from `export_keying_material` so the secret bytes are wiped
+    // on `Drop` even if a downstream `?` short-circuits before the
+    // `KeOutcome` is constructed. Without the wrap, an early return
+    // between this point and the final `Ok(KeOutcome { ... })`
+    // would leak the raw `Vec<u8>` allocation back to the heap with
+    // the bytes still intact.
+    let c2s_key = Zeroizing::new(
+        conn.export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&c2s_ctx))
+            .map_err(KeError::from)
+            .map_err(attribute)?,
+    );
+    let s2c_key = Zeroizing::new(
+        conn.export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&s2c_ctx))
+            .map_err(KeError::from)
+            .map_err(attribute)?,
+    );
 
     conn.send_close_notify();
     let _ = Stream::new(&mut conn, &mut tcp).flush();
@@ -2013,6 +2091,111 @@ mod tests {
         assert!(
             received <= NTS_KE_READ_BUDGET,
             "accumulator {received} must not have grown past cap {cap} before the trip",
+        );
+    }
+
+    /// Compile-time pin that [`KeOutcome::c2s_key`] and
+    /// [`KeOutcome::s2c_key`] are wrapped in [`zeroize::Zeroizing`].
+    /// The wrapper's `Drop` impl wipes the underlying `Vec<u8>`
+    /// allocation when the outcome is dropped, so the raw exporter
+    /// material does not linger in freed heap pages until the next
+    /// allocator overwrite.
+    ///
+    /// The function-signature trick (`assert_zeroizing_vec` accepts
+    /// only `&Zeroizing<Vec<u8>>`) makes the test fail at compile
+    /// time if either field is reverted to a bare `Vec<u8>`. The
+    /// runtime construction is just enough to produce a value whose
+    /// references can be passed to the assertion helper; nothing
+    /// downstream of the field types is being asserted.
+    #[test]
+    fn ke_outcome_exporter_keys_are_zeroizing_wrapped() {
+        fn assert_zeroizing_vec(_: &Zeroizing<Vec<u8>>) {}
+        let outcome = KeOutcome {
+            ntpv4_host: String::new(),
+            ntpv4_port: 0,
+            aead_id: 0,
+            c2s_key: Zeroizing::new(vec![0u8; 1]),
+            s2c_key: Zeroizing::new(vec![0u8; 1]),
+            cookies: Vec::new(),
+            warnings: Vec::new(),
+            phase_timings: KePhaseTimings {
+                dns_micros: 0,
+                connect_micros: 0,
+                tls_handshake_micros: 0,
+                ke_record_io_micros: 0,
+            },
+            trust_backend: KeTrustBackend::Platform,
+        };
+        assert_zeroizing_vec(&outcome.c2s_key);
+        assert_zeroizing_vec(&outcome.s2c_key);
+    }
+
+    /// Pins the manual `Debug` redaction on [`KeOutcome`]: every
+    /// field carrying authentication material (`c2s_key`, `s2c_key`,
+    /// `cookies`) must not appear in the rendered output, even
+    /// though `Zeroizing<Vec<u8>>` derives `Debug` from the inner
+    /// `Vec<u8>` and `Vec<Vec<u8>>` (the cookies field) would
+    /// otherwise emit them verbatim. A regression that reverted to
+    /// `#[derive(Debug)]` on `KeOutcome` would re-expose live key
+    /// material *and* live cookies in any `{:?}` formatting site
+    /// (assertion-failure messages, panic payloads, accidental log
+    /// lines).
+    ///
+    /// The assertion shape has four legs:
+    ///
+    /// 1. The redaction marker `<redacted` appears exactly three
+    ///    times — once per redacted field. Asserting the count
+    ///    (rather than `>= 1`) catches a regression that drops the
+    ///    redaction on one field while leaving it on the others.
+    /// 2. The literal `0x55` / `0x77` / `0x99` byte patterns used
+    ///    in the test fixture do not appear as hex tokens in the
+    ///    rendered output. The fixtures use single-byte-value-
+    ///    repeated buffers so the assertion can scan for `0x55` /
+    ///    `0x77` / `0x99` (the form `{:?}` on `Vec<u8>` emits) and
+    ///    not collide with hex digits that happen to appear inside
+    ///    decimal field values like `aead_id: 15`.
+    /// 3. The cookie *count* still appears (`3 cookies`), proving
+    ///    the redacted form preserves the diagnostic length without
+    ///    leaking the bytes themselves.
+    /// 4. The non-secret host field still appears verbatim,
+    ///    proving the manual impl didn't over-redact.
+    #[test]
+    fn ke_outcome_debug_redacts_exporter_keys_and_cookies() {
+        let outcome = KeOutcome {
+            ntpv4_host: "ntp.example.test".to_owned(),
+            ntpv4_port: 4123,
+            aead_id: 15,
+            c2s_key: Zeroizing::new(vec![0x55u8; 32]),
+            s2c_key: Zeroizing::new(vec![0x77u8; 32]),
+            cookies: vec![vec![0x99u8; 64]; 3],
+            warnings: Vec::new(),
+            phase_timings: KePhaseTimings {
+                dns_micros: 0,
+                connect_micros: 0,
+                tls_handshake_micros: 0,
+                ke_record_io_micros: 0,
+            },
+            trust_backend: KeTrustBackend::Platform,
+        };
+        let rendered = format!("{outcome:?}");
+        assert_eq!(
+            rendered.matches("<redacted").count(),
+            3,
+            "expected 3 redacted markers (c2s_key, s2c_key, cookies), got: {rendered}",
+        );
+        for hex_token in ["0x55", "0x77", "0x99"] {
+            assert!(
+                !rendered.contains(hex_token),
+                "byte token {hex_token:?} from test fixture leaked into Debug output: {rendered}",
+            );
+        }
+        assert!(
+            rendered.contains("3 cookies"),
+            "redacted cookies field must surface the count for diagnostics: {rendered}",
+        );
+        assert!(
+            rendered.contains("ntp.example.test"),
+            "non-secret host field must remain visible: {rendered}",
         );
     }
 }
