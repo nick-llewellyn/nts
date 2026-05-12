@@ -600,10 +600,13 @@ mod tests {
     /// extension and the Authenticator. Bodies are borrowed
     /// (`&[u8]`) so callers can pass fixed-size byte arrays /
     /// existing slices without allocating a fresh `Vec` per entry.
-    /// The Authenticator's AAD covers `bytes[..auth_idx]` (header +
-    /// every preceding extension; see `parse_server_response`), so
-    /// these extras are AAD-only — authenticated against tampering
-    /// but **not** AEAD-encrypted. Used by
+    /// The Authenticator's AAD covers the header plus every
+    /// extension before the Authenticator (computed by
+    /// `parse_server_response` as `bytes[..aad_end]`, where
+    /// `aad_end` sums the wire lengths of every extension at
+    /// indices `..auth_idx`), so these extras are AAD-only —
+    /// authenticated against tampering but **not** AEAD-encrypted.
+    /// Used by
     /// `parse_response_only_returns_cookies_from_decrypted_body` to
     /// pin the RFC 8915 §5.5 source-of-cookies invariant: even a
     /// well-formed `NTS_COOKIE` extension placed in the AAD slot
