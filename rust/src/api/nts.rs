@@ -43,9 +43,9 @@ use crate::nts::cookies::CookieJar;
 use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
 use crate::nts::ke::{
     perform_handshake, KeError, KeFailure, KeOutcome, KePhaseTimings, KeRequest, KeTimeoutPhase,
+    OFFERED_AEAD_IDS,
 };
 use crate::nts::ntp::{build_client_request, parse_server_response, ClientRequest, NtpError};
-use crate::nts::records::aead as aead_ids;
 
 /// IANA-assigned NTS-KE port (RFC 8915 §6).
 pub const DEFAULT_KE_PORT: u16 = 4460;
@@ -1413,7 +1413,12 @@ fn effective_dns_concurrency_cap(dns_concurrency_cap: u32) -> usize {
 /// the SIV-CMAC variant is the RFC 8915 §5.1 mandatory baseline and is what
 /// every public NTS server we tested actually picks today; GCM-SIV is added
 /// purely so a server that prefers nonce-misuse-resistant GCM still resolves
-/// to a usable AEAD instead of `UnsupportedAead`.
+/// to a usable AEAD instead of `UnsupportedAead`. The offered set lives in
+/// [`OFFERED_AEAD_IDS`] (in `crate::nts::ke`) — adding or removing an
+/// algorithm requires a single-site edit there, and the cross-surface
+/// invariant tests in that module catch any drift between the offered list,
+/// the `aead_key_len` lookup table, and the `AeadKey::from_keying_material`
+/// constructor at CI time.
 ///
 /// Returns the `Session` together with the per-phase wall-clock
 /// breakdown reported by [`perform_handshake`] so callers
@@ -1429,7 +1434,7 @@ fn establish_session(
     let req = KeRequest {
         host: spec.host.clone(),
         port: spec.port,
-        aead_algorithms: vec![aead_ids::AES_SIV_CMAC_256, aead_ids::AES_128_GCM_SIV],
+        aead_algorithms: OFFERED_AEAD_IDS.to_vec(),
         timeout: Some(timeout),
         dns_concurrency_cap,
         trust_mode: trust_mode.into(),
@@ -2642,6 +2647,7 @@ fn ntp64_to_unix_micros(ntp: u64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nts::records::aead as aead_ids;
 
     #[test]
     fn validate_rejects_empty_host() {
