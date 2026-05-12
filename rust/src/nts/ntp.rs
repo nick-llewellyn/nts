@@ -587,19 +587,37 @@ mod tests {
     /// an Authenticator extension sealed with the S2C key. Works for any
     /// AEAD by sizing the wire nonce from `s2c.nonce_len()`.
     fn craft_response(uid: &[u8], fresh_cookies: &[&[u8]], s2c: &AeadKey) -> Vec<u8> {
-        craft_response_with(uid, fresh_cookies, s2c, |_| {})
+        craft_response_with(uid, fresh_cookies, s2c, &[], |_| {})
     }
 
-    /// Same as [`craft_response`] but lets the test mutate the header
-    /// after the canonical fields are populated and *before* the AEAD
-    /// seals it. Required to exercise post-AEAD validation paths
+    /// Same as [`craft_response`] but lets the test inject arbitrary
+    /// cleartext extensions before the Authenticator (`aad_extras`)
+    /// and/or mutate the header after the canonical fields are
+    /// populated and *before* the AEAD seals it (`tweak`).
+    ///
+    /// `aad_extras`: each `(field_type, body)` pair is encoded as a
+    /// wire extension and inserted between the canonical UID
+    /// extension and the Authenticator. The Authenticator's AAD
+    /// covers `bytes[..auth_idx]` (header + every preceding
+    /// extension; see `parse_server_response`), so these extras are
+    /// AAD-only — authenticated against tampering but **not**
+    /// AEAD-encrypted. Used by
+    /// `parse_response_only_returns_cookies_from_decrypted_body` to
+    /// pin the RFC 8915 §5.5 source-of-cookies invariant: even a
+    /// well-formed `NTS_COOKIE` extension placed in the AAD slot
+    /// must be ignored by the cookie-extraction sweep, which is
+    /// scoped to the AEAD-decrypted body only.
+    ///
+    /// `tweak`: required to exercise post-AEAD validation paths
     /// (Stratum-0 KoD, LI=3 alarm) under a wire-correct, authentic
-    /// packet — anything that mutates the header *after* sealing would
-    /// trip the AAD check and surface as an `Aead` error instead.
+    /// packet — anything that mutates the header *after* sealing
+    /// would trip the AAD check and surface as an `Aead` error
+    /// instead.
     fn craft_response_with(
         uid: &[u8],
         fresh_cookies: &[&[u8]],
         s2c: &AeadKey,
+        aad_extras: &[(u16, Vec<u8>)],
         tweak: impl FnOnce(&mut NtpHeader),
     ) -> Vec<u8> {
         let mut header = NtpHeader::client_request(0xCAFE_BABE_1234_5678);
@@ -612,6 +630,9 @@ mod tests {
         let mut packet = Vec::new();
         packet.extend_from_slice(&header.to_bytes());
         packet.extend_from_slice(&encode_extension(ext_type::UNIQUE_IDENTIFIER, uid));
+        for (field_type, body) in aad_extras {
+            packet.extend_from_slice(&encode_extension(*field_type, body));
+        }
         let mut plaintext = Vec::new();
         for c in fresh_cookies {
             plaintext.extend_from_slice(&encode_extension(ext_type::NTS_COOKIE, c));
@@ -753,6 +774,63 @@ mod tests {
         assert_eq!(parsed.fresh_cookies[2], cookies[2]);
         assert_eq!(parsed.header.mode(), mode::SERVER);
         assert_eq!(parsed.header.origin_timestamp, CLIENT_TX);
+    }
+
+    /// `nts-3eu` acceptance criterion (RFC 8915 §5.5): new cookies
+    /// must be sourced **only** from the AEAD-decrypted body of the
+    /// server response. A `NewCookie`-shaped extension placed in the
+    /// AAD slot (between the canonical UID extension and the
+    /// Authenticator) is authenticated against tampering but is not
+    /// encrypted, so an off-path observer who sees one valid response
+    /// could rewrite that slot to swap a client's cookie pool for
+    /// attacker-minted bytes. The cookie-extraction sweep in
+    /// `parse_server_response` is scoped to the post-`s2c_open`
+    /// plaintext for exactly this reason; this test pins the
+    /// invariant so a future refactor that widens the sweep to the
+    /// full extension chain (cleartext + AAD + decrypted) breaks
+    /// loudly rather than silently.
+    ///
+    /// Mirrors the property pinned by ntpd-rs's
+    /// `test_new_cookies_only_from_encrypted` (v1.7.2 lines
+    /// 2284-2301), adapted to our `Vec<RawExt>` model where the
+    /// Authenticator extension is the AAD/ciphertext boundary
+    /// rather than ntpd-rs's flat `ExtensionFieldData` slot model.
+    ///
+    /// Scoped to the AAD-vs-encrypted distinction. The third
+    /// position called out in the bd issue — a cookie inserted
+    /// *after* the Authenticator — is rejected by
+    /// `parse_response_rejects_extension_after_authenticator` as
+    /// `AuthenticatorNotLast` *before* the cookie sweep ever runs,
+    /// so it cannot reach the cookie list and is excluded here to
+    /// keep this test focused on the source-of-cookies invariant.
+    #[test]
+    fn parse_response_only_returns_cookies_from_decrypted_body() {
+        let (_, s2c) = fresh_keys();
+        let aead_cookie = [1u8; 16];
+        let aad_cookie = [2u8; 16];
+        let packet = craft_response_with(
+            &UID,
+            &[&aead_cookie],
+            &s2c,
+            &[(ext_type::NTS_COOKIE, aad_cookie.to_vec())],
+            |_| {},
+        );
+        let parsed = parse_server_response(&packet, &UID, CLIENT_TX, &s2c).unwrap();
+        assert_eq!(
+            parsed.fresh_cookies.len(),
+            1,
+            "AAD-only NTS_COOKIE leaked into the fresh-cookie list (got {:?})",
+            parsed.fresh_cookies,
+        );
+        assert_eq!(
+            parsed.fresh_cookies[0],
+            aead_cookie.to_vec(),
+            "fresh cookie is not the AEAD-internal one; \
+             observed {:?}, expected the AEAD body and never the AAD-only \
+             value {:?}",
+            parsed.fresh_cookies[0],
+            aad_cookie,
+        );
     }
 
     #[test]
@@ -1022,7 +1100,7 @@ mod tests {
     #[test]
     fn parse_response_rejects_unsynchronized_alarm() {
         let (_, s2c) = fresh_keys();
-        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, &[], |h| {
             // LL=11, VVV=100 (v4), MMM=100 (server) → 0xE4.
             h.li_vn_mode = (LI_UNSYNCHRONIZED << 6) | (VERSION_4 << 3) | mode::SERVER;
         });
@@ -1042,7 +1120,7 @@ mod tests {
     #[test]
     fn parse_response_rejects_invalid_high_stratum() {
         let (_, s2c) = fresh_keys();
-        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, &[], |h| {
             h.stratum = STRATUM_UNSYNCHRONIZED_FLOOR;
             // Leave LI=0 so the rejection is attributable purely to
             // the stratum ceiling, not a bleed-through from the
@@ -1063,7 +1141,7 @@ mod tests {
     #[test]
     fn parse_response_rejects_kiss_of_death_with_ascii_code() {
         let (_, s2c) = fresh_keys();
-        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, &[], |h| {
             h.stratum = STRATUM_KISS_OF_DEATH;
             h.reference_id = *b"RATE";
         });
@@ -1083,7 +1161,7 @@ mod tests {
     #[test]
     fn parse_response_rejects_kiss_of_death_with_non_ascii_refid() {
         let (_, s2c) = fresh_keys();
-        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, &[], |h| {
             h.stratum = STRATUM_KISS_OF_DEATH;
             h.reference_id = [0xFF, 0xFE, 0xFD, 0xFC];
         });
@@ -1121,7 +1199,7 @@ mod tests {
     #[test]
     fn parse_response_prefers_kod_over_unsynchronized_when_both_set() {
         let (_, s2c) = fresh_keys();
-        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, |h| {
+        let packet = craft_response_with(&UID, &[&[0xAA; 64]], &s2c, &[], |h| {
             h.li_vn_mode = (LI_UNSYNCHRONIZED << 6) | (VERSION_4 << 3) | mode::SERVER;
             h.stratum = STRATUM_KISS_OF_DEATH;
             // `NTSN` is the NTS-specific kiss code (RFC 8915 §5.7) the
