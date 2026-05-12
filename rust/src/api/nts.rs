@@ -1637,18 +1637,28 @@ impl SessionTable {
                     // `checkout_with` call could overshoot the caller's
                     // documented budget by up to N rounds × `timeout`
                     // in the worst case. If the budget is already
-                    // exhausted, surface the same `KeRecordIo` timeout
-                    // a waiter that hit its deadline would have
-                    // surfaced.
+                    // exhausted, surface `DnsTimeout`: at this point no
+                    // record I/O has happened on this thread, and the
+                    // next phase that *would* have run is DNS. This
+                    // matches the convention
+                    // [`UdpDeadline::remaining_or_timeout`] uses for
+                    // pre-DNS budget exhaustion on the UDP path —
+                    // tagging this as `KeRecordIo` would conflate
+                    // pre-handshake budget exhaustion (operator
+                    // remediation: raise `dnsConcurrencyCap` or
+                    // `timeoutMs`) with the parked-waiter case below
+                    // at line ~1766 (operator remediation:
+                    // investigate why a leader's record I/O is the
+                    // syscall blocking us). Provenance: bd nts-r54.
                     let remaining = match timeout.checked_sub(started.elapsed()) {
                         Some(d) if !d.is_zero() => d,
                         _ => {
                             guard.complete(Err(NtsError::Timeout {
-                                phase: TimeoutPhase::KeRecordIo,
+                                phase: TimeoutPhase::DnsTimeout,
                                 trust_backend: None,
                             }));
                             return Err(NtsError::Timeout {
-                                phase: TimeoutPhase::KeRecordIo,
+                                phase: TimeoutPhase::DnsTimeout,
                                 trust_backend: None,
                             });
                         }
@@ -1743,7 +1753,15 @@ impl SessionTable {
                     // budget elapses and surfaces a Timeout against the
                     // KE record-IO phase (the most accurate single
                     // taxonomy bucket for "stuck waiting on a KE
-                    // handshake we did not run ourselves").
+                    // handshake we did not run ourselves"). Distinct
+                    // from the leader's pre-handshake budget-exhaustion
+                    // path above (line ~1640), which surfaces
+                    // `DnsTimeout` because no record I/O has happened
+                    // on the leader thread either — the two cases need
+                    // separate operator remediations (parked-waiter:
+                    // investigate slow leader; pre-handshake-exhausted:
+                    // raise `dnsConcurrencyCap`/`timeoutMs`). See
+                    // bd nts-r54.
                     let deadline = started + timeout;
                     match slot.wait_until(deadline) {
                         // Leader installed a session; loop back to phase
@@ -1844,11 +1862,21 @@ impl SessionTable {
         match role {
             Role::Leader(slot) => {
                 let mut guard = LeaderGuard::new(self, key.clone(), slot);
+                // Pre-handshake budget exhaustion surfaces `DnsTimeout`,
+                // not `KeRecordIo`: no record I/O has happened on this
+                // thread yet, and the next phase that *would* have run
+                // is DNS. Mirrors the matching site in `checkout_with`
+                // (see comment around line ~1640) and the convention
+                // [`UdpDeadline::remaining_or_timeout`] uses for
+                // pre-DNS budget exhaustion. The waiter case below at
+                // line ~1929 keeps `KeRecordIo` because that path *is*
+                // genuinely "stuck waiting on a leader's record I/O".
+                // Provenance: bd nts-r54.
                 let remaining = match timeout.checked_sub(started.elapsed()) {
                     Some(d) if !d.is_zero() => d,
                     _ => {
                         let err = NtsError::Timeout {
-                            phase: TimeoutPhase::KeRecordIo,
+                            phase: TimeoutPhase::DnsTimeout,
                             trust_backend: None,
                         };
                         guard.complete(Err(err.clone()));
@@ -1926,6 +1954,15 @@ impl SessionTable {
                         ))
                     }
                     Some(Err(e)) => Err(e),
+                    // Parked-waiter timeout: keeps `KeRecordIo` because
+                    // the waiter is genuinely stuck on a leader's
+                    // record I/O syscall. Distinct from the leader's
+                    // pre-handshake budget-exhaustion path above (line
+                    // ~1862), which surfaces `DnsTimeout` because no
+                    // record I/O has happened on the leader thread
+                    // either. Same taxonomy as the matching
+                    // `checkout_with` waiter site (line ~1765). See
+                    // bd nts-r54.
                     None => Err(NtsError::Timeout {
                         phase: TimeoutPhase::KeRecordIo,
                         trust_backend: None,
@@ -5356,18 +5393,23 @@ mod tests {
         }
     }
 
-    /// Pre-handshake budget exhaustion on a re-elected leader: when
+    /// Pre-handshake budget exhaustion on a (re-)elected leader: when
     /// a thread enters `warm_cookies_with` with `started.elapsed()`
     /// already exceeding `timeout`, the leader path must surface
-    /// `Timeout(KeRecordIo)` *before* invoking `do_handshake`, so a
+    /// `Timeout(DnsTimeout)` *before* invoking `do_handshake`, so a
     /// caller's documented per-call wall-clock budget cannot be
     /// silently extended by a re-leader's fresh `timeout`-long
-    /// window. Driven directly via a `Duration::ZERO` budget on a
-    /// fresh table so the leader's `checked_sub` returns `None`
-    /// on the very first iteration. The handshake closure asserts
-    /// it is never invoked.
+    /// window. The phase tag is `DnsTimeout` (not `KeRecordIo`)
+    /// because no record I/O has happened on this thread yet — the
+    /// next phase that *would* have run is DNS. Same taxonomy as
+    /// [`UdpDeadline::remaining_or_timeout`] applies pre-DNS on the
+    /// UDP path. Provenance: bd nts-r54.
+    ///
+    /// Driven directly via a `Duration::ZERO` budget on a fresh table
+    /// so the leader's `checked_sub` returns `None` on the very first
+    /// iteration. The handshake closure asserts it is never invoked.
     #[test]
-    fn warm_cookies_leader_budget_exhausted_before_handshake_returns_timeout() {
+    fn warm_cookies_leader_budget_exhausted_before_handshake_returns_dns_timeout() {
         let table = SessionTable::new();
         let spec = NtsServerSpec {
             host: "warm-singleflight-budget-exhausted.test".into(),
@@ -5383,10 +5425,10 @@ mod tests {
         );
         match outcome {
             Err(NtsError::Timeout {
-                phase: TimeoutPhase::KeRecordIo,
+                phase: TimeoutPhase::DnsTimeout,
                 trust_backend: None,
             }) => {}
-            Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
+            Err(other) => panic!("expected Timeout(DnsTimeout); got {other:?}"),
             Ok(_) => panic!("warm_cookies returned Ok despite an exhausted budget"),
         }
         // The inflight slot must have been cleaned up by the
@@ -5402,6 +5444,60 @@ mod tests {
         assert!(
             !g.contains_key(&key),
             "inflight slot leaked after budget-exhaustion path",
+        );
+    }
+
+    /// Symmetric counterpart for `checkout_with`: pre-handshake
+    /// budget exhaustion on a (re-)elected leader must surface
+    /// `Timeout(DnsTimeout)`, not `KeRecordIo`. The bd ticket
+    /// (nts-r54) describes the realistic scenario as a thread that
+    /// previously parked as a waiter, woke when the leader signalled,
+    /// found the cookie pool drained by another concurrent waker,
+    /// fell through to phase B again, elected itself as the next
+    /// leader, and then found the call-wide budget already
+    /// exhausted. The bug it pins is in a single line — the
+    /// `checked_sub` arm at the leader-budget check — so this test
+    /// drives that line directly via a `Duration::ZERO` budget on a
+    /// fresh table (the leader's `checked_sub` returns `None` on the
+    /// very first iteration). The realistic re-leader scenario
+    /// reaches the same `checked_sub` arm via a different multi-
+    /// thread path; the underlying bug being pinned is the same.
+    /// Mirrors `warm_cookies_leader_budget_exhausted_before_handshake_returns_dns_timeout`.
+    /// Provenance: bd nts-r54.
+    #[test]
+    fn checkout_leader_budget_exhausted_before_handshake_returns_dns_timeout() {
+        let table = SessionTable::new();
+        let spec = NtsServerSpec {
+            host: "checkout-singleflight-budget-exhausted.test".into(),
+            port: 4460,
+        };
+        let outcome = table.checkout_with(
+            &spec,
+            Duration::ZERO,
+            4,
+            &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+                panic!("do_handshake must not be invoked when the per-call budget is exhausted")
+            },
+        );
+        match outcome {
+            Err(NtsError::Timeout {
+                phase: TimeoutPhase::DnsTimeout,
+                trust_backend: None,
+            }) => {}
+            Err(other) => panic!("expected Timeout(DnsTimeout); got {other:?}"),
+            Ok(_) => panic!("checkout returned Ok despite an exhausted budget"),
+        }
+        // Same inflight-slot cleanup invariant as the warm_cookies
+        // counterpart: a single budget-exhaustion event must not
+        // strand future checkouts behind a stale slot.
+        let key = session_key(&spec);
+        let g = table
+            .inflight
+            .lock()
+            .expect("inflight singleflight map poisoned");
+        assert!(
+            !g.contains_key(&key),
+            "inflight slot leaked after checkout budget-exhaustion path",
         );
     }
 
