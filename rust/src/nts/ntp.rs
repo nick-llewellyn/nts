@@ -1316,4 +1316,109 @@ mod tests {
             other => panic!("expected KissOfDeath(\"NTSN\"), got {other:?}"),
         }
     }
+
+    /// Static regression corpus: byte sequences that previously caused
+    /// panics or out-of-bounds reads in ntpd-rs's NTP-extension parser
+    /// before they were minimised and committed as `should_not_crash`
+    /// guards. Each input is reproduced verbatim from
+    /// `ntpd-rs ntp-proto/src/packet/mod.rs` (v1.7.2) — the byte
+    /// sequences themselves are the load-bearing fixtures, so the
+    /// arrays must not be edited or "tidied up" in any future
+    /// refactor.
+    ///
+    /// These tests target [`super::parse_extensions`] directly on the
+    /// post-header slice (`&PACKET[HEADER_LEN..]`), which is exactly
+    /// the slice [`super::parse_server_response`] feeds in at the
+    /// receive entry. The three inputs all encode a non-server
+    /// LI/VN/Mode in byte 0 (`0x23` = client, `0x20` = reserved),
+    /// so calling `parse_server_response` directly would short-circuit
+    /// at the `UnexpectedMode` check before touching the extension
+    /// parser; targeting `parse_extensions` keeps the byte sequences
+    /// unmodified and exercises the actual parser surface the corpus
+    /// was minimised against.
+    ///
+    /// The three tests cumulatively cover both protective branches
+    /// in `parse_extensions`. Mutation-check verified locally:
+    ///
+    /// - Replacing `return Err(NtpError::TruncatedExtension)` (the
+    ///   `bytes.len() - pos < EXT_HEADER_LEN` arm) with `panic!()`
+    ///   trips
+    ///   `parse_extensions_does_not_panic_on_truncated_extension_header`.
+    /// - Replacing `return Err(NtpError::InvalidExtensionLength)`
+    ///   (the `len < EXT_MIN_TOTAL || !len.is_multiple_of(4) ||
+    ///   pos + len > bytes.len()` arm) with `panic!()` trips both
+    ///   `parse_extensions_does_not_panic_on_undersized_nonce` and
+    ///   `parse_extensions_does_not_panic_on_undersized_encryption_ef`.
+    ///
+    /// `test_undersized_ef_in_encrypted_data` (the fourth ntpd-rs
+    /// fixture) is intentionally omitted: it exercises the
+    /// encrypted-fields decryption path which requires driving a real
+    /// AEAD verify with `AesSivCmac256`. Defer to a follow-up once
+    /// an `IdentityAead` test helper exists (tracked separately).
+    mod regression {
+        use super::{parse_extensions, HEADER_LEN};
+
+        /// Regression input: ntpd-rs
+        /// `ntp-proto/src/packet/mod.rs::test_undersized_ef`
+        /// (v1.7.2 lines 2319-2328). 50-byte packet — valid 48-byte
+        /// NTP header followed by 2 bytes of a truncated
+        /// extension-field header. Property: parser must not panic
+        /// on the missing 2 bytes of the EF length prefix.
+        #[test]
+        fn parse_extensions_does_not_panic_on_truncated_extension_header() {
+            const PACKET: [u8; 50] = [
+                35, 2, 6, 232, 0, 0, 3, 255, 0, 0, 3, 125, 94, 198, 159, 15, 229, 246, 98, 152,
+                123, 97, 185, 175, 229, 246, 99, 102, 123, 100, 153, 93, 229, 246, 99, 102, 129,
+                64, 85, 144, 229, 246, 99, 168, 118, 29, 222, 72, 4, 4,
+            ];
+            assert!(
+                parse_extensions(&PACKET[HEADER_LEN..]).is_err(),
+                "extension parser must reject truncated EF header without panicking",
+            );
+        }
+
+        /// Regression input: ntpd-rs
+        /// `ntp-proto/src/packet/mod.rs::test_undersized_nonce`
+        /// (v1.7.2 lines 2330-2340). 77-byte packet — header
+        /// followed by an extension-field whose nonce-length field
+        /// declares more bytes than remain in the EF body.
+        /// Property: parser must not panic on the underflowing
+        /// inner-length arithmetic.
+        #[test]
+        fn parse_extensions_does_not_panic_on_undersized_nonce() {
+            const PACKET: [u8; 77] = [
+                32, 206, 206, 206, 77, 206, 206, 255, 216, 216, 216, 127, 0, 0, 0, 0, 0, 0, 0,
+                216, 216, 216, 216, 206, 217, 216, 216, 216, 216, 216, 216, 206, 206, 206, 1,
+                0, 0, 0, 206, 206, 206, 4, 44, 4, 4, 4, 4, 4, 4, 4, 0, 4, 206, 206, 222, 206,
+                206, 206, 206, 0, 0, 0, 206, 206, 206, 0, 0, 0, 206, 206, 206, 206, 206, 206,
+                131, 206, 206,
+            ];
+            assert!(
+                parse_extensions(&PACKET[HEADER_LEN..]).is_err(),
+                "extension parser must reject undersized-nonce EF without panicking",
+            );
+        }
+
+        /// Regression input: ntpd-rs
+        /// `ntp-proto/src/packet/mod.rs::test_undersized_encryption_ef`
+        /// (v1.7.2 lines 2342-2351). 80-byte packet — header
+        /// followed by an encrypted EF whose declared length is
+        /// consistent at the outer level but whose inner padding /
+        /// nonce arithmetic underflows. Property: parser must not
+        /// panic on the inner-vs-outer length skew.
+        #[test]
+        fn parse_extensions_does_not_panic_on_undersized_encryption_ef() {
+            const PACKET: [u8; 80] = [
+                32, 206, 206, 206, 77, 206, 216, 216, 127, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 216,
+                216, 216, 216, 206, 217, 216, 216, 216, 216, 216, 216, 206, 206, 206, 1, 0, 0,
+                0, 206, 206, 206, 4, 44, 4, 4, 4, 4, 4, 4, 4, 0, 4, 4, 0, 12, 206, 206, 222,
+                206, 206, 206, 206, 0, 0, 0, 12, 206, 206, 222, 206, 206, 206, 206, 206, 206,
+                206, 206, 131, 206, 206,
+            ];
+            assert!(
+                parse_extensions(&PACKET[HEADER_LEN..]).is_err(),
+                "extension parser must reject undersized-encryption EF without panicking",
+            );
+        }
+    }
 }
