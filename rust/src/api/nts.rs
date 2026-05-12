@@ -1779,27 +1779,29 @@ impl SessionTable {
     /// collapse onto one KE handshake: the first arrival becomes
     /// the singleflight leader, runs the handshake without holding
     /// any lock, installs the freshly-handshaken session under the
-    /// `map` lock, then publishes its result; concurrent callers
-    /// park on the slot bounded by their own per-call `timeout`
-    /// budget and, on success, snapshot the just-installed session
-    /// once. Waiters report `KePhaseTimings::default()` because they
-    /// did not perform KE work themselves — same convention
-    /// [`checkout_with`] uses for cache-hit and waiter-wake paths.
+    /// `map` lock, then publishes its harvested cookie count and
+    /// resolved [`TrustBackend`] on the singleflight slot via
+    /// [`HandshakeSlotOk`]; concurrent callers park on the slot
+    /// bounded by their own per-call `timeout` budget and, on
+    /// success, return the leader's payload verbatim without
+    /// re-acquiring the session map. Waiters report
+    /// `KePhaseTimings::default()` because they did not perform KE
+    /// work themselves — same convention [`checkout_with`] uses for
+    /// cache-hit and waiter-wake paths.
     ///
     /// Shares the singleflight key space with [`checkout_with`]:
     /// concurrent `nts_query` and `nts_warm_cookies` against the
     /// same `host:port` collapse onto one handshake, with whichever
     /// caller arrived first becoming the leader. A `nts_query`
-    /// waiter that wakes loops back to the cache to pop a cookie;
-    /// a `nts_warm_cookies` waiter snapshots the cookie count and
-    /// returns. Both observe the same leader session.
-    ///
-    /// If the cache entry is missing at the waiter's wake time
-    /// (e.g. a third caller's later forced refresh evicted it
-    /// between the leader's install and our snapshot), the waiter
-    /// loops back into the singleflight election rather than
-    /// surfacing a sentinel `Internal` error — same convention as
-    /// [`checkout_with`]'s waiter loop-back.
+    /// waiter ignores the slot's `HandshakeSlotOk` payload and loops
+    /// back to the cache to pop a cookie of its own; a
+    /// `nts_warm_cookies` waiter returns `payload.fresh_cookies` and
+    /// `payload.trust_backend` directly. The warm waiter never
+    /// re-reads the cache, so a concurrent `nts_query` waiter that
+    /// pops one cookie out of the freshly installed jar between the
+    /// leader's install and the warm waiter's wake cannot reduce the
+    /// "delivered with the KE response" count surfaced as
+    /// [`NtsWarmCookiesOutcome::fresh_cookies`].
     fn warm_cookies_with(
         &self,
         spec: &NtsServerSpec,
@@ -2000,11 +2002,14 @@ impl SessionTable {
 
     /// Replace any existing entry for `spec`'s `host:port` with `session`.
     /// Test-only since 3.1.0: `nts_warm_cookies_inner` now installs
-    /// through [`Self::warm_cookies_with`]'s singleflight leader path
-    /// (which install + completes atomically against the inflight
-    /// slot). The cache-layer unit tests still use this shim to seed
-    /// the table directly without standing up a faux NTS-KE
-    /// responder.
+    /// through [`Self::warm_cookies_with`]'s singleflight leader path,
+    /// which inserts under the `map` lock and then publishes the
+    /// leader's harvested count on the singleflight slot, so cache
+    /// installation and slot publication land in a fixed
+    /// install-then-publish order even though they occur under
+    /// different mutexes. The cache-layer unit tests still use this
+    /// shim to seed the table directly without standing up a faux
+    /// NTS-KE responder.
     #[cfg(test)]
     fn install(&self, spec: &NtsServerSpec, session: Session) {
         let key = session_key(spec);
