@@ -128,10 +128,12 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   - N concurrent `nts_warm_cookies` against the same `host:port`
     collapse onto exactly one KE handshake. The first arrival
     becomes the singleflight leader, runs the handshake without
-    holding any lock, and installs its session; concurrent callers
-    park on the same slot bounded by their own per-call `timeout_ms`
-    budget and, on success, snapshot the just-installed session's
-    cookie count and `trustBackend`.
+    holding any lock, installs its session, and publishes its
+    harvested cookie count + resolved `trustBackend` on the
+    singleflight slot; concurrent callers park on the same slot
+    bounded by their own per-call `timeout_ms` budget and, on
+    success, return those values verbatim from the slot payload
+    (no cache re-read).
   - Waiters report `phaseTimings` with every field at `0` (same
     convention `nts_query` already uses for cache-hit and
     waiter-wake paths) because they did not perform KE work

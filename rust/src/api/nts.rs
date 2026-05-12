@@ -2545,8 +2545,10 @@ fn nts_warm_cookies_inner(
     // Route through `SessionTable::warm_cookies` so concurrent forced
     // refreshes against the same `host:port` collapse onto one KE
     // handshake via the singleflight machinery shared with `checkout`.
-    // The leader runs a fresh handshake and installs its session;
-    // waiters snapshot that session's cookie count + trust-backend
+    // The leader runs a fresh handshake, installs its session, and
+    // publishes its harvested cookie count + resolved trust-backend
+    // on the singleflight slot via `HandshakeSlotOk`; waiters return
+    // those values verbatim from the slot payload (no cache re-read)
     // and report `KePhaseTimings::default()` because they did not
     // perform KE work themselves. See `SessionTable::warm_cookies_with`
     // for the full state-machine documentation.
