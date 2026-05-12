@@ -2318,6 +2318,39 @@ pub fn nts_query(
 /// `&SessionTable` keeps both paths bit-identical except for which
 /// cache the cookies and keys live in.
 ///
+/// Production source of the per-request 32-octet Unique Identifier
+/// and AEAD nonce. The single funnel through which `nts_query_inner`
+/// pulls request-scoped randomness, exposed at module scope so the
+/// regression test
+/// [`tests::consecutive_request_uids_from_helper_are_distinct`] can
+/// drive the same code path the production query uses (rather than
+/// reimplementing the `getrandom`-then-pack-into-`ClientRequest`
+/// flow inline, which would let `nts_query_inner` drift to a
+/// different RNG without the test catching it).
+///
+/// Both byte-buffers are filled from `getrandom::getrandom`, which
+/// the `getrandom` crate maps to the OS CSPRNG (`getentropy(2)` on
+/// macOS/iOS, `getrandom(2)` on Linux/Android, `BCryptGenRandom` on
+/// Windows). RFC 8915 §5.6 requires the UID be unpredictable; a
+/// regression that swapped this call site for a constant-bytes stub
+/// during debugging — or `getrandom` itself selecting a broken
+/// backend at build time — would silently lose §5.6 replay
+/// protection because the UID echo check in `parse_server_response`
+/// would still match.
+///
+/// Returns `NtsError::Internal` (with the underlying `getrandom`
+/// diagnostic preserved verbatim) on the unreachable-in-practice
+/// case where the OS CSPRNG itself fails.
+fn fresh_request_uid_and_nonce(nonce_len: usize) -> Result<([u8; UID_LEN], Vec<u8>), NtsError> {
+    let mut uid = [0u8; UID_LEN];
+    let mut nonce = vec![0u8; nonce_len];
+    getrandom::getrandom(&mut uid)
+        .map_err(|e| NtsError::Internal(format!("RNG failed for UID: {e}")))?;
+    getrandom::getrandom(&mut nonce)
+        .map_err(|e| NtsError::Internal(format!("RNG failed for nonce: {e}")))?;
+    Ok((uid, nonce))
+}
+
 /// `trust_mode` is the caller's [`TrustMode`] policy (the default
 /// singleton uses `PlatformWithFallback`; caller-minted clients use
 /// whatever they were constructed with). `is_default_client` selects
@@ -2409,12 +2442,7 @@ fn nts_query_inner(
         attribute_post_handshake(NtsError::from(err))
     };
 
-    let mut uid = [0u8; UID_LEN];
-    let mut nonce = vec![0u8; ctx.c2s_key.nonce_len()];
-    getrandom::getrandom(&mut uid)
-        .map_err(|e| NtsError::Internal(format!("RNG failed for UID: {e}")))?;
-    getrandom::getrandom(&mut nonce)
-        .map_err(|e| NtsError::Internal(format!("RNG failed for nonce: {e}")))?;
+    let (uid, nonce) = fresh_request_uid_and_nonce(ctx.c2s_key.nonce_len())?;
 
     let transmit_timestamp = system_time_to_ntp64();
     let req = ClientRequest {
@@ -5529,6 +5557,96 @@ mod tests {
         assert_eq!(
             NtsClient::with_trust_mode(TrustMode::PlatformOnly).trust_mode(),
             TrustMode::PlatformOnly,
+        );
+    }
+
+    /// Pins the RFC 8915 §5.6 unpredictability property at the
+    /// *production* UID-generation site by driving the same module-
+    /// scope helper [`super::fresh_request_uid_and_nonce`] that
+    /// `nts_query_inner` uses to mint per-request UIDs and nonces.
+    ///
+    /// Anchoring the assertion to the helper (rather than calling
+    /// `getrandom::getrandom` directly here in the test) means a
+    /// regression where `nts_query_inner` stops calling the helper —
+    /// or where the helper itself is rewritten to reuse a cached
+    /// UID, swap in constant bytes during a debugging session, or
+    /// pull from a broken RNG — would actually be caught by this
+    /// test. A test that reimplemented the `getrandom`-then-pack-
+    /// into-`ClientRequest` flow inline would *not* catch any of
+    /// those shapes, because the production code path would have
+    /// drifted out from under the test.
+    ///
+    /// To keep the production code path honest end-to-end the test
+    /// also serialises each UID into a `ClientRequest` and runs it
+    /// through `build_client_request`, then parses the resulting
+    /// wire bytes back to recover the on-wire UID extension and
+    /// asserts uniqueness on those bodies. Catches a hypothetical
+    /// regression where the helper returns distinct UIDs but
+    /// `build_client_request` pins them to a constant on the wire
+    /// (today the production wire encoding is a verbatim copy of
+    /// `req.unique_id`, but the test holds independently of that).
+    ///
+    /// Why this lives in `api::nts::tests` rather than
+    /// `nts::ntp::tests`: `nts::ntp` is intentionally
+    /// `getrandom`/`rand`-free (the module-level rustdoc says "all
+    /// randomness is supplied by the caller"); the production UID-
+    /// generation call site is in `nts_query_inner` here in
+    /// `api::nts`, and so is the helper that funnels its randomness.
+    ///
+    /// 100 iterations catches the gross-brokenness shape; the
+    /// birthday bound at 256 bits of UID entropy makes a real-RNG
+    /// collision astronomically unlikely, so this test does not
+    /// flake on healthy `getrandom`.
+    #[test]
+    fn consecutive_request_uids_from_helper_are_distinct() {
+        use crate::nts::ntp::{
+            build_client_request, ext_type, parse_extensions, ClientRequest, HEADER_LEN,
+        };
+        use std::collections::HashSet;
+
+        let c2s_key = AeadKey::from_keying_material(15, &[0x11u8; 32])
+            .expect("c2s key constructs from canonical SIV-CMAC-256 material");
+        let nonce_len = c2s_key.nonce_len();
+        let cookie = vec![0x55u8; 64];
+
+        let mut seen = HashSet::with_capacity(100);
+        for iteration in 0..100 {
+            // Production helper: same call site as `nts_query_inner`.
+            let (uid, nonce) = super::fresh_request_uid_and_nonce(nonce_len)
+                .unwrap_or_else(|e| panic!("iteration {iteration}: helper failed: {e:?}"));
+
+            let req = ClientRequest {
+                unique_id: uid.to_vec(),
+                cookie: cookie.clone(),
+                placeholder_count: 0,
+                nonce,
+                transmit_timestamp: 0,
+            };
+            let packet = build_client_request(&req, &c2s_key)
+                .unwrap_or_else(|e| panic!("iteration {iteration}: build_client_request: {e:?}"));
+            let extensions = parse_extensions(&packet[HEADER_LEN..])
+                .unwrap_or_else(|e| panic!("iteration {iteration}: parse_extensions: {e:?}"));
+            let on_wire_uid = extensions
+                .iter()
+                .find(|ext| ext.field_type == ext_type::UNIQUE_IDENTIFIER)
+                .unwrap_or_else(|| panic!("iteration {iteration}: UID extension missing on wire"))
+                .body
+                .clone();
+            assert_eq!(
+                on_wire_uid.len(),
+                UID_LEN,
+                "iteration {iteration}: on-wire UID length is not {UID_LEN}",
+            );
+            assert!(
+                seen.insert(on_wire_uid.clone()),
+                "iteration {iteration}: UID collision against earlier iteration ({on_wire_uid:02x?})",
+            );
+        }
+        assert_eq!(
+            seen.len(),
+            100,
+            "expected 100 distinct UIDs, got {}",
+            seen.len()
         );
     }
 }

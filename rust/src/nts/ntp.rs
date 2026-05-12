@@ -150,6 +150,21 @@ pub enum NtpError {
     },
     MissingUniqueIdentifier,
     UniqueIdentifierMismatch,
+    /// Response carried more than one Unique Identifier extension in
+    /// the AAD (i.e. before the Authenticator). RFC 8915 §5.3 says
+    /// "the Unique Identifier extension field" (singular) appears in
+    /// every NTS-protected NTP packet; a packet with two distinct
+    /// UIDs in the cleartext-but-authenticated portion is malformed
+    /// and must be rejected outright rather than implicitly resolving
+    /// to "the first one". An attacker who could splice a second UID
+    /// extension into a valid response (and re-seal the AAD via a
+    /// compromised server, or via an off-path replay against a future
+    /// in-flight request whose UID happens to match) would otherwise
+    /// be able to confuse downstream UID-correlation logic into
+    /// associating the response with the wrong outstanding request.
+    /// Rejecting at the parser keeps the "one UID per packet"
+    /// invariant load-bearing for every caller.
+    DuplicateUniqueIdentifier,
     MissingAuthenticator,
     AuthenticatorNotLast,
     MalformedAuthenticator,
@@ -202,6 +217,9 @@ impl std::fmt::Display for NtpError {
             Self::UnexpectedVersion { actual } => write!(f, "unexpected NTP version {actual}"),
             Self::MissingUniqueIdentifier => f.write_str("response lacks Unique Identifier"),
             Self::UniqueIdentifierMismatch => f.write_str("Unique Identifier did not echo request"),
+            Self::DuplicateUniqueIdentifier => {
+                f.write_str("response carries more than one Unique Identifier extension")
+            }
             Self::MissingAuthenticator => f.write_str("response lacks Authenticator extension"),
             Self::AuthenticatorNotLast => f.write_str("Authenticator must be last extension"),
             Self::MalformedAuthenticator => f.write_str("Authenticator body malformed"),
@@ -474,6 +492,23 @@ pub fn parse_server_response(
     };
     if auth_idx + 1 != extensions.len() {
         return Err(NtpError::AuthenticatorNotLast);
+    }
+
+    // RFC 8915 §5.3 mandates "the" Unique Identifier extension
+    // (singular). Count UID extensions in the AAD (everything before
+    // the Authenticator) and reject outright if more than one is
+    // present, rather than implicitly resolving to the first match
+    // and ignoring any extras: a packet with two distinct UIDs in
+    // the AAD is malformed, and accepting "the first" would let an
+    // attacker who could splice in a second UID extension confuse
+    // downstream UID-correlation logic into associating the response
+    // with the wrong outstanding request.
+    let uid_count = extensions[..auth_idx]
+        .iter()
+        .filter(|ext| ext.field_type == ext_type::UNIQUE_IDENTIFIER)
+        .count();
+    if uid_count > 1 {
+        return Err(NtpError::DuplicateUniqueIdentifier);
     }
 
     let unique_id = extensions
@@ -894,6 +929,69 @@ mod tests {
         match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
             Err(NtpError::AuthenticatorNotLast) => {}
             other => panic!("expected AuthenticatorNotLast, got {other:?}"),
+        }
+    }
+
+    /// RFC 8915 §5.3 says "the Unique Identifier extension field"
+    /// (singular) appears in every NTS-protected NTP packet. A
+    /// response with two distinct UIDs in the AAD (cleartext-but-
+    /// authenticated portion before the Authenticator) is malformed
+    /// and must surface
+    /// [`NtpError::DuplicateUniqueIdentifier`] outright — *not*
+    /// implicitly resolve to "the first match and ignore the extra"
+    /// (which is what `iter().find()` would do without an explicit
+    /// count check) and *not* fall through to the AEAD verify (which
+    /// would still pass, because both UIDs are inside the seal's
+    /// AAD).
+    ///
+    /// Attack-shape this guards against: a poisoned response where
+    /// the legitimate UID matches the outstanding request's UID
+    /// (passing the existing `UniqueIdentifierMismatch` check) but a
+    /// second UID is spliced in to confuse downstream UID-correlation
+    /// logic into associating the response with a different
+    /// outstanding request. Mirrors `ntpd-rs ntp-proto/src/packet/mod.rs::test_nts_response_validation`
+    /// (v1.7.2, lines 1679-1732), which exercises the same shape via
+    /// the "extra UID in the wrong slot" sub-case.
+    #[test]
+    fn parse_response_rejects_duplicate_uid_extension_in_aad() {
+        let (_, s2c) = fresh_keys();
+        // Plant a second UID with a *different* body before the
+        // Authenticator. Both extensions are inside the seal's AAD,
+        // so the AEAD verify still passes — the rejection must
+        // happen at the parser layer, before the AEAD step.
+        let extra_uid = [0xEE; 32];
+        let packet = craft_response_with(
+            &UID,
+            &[&[0xAA; 64]],
+            &s2c,
+            &[(ext_type::UNIQUE_IDENTIFIER, &extra_uid)],
+            |_| {},
+        );
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::DuplicateUniqueIdentifier) => {}
+            other => panic!("expected DuplicateUniqueIdentifier, got {other:?}"),
+        }
+    }
+
+    /// Same shape as `parse_response_rejects_duplicate_uid_extension_in_aad`
+    /// but with the duplicate UID matching the legitimate one byte-
+    /// for-byte. A naive implementation that deduplicates UIDs by
+    /// equality before counting would silently accept this packet;
+    /// the rejection must be based on the count of UID extensions
+    /// alone, regardless of whether the bodies are equal.
+    #[test]
+    fn parse_response_rejects_duplicate_uid_even_when_bodies_match() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_response_with(
+            &UID,
+            &[&[0xAA; 64]],
+            &s2c,
+            &[(ext_type::UNIQUE_IDENTIFIER, &UID)],
+            |_| {},
+        );
+        match parse_server_response(&packet, &UID, CLIENT_TX, &s2c) {
+            Err(NtpError::DuplicateUniqueIdentifier) => {}
+            other => panic!("expected DuplicateUniqueIdentifier, got {other:?}"),
         }
     }
 
