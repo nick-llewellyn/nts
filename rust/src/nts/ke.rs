@@ -686,7 +686,7 @@ pub(crate) fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild
 
 #[cfg(target_os = "android")]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
-    match build_with_native_verifier_android() {
+    match build_with_native_verifier_android(trust_mode) {
         Ok((mut cfg, hybrid)) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
             Ok(TlsConfigBuild {
@@ -735,7 +735,9 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
 }
 
 #[cfg(target_os = "android")]
-fn build_with_native_verifier_android() -> Result<
+fn build_with_native_verifier_android(
+    trust_mode: KeTrustMode,
+) -> Result<
     (
         ClientConfig,
         Arc<crate::nts::hybrid_verifier::HybridVerifier>,
@@ -743,7 +745,7 @@ fn build_with_native_verifier_android() -> Result<
     rustls::Error,
 > {
     use crate::nts::hybrid_verifier::HybridVerifier;
-    let hybrid = Arc::new(HybridVerifier::new());
+    let hybrid = Arc::new(HybridVerifier::new(trust_mode));
     let cfg = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
         .dangerous()
         .with_custom_certificate_verifier(hybrid.clone())

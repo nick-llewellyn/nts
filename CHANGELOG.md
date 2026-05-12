@@ -108,6 +108,55 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   followed older docs that described `0` as the package default) now
   trip the new range validator above.
 
+### Changed — `TrustMode::PlatformOnly` is now strict at the per-chain level on Android
+
+- **BREAKING (Android-only)** — `TrustMode::PlatformOnly` /
+  `TrustMode.platformOnly` now refuses *every* silent fallback to
+  the `webpki-roots` static bundle, including the per-chain hybrid
+  fallback that the Android `HybridVerifier` performed in 3.0.x for
+  two curated failure shapes:
+  - `CertificateError::Revoked` (typical when a chain like Let's
+    Encrypt R12 omits the OCSP responder URL in the AIA extension —
+    the platform `PKIXRevocationChecker` hard-fails such chains as
+    `Revoked`).
+  - `Error::General("failed to call native verifier: …")`
+    (typical when R8 / ProGuard dead-code-eliminates the AAR's
+    `org.rustls.platformverifier.*` glue in a release build that
+    forgot the keep rules).
+
+  In 3.0.x both arms silently retried against `webpki-roots`
+  regardless of `TrustMode`, and the only signal a `PlatformOnly`
+  caller had that the static bundle had been consulted was a
+  post-hoc `KeOutcome::trust_backend == PlatformWithHybridFallback`
+  on the resulting sample. As of 3.1.0 the `HybridVerifier` is
+  constructed with the `KeTrustMode` and gates both arms on
+  `PlatformWithFallback`; in `PlatformOnly` mode the platform
+  verifier's error propagates verbatim and `webpki-roots` is never
+  consulted.
+
+  - **Migration**: callers who *want* the safety net should switch
+    to (or stay on) `TrustMode::PlatformWithFallback` (the historic
+    default for both `NtsClient::new()` and the top-level
+    convenience functions), where both arms continue to fire as in
+    3.0.x.
+  - **Migration**: callers who already used `PlatformOnly` to enforce
+    a corporate-CA / MDM-pin posture see their stated intent honoured
+    in full and can drop any post-hoc `trust_backend !=
+    PlatformWithHybridFallback` defensive checks they had layered
+    on top of the per-sample outcome.
+  - **Default `NtsClient` is unaffected**. `NtsClient::new()` is
+    `PlatformWithFallback`, so the default behaviour matches 3.0.x
+    and there is no opt-out behaviour change for callers who never
+    constructed a `PlatformOnly` client.
+
+  The pre-3.1 dartdoc on `TrustMode::PlatformOnly` framed the
+  per-chain limitation as inherent ("`PlatformOnly` therefore means
+  'no silent build-time downgrade', not 'the public-CA bundle is
+  unreachable'"). The strict semantics this release ships replace
+  that disclaimer with the contract Android callers actually want.
+
+  Resolves the bd-tracked finding `nts-2lh`.
+
 ### Changed — `nts_warm_cookies` collapses concurrent forced refreshes via singleflight
 
 - **No behaviour change for the dartdoc'd contract** —

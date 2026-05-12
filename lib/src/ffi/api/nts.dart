@@ -767,24 +767,28 @@ enum TrustMode {
   /// [`NtsClient::new`].
   platformWithFallback,
 
-  /// Refuses the build-time silent fallback. On
-  /// `build_with_native_verifier` failure the client surfaces
-  /// [`NtsError::TrustBackendUnavailable`] rather than constructing
-  /// a `webpki-roots` config. Use when a pinned corporate CA or an
-  /// MDM-installed root is the load-bearing trust anchor and a
-  /// silent downgrade to a static bundle would defeat the
-  /// deployment's TLS-inspection posture.
+  /// Refuses every silent fallback to the `webpki-roots` static
+  /// bundle. Use when a pinned corporate CA or an MDM-installed
+  /// root is the load-bearing trust anchor and a silent downgrade
+  /// to a static bundle would defeat the deployment's
+  /// TLS-inspection posture.
   ///
-  /// This setting governs the **build-time** hard-fallback
-  /// decision only. On Android, the `HybridVerifier` makes a
-  /// separate **per-chain** decision after the platform verifier
-  /// returns: chains the platform verifier rejects with a curated
-  /// fallback-eligible failure shape (e.g. missing-OCSP-AIA chains
-  /// such as Let's Encrypt R12) can still be accepted via the
-  /// `webpki-roots` static bundle and surface as
-  /// [`TrustBackend::PlatformWithHybridFallback`]. That path is
-  /// not affected by `TrustMode`. `PlatformOnly` therefore means
-  /// "no silent build-time downgrade", not "the public-CA bundle
-  /// is unreachable".
+  /// Two distinct surfaces are gated:
+  ///
+  /// 1. **Build-time** (3.0.0): `build_with_native_verifier`
+  ///    failure surfaces as [`NtsError::TrustBackendUnavailable`]
+  ///    rather than constructing a `webpki-roots` config.
+  /// 2. **Per-chain** on Android (3.1.0, BREAKING): the
+  ///    `HybridVerifier` no longer retries against `webpki-roots`
+  ///    for the two curated fallback-eligible failure shapes
+  ///    (missing-OCSP-AIA chains such as Let's Encrypt R12, and
+  ///    R8-stripped `org.rustls.platformverifier.*` JNI failures).
+  ///    Both arms now propagate the platform verifier's error
+  ///    verbatim. As a result, a `PlatformOnly` Android caller
+  ///    will *never* observe
+  ///    [`TrustBackend::PlatformWithHybridFallback`]; that backend
+  ///    is reachable only via [`TrustMode::PlatformWithFallback`]
+  ///    (the historic default), where both fallback arms continue
+  ///    to fire as in 3.0.x.
   platformOnly,
 }

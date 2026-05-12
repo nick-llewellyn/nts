@@ -28,9 +28,12 @@ pub mod ntp;
 pub mod records;
 pub mod trust_state;
 
-// Android-only: see `hybrid_verifier::HybridVerifier`. Salvages NTS-KE
+// `HybridVerifier` runs on Android in production (it salvages NTS-KE
 // handshakes against servers whose Let's Encrypt R12 leaves omit the
 // OCSP responder URL — the platform `PKIXRevocationChecker` rejects
-// those as `Revoked` even though they're valid.
-#[cfg(target_os = "android")]
+// those as `Revoked` even though they're valid). The module is
+// compiled on every platform so its `KeTrustMode`-gating contract
+// can be unit-tested in the host-platform CI run; only the
+// Android-only `build_with_native_verifier_android` call site in
+// `ke.rs` actually instantiates one in production.
 pub mod hybrid_verifier;
