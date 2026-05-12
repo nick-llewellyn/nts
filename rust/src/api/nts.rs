@@ -5531,4 +5531,90 @@ mod tests {
             TrustMode::PlatformOnly,
         );
     }
+
+    /// Pins the RFC 8915 §5.6 unpredictability property at the
+    /// production UID-generation site: every consecutive request
+    /// that `nts_query` would build pulls a fresh 32-octet UID from
+    /// `getrandom::getrandom`, and the resulting UIDs as observed
+    /// on-wire (after `build_client_request` has serialised them
+    /// into the canonical Unique Identifier extension) must all be
+    /// distinct.
+    ///
+    /// Why this lives in `api::nts::tests` rather than
+    /// `nts::ntp::tests`: `nts::ntp` is intentionally
+    /// `getrandom`/`rand`-free (the module-level rustdoc says "all
+    /// randomness is supplied by the caller"); the production UID-
+    /// generation call site is in `nts_query` here in `api::nts`.
+    /// Driving the same `getrandom::getrandom(&mut [0u8; UID_LEN])`
+    /// pattern that `nts_query` uses (rather than asserting that
+    /// `build_client_request` synthesises UIDs, which it doesn't)
+    /// keeps the test honest about the actual production flow.
+    ///
+    /// A "stuck RNG" regression — accidentally swapping
+    /// `getrandom::getrandom` for a constant-bytes stub during
+    /// debugging, or `getrandom` itself selecting a broken backend
+    /// at build time — would silently lose RFC 8915 §5.6 replay
+    /// protection: an off-path attacker who recorded one valid
+    /// request/response pair could replay the response against the
+    /// next request, because the UID echo check in
+    /// `parse_server_response` would still match. 100 iterations
+    /// catches the gross-brokenness shape; the birthday bound at
+    /// 256 bits of UID entropy makes a real-RNG collision
+    /// astronomically unlikely (so this test does not flake on
+    /// healthy `getrandom`).
+    #[test]
+    fn consecutive_client_request_uids_are_distinct() {
+        use crate::nts::ntp::{
+            build_client_request, ext_type, parse_extensions, ClientRequest, HEADER_LEN,
+        };
+        use std::collections::HashSet;
+
+        let c2s_key = AeadKey::from_keying_material(15, &[0x11u8; 32])
+            .expect("c2s key constructs from canonical SIV-CMAC-256 material");
+        let nonce_len = c2s_key.nonce_len();
+        let cookie = vec![0x55u8; 64];
+
+        let mut seen = HashSet::with_capacity(100);
+        for iteration in 0..100 {
+            let mut uid = [0u8; UID_LEN];
+            let mut nonce = vec![0u8; nonce_len];
+            getrandom::getrandom(&mut uid)
+                .unwrap_or_else(|e| panic!("iteration {iteration}: getrandom UID failed: {e}"));
+            getrandom::getrandom(&mut nonce)
+                .unwrap_or_else(|e| panic!("iteration {iteration}: getrandom nonce failed: {e}"));
+
+            let req = ClientRequest {
+                unique_id: uid.to_vec(),
+                cookie: cookie.clone(),
+                placeholder_count: 0,
+                nonce,
+                transmit_timestamp: 0,
+            };
+            let packet = build_client_request(&req, &c2s_key)
+                .unwrap_or_else(|e| panic!("iteration {iteration}: build_client_request: {e:?}"));
+            let extensions = parse_extensions(&packet[HEADER_LEN..])
+                .unwrap_or_else(|e| panic!("iteration {iteration}: parse_extensions: {e:?}"));
+            let on_wire_uid = extensions
+                .iter()
+                .find(|ext| ext.field_type == ext_type::UNIQUE_IDENTIFIER)
+                .unwrap_or_else(|| panic!("iteration {iteration}: UID extension missing on wire"))
+                .body
+                .clone();
+            assert_eq!(
+                on_wire_uid.len(),
+                UID_LEN,
+                "iteration {iteration}: on-wire UID length is not {UID_LEN}",
+            );
+            assert!(
+                seen.insert(on_wire_uid.clone()),
+                "iteration {iteration}: UID collision against earlier iteration ({on_wire_uid:02x?})",
+            );
+        }
+        assert_eq!(
+            seen.len(),
+            100,
+            "expected 100 distinct UIDs, got {}",
+            seen.len()
+        );
+    }
 }
