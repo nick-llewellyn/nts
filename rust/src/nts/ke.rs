@@ -1799,7 +1799,7 @@ mod tests {
     fn validate_response_rejects_extra_error_record_after_handshake() {
         let mut records = well_formed_response();
         // Inject a non-critical Error record immediately before the
-        // EOM. The Error variant is RFC 8915 §4.1.5 record type 2
+        // EOM. The Error variant is RFC 8915 §4.1.3 record type 2
         // with a u16 payload; using `0xBEEF` as an arbitrary
         // server-defined code so the test pins both the rejection
         // *and* the round-trip of the code through `ServerError`.
