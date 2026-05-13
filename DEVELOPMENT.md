@@ -563,11 +563,11 @@ notes](https://blog.rust-lang.org/2024/09/05/Rust-1.81.0.html#new-expect-attribu
 Unlike `#[allow]`, which silently suppresses a lint regardless of
 whether the lint would actually fire, `#[expect]` *requires* the
 lint to fire — if a later refactor resolves the underlying issue,
-the compiler emits a `lint_reasons` warning that the suppression
-is now dead code. Stale suppressions are flagged automatically;
-they do not silently outlive the condition that justified them.
-The MSRV declared in `rust/Cargo.toml` (`rust-version = "1.87"`)
-covers the `reason` field syntax.
+the compiler emits an `unfulfilled_lint_expectations` warning that
+the suppression is now dead code. Stale suppressions are flagged
+automatically; they do not silently outlive the condition that
+justified them. The MSRV declared in `rust/Cargo.toml`
+(`rust-version = "1.87"`) covers the `reason` field syntax.
 
 ### `reason = "..."` content
 
@@ -612,8 +612,9 @@ lint findings against it are not actionable from this repository.
 The suppression is durable, not temporary, so `#[expect]`'s "fail
 on resolution" semantics actively work against the maintainer
 intent here — a regeneration that happens to satisfy a
-previously-suppressed lint would emit `lint_reasons` warnings
-that nobody can fix without re-adding the lint shape elsewhere.
+previously-suppressed lint would emit
+`unfulfilled_lint_expectations` warnings that nobody can fix
+without re-adding the lint shape elsewhere.
 
 This is the *only* `#[allow]` site in hand-written code. New
 sites must use `#[expect]`; the PR template
