@@ -354,7 +354,7 @@ pub struct KeOutcome {
     pub s2c_key: Zeroizing<Vec<u8>>,
     /// Initial cookie pool delivered with the response.
     pub cookies: Vec<Vec<u8>>,
-    /// Non-fatal warning codes (RFC 8915 §4.1.5 record type 3).
+    /// Non-fatal warning codes (RFC 8915 §4.1.4 record type 3).
     pub warnings: Vec<u16>,
     /// Microsecond-resolution per-phase wall-clock breakdown of the
     /// handshake. `0` for any phase the call did not enter (e.g.
@@ -418,7 +418,7 @@ pub enum KeError {
     Tls(rustls::Error),
     InvalidServerName,
     Codec(CodecError),
-    /// Server returned an Error record (RFC 8915 §4.1.5 record type 2).
+    /// Server returned an Error record (RFC 8915 §4.1.3 record type 2).
     ServerError(u16),
     /// A critical record we don't recognize was received (RFC 8915 §4.1.4).
     UnknownCritical(u16),
@@ -671,8 +671,9 @@ fn exporter_context(aead_id: u16, s2c: bool) -> [u8; 5] {
 
 /// Build the client request blob: NextProtocol(NTPv4), AeadAlgorithm(prefs), EOM.
 ///
-/// All three records are critical (RFC 8915 §4.1.5 mandates the first two as
-/// critical; we mark EOM critical to match every reference implementation).
+/// All three records are critical (RFC 8915 §4.1.2 mandates NextProtocol
+/// and §4.1.5 mandates AEAD Algorithm Negotiation as critical; we mark
+/// EOM critical to match every reference implementation).
 fn build_request(aead_algorithms: &[u16]) -> Vec<u8> {
     serialize_message(&[
         Record::new(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4])),
