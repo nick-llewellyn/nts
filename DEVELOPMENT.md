@@ -74,6 +74,51 @@ run from the example app (`example/`); the underlying Rust crate has
 its own live integration probes gated behind `--ignored` (run with
 `cargo test --ignored` in `rust/`).
 
+### Fuzzing the Rust parsers (cargo-fuzz)
+
+The Rust crate ships a `cargo-fuzz` workspace under `rust/fuzz/` that
+targets the parser surfaces directly exposed to attacker-controlled
+network bytes (currently `parse_extensions`; `parse_message` and
+`validate_response` are queued as follow-ups). The workspace is a
+separate Cargo workspace so the parent `cargo test` / `cargo clippy`
+invocations remain on stable toolchain — `libfuzzer-sys` itself
+builds on stable, but `cargo fuzz {build,run}` enables sanitizer
+coverage instrumentation (`-Zsanitizer`, etc.) that only the nightly
+compiler accepts.
+
+One-time setup:
+
+```bash
+rustup toolchain install nightly
+cargo install cargo-fuzz
+```
+
+Run a target locally (5 minutes is a reasonable spot-check; longer for
+overnight):
+
+```bash
+cd rust/fuzz
+cargo +nightly fuzz run parse_extensions -- -max_total_time=300
+```
+
+The seed corpus under `rust/fuzz/corpus/parse_extensions/` is committed
+and contains three minimised reproducers ported from `ntpd-rs`'s
+`should_not_crash` tests (see PR #45 / bd nts-1qb). New crashes land in
+`rust/fuzz/artifacts/<target>/` (gitignored); promote any minimised
+crash into the seed corpus or pin it as a unit-test fixture in the
+parent crate's regression module.
+
+The `nts_rust` crate exposes the parsers to the harness via the
+`__fuzzing` Cargo feature (re-exports under `nts_rust::__fuzzing::*`).
+That feature must only ever be enabled by fuzz / coverage crates that
+are themselves excluded from the published artefact (see
+`.pubignore`). Never enable it from `hook/build.dart` or the FRB
+codegen.
+
+CI integration is not wired up yet; follow-up tickets cover both
+adding the additional fuzz targets and a nightly job that runs each
+target for a fixed wall-clock budget.
+
 ## Rust log verbosity
 
 The Rust crate is compiled in one of two configurations, selected by

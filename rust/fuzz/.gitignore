@@ -1,0 +1,17 @@
+# cargo-fuzz build output (recreated by every `cargo fuzz run`).
+target/
+
+# Crash reproducers written by libfuzzer when a target panics or
+# trips a sanitizer. These are local-investigation artefacts, not
+# part of the regression suite — once minimised they get promoted
+# into `corpus/<target>/` (which IS committed) or, if appropriate,
+# pinned by a unit-test fixture in the parent crate.
+artifacts/
+
+# Coverage data from `cargo fuzz coverage` runs.
+coverage/
+
+# Note: `corpus/<target>/` directories are NOT ignored. The seed
+# corpus is committed so each fresh `cargo fuzz run` starts from a
+# known-good baseline (and so CI, when wired up, exercises the same
+# inputs every contributor sees locally).

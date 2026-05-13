@@ -6,13 +6,22 @@ publish = false
 license = "MIT"
 description = "Rust client for RFC 8915 Network Time Security, bridged to Dart via flutter_rust_bridge."
 
-# This crate is consumed by Flutter via the Native Assets API (`hook/build.dart`).
-# - `cdylib`  — produced for iOS / Android / desktop dylib bundling.
+# This crate is consumed by Flutter via the Native Assets API
+# (`hook/build.dart`). The crate-type list below has three entries:
+#
+# - `cdylib`    — produced for iOS / Android / desktop dylib bundling.
 # - `staticlib` — used on platforms where the native asset hook prefers a
 #                 static archive (e.g. iOS device builds without dynamic
 #                 framework wrapping).
+# - `rlib`      — required so cargo-fuzz harnesses in `rust/fuzz/` (and
+#                 any future Rust-side integration tests in a sibling
+#                 crate) can link `nts_rust` as a Rust dependency. Adds
+#                 a `libnts_rust.rlib` to `target/<profile>/deps/` but
+#                 does not change the `cdylib` / `staticlib` outputs the
+#                 Native Assets build hook reads, and is not published
+#                 to consumers (only the cdylib/staticlib are bundled).
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 # Compile-time logging-level strip is gated behind a default-on Cargo
 # feature so the Native Assets build hook (`hook/build.dart`) can drop
@@ -30,6 +39,15 @@ crate-type = ["cdylib", "staticlib"]
 [features]
 default = ["log-strip"]
 log-strip = ["log/release_max_level_warn", "tracing/release_max_level_warn"]
+# Re-exports the otherwise-`pub(crate)` `nts` protocol modules through a
+# `__fuzzing` re-export module so harnesses in `rust/fuzz/` can target
+# the parsers (`parse_extensions`, future `parse_message`,
+# `validate_response`) without widening the crate's public API. The
+# leading `__` is the convention for non-API integration hooks (see bd
+# nts-b6m); the feature must only ever be enabled by fuzz / coverage
+# crates that are themselves excluded from the published artefact, never
+# by the Native Assets build hook (`hook/build.dart`) or the FRB codegen.
+__fuzzing = []
 
 [dependencies]
 aes-gcm-siv = { version = "0.11", default-features = false, features = ["alloc", "aes"] }

@@ -11,6 +11,18 @@ pub mod api;
 mod frb_generated;
 pub(crate) mod nts;
 
+// Re-exports the protocol parsers for cargo-fuzz harnesses in
+// `rust/fuzz/`, gated behind the `__fuzzing` Cargo feature so the
+// surface stays out of the published API. The `nts` module remains
+// `pub(crate)` for ordinary builds; flipping `__fuzzing` re-exposes
+// only the specific parser entry points that fuzz targets need to
+// drive, not the whole module tree. See `rust/Cargo.toml::[features]`
+// for the policy on enabling this flag (fuzz / coverage crates only).
+#[cfg(feature = "__fuzzing")]
+pub mod __fuzzing {
+    pub use crate::nts::ntp::{parse_extensions, NtpError};
+}
+
 // Android-only: exports a JNI symbol that bootstraps `rustls-platform-verifier`
 // against the Android system trust store. The matching Kotlin caller
 // (`com.nllewellyn.nts.PlatformInit`) ships inside the `nts` Flutter
