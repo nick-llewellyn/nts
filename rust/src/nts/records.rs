@@ -190,7 +190,7 @@ pub fn serialize_message(records: &[Record]) -> Vec<u8> {
 /// Parse a complete NTS-KE message into a record list.
 ///
 /// On success the last record is guaranteed to be `EndOfMessage` and any
-/// `EndOfMessage` body is required to be empty (RFC 8915 §4.1.5).
+/// `EndOfMessage` body is required to be empty (RFC 8915 §4.1.1).
 pub fn parse_message(bytes: &[u8]) -> Result<Vec<Record>, CodecError> {
     if bytes.len() > MAX_MESSAGE_BYTES {
         return Err(CodecError::MessageTooLarge {
@@ -488,7 +488,7 @@ mod tests {
     }
 
     /// Per-variant body-length boundary for the NTPv4-Port record
-    /// (RFC 8915 §4.1.7 — 2-octet u16 port). A buggy or hostile
+    /// (RFC 8915 §4.1.8 — 2-octet u16 port). A buggy or hostile
     /// server emitting a 1- or 3-byte body around the fixed 2-byte
     /// payload must surface `BodyLengthMismatch` from
     /// `decode_u16_scalar` rather than silently truncating or
@@ -538,7 +538,7 @@ mod tests {
     }
 
     /// Per-variant body-length boundary for the Warning record
-    /// (RFC 8915 §4.1.5 — 2-octet u16 warning code). Same shape as
+    /// (RFC 8915 §4.1.4 — 2-octet u16 warning code). Same shape as
     /// `rejects_wrong_length_port_record`; both critical (`0x80, 3`)
     /// and non-critical (`0x00, 3`) wire encodings must trip the
     /// same `BodyLengthMismatch` so the codec layer's per-variant
