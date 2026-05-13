@@ -50,6 +50,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "parse_message"
+path = "fuzz_targets/parse_message.rs"
+test = false
+doc = false
+bench = false
+
 # Standalone `[workspace]` stanza: declares this manifest as the root
 # of its own Cargo workspace so it is not silently absorbed into a
 # parent workspace cargo discovers via `--manifest-path` walks. With
