@@ -81,8 +81,10 @@ targets the parser surfaces directly exposed to attacker-controlled
 network bytes (currently `parse_extensions`; `parse_message` and
 `validate_response` are queued as follow-ups). The workspace is a
 separate Cargo workspace so the parent `cargo test` / `cargo clippy`
-invocations remain on stable toolchain — `libfuzzer-sys` requires the
-nightly compiler for the sanitizer flags `cargo fuzz` injects.
+invocations remain on stable toolchain — `libfuzzer-sys` itself
+builds on stable, but `cargo fuzz {build,run}` enables sanitizer
+coverage instrumentation (`-Zsanitizer`, etc.) that only the nightly
+compiler accepts.
 
 One-time setup:
 

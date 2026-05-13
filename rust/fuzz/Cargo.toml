@@ -8,9 +8,12 @@
 #
 # This is a separate Cargo workspace from `rust/` so the parent crate's
 # `cargo test --lib` / `cargo clippy --lib --tests` invocations do not
-# pull `libfuzzer-sys` into their dep graph (libfuzzer-sys requires the
-# nightly toolchain because of the sanitizer flags `cargo fuzz` injects;
-# pinning the parent to stable 1.92.0 must keep working).
+# pull `libfuzzer-sys` into their dep graph. `libfuzzer-sys` itself
+# builds on stable; the nightly toolchain requirement comes from
+# `cargo fuzz {build,run}` enabling sanitizer coverage instrumentation
+# (`-Zsanitizer`, etc.) that only nightly accepts. Keeping this crate
+# out of the parent's workspace means the parent's pin to stable
+# 1.92.0 does not need to track `cargo fuzz`'s nightly requirement.
 #
 # Usage (local): see `DEVELOPMENT.md` for the full walkthrough.
 #   cargo install cargo-fuzz
