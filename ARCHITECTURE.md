@@ -28,6 +28,120 @@ Rust  : nts_query()
         └─ Cookie store (RAM, optional persisted blob)
 ```
 
+## Why the Rust core: RFC 8915 §4.3 and the TLS exporter gap
+
+The package has a Rust core because RFC 8915 §4.3 mandates that the
+C2S and S2C AEAD keys be derived from the live TLS 1.3 session via
+the keying-material exporter (RFC 5705, profiled for TLS 1.3 by
+RFC 8446 §7.5), and `dart:io.SecureSocket` does not expose that
+exporter to Dart code. This is not a performance preference or a
+historical artefact: a pure-Dart implementation on top of `dart:io`
+cannot produce keys that an RFC-conformant NTPv4-NTS server will
+accept. The constraint shapes every other layering decision in the
+project, so it is recorded here adjacent to the rest of the
+architectural reasoning rather than deferred to a sibling document.
+
+The seven load-bearing observations:
+
+1. **RFC 8915 §5.1 fixes the exporter inputs.** C2S and S2C keys
+   are produced by calling the TLS 1.3 keying-material exporter
+   with label `"EXPORTER-network-time-security"` and a five-octet
+   context `[0x00, 0x00, aead_hi, aead_lo, direction]` where
+   `direction` is `0x00` for C2S and `0x01` for S2C. The output
+   length is determined by the negotiated AEAD (32 octets for
+   AES-SIV-CMAC-256). Our derivation is pinned by
+   `rust/src/nts/ke.rs::EXPORTER_LABEL` and the
+   `exporter_context(aead_id, s2c)` helper, with the
+   `exporter_context_matches_rfc_8915` regression test asserting
+   the byte layout against worked examples for the supported IANA
+   AEAD IDs.
+
+2. **The exporter is the only legitimate source of these keys.**
+   TLS 1.3's `exporter_master_secret` (RFC 8446 §7.5) is derived
+   inside the TLS state machine from the handshake transcript and
+   never appears on the wire. Reproducing the exporter output
+   without access to that secret is a TLS-1.3 break, not an
+   engineering shortcut. The threat model RFC 8915 §3 invokes —
+   that passive observers cannot mint authenticated NTPv4 packets —
+   collapses if the keys come from anywhere else.
+
+3. **`dart:io.SecureSocket` does not surface the exporter.** The
+   underlying TLS implementations all support it: BoringSSL's
+   `SSL_export_keying_material` (Android NDK / Linux / Windows),
+   the JVM's `SSLSession.exportKeyingMaterial` (JDK 12+,
+   accessible from Conscrypt-backed Android sockets), and Apple's
+   `sec_protocol_metadata_create_secret` (Network framework). None
+   of the three is exposed through Dart's `SecureSocket` /
+   `RawSecureSocket` API; as of this writing no shipped Dart SDK
+   has a `SecureSocket.exportKeyingMaterial(...)` method. This is
+   a `dart:io` API gap, not a platform-TLS limitation.
+
+4. **`package:cryptography` cannot bridge the gap.** It supplies
+   pure-Dart AEAD / KDF / hash primitives but does not implement
+   TLS, has no concept of a TLS session, and cannot reach into
+   `dart:io`'s underlying TLS state to retrieve exporter bytes.
+   Once exporter output exists it could in principle perform the
+   AEAD work above the protocol layer, but the keys must come
+   from the TLS session first.
+
+5. **`rustls::ClientConnection::export_keying_material` is the
+   first-class entry point.** `rustls` exposes RFC 5705 directly
+   on the live connection. After `validate_response` accepts the
+   server's NTS-KE record list, `perform_handshake`
+   (`rust/src/nts/ke.rs`) calls the exporter twice — once per
+   direction — and wraps both results in `Zeroizing<Vec<u8>>` on
+   receipt so an early `?` between the call and the final
+   `KeOutcome` cannot leak secret bytes back to the heap with
+   their contents intact:
+
+   ```rust
+   let c2s_key = Zeroizing::new(
+       conn.export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&c2s_ctx))
+           .map_err(KeError::from)
+           .map_err(attribute)?,
+   );
+   let s2c_key = Zeroizing::new(
+       conn.export_keying_material(vec![0u8; key_len], EXPORTER_LABEL, Some(&s2c_ctx))
+           .map_err(KeError::from)
+           .map_err(attribute)?,
+   );
+   ```
+
+   The two `Vec<u8>` outputs cross the FFI boundary into
+   `rust/src/api/nts.rs::establish_session`, which converts them
+   to in-process `AeadKey` handles and discards the raw
+   allocations.
+
+6. **The three non-options.**
+   - **Pure-Dart NTS on `dart:io`.** Cannot derive RFC-compliant
+     keys; conformant servers will reject every authenticated
+     NTPv4 packet, and a server that accepts non-exporter keys
+     offers no cryptographic guarantee in the first place. Not
+     NTS in any meaningful sense.
+   - **Pure-Dart TLS 1.3.** Possible in principle, an order of
+     magnitude more work than the rest of the package combined,
+     and carries adversarial-review obligations (Bleichenbacher,
+     Lucky-13, padding-oracle, timing-side-channel) that a small
+     maintainer team cannot reasonably meet.
+   - **Wait for `dart:io` to expose the exporter.** The right
+     long-term answer; no shipped timeline; would still require
+     every supported Dart SDK version to land it before the Rust
+     core could be removed.
+
+7. **Where this draws the Rust-vs-Dart boundary.** The Rust crate
+   covers TLS 1.3, the exporter, and everything below. The
+   protocol layers *above* the exporter — the NTS-KE record codec
+   (`rust/src/nts/records.rs`), the AEAD-protected NTPv4 wire
+   format (`rust/src/nts/ntp.rs`), the cookie jar
+   (`rust/src/nts/cookies.rs`), KoD handling, and replay
+   protection — are in Rust today because they live next to the
+   layer that *has* to be Rust. If `dart:io` ever exposes the
+   exporter, the layers above it could in principle be ported to
+   Dart on top of `package:cryptography`, shrinking the Rust
+   surface to just the TLS + exporter shim. Until then, the
+   architecture is shaped by the API surface available, not by a
+   Rust preference.
+
 ## Timeout budget and bounded DNS
 
 `timeoutMs` is treated as a single wall-clock budget anchored at the
