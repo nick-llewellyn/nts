@@ -6,12 +6,9 @@ publish = false
 license = "MIT"
 description = "Rust client for RFC 8915 Network Time Security, bridged to Dart via flutter_rust_bridge."
 
-# This crate is consumed by Flutter via the Native Assets API (`hook/build.dart`).
-# - `cdylib`  — produced for iOS / Android / desktop dylib bundling.
-# - `staticlib` — used on platforms where the native asset hook prefers a
-#                 static archive (e.g. iOS device builds without dynamic
-#                 framework wrapping).
-[lib]
+# This crate is consumed by Flutter via the Native Assets API
+# (`hook/build.dart`). The crate-type list below has three entries:
+#
 # - `cdylib`    — produced for iOS / Android / desktop dylib bundling.
 # - `staticlib` — used on platforms where the native asset hook prefers a
 #                 static archive (e.g. iOS device builds without dynamic
@@ -23,6 +20,7 @@ description = "Rust client for RFC 8915 Network Time Security, bridged to Dart v
 #                 does not change the `cdylib` / `staticlib` outputs the
 #                 Native Assets build hook reads, and is not published
 #                 to consumers (only the cdylib/staticlib are bundled).
+[lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 # Compile-time logging-level strip is gated behind a default-on Cargo

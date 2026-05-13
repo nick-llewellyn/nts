@@ -1,4 +1,10 @@
-//! libFuzzer harness for `nts_rust::nts::ntp::parse_extensions`.
+//! libFuzzer harness for `parse_extensions` from `rust/src/nts/ntp.rs`,
+//! reached through the `nts_rust::__fuzzing::parse_extensions`
+//! re-export. The `nts` module is `pub(crate)` in ordinary builds;
+//! the `__fuzzing` Cargo feature (declared in `rust/Cargo.toml` and
+//! enabled by `rust/fuzz/Cargo.toml`'s `nts_rust` dependency line)
+//! re-exports the parser so this harness can target it without
+//! widening the parent crate's public API.
 //!
 //! Property under test: `parse_extensions` must never panic, abort,
 //! over-read, or unboundedly allocate when fed arbitrary bytes. The
