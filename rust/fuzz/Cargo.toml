@@ -1,0 +1,56 @@
+# cargo-fuzz workspace for the `nts_rust` parser surface.
+#
+# Layout follows the standard `cargo fuzz init` shape:
+# - `[[bin]]` per fuzz target, pointing at `fuzz_targets/<name>.rs`.
+# - `corpus/<target>/` holds the regression seed files (committed).
+# - `artifacts/<target>/` holds new crash reproducers (gitignored).
+# - `target/` holds build output (gitignored).
+#
+# This is a separate Cargo workspace from `rust/` so the parent crate's
+# `cargo test --lib` / `cargo clippy --lib --tests` invocations do not
+# pull `libfuzzer-sys` into their dep graph (libfuzzer-sys requires the
+# nightly toolchain because of the sanitizer flags `cargo fuzz` injects;
+# pinning the parent to stable 1.92.0 must keep working).
+#
+# Usage (local): see `DEVELOPMENT.md` for the full walkthrough.
+#   cargo install cargo-fuzz
+#   rustup toolchain install nightly
+#   cd rust/fuzz && cargo +nightly fuzz run parse_extensions
+#
+# Not wired into CI yet; that is tracked separately.
+
+[package]
+name = "nts_rust-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# Pinned to the same major version cargo-fuzz vendors as of writing
+# (0.4.x). `libfuzzer-sys` itself builds on stable; only the sanitizer
+# wrapping injected by `cargo fuzz {build,run}` requires nightly.
+libfuzzer-sys = "0.4"
+
+[dependencies.nts_rust]
+path = ".."
+# Enables the `__fuzzing` re-export module on the parent crate so this
+# harness can drive the otherwise-`pub(crate)` parsers directly.
+features = ["__fuzzing"]
+
+[[bin]]
+name = "parse_extensions"
+path = "fuzz_targets/parse_extensions.rs"
+test = false
+doc = false
+bench = false
+
+# Empty `[workspace]` table: makes this directory a standalone Cargo
+# workspace (instead of being silently absorbed into a parent that
+# cargo-fuzz might discover via `--manifest-path` walks). The parent
+# `rust/Cargo.toml` does not list this crate as a member, so the parent
+# `cargo test --lib` / clippy invocations remain unaffected.
+[workspace]
+members = ["."]

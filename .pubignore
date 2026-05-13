@@ -10,6 +10,14 @@
 # Rust build artefacts
 rust/target/
 
+# cargo-fuzz workspace (separate Cargo workspace under rust/fuzz/ that
+# pulls in libfuzzer-sys and is only ever exercised by maintainers
+# running `cargo +nightly fuzz run`). Not part of the build the
+# Native Assets hook performs for consumers, so the entire directory
+# — sources, manifest, regression seed corpus, and target/ — is
+# excluded from the published tarball.
+rust/fuzz/
+
 # Dart/Flutter
 .dart_tool/
 .flutter-plugins
