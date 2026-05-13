@@ -747,6 +747,16 @@ impl From<KeFailure> for NtsError {
 }
 
 impl From<NtpError> for NtsError {
+    #[expect(
+        clippy::match_same_arms,
+        reason = "the per-variant arms for `Unsynchronized` / `KissOfDeath` / \
+                  `StaleCookie` are intentionally enumerated rather than \
+                  collapsed via `|` or onto the catch-all `other` arm: each \
+                  is documented as a candidate for promotion into a dedicated \
+                  `NtsError` variant, and an explicit arm makes the future \
+                  split a localised one-line change rather than a hunt \
+                  through the wildcard branch"
+    )]
     fn from(e: NtpError) -> Self {
         match e {
             NtpError::Aead(a) => Self::Authentication {
@@ -1037,7 +1047,7 @@ impl<'a> LeaderGuard<'a> {
     }
 }
 
-impl<'a> Drop for LeaderGuard<'a> {
+impl Drop for LeaderGuard<'_> {
     fn drop(&mut self) {
         if !self.completed {
             // Leader path aborted before publishing (panic in
@@ -1564,6 +1574,19 @@ impl SessionTable {
     /// path (count invocations, block until released, fail
     /// deterministically) without standing up a faux NTS-KE responder.
     /// The closure signature mirrors `establish_session`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "linear singleflight role-election loop: phase A cache hit \
+                  (`map` lock briefly), phase B leader/waiter election \
+                  (`inflight` lock briefly), phase C lock-free leader body \
+                  with publish-then-remove discipline, plus the per-iteration \
+                  waiter park/wake/loop. Splitting across helpers obscures \
+                  the lock-order discipline (the `map` and `inflight` mutexes \
+                  are deliberately never held simultaneously) and the \
+                  per-call deadline anchoring; the loop is kept in a single \
+                  body so reviewers can verify the discipline at the call \
+                  site"
+    )]
     fn checkout_with(
         &self,
         spec: &NtsServerSpec,
@@ -1777,7 +1800,7 @@ impl SessionTable {
                         // leader's handshake — `ceil(waiters / N)`
                         // handshake rounds in the worst case, where N is
                         // the cookie-pool size per handshake.
-                        Some(Ok(_)) => continue,
+                        Some(Ok(_)) => {}
                         Some(Err(e)) => return Err(e),
                         None => {
                             return Err(NtsError::Timeout {
@@ -2088,12 +2111,12 @@ impl SessionTable {
 /// so they are dead-stripped from release builds.
 #[cfg(test)]
 fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8>>) {
-    default_session_table().deposit_cookies(spec_key, expected_generation, cookies)
+    default_session_table().deposit_cookies(spec_key, expected_generation, cookies);
 }
 
 #[cfg(test)]
 fn evict_session(spec_key: &str, expected_generation: u64) {
-    default_session_table().evict_session(spec_key, expected_generation)
+    default_session_table().evict_session(spec_key, expected_generation);
 }
 
 /// Resolve `(host, port)` and return a UDP socket bound to the local
@@ -3509,6 +3532,13 @@ mod tests {
         // to scheduling jitter on slow CI runners while still
         // catching the regression — re-arming the full `timeout`
         // would land the socket timeout at exactly 500 ms.
+        #[expect(
+            clippy::unchecked_time_subtraction,
+            reason = "test-local: `budget` is the locally-constructed 500 ms \
+                      timeout from the prior assertion block, well above the \
+                      50 ms slack subtrahend; underflow is impossible by \
+                      construction"
+        )]
         let upper_bound = budget - Duration::from_millis(50);
         assert!(
             read_t > Duration::ZERO && read_t < upper_bound,
@@ -3829,6 +3859,11 @@ mod tests {
         }
 
         // Sub-microsecond slack still propagates as Ok.
+        #[expect(
+            clippy::unchecked_time_subtraction,
+            reason = "test-local: `total` is a locally-constructed Duration \
+                      well above 1 ns; underflow is impossible by construction"
+        )]
         let nearly = total - Duration::from_nanos(1);
         let r = remaining_budget_or_ntp_timeout(total, nearly)
             .expect("one-nanosecond slack must propagate");
@@ -4268,13 +4303,12 @@ mod tests {
                     return;
                 }
             }
-            if Instant::now() >= deadline {
-                panic!(
-                    "singleflight state did not converge for key {key:?} within {timeout:?}; \
-                     this almost certainly means the leader never registered an inflight \
-                     slot or the waiters never grabbed their slot references",
-                );
-            }
+            assert!(
+                Instant::now() < deadline,
+                "singleflight state did not converge for key {key:?} within {timeout:?}; \
+                 this almost certainly means the leader never registered an inflight \
+                 slot or the waiters never grabbed their slot references",
+            );
             thread::sleep(Duration::from_millis(1));
         }
     }
@@ -4801,6 +4835,14 @@ mod tests {
     /// trust-mode plumbing from silently dropping a variant on
     /// either end of the boundary.
     #[test]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "the per-pair arms are intentionally enumerated rather than \
+                  collapsed via `|`: each (input, output) pair pins one \
+                  conversion as a regression target so a future variant added \
+                  on either side surfaces as a missing arm at compile time, \
+                  not as silent passthrough on the wildcard arm"
+    )]
     fn trust_mode_and_backend_conversions_are_total() {
         // TrustMode -> KeTrustMode
         for m in [TrustMode::PlatformWithFallback, TrustMode::PlatformOnly] {
