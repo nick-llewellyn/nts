@@ -21,6 +21,7 @@ pub(crate) mod nts;
 #[cfg(feature = "__fuzzing")]
 pub mod __fuzzing {
     pub use crate::nts::ntp::{parse_extensions, NtpError};
+    pub use crate::nts::records::{parse_message, CodecError};
 }
 
 // Android-only: exports a JNI symbol that bootstraps `rustls-platform-verifier`
