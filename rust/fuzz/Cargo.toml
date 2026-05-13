@@ -57,6 +57,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "validate_response"
+path = "fuzz_targets/validate_response.rs"
+test = false
+doc = false
+bench = false
+
 # Standalone `[workspace]` stanza: declares this manifest as the root
 # of its own Cargo workspace so it is not silently absorbed into a
 # parent workspace cargo discovers via `--manifest-path` walks. With
