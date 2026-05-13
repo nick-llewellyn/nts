@@ -20,8 +20,25 @@ pub(crate) mod nts;
 // for the policy on enabling this flag (fuzz / coverage crates only).
 #[cfg(feature = "__fuzzing")]
 pub mod __fuzzing {
+    pub use crate::nts::ke::KeError;
     pub use crate::nts::ntp::{parse_extensions, NtpError};
-    pub use crate::nts::records::{parse_message, CodecError};
+    pub use crate::nts::records::aead::AES_SIV_CMAC_256;
+    pub use crate::nts::records::{parse_message, CodecError, Record};
+
+    /// Thin shim over `crate::nts::ke::validate_response` for the
+    /// cargo-fuzz harness in `rust/fuzz/`. Discards the
+    /// `KeOutcomePartial` payload (which stays private to the
+    /// `nts::ke` module) and surfaces only `Result<(), KeError>`
+    /// — the harness only asserts the call does not panic, the
+    /// success-payload contents are uninteresting at the fuzz
+    /// surface.
+    pub fn validate_response(
+        request_host: &str,
+        offered_aead: &[u16],
+        records: &[Record],
+    ) -> Result<(), KeError> {
+        crate::nts::ke::validate_response(request_host, offered_aead, records).map(|_| ())
+    }
 }
 
 // Android-only: exports a JNI symbol that bootstraps `rustls-platform-verifier`
