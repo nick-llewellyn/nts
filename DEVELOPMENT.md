@@ -593,11 +593,17 @@ act on.
 
 ### Reusable boilerplate
 
+Wrap long `reason` strings with `\` line continuations so the
+literal does not embed newlines and indentation spaces into the
+diagnostic that downstream tooling consumes; existing `#[expect]`
+sites under `rust/src/` follow this shape (see e.g.
+`rust/src/api/nts.rs::From<NtpError> for NtsError`).
+
 ```rust
 #[expect(
     clippy::too_many_lines,
-    reason = "Test bodies are intentionally long to exercise the
-              full positive/negative input matrix; splitting would
+    reason = "Test bodies are intentionally long to exercise the \
+              full positive/negative input matrix; splitting would \
               obscure the relationship between cases."
 )]
 ```
@@ -607,8 +613,10 @@ act on.
 `rust/src/lib.rs` carries a single `#[allow(...)]` on the
 `mod frb_generated;` declaration. `frb_generated.rs` is
 `flutter_rust_bridge_codegen` output and gets regenerated
-wholesale by `dart run flutter_rust_bridge_codegen generate`;
-lint findings against it are not actionable from this repository.
+wholesale by `flutter_rust_bridge_codegen generate` (the
+cargo-installed binary on `PATH`; see "Regenerate bindings"
+above); lint findings against it are not actionable from this
+repository.
 The suppression is durable, not temporary, so `#[expect]`'s "fail
 on resolution" semantics actively work against the maintainer
 intent here — a regeneration that happens to satisfy a
