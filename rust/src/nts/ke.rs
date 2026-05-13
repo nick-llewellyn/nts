@@ -449,6 +449,22 @@ pub enum KeError {
     NonCriticalAeadAlgorithm,
     UnsupportedAead(u16),
     NoCookies,
+    /// RFC 8915 §4.1.2 — the NTS Next Protocol Negotiation record
+    /// MUST appear exactly once in a server response. ntpd-rs
+    /// rejects duplicates on the request side
+    /// (`ntp-proto/src/nts/messages.rs::test_request_basic_reject_multiple`,
+    /// v1.7.2); the same threat shape applies on the response side:
+    /// silently picking the first-seen value (which `find_map`
+    /// would do) would mask the violation and could let an on-path
+    /// tamper inject a record the client would later honour.
+    DuplicateNextProtocol,
+    /// RFC 8915 §4.1.5 — the AEAD Algorithm Negotiation record
+    /// MUST appear exactly once. Same rationale as
+    /// `DuplicateNextProtocol`: silently taking the first-seen
+    /// AEAD id would let a duplicate record (server bug or
+    /// on-path tamper) downgrade the client to an algorithm it
+    /// would otherwise reject.
+    DuplicateAeadAlgorithm,
     /// Streaming-read accumulator in [`read_to_end_capped`] would
     /// exceed [`NTS_KE_READ_BUDGET`] if the next chunk were appended.
     /// `received` is the post-append length the offending read would
@@ -543,6 +559,12 @@ impl std::fmt::Display for KeError {
             }
             Self::UnsupportedAead(id) => write!(f, "server selected unsupported AEAD ID {id}"),
             Self::NoCookies => f.write_str("response delivered no cookies"),
+            Self::DuplicateNextProtocol => f.write_str(
+                "response contains more than one Next Protocol record (RFC 8915 §4.1.2)",
+            ),
+            Self::DuplicateAeadAlgorithm => f.write_str(
+                "response contains more than one AEAD Algorithm record (RFC 8915 §4.1.5)",
+            ),
             Self::ResponseTooLarge { received, cap } => write!(
                 f,
                 "NTS-KE response exceeded {cap}-byte streaming budget \
@@ -684,6 +706,28 @@ pub(crate) fn validate_response(
                 return Err(KeError::UnknownCritical(*t));
             }
         }
+    }
+    // RFC 8915 §4.1.2 / §4.1.5: the NextProtocol and AEAD Algorithm
+    // records MUST appear exactly once in a server response. Detect
+    // duplicates before the `find_map` walks below — those would
+    // otherwise silently take the first occurrence and mask the
+    // violation, allowing a duplicate record (server bug or on-path
+    // tamper) to seed a downgrade or other shape attack the typed
+    // `Duplicate*` variants make visible to the caller.
+    let mut np_seen = 0usize;
+    let mut aead_seen = 0usize;
+    for r in records {
+        match &r.kind {
+            RecordKind::NextProtocol(_) => np_seen += 1,
+            RecordKind::AeadAlgorithm(_) => aead_seen += 1,
+            _ => {}
+        }
+    }
+    if np_seen > 1 {
+        return Err(KeError::DuplicateNextProtocol);
+    }
+    if aead_seen > 1 {
+        return Err(KeError::DuplicateAeadAlgorithm);
     }
     // RFC 8915 §4.1.2 — the NextProtocol record MUST carry the Critical
     // bit. We capture the bit alongside the value (rather than checking
@@ -1682,6 +1726,88 @@ mod tests {
         match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
             Err(KeError::NoCookies) => {}
             other => panic!("expected NoCookies, got {other:?}"),
+        }
+    }
+
+    /// RFC 8915 §4.1.5 — the AEAD Algorithm Negotiation record MUST
+    /// appear exactly once. The codec layer (`parse_message`) is
+    /// happy to return two AeadAlgorithm records in the same
+    /// message; the validator must refuse them, otherwise `find_map`
+    /// would silently take the first occurrence and an on-path tamper
+    /// could inject a duplicate to mask a genuine downgrade. Mirrors
+    /// the request-side guard ntpd-rs ships in
+    /// `ntp-proto/src/nts/messages.rs::test_request_basic_reject_multiple`
+    /// (v1.7.2).
+    #[test]
+    fn validate_response_rejects_duplicate_aead_algorithm() {
+        let mut records = well_formed_response();
+        // Insert a second critical AeadAlgorithm record before the EOM
+        // (which lives at the tail in `well_formed_response`). The
+        // duplicate is materially equivalent to the first, so the only
+        // signal driving the rejection is the duplicate-record count.
+        let eom_pos = records.len() - 1;
+        records.insert(
+            eom_pos,
+            rec(
+                true,
+                RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
+            ),
+        );
+        match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::DuplicateAeadAlgorithm) => {}
+            other => panic!("expected DuplicateAeadAlgorithm, got {other:?}"),
+        }
+    }
+
+    /// RFC 8915 §4.1.2 — symmetric to the AeadAlgorithm case above;
+    /// duplicate NextProtocol records must short-circuit the
+    /// handshake before either NextProtocol value is honoured.
+    /// Mirrors the request-side guard ntpd-rs ships in
+    /// `ntp-proto/src/nts/messages.rs::test_request_basic_reject_multiple`
+    /// (v1.7.2).
+    #[test]
+    fn validate_response_rejects_duplicate_next_protocol() {
+        let mut records = well_formed_response();
+        let eom_pos = records.len() - 1;
+        records.insert(
+            eom_pos,
+            rec(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4])),
+        );
+        match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::DuplicateNextProtocol) => {}
+            other => panic!("expected DuplicateNextProtocol, got {other:?}"),
+        }
+    }
+
+    /// An Error record appearing alongside otherwise-valid response
+    /// records must short-circuit the handshake. RFC 8915 is silent
+    /// on the precise interaction (the spec treats Error as the
+    /// server's signal to decline the request, not as a record that
+    /// can co-occur with a successful negotiation), but the safe
+    /// behaviour is to surface the server's error code rather than
+    /// silently completing key export against a response the server
+    /// has explicitly disclaimed. Pinned here as `ServerError(code)`
+    /// (the existing arm in the per-record loop already catches it
+    /// regardless of position or critical bit) — the choice is to
+    /// preserve the server's diagnostic code rather than collapse
+    /// onto a generic `MalformedResponse` so the Dart side can
+    /// surface "server said error N" verbatim. Mirrors the
+    /// request-side guard ntpd-rs ships in
+    /// `ntp-proto/src/nts/messages.rs::test_request_basic_reject_problematic`
+    /// (v1.7.2).
+    #[test]
+    fn validate_response_rejects_extra_error_record_after_handshake() {
+        let mut records = well_formed_response();
+        // Inject a non-critical Error record immediately before the
+        // EOM. The Error variant is RFC 8915 §4.1.5 record type 2
+        // with a u16 payload; using `0xBEEF` as an arbitrary
+        // server-defined code so the test pins both the rejection
+        // *and* the round-trip of the code through `ServerError`.
+        let eom_pos = records.len() - 1;
+        records.insert(eom_pos, rec(false, RecordKind::Error(0xBEEF)));
+        match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::ServerError(0xBEEF)) => {}
+            other => panic!("expected ServerError(0xBEEF), got {other:?}"),
         }
     }
 
