@@ -5405,9 +5405,15 @@ mod tests {
     /// [`UdpDeadline::remaining_or_timeout`] applies pre-DNS on the
     /// UDP path. Provenance: bd nts-r54.
     ///
-    /// Driven directly via a `Duration::ZERO` budget on a fresh table
-    /// so the leader's `checked_sub` returns `None` on the very first
-    /// iteration. The handshake closure asserts it is never invoked.
+    /// Driven directly via a `Duration::ZERO` budget on a fresh
+    /// table so the leader's `checked_sub` falls into the budget-
+    /// exhausted arm on the very first iteration: with `timeout =
+    /// ZERO`, the subtraction returns `None` whenever
+    /// `started.elapsed() > 0`, and even on the boundary case
+    /// (`elapsed = 0`) returns `Some(0)` which the
+    /// `Some(d) if !d.is_zero()` guard rejects, so the `_` arm
+    /// fires either way. The handshake closure asserts it is never
+    /// invoked.
     #[test]
     fn warm_cookies_leader_budget_exhausted_before_handshake_returns_dns_timeout() {
         let table = SessionTable::new();
@@ -5458,10 +5464,14 @@ mod tests {
     /// exhausted. The bug it pins is in a single line — the
     /// `checked_sub` arm at the leader-budget check — so this test
     /// drives that line directly via a `Duration::ZERO` budget on a
-    /// fresh table (the leader's `checked_sub` returns `None` on the
-    /// very first iteration). The realistic re-leader scenario
-    /// reaches the same `checked_sub` arm via a different multi-
-    /// thread path; the underlying bug being pinned is the same.
+    /// fresh table. With `timeout = ZERO`, the subtraction returns
+    /// `None` whenever `started.elapsed() > 0`, and even on the
+    /// boundary case (`elapsed = 0`) returns `Some(0)` which the
+    /// `Some(d) if !d.is_zero()` guard rejects, so the budget-
+    /// exhausted `_` arm fires on the very first iteration either
+    /// way. The realistic re-leader scenario reaches the same
+    /// `_` arm via a different multi-thread path; the underlying
+    /// bug being pinned is the same.
     /// Mirrors `warm_cookies_leader_budget_exhausted_before_handshake_returns_dns_timeout`.
     /// Provenance: bd nts-r54.
     #[test]
