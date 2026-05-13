@@ -50,10 +50,13 @@ test = false
 doc = false
 bench = false
 
-# Empty `[workspace]` table: makes this directory a standalone Cargo
-# workspace (instead of being silently absorbed into a parent that
-# cargo-fuzz might discover via `--manifest-path` walks). The parent
-# `rust/Cargo.toml` does not list this crate as a member, so the parent
-# `cargo test --lib` / clippy invocations remain unaffected.
+# Standalone `[workspace]` stanza: declares this manifest as the root
+# of its own Cargo workspace so it is not silently absorbed into a
+# parent workspace cargo discovers via `--manifest-path` walks. With
+# this manifest already containing `[package]`, the workspace
+# implicitly contains the package itself as its only member, so no
+# explicit `members = [...]` line is needed (and adding one would
+# duplicate the implicit single-member set). The parent
+# `rust/Cargo.toml` does not list this crate as a member, so the
+# parent's `cargo test --lib` / clippy invocations remain unaffected.
 [workspace]
-members = ["."]
