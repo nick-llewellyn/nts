@@ -1,0 +1,18 @@
+# cargo-fuzz seed corpus and crash artefacts: raw bytes, not text.
+#
+# The `binary` macro is shorthand for `-text -diff -merge`. Without
+# this rule, a contributor who has `core.autocrlf=true` configured
+# globally (the default on Windows installs of Git for Windows) would
+# silently rewrite any `0x0A` / `0x0D` bytes in a corpus file on
+# checkout or commit, corrupting the load-bearing reproducer bytes.
+# The current `parse_extensions` corpus happens not to contain those
+# bytes, but coverage-guided fuzz crashes routinely will, and once
+# CI starts auto-promoting minimised crash reproducers from
+# `rust/fuzz/artifacts/<target>/` into the seed corpus the cross-
+# platform reproducibility risk is real.
+#
+# Also covers `rust/fuzz/artifacts/**` so that locally-discovered
+# crashes are stable on disk before being promoted into the seed
+# corpus.
+rust/fuzz/corpus/** binary
+rust/fuzz/artifacts/** binary
