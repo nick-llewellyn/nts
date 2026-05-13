@@ -660,13 +660,7 @@ fn aead_key_len(id: u16) -> Option<usize> {
 /// `s2c == true`  → S2C (last byte 0x01).
 fn exporter_context(aead_id: u16, s2c: bool) -> [u8; 5] {
     let aead_be = aead_id.to_be_bytes();
-    [
-        0x00,
-        0x00,
-        aead_be[0],
-        aead_be[1],
-        if s2c { 0x01 } else { 0x00 },
-    ]
+    [0x00, 0x00, aead_be[0], aead_be[1], u8::from(s2c)]
 }
 
 /// Build the client request blob: NextProtocol(NTPv4), AeadAlgorithm(prefs), EOM.
@@ -999,6 +993,18 @@ fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {
 /// how time is distributed across phases. `req.timeout = None` keeps
 /// the prior unbounded behaviour for callers that opt out of timeout
 /// enforcement entirely.
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear handshake driver: deadline construction, TLS config build, \
+              TCP connect with deadline-threaded socket-timeout refresh, ALPN \
+              selection, request-write/flush with deadline refresh, \
+              read-to-end with budget-capped streaming, response parse, \
+              `validate_response`, twice-called `export_keying_material` with \
+              `Zeroizing` wrap, and `KeOutcome` assembly all need to live in a \
+              single body so the deadline-threading and Zeroizing-wrap \
+              invariants are visible at the call site rather than scattered \
+              across helpers"
+)]
 pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     if req.aead_algorithms.is_empty() {
         return Err(KeError::MissingAead.into());
@@ -1354,7 +1360,7 @@ fn read_to_end_capped(
                 next_chunk_within_budget(buf.len(), n, NTS_KE_READ_BUDGET)?;
                 buf.extend_from_slice(&chunk[..n]);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(e) => return Err(phase_io_to_ke(e, KeTimeoutPhase::KeRecordIo)),
         }
     }

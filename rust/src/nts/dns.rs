@@ -165,7 +165,7 @@ pub(crate) fn snapshot_of(stats: &PoolStats) -> PoolSnapshot {
 /// tests in those modules can hand-roll an injected resolver while the
 /// non-test wrappers stay pithy.
 pub(crate) fn system_lookup(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-    (host, port).to_socket_addrs().map(|iter| iter.collect())
+    (host, port).to_socket_addrs().map(Iterator::collect)
 }
 
 /// RAII slot in the bounded resolver pool. The slot is acquired by

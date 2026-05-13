@@ -296,6 +296,15 @@ jobs:
         working-directory: rust
         run: cargo test --lib --locked
 
+      # Promote the curated `[lints.clippy]` set in `rust/Cargo.toml` to
+      # CI errors. The table uses `level = "warn"` so the `-D warnings`
+      # flag is what gates the merge; without it the lints would emit
+      # diagnostics but not fail the job. `--lib --tests` matches the
+      # local invocation pinned in `AGENTS.md`'s quality-gate list.
+      - name: Lint Rust crate (clippy -D warnings)
+        working-directory: rust
+        run: cargo clippy --lib --tests --locked -- -D warnings
+
       # Tarpaulin install is the dominant cold-build cost of the
       # coverage step (~3-5 min from source). Caching the binary by
       # runner OS + version keeps subsequent runs at ~5 s for this
@@ -437,6 +446,18 @@ jobs:
         # Single source of truth for drift detection; the same script runs
         # locally via `dart run tool/check_bindings.dart`.
         run: dart run tool/check_bindings.dart
+
+      # Run clippy against the freshly-regenerated `frb_generated.rs` so
+      # any new lint shape the codegen starts emitting (one the
+      # `#[allow(...)]` set on `mod frb_generated;` in `lib.rs` does not
+      # already cover) surfaces here rather than as a CI break in an
+      # unrelated downstream PR. The duplication with the `rust` job's
+      # clippy step is intentional: that job runs on whatever
+      # `frb_generated.rs` is checked in, this job runs on the
+      # post-regeneration version.
+      - name: Lint regenerated bindings (clippy -D warnings)
+        working-directory: rust
+        run: cargo clippy --lib --tests --locked -- -D warnings
 
   dependency-review:
     # Supply-chain gate: flags newly-introduced dependencies with

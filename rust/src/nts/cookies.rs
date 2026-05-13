@@ -75,7 +75,7 @@ impl CookieJar {
 
     /// Pop and return the oldest unused cookie for `host`, if any.
     pub fn take(&mut self, host: &str) -> Option<Vec<u8>> {
-        self.inner.get_mut(host).and_then(|q| q.pop_front())
+        self.inner.get_mut(host).and_then(VecDeque::pop_front)
     }
 
     /// Number of cookies currently stored for `host`.

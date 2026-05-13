@@ -1,0 +1,6 @@
+# MSRV floor for clippy's msrv-aware suggestion machinery. Mirrors the
+# `rust-version` field in `Cargo.toml`; the active toolchain pin lives
+# in `rust-toolchain.toml`. Pinning here keeps clippy from suggesting
+# stabilized-after-floor APIs that downstream consumers on the floor
+# could not adopt without bumping their own toolchain.
+msrv = "1.87"

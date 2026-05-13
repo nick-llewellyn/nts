@@ -5,6 +5,15 @@ edition = "2021"
 publish = false
 license = "MIT"
 description = "Rust client for RFC 8915 Network Time Security, bridged to Dart via flutter_rust_bridge."
+# Floor set by transitive deps (notably `security-framework 3.7.0` pulled
+# in by `rustls-platform-verifier`, which requires edition2024) plus
+# `usize::is_multiple_of` (stable in 1.87, used in `nts::ntp` and
+# `nts::records` for the extension-field length validators). The active
+# toolchain pin in `rust-toolchain.toml` is higher (currently 1.92.0);
+# declaring the actual functional floor here keeps clippy's msrv-aware
+# suggestions accurate without over-constraining downstream consumers.
+# The matching `msrv` entry lives in `rust/clippy.toml`.
+rust-version = "1.87"
 
 # This crate is consumed by Flutter via the Native Assets API
 # (`hook/build.dart`). The crate-type list below has three entries:
@@ -112,3 +121,117 @@ tracing-log = "0.2"
 # Declaring it here silences the spurious `unexpected_cfgs` warning on builds
 # that don't run codegen.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+# Curated clippy lint set adapted from `pendulum-project/ntpd-rs`
+# (`ntp-proto/src/lib.rs` v1.7.2). Each entry is a hardening signal that
+# reviewer attention currently has to catch — large pass-by-value, missed
+# exhaustiveness, redundant closures, dead `async`, etc. The Cargo table
+# form is preferred over `#![warn(clippy::*)]` attributes in `lib.rs` so
+# the source isn't polluted with a 100-entry block.
+#
+# `level = "warn"` everywhere; CI promotes warnings to errors via
+# `cargo clippy -- -D warnings`. The matching `clippy.toml` declares
+# the `msrv` floor so suggestions respect what we can actually adopt.
+#
+# ntpd-rs's `//FIXME: Enable` entries are intentionally omitted (their
+# backlog, not ours). Drift between this set and upstream's is expected;
+# the goal is the hardening surface, not byte-for-byte parity.
+[lints.clippy]
+assigning_clones = "warn"
+bool_to_int_with_if = "warn"
+borrow_as_ptr = "warn"
+case_sensitive_file_extension_comparisons = "warn"
+cast_ptr_alignment = "warn"
+comparison_chain = "warn"
+copy_iterator = "warn"
+default_trait_access = "warn"
+doc_comment_double_space_linebreaks = "warn"
+doc_link_with_quotes = "warn"
+elidable_lifetime_names = "warn"
+empty_enum = "warn"
+expl_impl_clone_on_copy = "warn"
+explicit_deref_methods = "warn"
+flat_map_option = "warn"
+fn_params_excessive_bools = "warn"
+format_collect = "warn"
+format_push_string = "warn"
+from_iter_instead_of_collect = "warn"
+ignore_without_reason = "warn"
+implicit_hasher = "warn"
+inconsistent_struct_constructor = "warn"
+index_refutable_slice = "warn"
+inefficient_to_string = "warn"
+inline_always = "warn"
+into_iter_without_iter = "warn"
+invalid_upcast_comparisons = "warn"
+ip_constant = "warn"
+iter_filter_is_ok = "warn"
+iter_filter_is_some = "warn"
+iter_not_returning_iterator = "warn"
+iter_without_into_iter = "warn"
+large_digit_groups = "warn"
+large_futures = "warn"
+large_stack_arrays = "warn"
+large_types_passed_by_value = "warn"
+linkedlist = "warn"
+macro_use_imports = "warn"
+manual_assert = "warn"
+manual_instant_elapsed = "warn"
+manual_is_power_of_two = "warn"
+manual_is_variant_and = "warn"
+manual_string_new = "warn"
+many_single_char_names = "warn"
+map_unwrap_or = "warn"
+match_same_arms = "warn"
+match_wild_err_arm = "warn"
+maybe_infinite_iter = "warn"
+mismatching_type_param_order = "warn"
+mut_mut = "warn"
+naive_bytecount = "warn"
+needless_bitwise_bool = "warn"
+needless_continue = "warn"
+needless_for_each = "warn"
+needless_raw_string_hashes = "warn"
+no_effect_underscore_binding = "warn"
+no_mangle_with_rust_abi = "warn"
+non_std_lazy_statics = "warn"
+option_as_ref_cloned = "warn"
+option_option = "warn"
+ptr_as_ptr = "warn"
+ptr_cast_constness = "warn"
+pub_underscore_fields = "warn"
+range_minus_one = "warn"
+range_plus_one = "warn"
+redundant_closure_for_method_calls = "warn"
+redundant_else = "warn"
+ref_as_ptr = "warn"
+ref_binding_to_reference = "warn"
+ref_option = "warn"
+ref_option_ref = "warn"
+same_functions_in_if_condition = "warn"
+semicolon_if_nothing_returned = "warn"
+single_char_pattern = "warn"
+str_split_at_newline = "warn"
+string_add_assign = "warn"
+struct_excessive_bools = "warn"
+too_many_lines = "warn"
+transmute_ptr_to_ptr = "warn"
+# Renamed from `clippy::unchecked_duration_subtraction` upstream; the
+# old name still resolves but emits `renamed_and_removed_lints`. Use
+# the canonical name directly.
+unchecked_time_subtraction = "warn"
+unicode_not_nfc = "warn"
+unnecessary_box_returns = "warn"
+unnecessary_debug_formatting = "warn"
+unnecessary_join = "warn"
+unnecessary_literal_bound = "warn"
+unnecessary_semicolon = "warn"
+unnested_or_patterns = "warn"
+unsafe_derive_deserialize = "warn"
+unused_async = "warn"
+unused_self = "warn"
+used_underscore_binding = "warn"
+used_underscore_items = "warn"
+verbose_bit_mask = "warn"
+wildcard_imports = "warn"
+zero_sized_map_values = "warn"
