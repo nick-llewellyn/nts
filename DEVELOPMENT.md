@@ -518,6 +518,7 @@ flutter test --coverage
 
 # Rust side (any rust/** change)
 (cd rust && cargo build --locked && cargo test --lib --locked)
+(cd rust && cargo clippy --lib --tests --locked -- -D warnings)
 (cd rust && cargo tarpaulin --lib --locked --skip-clean \
             --out Lcov --output-dir coverage)
 
@@ -532,3 +533,89 @@ sh tool/hooks/test_hooks.sh
 The PR template (`.github/pull_request_template.md`) carries the
 canonical checklist; tick the boxes you actually ran rather than
 the full set.
+
+## Lint suppression policy
+
+The Rust crate runs the curated `[lints.clippy]` set declared in
+`rust/Cargo.toml` (see the table introduced by bd nts-hdx). When a
+lint fires on a real change, the resolution order is:
+
+1. **Default — fix at the call site.** Clippy is calibrated on
+   ntpd-rs's hardening surface; most findings are real and the
+   suggestion in the diagnostic is usually the right answer.
+2. **Local suppression — `#[expect(lint, reason = "...")]`.** Use
+   when the lint is wrong for this specific call site. *Never*
+   `#[allow(...)]` in hand-written code (the singleton on
+   `mod frb_generated;` in `rust/src/lib.rs` is the documented
+   carve-out for generated content; see "Generated-code
+   carve-out" below).
+3. **Crate-wide suppression — drop the lint from
+   `[lints.clippy]`.** Use when the lint is wrong *everywhere* in
+   this codebase (e.g. a server-daemon-shaped lint reaching a
+   library client). Document the decision with an inline comment
+   on the dropped line. Per-call-site `#[expect]` is preferred
+   over crate-wide drop unless the lint is wrong everywhere.
+
+### Why `#[expect]` and not `#[allow]`
+
+`#[expect]` was stabilised in Rust 1.81 (see the [release
+notes](https://blog.rust-lang.org/2024/09/05/Rust-1.81.0.html#new-expect-attribute)).
+Unlike `#[allow]`, which silently suppresses a lint regardless of
+whether the lint would actually fire, `#[expect]` *requires* the
+lint to fire — if a later refactor resolves the underlying issue,
+the compiler emits a `lint_reasons` warning that the suppression
+is now dead code. Stale suppressions are flagged automatically;
+they do not silently outlive the condition that justified them.
+The MSRV declared in `rust/Cargo.toml` (`rust-version = "1.87"`)
+covers the `reason` field syntax.
+
+### `reason = "..."` content
+
+The `reason` field is required, not optional. It must answer two
+questions for the next reviewer:
+
+- **Why is the lint wrong *here*?** What property of the call site
+  makes the lint's general-purpose check inapplicable?
+- **What would change that?** What future edit would invalidate
+  the reason and force the suppression to be reconsidered?
+
+Examples of reasons that meet the bar (lifted from current
+sites): "linear handshake driver: deadline-threading and
+Zeroizing-wrap invariants are visible at the call site rather
+than scattered across helpers"; "test-local: `budget` is the
+locally-constructed 500 ms timeout from the prior assertion
+block, well above the 50 ms slack subtrahend; underflow is
+impossible by construction".
+
+Avoid reasons of the shape "this is fine", "intentional", "see
+comment" — they convey no information that a future reviewer can
+act on.
+
+### Reusable boilerplate
+
+```rust
+#[expect(
+    clippy::too_many_lines,
+    reason = "Test bodies are intentionally long to exercise the
+              full positive/negative input matrix; splitting would
+              obscure the relationship between cases."
+)]
+```
+
+### Generated-code carve-out
+
+`rust/src/lib.rs` carries a single `#[allow(...)]` on the
+`mod frb_generated;` declaration. `frb_generated.rs` is
+`flutter_rust_bridge_codegen` output and gets regenerated
+wholesale by `dart run flutter_rust_bridge_codegen generate`;
+lint findings against it are not actionable from this repository.
+The suppression is durable, not temporary, so `#[expect]`'s "fail
+on resolution" semantics actively work against the maintainer
+intent here — a regeneration that happens to satisfy a
+previously-suppressed lint would emit `lint_reasons` warnings
+that nobody can fix without re-adding the lint shape elsewhere.
+
+This is the *only* `#[allow]` site in hand-written code. New
+sites must use `#[expect]`; the PR template
+(`.github/pull_request_template.md`) carries a checklist item
+flagging `#[allow]` introductions for conversion.
