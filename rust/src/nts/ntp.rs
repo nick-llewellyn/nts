@@ -73,6 +73,7 @@ pub struct NtpHeader {
 
 impl NtpHeader {
     /// Build a zeroed client-request header carrying just the transmit timestamp.
+    #[must_use]
     pub fn client_request(transmit_timestamp: u64) -> Self {
         Self {
             li_vn_mode: LI_VN_MODE_CLIENT,
@@ -120,6 +121,7 @@ impl NtpHeader {
         b
     }
 
+    #[must_use]
     pub fn from_bytes(b: &[u8; HEADER_LEN]) -> Self {
         Self {
             li_vn_mode: b[0],

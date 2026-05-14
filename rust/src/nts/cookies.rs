@@ -35,11 +35,13 @@ impl Default for CookieJar {
 
 impl CookieJar {
     /// Construct an empty jar with the default per-host cap.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Construct an empty jar with `capacity` cookies per host. Panics if zero.
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity > 0, "CookieJar capacity must be > 0");
         Self {
