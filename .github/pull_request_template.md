@@ -40,6 +40,9 @@ leg fails only on the floor, that's a real signal, not a flake.
 - [ ] `(cd example && flutter pub get && flutter analyze)`
 - [ ] `(cd rust && cargo build --locked && cargo test --lib --locked)`
       (Rust-touching changes)
+- [ ] `(cd rust && cargo clippy --lib --tests --locked -- -D warnings)`
+      (Rust-touching changes; mirrors the `Rust build + tests +
+      coverage` and `Verify FRB bindings are in sync` CI jobs)
 - [ ] `dart run tool/check_bindings.dart` (any change to
       `rust/src/api/**` or hand-edits under `lib/src/ffi/**`)
 - [ ] `(cd rust && cargo tarpaulin --lib --locked --skip-clean --out Lcov --output-dir coverage)`
@@ -68,3 +71,8 @@ leg fails only on the floor, that's a real signal, not a flake.
       were bumped together
 - [ ] If the SDK floor was raised, `pubspec.yaml` constraints and
       `.github/workflows/ci.yml` matrix entries were updated together
+- [ ] No new `#[allow(...)]` sites in hand-written Rust code
+      (the singleton on `mod frb_generated;` in `rust/src/lib.rs`
+      is the only documented carve-out). Any local lint
+      suppression uses `#[expect(lint, reason = "...")]` per
+      [`DEVELOPMENT.md`](../DEVELOPMENT.md#lint-suppression-policy).
