@@ -49,13 +49,133 @@ pub struct Record {
 pub enum RecordKind {
     EndOfMessage,
     NextProtocol(Vec<u16>),
-    Error(u16),
-    Warning(u16),
+    Error(ErrorCode),
+    Warning(WarningCode),
     AeadAlgorithm(Vec<u16>),
     NewCookie(Vec<u8>),
     Server(String),
     Port(u16),
     Unknown { record_type: u16, body: Vec<u8> },
+}
+
+/// Typed wrapper over the u16 payload of an NTS-KE Error record
+/// (RFC 8915 §4.1.3 record type 2). The three IANA-registered codes
+/// in the original specification get named variants; any other value
+/// — including future IANA registry additions — round-trips through
+/// the `Unknown(u16)` catch-all so a non-conforming server cannot
+/// crash the parser by sending an unrecognized code, and the
+/// numeric payload remains visible to logs and to the `From<_> for
+/// u16` round-trip.
+///
+/// Mirrors the shape used by `pendulum-project/ntpd-rs`'s
+/// `nts::ErrorCode` (v1.7.2) so the two implementations agree on
+/// the canonical naming of the three spec'd codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCode {
+    /// RFC 8915 §4.1.3 code 0 — server received a critical record
+    /// type it does not understand.
+    UnrecognizedCriticalRecord,
+    /// RFC 8915 §4.1.3 code 1 — request was malformed or otherwise
+    /// unacceptable to the server.
+    BadRequest,
+    /// RFC 8915 §4.1.3 code 2 — server failed to process an
+    /// otherwise-acceptable request for an internal reason.
+    InternalServerError,
+    /// Any code outside the IANA-registered set above. Preserved as
+    /// the raw u16 so the diagnostic and any round-trip back onto
+    /// the wire keep the server's choice intact.
+    Unknown(u16),
+}
+
+impl From<u16> for ErrorCode {
+    fn from(value: u16) -> Self {
+        match value {
+            0 => Self::UnrecognizedCriticalRecord,
+            1 => Self::BadRequest,
+            2 => Self::InternalServerError,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+impl From<ErrorCode> for u16 {
+    fn from(code: ErrorCode) -> Self {
+        match code {
+            ErrorCode::UnrecognizedCriticalRecord => 0,
+            ErrorCode::BadRequest => 1,
+            ErrorCode::InternalServerError => 2,
+            ErrorCode::Unknown(other) => other,
+        }
+    }
+}
+
+impl ErrorCode {
+    /// Numeric code that will be written to the wire for this
+    /// variant. Convenience alias for `u16::from(self)`; useful at
+    /// FFI boundaries where the named variant is not the natural
+    /// payload.
+    #[must_use]
+    pub fn as_u16(self) -> u16 {
+        self.into()
+    }
+}
+
+impl fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnrecognizedCriticalRecord => f.write_str("UnrecognizedCriticalRecord"),
+            Self::BadRequest => f.write_str("BadRequest"),
+            Self::InternalServerError => f.write_str("InternalServerError"),
+            Self::Unknown(code) => write!(f, "Unknown({code})"),
+        }
+    }
+}
+
+/// Typed wrapper over the u16 payload of an NTS-KE Warning record
+/// (RFC 8915 §4.1.4 record type 3). The IANA registry for warning
+/// codes is empty as of RFC 8915, so every observed value lands in
+/// the `Unknown(u16)` catch-all today; the typed wrapper exists so
+/// future registry additions can be promoted to named variants
+/// without changing every call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarningCode {
+    /// Any code observed on the wire. The IANA registry is empty
+    /// at the spec's publication time; future named variants will
+    /// take precedence over this catch-all when added.
+    Unknown(u16),
+}
+
+impl From<u16> for WarningCode {
+    fn from(value: u16) -> Self {
+        Self::Unknown(value)
+    }
+}
+
+impl From<WarningCode> for u16 {
+    fn from(code: WarningCode) -> Self {
+        match code {
+            WarningCode::Unknown(other) => other,
+        }
+    }
+}
+
+impl WarningCode {
+    /// Numeric code that will be written to the wire for this
+    /// variant. Convenience alias for `u16::from(self)`; useful at
+    /// FFI boundaries where the named variant is not the natural
+    /// payload.
+    #[must_use]
+    pub fn as_u16(self) -> u16 {
+        self.into()
+    }
+}
+
+impl fmt::Display for WarningCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown(code) => write!(f, "Unknown({code})"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -143,9 +263,16 @@ impl Record {
                     out.extend_from_slice(&n.to_be_bytes());
                 }
             }
-            RecordKind::Error(c) | RecordKind::Warning(c) | RecordKind::Port(c) => {
-                out.extend_from_slice(&c.to_be_bytes());
-            }
+            // The three single-u16-body record types share the same
+            // wire shape but no longer share a Rust type after the
+            // typed `ErrorCode` / `WarningCode` wrappers landed
+            // (bd nts-zqn). Each arm calls `as_u16()` (for the typed
+            // wrappers) or uses the value directly (for `Port`'s
+            // remaining bare `u16`); the `to_be_bytes` invocation
+            // is identical across the three.
+            RecordKind::Error(code) => out.extend_from_slice(&code.as_u16().to_be_bytes()),
+            RecordKind::Warning(code) => out.extend_from_slice(&code.as_u16().to_be_bytes()),
+            RecordKind::Port(p) => out.extend_from_slice(&p.to_be_bytes()),
             RecordKind::NewCookie(b) | RecordKind::Unknown { body: b, .. } => {
                 out.extend_from_slice(b);
             }
@@ -246,8 +373,8 @@ fn decode_kind(record_type: u16, body: &[u8]) -> Result<RecordKind, CodecError> 
         }
         record_type::NEXT_PROTOCOL => Ok(RecordKind::NextProtocol(decode_u16_array(body)?)),
         record_type::AEAD_ALGORITHM => Ok(RecordKind::AeadAlgorithm(decode_u16_array(body)?)),
-        record_type::ERROR => Ok(RecordKind::Error(decode_u16_scalar(body)?)),
-        record_type::WARNING => Ok(RecordKind::Warning(decode_u16_scalar(body)?)),
+        record_type::ERROR => Ok(RecordKind::Error(ErrorCode::from(decode_u16_scalar(body)?))),
+        record_type::WARNING => Ok(RecordKind::Warning(WarningCode::from(decode_u16_scalar(body)?))),
         record_type::NTPV4_PORT => Ok(RecordKind::Port(decode_u16_scalar(body)?)),
         record_type::NEW_COOKIE => Ok(RecordKind::NewCookie(body.to_vec())),
         record_type::NTPV4_SERVER => std::str::from_utf8(body)
@@ -299,7 +426,7 @@ mod tests {
             rec(false, RecordKind::NewCookie(vec![0xAA; 100])),
             rec(false, RecordKind::Server("time.example.com".to_owned())),
             rec(false, RecordKind::Port(123)),
-            rec(false, RecordKind::Warning(0x1234)),
+            rec(false, RecordKind::Warning(WarningCode::Unknown(0x1234))),
             rec(true, RecordKind::EndOfMessage),
         ];
         let bytes = serialize_message(&msg);
@@ -661,8 +788,8 @@ mod tests {
         // doubles as the message terminator.
         let kinds: Vec<RecordKind> = vec![
             RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4]),
-            RecordKind::Error(2),
-            RecordKind::Warning(0),
+            RecordKind::Error(ErrorCode::InternalServerError),
+            RecordKind::Warning(WarningCode::Unknown(0)),
             RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
             RecordKind::NewCookie(vec![0xAB; 4]),
             RecordKind::Server("h".to_owned()),
@@ -708,6 +835,95 @@ mod tests {
             assert_eq!(parsed.len(), 1);
             assert_eq!(parsed[0].critical, critical);
             assert_eq!(parsed[0].kind, RecordKind::EndOfMessage);
+        }
+    }
+
+    /// Pin the `u16` ⇄ `ErrorCode` round-trip across the three
+    /// IANA-registered codes (RFC 8915 §4.1.3 — 0/1/2) plus an
+    /// out-of-registry sample and the `u16` ceiling, both routed
+    /// through the `Unknown(u16)` wrapper variant (not a spec'd
+    /// code — the IANA registry stops at 2). The round-trip itself
+    /// proves encoder/decoder symmetry and `Unknown` payload
+    /// preservation. The named-variant spot checks below pin the
+    /// asymmetric failure mode in the two `From` impls:
+    /// `From<ErrorCode> for u16` is an exhaustive match that
+    /// refuses to compile if a future variant is added without an
+    /// arm (good), but `From<u16> for ErrorCode` ends in a
+    /// catch-all `other => Self::Unknown(other)` arm that would
+    /// silently route a future spec'd code (e.g. IANA code 3)
+    /// through `Unknown` until a matching arm is added — so the
+    /// spot checks for 0/1/2 must trip if any of those mappings
+    /// regresses.
+    #[test]
+    fn error_code_round_trips_all_iana_codes() {
+        for code in [0u16, 1, 2, 0xBEEF, 0xFFFF] {
+            let typed = ErrorCode::from(code);
+            assert_eq!(u16::from(typed), code, "round-trip lost code {code}");
+            assert_eq!(typed.as_u16(), code, "as_u16() disagreed for {code}");
+        }
+        // Spot-check the named-variant assignment matches RFC 8915
+        // §4.1.3's numbering directly so a transposition (e.g.
+        // BadRequest <-> InternalServerError) fails immediately.
+        assert_eq!(ErrorCode::from(0), ErrorCode::UnrecognizedCriticalRecord);
+        assert_eq!(ErrorCode::from(1), ErrorCode::BadRequest);
+        assert_eq!(ErrorCode::from(2), ErrorCode::InternalServerError);
+        assert_eq!(ErrorCode::from(3), ErrorCode::Unknown(3));
+    }
+
+    /// Pin the `Display` rendering of every `ErrorCode` variant.
+    /// Logs and `KeError::ServerError`'s `Display` rely on this; a
+    /// rename of any spec'd variant must trip this test before it
+    /// silently changes the diagnostic surface.
+    #[test]
+    fn error_code_display_matches_iana_names() {
+        assert_eq!(
+            ErrorCode::UnrecognizedCriticalRecord.to_string(),
+            "UnrecognizedCriticalRecord"
+        );
+        assert_eq!(ErrorCode::BadRequest.to_string(), "BadRequest");
+        assert_eq!(
+            ErrorCode::InternalServerError.to_string(),
+            "InternalServerError"
+        );
+        assert_eq!(ErrorCode::Unknown(0xBEEF).to_string(), "Unknown(48879)");
+    }
+
+    /// Symmetric round-trip pin for `WarningCode`. The IANA registry
+    /// is empty as of RFC 8915 so every code lands in `Unknown`
+    /// today; this test exists so a future named-variant promotion
+    /// has a single place to extend and a single place to assert
+    /// the existing catch-all behaviour was not regressed.
+    #[test]
+    fn warning_code_round_trips_unknown_payload() {
+        for code in [0u16, 1, 0x1234, 0xFFFF] {
+            let typed = WarningCode::from(code);
+            assert_eq!(u16::from(typed), code);
+            assert_eq!(typed.as_u16(), code);
+            assert_eq!(typed, WarningCode::Unknown(code));
+        }
+        assert_eq!(WarningCode::Unknown(0x1234).to_string(), "Unknown(4660)");
+    }
+
+    /// Wire-level pin: an Error record carrying each IANA-registered
+    /// code (and one out-of-registry code) round-trips through the
+    /// codec without dropping the typed wrapper. Catches a decoder
+    /// that forgets to wrap (or an encoder that double-wraps).
+    #[test]
+    fn error_record_round_trips_through_codec() {
+        for code in [
+            ErrorCode::UnrecognizedCriticalRecord,
+            ErrorCode::BadRequest,
+            ErrorCode::InternalServerError,
+            ErrorCode::Unknown(0xBEEF),
+        ] {
+            let msg = vec![
+                rec(true, RecordKind::Error(code)),
+                rec(true, RecordKind::EndOfMessage),
+            ];
+            let bytes = serialize_message(&msg);
+            let parsed = parse_message(&bytes)
+                .unwrap_or_else(|e| panic!("code={code:?}: parse failed with {e:?}"));
+            assert_eq!(parsed[0].kind, RecordKind::Error(code));
         }
     }
 }
