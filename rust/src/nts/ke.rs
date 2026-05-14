@@ -1397,10 +1397,8 @@ fn next_chunk_within_budget(buf_len: usize, n: usize, cap: usize) -> Result<(), 
 }
 
 // Compile-time pin that the trust/timeout enums implement `Hash`.
-// See the matching pin in `super::records` for rationale; the
-// closure compiles only if every named type satisfies `T: Hash`,
-// is never called, and has no runtime cost (bd nts-b6m sub-item A).
-#[allow(dead_code)]
+// See the matching pin in `super::records` for rationale, including
+// the `_`-prefix-vs-`#[expect]` choice for the const name.
 const _ASSERT_HASH_DERIVES: fn() = || {
     fn requires_hash<T: std::hash::Hash>() {}
     requires_hash::<KeTrustMode>();

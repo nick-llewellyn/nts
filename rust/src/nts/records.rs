@@ -414,8 +414,9 @@ fn decode_u16_scalar(body: &[u8]) -> Result<u16, CodecError> {
 // boilerplate; without an active use site today, a future drop of
 // the derive would otherwise go silently. The closure compiles only
 // if every named type satisfies `T: Hash`; it is never called and
-// has no runtime cost (bd nts-b6m sub-item A).
-#[allow(dead_code)]
+// has no runtime cost (bd nts-b6m sub-item A). The leading `_` on
+// the const name is the standard Rust opt-out from `dead_code`, so
+// no lint suppression is needed here.
 const _ASSERT_HASH_DERIVES: fn() = || {
     fn requires_hash<T: std::hash::Hash>() {}
     requires_hash::<RecordKind>();

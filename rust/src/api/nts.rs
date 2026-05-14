@@ -2706,10 +2706,8 @@ fn ntp64_to_unix_micros(ntp: u64) -> i64 {
 
 // Compile-time pin that the FFI-bridged trust enums implement
 // `Hash`. See the matching pin in `crate::nts::records` for
-// rationale; the closure compiles only if every named type
-// satisfies `T: Hash`, is never called, and has no runtime cost
-// (bd nts-b6m sub-item A).
-#[allow(dead_code)]
+// rationale, including the `_`-prefix-vs-`#[expect]` choice for
+// the const name.
 const _ASSERT_HASH_DERIVES: fn() = || {
     fn requires_hash<T: std::hash::Hash>() {}
     requires_hash::<TrustMode>();
