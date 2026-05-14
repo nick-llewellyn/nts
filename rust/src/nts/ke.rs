@@ -18,7 +18,8 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, SupportedPro
 use zeroize::Zeroizing;
 
 use super::records::{
-    aead, parse_message, serialize_message, CodecError, Record, RecordKind, NEXT_PROTO_NTPV4,
+    aead, parse_message, serialize_message, CodecError, ErrorCode, Record, RecordKind,
+    WarningCode, NEXT_PROTO_NTPV4,
 };
 
 /// RFC 8915 §5.1 fixed exporter label.
@@ -355,7 +356,13 @@ pub struct KeOutcome {
     /// Initial cookie pool delivered with the response.
     pub cookies: Vec<Vec<u8>>,
     /// Non-fatal warning codes (RFC 8915 §4.1.4 record type 3).
-    pub warnings: Vec<u16>,
+    /// Carried as the typed [`WarningCode`] so a future named-variant
+    /// promotion (the IANA registry is empty as of RFC 8915) can land
+    /// without changing every consumer's match shape; today every
+    /// observed code rides through `WarningCode::Unknown(u16)` and the
+    /// raw value is recoverable via `WarningCode::as_u16` / the
+    /// `Display` rendering (bd nts-zqn).
+    pub warnings: Vec<WarningCode>,
     /// Microsecond-resolution per-phase wall-clock breakdown of the
     /// handshake. `0` for any phase the call did not enter (e.g.
     /// `req.timeout = None` short-circuits the bounded DNS resolver,
@@ -419,7 +426,13 @@ pub enum KeError {
     InvalidServerName,
     Codec(CodecError),
     /// Server returned an Error record (RFC 8915 §4.1.3 record type 2).
-    ServerError(u16),
+    /// The payload is the typed [`ErrorCode`] so the three IANA-
+    /// registered codes (`UnrecognizedCriticalRecord`, `BadRequest`,
+    /// `InternalServerError`) can be pattern-matched at the call site
+    /// without re-parsing the raw `u16`; out-of-registry codes ride
+    /// through `ErrorCode::Unknown(u16)` so the diagnostic preserves
+    /// the server's choice (bd nts-zqn).
+    ServerError(ErrorCode),
     /// A critical record we don't recognize was received (RFC 8915 §4.1.4).
     UnknownCritical(u16),
     MissingNextProtocol,
@@ -812,7 +825,7 @@ pub(crate) struct KeOutcomePartial {
     ntpv4_port: u16,
     aead_id: u16,
     cookies: Vec<Vec<u8>>,
-    warnings: Vec<u16>,
+    warnings: Vec<WarningCode>,
 }
 
 /// Result of [`build_tls_config`]: the assembled `ClientConfig`, the
@@ -1661,12 +1674,12 @@ mod tests {
     fn validate_response_propagates_server_error() {
         let records = vec![
             rec(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4])),
-            rec(true, RecordKind::Error(2)),
+            rec(true, RecordKind::Error(ErrorCode::InternalServerError)),
             rec(true, RecordKind::EndOfMessage),
         ];
         match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
-            Err(KeError::ServerError(2)) => {}
-            other => panic!("expected ServerError(2), got {other:?}"),
+            Err(KeError::ServerError(ErrorCode::InternalServerError)) => {}
+            other => panic!("expected ServerError(InternalServerError), got {other:?}"),
         }
     }
 
@@ -1811,10 +1824,13 @@ mod tests {
         // server-defined code so the test pins both the rejection
         // *and* the round-trip of the code through `ServerError`.
         let eom_pos = records.len() - 1;
-        records.insert(eom_pos, rec(false, RecordKind::Error(0xBEEF)));
+        records.insert(
+            eom_pos,
+            rec(false, RecordKind::Error(ErrorCode::Unknown(0xBEEF))),
+        );
         match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
-            Err(KeError::ServerError(0xBEEF)) => {}
-            other => panic!("expected ServerError(0xBEEF), got {other:?}"),
+            Err(KeError::ServerError(ErrorCode::Unknown(0xBEEF))) => {}
+            other => panic!("expected ServerError(Unknown(0xBEEF)), got {other:?}"),
         }
     }
 
