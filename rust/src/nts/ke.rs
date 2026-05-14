@@ -529,6 +529,7 @@ impl KeFailure {
     /// Construct a failure with the resolved trust-backend attached.
     /// Used at every `map_err` site in [`perform_handshake`] that fires
     /// after `build_tls_config` has succeeded.
+    #[must_use]
     pub fn with_backend(error: KeError, trust_backend: Option<KeTrustBackend>) -> Self {
         Self {
             error,

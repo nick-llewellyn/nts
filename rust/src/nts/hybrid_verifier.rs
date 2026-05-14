@@ -119,6 +119,7 @@ pub struct HybridVerifier {
 }
 
 impl HybridVerifier {
+    #[must_use]
     pub fn new(trust_mode: KeTrustMode) -> Self {
         Self {
             platform: Arc::new(PlatformVerifier::new()),
