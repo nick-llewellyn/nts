@@ -428,10 +428,7 @@ const _ASSERT_HASH_DERIVES: fn() = || {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn rec(critical: bool, kind: RecordKind) -> Record {
-        Record::new(critical, kind)
-    }
+    use crate::nts::test_helpers::rec;
 
     #[test]
     fn round_trip_full_message() {

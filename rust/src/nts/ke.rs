@@ -1412,10 +1412,7 @@ const _ASSERT_HASH_DERIVES: fn() = || {
 mod tests {
     use super::*;
     use crate::nts::records::record_type;
-
-    fn rec(critical: bool, kind: RecordKind) -> Record {
-        Record::new(critical, kind)
-    }
+    use crate::nts::test_helpers::rec;
 
     /// RFC 8915 §3 forbids negotiating any TLS version below 1.3. The
     /// configuration constant must contain exactly one element pointing
