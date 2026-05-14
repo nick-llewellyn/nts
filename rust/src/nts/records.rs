@@ -838,14 +838,22 @@ mod tests {
         }
     }
 
-    /// Pin the `u16` ⇄ `ErrorCode` round-trip across every IANA-
-    /// registered code (RFC 8915 §4.1.3) plus a representative
-    /// out-of-registry value. Round-tripping the four spec'd codes
-    /// (0/1/2/Unknown) catches a future variant addition that
-    /// forgets to extend either of the `From` impls — the wildcard
-    /// arm of `From<ErrorCode> for u16` would otherwise silently
-    /// flatten a new variant onto whatever raw value the
-    /// `Unknown(u16)` arm carries.
+    /// Pin the `u16` ⇄ `ErrorCode` round-trip across the three
+    /// IANA-registered codes (RFC 8915 §4.1.3 — 0/1/2) plus an
+    /// out-of-registry sample and the `u16` ceiling, both routed
+    /// through the `Unknown(u16)` wrapper variant (not a spec'd
+    /// code — the IANA registry stops at 2). The round-trip itself
+    /// proves encoder/decoder symmetry and `Unknown` payload
+    /// preservation. The named-variant spot checks below pin the
+    /// asymmetric failure mode in the two `From` impls:
+    /// `From<ErrorCode> for u16` is an exhaustive match that
+    /// refuses to compile if a future variant is added without an
+    /// arm (good), but `From<u16> for ErrorCode` ends in a
+    /// catch-all `other => Self::Unknown(other)` arm that would
+    /// silently route a future spec'd code (e.g. IANA code 3)
+    /// through `Unknown` until a matching arm is added — so the
+    /// spot checks for 0/1/2 must trip if any of those mappings
+    /// regresses.
     #[test]
     fn error_code_round_trips_all_iana_codes() {
         for code in [0u16, 1, 2, 0xBEEF, 0xFFFF] {
