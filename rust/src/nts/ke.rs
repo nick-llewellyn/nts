@@ -189,7 +189,7 @@ fn phase_io_to_ke(e: std::io::Error, phase: KeTimeoutPhase) -> KeError {
 /// [`crate::api::nts::TrustMode`] across the protocol-layer boundary
 /// so the protocol module stays independent of the public-API enum
 /// definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeTrustMode {
     /// Platform store first, `webpki-roots` static bundle on
     /// `build_with_native_verifier` failure. Default behaviour
@@ -206,7 +206,7 @@ pub enum KeTrustMode {
 /// resolution and (on Android) from the per-handshake hybrid-fallback
 /// observation. Mirrors [`crate::api::nts::TrustBackend`] across the
 /// protocol-layer boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeTrustBackend {
     Platform,
     PlatformWithHybridFallback,
@@ -250,7 +250,7 @@ pub struct KeRequest {
 /// pre-handshake step rather than collapsing every wall-clock-bound
 /// failure onto an opaque `Timeout`. See `ARCHITECTURE.md`'s "Phase
 /// attribution and timings" section for the diagnostic shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeTimeoutPhase {
     /// Bounded DNS resolver pool was already at capacity when the call
     /// arrived. Surfaces as `io::ErrorKind::WouldBlock` from
@@ -1395,6 +1395,17 @@ fn next_chunk_within_budget(buf_len: usize, n: usize, cap: usize) -> Result<(), 
         Ok(())
     }
 }
+
+// Compile-time pin that the trust/timeout enums implement `Hash`.
+// See the matching pin in `super::records` for rationale, including
+// the `_`-prefix-vs-`#[expect]` choice for the const name.
+const _ASSERT_HASH_DERIVES: fn() = || {
+    fn requires_hash<T: std::hash::Hash>() {}
+    requires_hash::<KeTrustMode>();
+    requires_hash::<KeTrustBackend>();
+    requires_hash::<KeTimeoutPhase>();
+};
+
 
 #[cfg(test)]
 mod tests {
