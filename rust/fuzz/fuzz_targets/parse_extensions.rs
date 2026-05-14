@@ -1,8 +1,8 @@
 //! libFuzzer harness for `parse_extensions` from `rust/src/nts/ntp.rs`,
-//! reached through the `nts_rust::__fuzzing::parse_extensions`
+//! reached through the `nts_rust::__internal_fuzz::parse_extensions`
 //! re-export. The `nts` module is `pub(crate)` in ordinary builds;
-//! the `__fuzzing` Cargo feature (declared in `rust/Cargo.toml` and
-//! enabled by `rust/fuzz/Cargo.toml`'s `nts_rust` dependency line)
+//! the `__internal-fuzz` Cargo feature (declared in `rust/Cargo.toml`
+//! and enabled by `rust/fuzz/Cargo.toml`'s `nts_rust` dependency line)
 //! re-exports the parser so this harness can target it without
 //! widening the parent crate's public API.
 //!
@@ -36,7 +36,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nts_rust::__fuzzing::parse_extensions;
+use nts_rust::__internal_fuzz::parse_extensions;
 
 fuzz_target!(|data: &[u8]| {
     // Discard the `Result`. The only failure mode the harness cares

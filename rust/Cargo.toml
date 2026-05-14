@@ -49,14 +49,19 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 default = ["log-strip"]
 log-strip = ["log/release_max_level_warn", "tracing/release_max_level_warn"]
 # Re-exports the otherwise-`pub(crate)` `nts` protocol modules through a
-# `__fuzzing` re-export module so harnesses in `rust/fuzz/` can target
-# the parsers (`parse_extensions`, future `parse_message`,
+# `__internal_fuzz` re-export module so harnesses in `rust/fuzz/` can
+# target the parsers (`parse_extensions`, `parse_message`,
 # `validate_response`) without widening the crate's public API. The
-# leading `__` is the convention for non-API integration hooks (see bd
-# nts-b6m); the feature must only ever be enabled by fuzz / coverage
-# crates that are themselves excluded from the published artefact, never
-# by the Native Assets build hook (`hook/build.dart`) or the FRB codegen.
-__fuzzing = []
+# `__internal-` prefix is the `ntpd-rs ntp-proto/Cargo.toml` convention
+# (bd nts-b6m sub-item B): "exists for the workspace's own tooling;
+# external consumers must not depend on it." The feature must only ever
+# be enabled by fuzz / coverage crates that are themselves excluded from
+# the published artefact, never by the Native Assets build hook
+# (`hook/build.dart`) or the FRB codegen. The Cargo feature uses the
+# canonical hyphenated form (`__internal-fuzz`); the corresponding Rust
+# module name substitutes underscore (`__internal_fuzz`) because Rust
+# identifiers cannot contain hyphens.
+__internal-fuzz = []
 
 [dependencies]
 aes-gcm-siv = { version = "0.11", default-features = false, features = ["alloc", "aes"] }

@@ -37,14 +37,18 @@ mod frb_generated;
 pub(crate) mod nts;
 
 // Re-exports the protocol parsers for cargo-fuzz harnesses in
-// `rust/fuzz/`, gated behind the `__fuzzing` Cargo feature so the
-// surface stays out of the published API. The `nts` module remains
-// `pub(crate)` for ordinary builds; flipping `__fuzzing` re-exposes
-// only the specific parser entry points that fuzz targets need to
-// drive, not the whole module tree. See `rust/Cargo.toml::[features]`
-// for the policy on enabling this flag (fuzz / coverage crates only).
-#[cfg(feature = "__fuzzing")]
-pub mod __fuzzing {
+// `rust/fuzz/`, gated behind the `__internal-fuzz` Cargo feature so
+// the surface stays out of the published API. The `nts` module
+// remains `pub(crate)` for ordinary builds; flipping `__internal-fuzz`
+// re-exposes only the specific parser entry points that fuzz targets
+// need to drive, not the whole module tree. See
+// `rust/Cargo.toml::[features]` for the policy on enabling this flag
+// (fuzz / coverage crates only). The Cargo feature uses the
+// canonical hyphenated form (`__internal-fuzz`); the module below
+// substitutes underscore (`__internal_fuzz`) because Rust identifiers
+// cannot contain hyphens (bd nts-b6m sub-item B).
+#[cfg(feature = "__internal-fuzz")]
+pub mod __internal_fuzz {
     pub use crate::nts::ke::KeError;
     pub use crate::nts::ntp::{parse_extensions, NtpError};
     pub use crate::nts::records::aead::AES_SIV_CMAC_256;

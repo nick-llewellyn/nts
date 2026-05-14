@@ -1,5 +1,5 @@
 //! libFuzzer harness for `validate_response` from `rust/src/nts/ke.rs`,
-//! reached through the `nts_rust::__fuzzing::validate_response`
+//! reached through the `nts_rust::__internal_fuzz::validate_response`
 //! shim. The shim discards the success-payload `KeOutcomePartial`
 //! (which stays private to the `nts::ke` module) and surfaces
 //! `Result<(), KeError>` — the harness only asserts the call does
@@ -49,7 +49,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nts_rust::__fuzzing::{parse_message, validate_response, AES_SIV_CMAC_256};
+use nts_rust::__internal_fuzz::{parse_message, validate_response, AES_SIV_CMAC_256};
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(records) = parse_message(data) {
