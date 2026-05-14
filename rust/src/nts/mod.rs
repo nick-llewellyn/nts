@@ -28,6 +28,12 @@ pub mod ntp;
 pub mod records;
 pub mod trust_state;
 
+// Shared test-only helpers (rec record-builder, fresh_keys, sample_request,
+// craft_response{,_with}, craft_unauthenticated_ntsn). Gated `#[cfg(test)]`
+// so the contents are compiled out of release builds. See bd nts-wzg.
+#[cfg(test)]
+pub(crate) mod test_helpers;
+
 // `HybridVerifier` runs on Android in production (it salvages NTS-KE
 // handshakes against servers whose Let's Encrypt R12 leaves omit the
 // OCSP responder URL — the platform `PKIXRevocationChecker` rejects
