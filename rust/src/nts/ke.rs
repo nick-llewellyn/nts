@@ -694,9 +694,9 @@ fn build_request(aead_algorithms: &[u16]) -> Vec<u8> {
 /// Returns the synthesized [`KeOutcome`] sans the exported keys; the caller
 /// fills those in once the response has been validated against the live TLS
 /// session it came from.
-// `pub(crate)` so the `__fuzzing` re-export module in `lib.rs`
-// (gated by the `__fuzzing` Cargo feature) can wrap this function
-// for the cargo-fuzz harness in `rust/fuzz/`. The harness exposes
+// `pub(crate)` so the `__internal_fuzz` re-export module in `lib.rs`
+// (gated by the `__internal-fuzz` Cargo feature) can wrap this
+// function for the cargo-fuzz harness in `rust/fuzz/`. The harness exposes
 // only a thin shim that discards the `KeOutcomePartial` payload
 // (which stays private), so widening from `fn` to `pub(crate)` does
 // not enlarge the cross-module API surface for ordinary builds.
@@ -814,7 +814,7 @@ pub(crate) fn validate_response(
     })
 }
 
-// `pub(crate)` so the `__fuzzing` validate_response shim in
+// `pub(crate)` so the `__internal_fuzz` validate_response shim in
 // `lib.rs` can reference this in its return type. The fields stay
 // private (no `pub` on any field) — only the type-name visibility
 // changes, not the data exposure. The shim discards the value via

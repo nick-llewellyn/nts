@@ -39,9 +39,11 @@ libfuzzer-sys = "0.4"
 
 [dependencies.nts_rust]
 path = ".."
-# Enables the `__fuzzing` re-export module on the parent crate so this
-# harness can drive the otherwise-`pub(crate)` parsers directly.
-features = ["__fuzzing"]
+# Enables the `__internal_fuzz` re-export module on the parent crate so
+# this harness can drive the otherwise-`pub(crate)` parsers directly.
+# Feature name uses the canonical hyphenated `__internal-fuzz` form;
+# the Rust module name substitutes underscore (bd nts-b6m sub-item B).
+features = ["__internal-fuzz"]
 
 [[bin]]
 name = "parse_extensions"

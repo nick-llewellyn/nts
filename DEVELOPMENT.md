@@ -109,11 +109,14 @@ crash into the seed corpus or pin it as a unit-test fixture in the
 parent crate's regression module.
 
 The `nts_rust` crate exposes the parsers to the harness via the
-`__fuzzing` Cargo feature (re-exports under `nts_rust::__fuzzing::*`).
-That feature must only ever be enabled by fuzz / coverage crates that
-are themselves excluded from the published artefact (see
-`.pubignore`). Never enable it from `hook/build.dart` or the FRB
-codegen.
+`__internal-fuzz` Cargo feature (re-exports under
+`nts_rust::__internal_fuzz::*`; the Cargo feature uses the
+canonical hyphenated form per the `ntpd-rs` `__internal-` convention,
+and the Rust module substitutes underscore because Rust identifiers
+cannot contain hyphens). That feature must only ever be enabled by
+fuzz / coverage crates that are themselves excluded from the
+published artefact (see `.pubignore`). Never enable it from
+`hook/build.dart` or the FRB codegen.
 
 CI integration is not wired up yet; follow-up tickets cover both
 adding the additional fuzz targets and a nightly job that runs each
