@@ -63,7 +63,7 @@ pub enum RecordKind {
 /// in the original specification get named variants; any other value
 /// — including future IANA registry additions — round-trips through
 /// the `Unknown(u16)` catch-all so a non-conforming server cannot
-/// crash the parser by sending an unrecognised code, and the
+/// crash the parser by sending an unrecognized code, and the
 /// numeric payload remains visible to logs and to the `From<_> for
 /// u16` round-trip.
 ///
