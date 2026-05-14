@@ -45,7 +45,7 @@ pub struct Record {
     pub kind: RecordKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RecordKind {
     EndOfMessage,
     NextProtocol(Vec<u16>),
@@ -70,7 +70,7 @@ pub enum RecordKind {
 /// Mirrors the shape used by `pendulum-project/ntpd-rs`'s
 /// `nts::ErrorCode` (v1.7.2) so the two implementations agree on
 /// the canonical naming of the three spec'd codes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// RFC 8915 §4.1.3 code 0 — server received a critical record
     /// type it does not understand.
@@ -137,7 +137,7 @@ impl fmt::Display for ErrorCode {
 /// the `Unknown(u16)` catch-all today; the typed wrapper exists so
 /// future registry additions can be promoted to named variants
 /// without changing every call site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WarningCode {
     /// Any code observed on the wire. The IANA registry is empty
     /// at the spec's publication time; future named variants will
@@ -406,6 +406,23 @@ fn decode_u16_scalar(body: &[u8]) -> Result<u16, CodecError> {
     }
     Ok(u16::from_be_bytes([body[0], body[1]]))
 }
+
+// Compile-time pin that the protocol-code enums implement
+// `Hash`. The `derive(Hash)` lines above are added so callers can
+// key counters and `HashMap`s on protocol codes (e.g.
+// per-`ErrorCode` error-frequency telemetry) without local
+// boilerplate; without an active use site today, a future drop of
+// the derive would otherwise go silently. The closure compiles only
+// if every named type satisfies `T: Hash`; it is never called and
+// has no runtime cost (bd nts-b6m sub-item A).
+#[allow(dead_code)]
+const _ASSERT_HASH_DERIVES: fn() = || {
+    fn requires_hash<T: std::hash::Hash>() {}
+    requires_hash::<RecordKind>();
+    requires_hash::<ErrorCode>();
+    requires_hash::<WarningCode>();
+};
+
 
 #[cfg(test)]
 mod tests {

@@ -385,7 +385,7 @@ pub fn nts_trust_status() -> NtsTrustStatus {
 /// Carried per-handshake on [`NtsTimeSample`] / [`NtsWarmCookiesOutcome`]
 /// and process-globally on [`NtsTrustStatus`]. See `ARCHITECTURE.md`'s
 /// "Trust-anchor diagnostics" section for the operational shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrustBackend {
     /// `rustls-platform-verifier` ran against the OS trust store
     /// (system roots plus any user / MDM-installed roots). Source of
@@ -418,7 +418,7 @@ pub enum TrustBackend {
 /// functions ([`nts_query`], [`nts_warm_cookies`]) is constructed with
 /// [`TrustMode::PlatformWithFallback`] and never changes, so existing
 /// callers see no behaviour change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrustMode {
     /// Platform store is the primary source of truth; on
     /// `build_with_native_verifier` failure the client silently
@@ -2703,6 +2703,19 @@ fn ntp64_to_unix_micros(ntp: u64) -> i64 {
         .saturating_mul(1_000_000)
         .saturating_add(micros as i64)
 }
+
+// Compile-time pin that the FFI-bridged trust enums implement
+// `Hash`. See the matching pin in `crate::nts::records` for
+// rationale; the closure compiles only if every named type
+// satisfies `T: Hash`, is never called, and has no runtime cost
+// (bd nts-b6m sub-item A).
+#[allow(dead_code)]
+const _ASSERT_HASH_DERIVES: fn() = || {
+    fn requires_hash<T: std::hash::Hash>() {}
+    requires_hash::<TrustMode>();
+    requires_hash::<TrustBackend>();
+};
+
 
 #[cfg(test)]
 mod tests {
