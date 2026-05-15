@@ -1,14 +1,20 @@
 //! AEAD wrappers for NTS-protected NTPv4 (RFC 8915 §5.6).
 //!
-//! Two algorithms ship today:
+//! Three algorithms ship today:
 //!  * AES-SIV-CMAC-256 (IANA AEAD ID 15, RFC 5297) — the RFC 8915 mandatory
 //!    baseline. Multi-AD, deterministic IV; the wire "nonce" is folded into
 //!    the AD vector and the 16-byte synthetic IV is prepended to the ciphertext.
+//!  * AES-SIV-CMAC-512 (IANA AEAD ID 17, RFC 5297 with AES-256) — same SIV
+//!    construction as ID 15 but on the AES-256 block cipher. The 64-byte key
+//!    splits into 32 bytes of CMAC-AES-256 subkey and 32 bytes of AES-256
+//!    encryption key, both consumed by [`Aes256Siv`]. Optional in RFC 8915;
+//!    offered after CMAC-256 so a server that prefers the larger key still
+//!    resolves to a usable AEAD.
 //!  * AES-128-GCM-SIV  (IANA AEAD ID 30, RFC 8452) — nonce-misuse-resistant
 //!    GCM variant with native hardware acceleration on every shipping ARM and
 //!    x86-64 part. 12-byte real nonce, 16-byte tag appended to ciphertext.
 //!
-//! Both fit cleanly into the RFC 8915 §5.6 Authenticator wire layout
+//! All three fit cleanly into the RFC 8915 §5.6 Authenticator wire layout
 //! (`nonce_len || ciphertext_len || nonce || ciphertext`); the [`AeadKey`]
 //! enum dispatches to the right implementation while [`build_client_request`]
 //! and [`parse_server_response`] in `nts::ntp` stay algorithm-agnostic.
@@ -17,12 +23,17 @@ use aes_gcm_siv::aead::Aead as _;
 use aes_gcm_siv::Aes128GcmSiv;
 use aes_gcm_siv::Nonce;
 use aes_siv::aead::generic_array::GenericArray;
-use aes_siv::siv::Aes128Siv;
+use aes_siv::siv::{Aes128Siv, Aes256Siv};
 use aes_siv::KeyInit;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// AES-SIV-CMAC-256 key length (RFC 8915 §5.1, AEAD ID 15).
 pub const KEY_LEN: usize = 32;
+
+/// AES-SIV-CMAC-512 key length (RFC 8915 §5.1, AEAD ID 17). 64 bytes
+/// because the SIV construction concatenates the CMAC-AES-256 subkey
+/// (32 bytes) with the AES-256 encryption key (32 bytes).
+pub const KEY_LEN_SIV_512: usize = 64;
 
 /// AES-128-GCM-SIV key length (RFC 8452 §4, IANA AEAD ID 30).
 pub const KEY_LEN_GCM_SIV: usize = 16;
@@ -121,6 +132,43 @@ impl std::fmt::Debug for SivKey {
     }
 }
 
+/// AES-SIV-CMAC-512 key material wrapped to enforce length once on
+/// construction. Same [`Zeroize`] / [`ZeroizeOnDrop`] derives as
+/// [`SivKey`]; see that type's rustdoc for the rationale. The 64-byte
+/// key is consumed by [`Aes256Siv`], which internally splits it into
+/// a CMAC-AES-256 subkey and an AES-256 encryption key (32 bytes
+/// each).
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct SivKey512 {
+    bytes: [u8; KEY_LEN_SIV_512],
+}
+
+impl SivKey512 {
+    pub fn from_slice(material: &[u8]) -> Result<Self, AeadError> {
+        if material.len() != KEY_LEN_SIV_512 {
+            return Err(AeadError::InvalidKeyLength {
+                actual: material.len(),
+                expected: KEY_LEN_SIV_512,
+            });
+        }
+        let mut bytes = [0u8; KEY_LEN_SIV_512];
+        bytes.copy_from_slice(material);
+        Ok(Self { bytes })
+    }
+
+    fn cipher(&self) -> Aes256Siv {
+        Aes256Siv::new(GenericArray::from_slice(&self.bytes))
+    }
+}
+
+impl std::fmt::Debug for SivKey512 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SivKey512")
+            .field("bytes", &"<redacted>")
+            .finish()
+    }
+}
+
 /// AES-128-GCM-SIV key material wrapped to enforce length once on
 /// construction. Same [`Zeroize`] / [`ZeroizeOnDrop`] derives as
 /// [`SivKey`]; see that type's rustdoc for the rationale.
@@ -175,6 +223,24 @@ pub fn siv_open(key: &SivKey, ad: &[&[u8]], sealed: &[u8]) -> Result<Vec<u8>, Ae
         .map_err(|_| AeadError::OpenFailed)
 }
 
+/// AES-SIV-CMAC-512 counterpart to [`siv_seal`]. Same wire layout
+/// (synthetic IV prepended), same multi-AD semantics, same empty-
+/// plaintext-yields-pure-authenticator property; the only difference
+/// is the underlying block cipher (AES-256 vs. AES-128) and key size
+/// (64 vs. 32 octets).
+pub fn siv_seal_512(key: &SivKey512, ad: &[&[u8]], plaintext: &[u8]) -> Result<Vec<u8>, AeadError> {
+    key.cipher()
+        .encrypt(ad, plaintext)
+        .map_err(|_| AeadError::SealFailed)
+}
+
+/// AES-SIV-CMAC-512 counterpart to [`siv_open`]. Mirrors [`siv_seal_512`].
+pub fn siv_open_512(key: &SivKey512, ad: &[&[u8]], sealed: &[u8]) -> Result<Vec<u8>, AeadError> {
+    key.cipher()
+        .decrypt(ad, sealed)
+        .map_err(|_| AeadError::OpenFailed)
+}
+
 /// Algorithm-agnostic AEAD key for the NTS Authenticator extension.
 ///
 /// Wraps the per-algorithm key types and exposes a single entry point —
@@ -186,6 +252,7 @@ pub fn siv_open(key: &SivKey, ad: &[&[u8]], sealed: &[u8]) -> Result<Vec<u8>, Ae
 #[derive(Clone, Debug)]
 pub enum AeadKey {
     SivCmac256(SivKey),
+    SivCmac512(SivKey512),
     Aes128GcmSiv(Aes128GcmSivKey),
 }
 
@@ -194,18 +261,20 @@ impl AeadKey {
     pub fn algorithm_id(&self) -> u16 {
         match self {
             Self::SivCmac256(_) => 15,
+            Self::SivCmac512(_) => 17,
             Self::Aes128GcmSiv(_) => 30,
         }
     }
 
     /// Recommended wire-nonce length for the negotiated algorithm.
     ///
-    /// SIV-CMAC tolerates any non-empty length; GCM-SIV requires exactly 12
-    /// bytes (RFC 8452 §4). Callers generating fresh nonces should use this
-    /// to size their RNG read.
+    /// Both SIV-CMAC variants tolerate any non-empty length and share the
+    /// same [`RECOMMENDED_NONCE_LEN`]; GCM-SIV requires exactly 12 bytes
+    /// (RFC 8452 §4). Callers generating fresh nonces should use this to
+    /// size their RNG read.
     pub fn nonce_len(&self) -> usize {
         match self {
-            Self::SivCmac256(_) => RECOMMENDED_NONCE_LEN,
+            Self::SivCmac256(_) | Self::SivCmac512(_) => RECOMMENDED_NONCE_LEN,
             Self::Aes128GcmSiv(_) => NONCE_LEN_GCM_SIV,
         }
     }
@@ -231,6 +300,7 @@ impl AeadKey {
     pub fn from_keying_material(aead_id: u16, material: &[u8]) -> Result<Self, AeadError> {
         match aead_id {
             15 => SivKey::from_slice(material).map(Self::SivCmac256),
+            17 => SivKey512::from_slice(material).map(Self::SivCmac512),
             30 => Aes128GcmSivKey::from_slice(material).map(Self::Aes128GcmSiv),
             other => Err(AeadError::UnsupportedAlgorithm(other)),
         }
@@ -248,6 +318,7 @@ impl AeadKey {
     ) -> Result<Vec<u8>, AeadError> {
         match self {
             Self::SivCmac256(k) => siv_seal(k, &[packet_aad, nonce], plaintext),
+            Self::SivCmac512(k) => siv_seal_512(k, &[packet_aad, nonce], plaintext),
             Self::Aes128GcmSiv(k) => {
                 if nonce.len() != NONCE_LEN_GCM_SIV {
                     return Err(AeadError::InvalidNonceLength {
@@ -278,6 +349,7 @@ impl AeadKey {
     ) -> Result<Vec<u8>, AeadError> {
         match self {
             Self::SivCmac256(k) => siv_open(k, &[packet_aad, nonce], sealed),
+            Self::SivCmac512(k) => siv_open_512(k, &[packet_aad, nonce], sealed),
             Self::Aes128GcmSiv(k) => {
                 if nonce.len() != NONCE_LEN_GCM_SIV {
                     return Err(AeadError::InvalidNonceLength {
@@ -487,6 +559,15 @@ mod tests {
             }) => {}
             other => panic!("SivKey: expected InvalidKeyLength(64, {KEY_LEN}), got {other:?}",),
         }
+        match SivKey512::from_slice(&[0u8; 128]) {
+            Err(AeadError::InvalidKeyLength {
+                actual: 128,
+                expected: KEY_LEN_SIV_512,
+            }) => {}
+            other => panic!(
+                "SivKey512: expected InvalidKeyLength(128, {KEY_LEN_SIV_512}), got {other:?}",
+            ),
+        }
         match Aes128GcmSivKey::from_slice(&[0u8; 32]) {
             Err(AeadError::InvalidKeyLength {
                 actual: 32,
@@ -549,6 +630,55 @@ mod tests {
         assert_eq!(direct, via_enum);
     }
 
+    #[test]
+    fn aes_siv_cmac_512_round_trips_via_aead_key() {
+        let key = AeadKey::from_keying_material(17, &[0xC3; KEY_LEN_SIV_512]).unwrap();
+        assert_eq!(key.algorithm_id(), 17);
+        assert_eq!(key.nonce_len(), RECOMMENDED_NONCE_LEN);
+        let nonce = [0x22u8; RECOMMENDED_NONCE_LEN];
+        let aad = b"ntp header || extensions";
+        let plaintext = b"new-cookie payload bytes";
+        let sealed = key.seal_packet(aad, &nonce, plaintext).unwrap();
+        // SIV emits synthetic_iv || ciphertext; the IV is 16 bytes.
+        assert_eq!(sealed.len(), plaintext.len() + TAG_LEN);
+        let opened = key.open_packet(aad, &nonce, &sealed).unwrap();
+        assert_eq!(opened, plaintext);
+    }
+
+    /// Equivalence proof for the 512-bit variant: dispatching through
+    /// `AeadKey::SivCmac512(...).seal_packet(aad, nonce, pt)` must be
+    /// byte-identical to `siv_seal_512(key, &[aad, nonce], pt)`. Mirrors
+    /// [`aead_key_siv_dispatches_to_multi_ad`] for ID 17 so a future
+    /// arm reshuffle that swapped the multi-AD ordering would trip
+    /// both tests symmetrically rather than only the 256-bit one.
+    #[test]
+    fn aead_key_siv_512_dispatches_to_multi_ad() {
+        let raw = SivKey512::from_slice(&[0x91; KEY_LEN_SIV_512]).unwrap();
+        let wrapped = AeadKey::SivCmac512(raw.clone());
+        let aad = b"header-bytes";
+        let nonce = [0xA4u8; RECOMMENDED_NONCE_LEN];
+        let pt = b"payload";
+        let direct = siv_seal_512(&raw, &[aad, &nonce], pt).unwrap();
+        let via_enum = wrapped.seal_packet(aad, &nonce, pt).unwrap();
+        assert_eq!(direct, via_enum);
+    }
+
+    /// SIV-CMAC-512 must reject a tampered synthetic-IV / ciphertext
+    /// just like the 256-bit variant. Pairs with [`tampered_tag_rejects`]
+    /// for the lower-level `siv_open`/`siv_open_512` path; this one
+    /// exercises the `AeadKey` dispatch arm.
+    #[test]
+    fn aead_key_siv_512_rejects_tampered_ciphertext() {
+        let key = AeadKey::from_keying_material(17, &[0xD7; KEY_LEN_SIV_512]).unwrap();
+        let nonce = [0x05u8; RECOMMENDED_NONCE_LEN];
+        let mut sealed = key.seal_packet(b"ad", &nonce, b"payload").unwrap();
+        sealed[0] ^= 0x01;
+        match key.open_packet(b"ad", &nonce, &sealed) {
+            Err(AeadError::OpenFailed) => {}
+            other => panic!("expected OpenFailed, got {other:?}"),
+        }
+    }
+
     /// Unknown IANA AEAD IDs must surface via the dedicated
     /// `UnsupportedAlgorithm` variant carrying the offending id, not via
     /// the legacy `InvalidKeyLength { expected: 0 }` sentinel that
@@ -566,7 +696,9 @@ mod tests {
     /// 32 octets but we hand it 16. This is the regression guard that
     /// keeps the new `UnsupportedAlgorithm` arm from quietly swallowing
     /// the length-validation path when a future refactor reorders the
-    /// match in `from_keying_material`.
+    /// match in `from_keying_material`. Both SIV-CMAC variants are
+    /// covered so a future reordering that put the `UnsupportedAlgorithm`
+    /// arm ahead of the `17` arm would still be caught.
     #[test]
     fn aead_key_known_id_short_material_is_invalid_key_length() {
         match AeadKey::from_keying_material(15, &[0u8; 16]) {
@@ -574,7 +706,14 @@ mod tests {
                 actual: 16,
                 expected: KEY_LEN,
             }) => {}
-            other => panic!("expected InvalidKeyLength for short SIV key, got {other:?}"),
+            other => panic!("expected InvalidKeyLength for short SIV-CMAC-256 key, got {other:?}"),
+        }
+        match AeadKey::from_keying_material(17, &[0u8; 32]) {
+            Err(AeadError::InvalidKeyLength {
+                actual: 32,
+                expected: KEY_LEN_SIV_512,
+            }) => {}
+            other => panic!("expected InvalidKeyLength for short SIV-CMAC-512 key, got {other:?}"),
         }
     }
 
@@ -586,9 +725,17 @@ mod tests {
         assert!(rendered.contains("redacted"));
     }
 
-    /// Compile-time pin that [`SivKey`] and [`Aes128GcmSivKey`]
+    #[test]
+    fn siv_512_debug_does_not_leak_key_material() {
+        let key = SivKey512::from_slice(&[0x77; KEY_LEN_SIV_512]).unwrap();
+        let rendered = format!("{key:?}");
+        assert!(!rendered.contains("77"));
+        assert!(rendered.contains("redacted"));
+    }
+
+    /// Compile-time pin that all three per-algorithm key types
     /// implement [`zeroize::ZeroizeOnDrop`]. The trait bound is the
-    /// load-bearing contract on both types — removing the
+    /// load-bearing contract on every wrapped key — removing the
     /// `#[derive(Zeroize, ZeroizeOnDrop)]` would silently let the
     /// raw key bytes leak back to the heap with their material
     /// intact. A future edit that drops the derive (or replaces the
@@ -599,6 +746,7 @@ mod tests {
     fn aead_keys_implement_zeroize_on_drop() {
         fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
         assert_zeroize_on_drop::<SivKey>();
+        assert_zeroize_on_drop::<SivKey512>();
         assert_zeroize_on_drop::<Aes128GcmSivKey>();
     }
 
@@ -628,6 +776,31 @@ mod tests {
         assert_eq!(
             ct_aa_after, ct_zero,
             "post-zeroize SivKey must behave as the all-zero key",
+        );
+    }
+
+    /// Same shape as [`siv_key_zeroize_method_yields_all_zero_key_behaviour`]
+    /// for [`SivKey512`]. Pinned independently of the 256-bit variant
+    /// because the derived `Zeroize` impl is per-type: a future edit
+    /// that re-shaped only one of the two wrappers (e.g. moved its
+    /// bytes behind a `Box<[u8]>` without preserving the derive)
+    /// would leave the other behaviourally correct, masking the leak.
+    #[test]
+    fn siv_key_512_zeroize_method_yields_all_zero_key_behaviour() {
+        use zeroize::Zeroize;
+        let mut key_aa = SivKey512::from_slice(&[0xAA; KEY_LEN_SIV_512]).unwrap();
+        let key_zero = SivKey512::from_slice(&[0u8; KEY_LEN_SIV_512]).unwrap();
+        let ct_aa_before = siv_seal_512(&key_aa, &[b"ad"], b"pt").unwrap();
+        let ct_zero = siv_seal_512(&key_zero, &[b"ad"], b"pt").unwrap();
+        assert_ne!(
+            ct_aa_before, ct_zero,
+            "pre-zeroize ciphertexts under distinct SivKey512 keys must differ",
+        );
+        key_aa.zeroize();
+        let ct_aa_after = siv_seal_512(&key_aa, &[b"ad"], b"pt").unwrap();
+        assert_eq!(
+            ct_aa_after, ct_zero,
+            "post-zeroize SivKey512 must behave as the all-zero key",
         );
     }
 

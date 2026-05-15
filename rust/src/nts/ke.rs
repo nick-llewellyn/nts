@@ -657,27 +657,29 @@ impl From<CodecError> for KeError {
 /// out of step.
 pub(crate) const OFFERED_AEAD_IDS: &[u16] = &[
     aead::AES_SIV_CMAC_256,
+    aead::AES_SIV_CMAC_512,
     aead::AES_128_GCM_SIV,
 ];
 
 /// AEAD key length in octets per RFC 8915 §5.1 (SIV-CMAC family) and
 /// RFC 8452 §4 (GCM-SIV).
 ///
-/// Currently entries match exactly the IDs we both *offer* in the KE
-/// handshake (see [`OFFERED_AEAD_IDS`]) and can *construct* in the
-/// AEAD layer (`AeadKey::from_keying_material` in
-/// `crate::nts::aead`). The 384- and 512-bit SIV-CMAC variants
-/// (IANA IDs 16 and 17) are deliberately absent: although they are
-/// valid IANA registry values and used by [`exporter_context`] for
-/// context-string round-trips, the AEAD constructor does not
-/// implement them, so listing them here would let `validate_response`
-/// accept an offered AEAD that derivation immediately fails on. Any
-/// future expansion must update all three surfaces
-/// (`OFFERED_AEAD_IDS`, this table, and the AEAD constructor)
-/// together; the invariant tests in this module fail otherwise.
+/// Entries match exactly the IDs we both *offer* in the KE handshake
+/// (see [`OFFERED_AEAD_IDS`]) and can *construct* in the AEAD layer
+/// (`AeadKey::from_keying_material` in `crate::nts::aead`). The
+/// 384-bit SIV-CMAC variant (IANA ID 16) is deliberately absent:
+/// although it is a valid IANA registry value and used by
+/// [`exporter_context`] for context-string round-trips, the AEAD
+/// constructor does not implement it, so listing it here would let
+/// `validate_response` accept an offered AEAD that derivation
+/// immediately fails on. Any future expansion must update all three
+/// surfaces (`OFFERED_AEAD_IDS`, this table, and the AEAD
+/// constructor) together; the invariant tests in this module fail
+/// otherwise.
 fn aead_key_len(id: u16) -> Option<usize> {
     match id {
         aead::AES_SIV_CMAC_256 => Some(32),
+        aead::AES_SIV_CMAC_512 => Some(64),
         aead::AES_128_GCM_SIV => Some(16),
         _ => None,
     }
