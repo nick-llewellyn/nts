@@ -299,6 +299,87 @@ impl AeadKey {
     }
 }
 
+/// Pass-through "AEAD" for framing-only tests in this crate.
+///
+/// Returns `plaintext` verbatim as ciphertext and exposes a deterministic
+/// nonce of `nonce_len` octets via [`Self::nonce`]. Strictly
+/// `#[cfg(test)] pub(crate)` so no production path can construct or call
+/// it — `AeadKey` is unaffected and the algorithm-dispatch table
+/// (`AeadKey::from_keying_material`) is intentionally not extended.
+///
+/// Drop-in for [`siv_seal`] / [`siv_open`] at the framing level so
+/// framing-regression coverage can assert on wire bytes directly rather
+/// than treating the Authenticator's ciphertext slot as an opaque
+/// `tag || ciphertext` blob. The nonce mirrors ntpd-rs's `IdentityCipher`
+/// (`ntp-proto/src/packet/crypto.rs`, v1.7.2 lines 326-384) deterministic
+/// sequence so callers can hard-code the expected nonce bytes without
+/// pulling in an RNG. The API shape differs because our AEAD interface
+/// is value-in / value-out rather than ntpd-rs's in-place buffer
+/// mutation.
+///
+/// Ticket: bd nts-fa3.
+#[cfg(test)]
+pub(crate) struct IdentityAead {
+    nonce_len: usize,
+}
+
+#[cfg(test)]
+impl IdentityAead {
+    pub(crate) fn new(nonce_len: usize) -> Self {
+        assert!(
+            nonce_len <= u8::MAX as usize + 1,
+            "IdentityAead deterministic nonce overflows u8 at length {nonce_len}",
+        );
+        Self { nonce_len }
+    }
+
+    /// Deterministic nonce: `(0..self.nonce_len).map(|i| i as u8)`
+    /// collected into a `Vec<u8>`. The sequence is fixed so framing
+    /// assertions can pin the expected nonce bytes without an RNG
+    /// dependency. The cast is applied per-element rather than to the
+    /// range bound so the boundary case `nonce_len == 256` (the
+    /// largest value [`Self::new`] accepts) yields the full
+    /// `[0, 1, …, 255]` sequence rather than an empty `0..0u8` range.
+    pub(crate) fn nonce(&self) -> Vec<u8> {
+        (0..self.nonce_len).map(|i| i as u8).collect()
+    }
+
+    /// Pass-through `seal`: returns `plaintext.to_vec()` regardless of
+    /// `ad`. No tag, no encryption — the wire bytes are equal to the
+    /// plaintext so framing-layer assertions can read the inner
+    /// extension structure directly. `&self` is retained for symmetry
+    /// with [`Self::open`] and with `AeadKey::seal_packet` so callers
+    /// can swap implementations without changing call-site shape; the
+    /// helper itself is configuration-free on the seal path.
+    #[expect(
+        clippy::unused_self,
+        reason = "pass-through seal mirrors AeadKey::seal_packet's &self receiver \
+                 so framing tests can swap implementations without changing call sites"
+    )]
+    pub(crate) fn seal(&self, _ad: &[&[u8]], plaintext: &[u8]) -> Result<Vec<u8>, AeadError> {
+        Ok(plaintext.to_vec())
+    }
+
+    /// Pass-through `open`: returns `ciphertext.to_vec()` after
+    /// validating the nonce length. Mirrors [`siv_open`]'s `Vec<u8>`
+    /// return shape so framing tests can swap implementations without
+    /// changing call sites.
+    pub(crate) fn open(
+        &self,
+        _ad: &[&[u8]],
+        nonce: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, AeadError> {
+        if nonce.len() != self.nonce_len {
+            return Err(AeadError::InvalidNonceLength {
+                actual: nonce.len(),
+                expected: self.nonce_len,
+            });
+        }
+        Ok(ciphertext.to_vec())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +663,79 @@ mod tests {
             ct_aa_after, ct_zero,
             "post-zeroize Aes128GcmSivKey must behave as the all-zero key",
         );
+    }
+
+    /// [`IdentityAead`] seal/open is a pure copy: the sealed bytes equal
+    /// the plaintext, and `open` returns the same bytes back. The whole
+    /// point of the helper — framing tests can read the inner extension
+    /// structure directly from the wire ciphertext slot rather than
+    /// treating it as a `tag || ciphertext` blob. Pin the property in
+    /// `aead.rs` so a future refactor that accidentally re-introduces
+    /// encryption (or strips the copy) trips a local test rather than
+    /// surfacing as silent breakage in `ntp.rs::tests` framing
+    /// assertions.
+    #[test]
+    fn identity_aead_seal_is_a_pass_through_copy() {
+        let aead = IdentityAead::new(16);
+        let pt = b"plaintext-bytes";
+        let sealed = aead.seal(&[b"any-aad"], pt).unwrap();
+        assert_eq!(sealed.as_slice(), pt);
+        let opened = aead.open(&[b"any-aad"], &aead.nonce(), &sealed).unwrap();
+        assert_eq!(opened, pt);
+    }
+
+    /// The deterministic-nonce property: [`IdentityAead::nonce`] yields
+    /// `(0..self.nonce_len).map(|i| i as u8)` collected exactly so
+    /// framing assertions can hard-code the expected nonce bytes. The
+    /// length `11` matches ntpd-rs `IdentityCipher::new(11)` in their
+    /// framing tests; the shorter run also doubles as a guard that the
+    /// helper does not implicitly fix the nonce at any AEAD-specific
+    /// length.
+    ///
+    /// The `nonce_len = 256` arm pins the boundary case: per-element
+    /// `as u8` casting must produce the full `[0, 1, …, 255]` sequence
+    /// rather than the empty range a naive `(0..nonce_len as u8)`
+    /// would yield (`256 as u8 == 0`). Guards against a future
+    /// "simplification" of `nonce()` that reintroduces the cast on the
+    /// range bound.
+    #[test]
+    fn identity_aead_nonce_is_deterministic_sequence() {
+        let aead = IdentityAead::new(11);
+        let nonce = aead.nonce();
+        let expected: Vec<u8> = (0..11u8).collect();
+        assert_eq!(nonce, expected);
+        // And the AD vector is genuinely ignored — a different AD on
+        // open must still return the ciphertext verbatim.
+        let sealed = aead.seal(&[b"ad-one"], b"x").unwrap();
+        let opened = aead.open(&[b"ad-two"], &nonce, &sealed).unwrap();
+        assert_eq!(opened, b"x");
+
+        // Boundary: the largest `nonce_len` `IdentityAead::new` accepts.
+        let aead_max = IdentityAead::new(256);
+        let nonce_max = aead_max.nonce();
+        assert_eq!(nonce_max.len(), 256);
+        let expected_max: Vec<u8> = (0..=u8::MAX).collect();
+        assert_eq!(nonce_max, expected_max);
+    }
+
+    /// Even a pass-through `open` must validate the nonce length
+    /// against the configured `nonce_len`. Without this guard, framing
+    /// tests that drive a mis-sized nonce through the helper would
+    /// silently round-trip and miss the genuine wire-layout regression
+    /// (a parser that produced a nonce of the wrong length). Mirrors
+    /// the `InvalidNonceLength` shape `AeadKey::seal_packet` enforces
+    /// for GCM-SIV.
+    #[test]
+    fn identity_aead_rejects_wrong_nonce_length_on_open() {
+        let aead = IdentityAead::new(12);
+        let sealed = aead.seal(&[], b"payload").unwrap();
+        match aead.open(&[], &[0u8; 16], &sealed) {
+            Err(AeadError::InvalidNonceLength {
+                actual: 16,
+                expected: 12,
+            }) => {}
+            other => panic!("expected InvalidNonceLength(16, 12), got {other:?}"),
+        }
     }
 
     fn hex(s: &str) -> Vec<u8> {
