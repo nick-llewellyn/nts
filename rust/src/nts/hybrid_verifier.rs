@@ -494,14 +494,20 @@ mod tests {
     /// does not accidentally regress the default behaviour, AND
     /// when the fallback itself also rejects the chain (the stub
     /// `b"leaf-stub"` will never validate against webpki-roots) no
-    /// fallback is attributed: `fallback_count` stays at 0.
+    /// fallback is attributed: this verifier's per-instance
+    /// `fallback_count()` stays at 0.
     ///
     /// Because the `log::warn!` and `record_fallback()` calls now
-    /// share the same `if result.is_ok()` predicate, the counter
-    /// assertion is also a proxy for "no `WARN nts::hybrid_verifier`
-    /// line was emitted on this path" — the invariant `(grep -c
-    /// WARN nts::hybrid_verifier) == fallback_count()` holds by
-    /// construction.
+    /// share the same `if result.is_ok()` predicate (and
+    /// `record_fallback()` bumps the per-instance counter and the
+    /// process-global `TRUST_STATE.android_hybrid_fallback_count`
+    /// in lockstep), the per-instance assertion below is a proxy
+    /// for "no `WARN nts::hybrid_verifier` line was emitted on
+    /// *this verifier's* verify call". The process-wide invariant
+    /// `(grep -c WARN nts::hybrid_verifier) ==
+    /// nts_trust_status().android_hybrid_fallback_count` also
+    /// holds by construction, but is not what this single-verifier
+    /// test directly asserts.
     ///
     /// We assert the fallback was *attempted* (the platform-result
     /// error transforms into a `webpki`-flavoured error rather than
@@ -534,11 +540,12 @@ mod tests {
     /// `nts-7di` acceptance criterion (JNI-marker arm): when the
     /// platform raises an `Error::General` carrying the JNI marker
     /// AND the webpki-roots fallback also rejects the chain, no
-    /// fallback is attributed (`fallback_count` stays at 0) and —
-    /// by virtue of sharing the `if result.is_ok()` predicate with
-    /// the counter — no `WARN nts::hybrid_verifier` line is
-    /// emitted. The result carries the fallback's webpki rejection,
-    /// not the original `General` JNI error.
+    /// fallback is attributed to this verifier (per-instance
+    /// `fallback_count()` stays at 0) and — by virtue of sharing
+    /// the `if result.is_ok()` predicate with `record_fallback()`
+    /// — no `WARN nts::hybrid_verifier` line is emitted on this
+    /// verifier's verify call. The result carries the fallback's
+    /// webpki rejection, not the original `General` JNI error.
     #[test]
     fn platform_with_fallback_jni_dual_failure_does_not_attribute() {
         let fake = FakePlatform::new(|| {
