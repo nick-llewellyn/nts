@@ -146,18 +146,20 @@ mod aead_negotiation {
     #[test]
     fn aead_key_lengths_match_rfc_8915() {
         assert_eq!(aead_key_len(aead::AES_SIV_CMAC_256), Some(32));
+        // RFC 8915 §5.1 — AES-SIV-CMAC-512 (AEAD ID 17) splits a
+        // 64-byte key into a 32-byte CMAC-AES-256 subkey and a
+        // 32-byte AES-256 encryption key.
+        assert_eq!(aead_key_len(aead::AES_SIV_CMAC_512), Some(64));
         // RFC 8452 §4 — AES-128-GCM-SIV uses a 128-bit key.
         assert_eq!(aead_key_len(aead::AES_128_GCM_SIV), Some(16));
-        // SIV-CMAC-384 and SIV-CMAC-512 are valid IANA registry
-        // entries (RFC 8915 §5.1) but are not in the supported set:
-        // the AEAD constructor in `crate::nts::aead` does not
-        // implement them, so listing them here would let
-        // `validate_response` accept an offered AEAD that
-        // exporter-key derivation immediately fails on. The
-        // `aead_key_len_agrees_with_constructor` test below pins
-        // the cross-surface invariant.
+        // SIV-CMAC-384 is a valid IANA registry entry (RFC 8915
+        // §5.1) but is not in the supported set: the AEAD
+        // constructor in `crate::nts::aead` does not implement it,
+        // so listing it here would let `validate_response` accept
+        // an offered AEAD that exporter-key derivation immediately
+        // fails on. The `aead_key_len_agrees_with_constructor`
+        // test below pins the cross-surface invariant.
         assert_eq!(aead_key_len(aead::AES_SIV_CMAC_384), None);
-        assert_eq!(aead_key_len(aead::AES_SIV_CMAC_512), None);
         assert_eq!(aead_key_len(0xFFFF), None);
         assert_eq!(aead_key_len(14), None);
     }

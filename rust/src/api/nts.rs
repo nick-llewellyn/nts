@@ -1419,16 +1419,19 @@ fn effective_dns_concurrency_cap(dns_concurrency_cap: u32) -> usize {
 
 /// Drive a complete NTS-KE handshake and convert its outcome into a [`Session`].
 ///
-/// The KE driver offers AES-SIV-CMAC-256 first and AES-128-GCM-SIV second:
-/// the SIV-CMAC variant is the RFC 8915 §5.1 mandatory baseline and is what
-/// every public NTS server we tested actually picks today; GCM-SIV is added
-/// purely so a server that prefers nonce-misuse-resistant GCM still resolves
-/// to a usable AEAD instead of `UnsupportedAead`. The offered set lives in
-/// [`OFFERED_AEAD_IDS`] (in `crate::nts::ke`) — adding or removing an
-/// algorithm requires a single-site edit there, and the cross-surface
-/// invariant tests in that module catch any drift between the offered list,
-/// the `aead_key_len` lookup table, and the `AeadKey::from_keying_material`
-/// constructor at CI time.
+/// The KE driver offers AES-SIV-CMAC-256 first, then AES-SIV-CMAC-512, then
+/// AES-128-GCM-SIV: the 256-bit SIV-CMAC variant is the RFC 8915 §5.1
+/// mandatory baseline and is what every public NTS server we tested actually
+/// picks today; the 512-bit SIV-CMAC variant (RFC 8915 §5.1 optional, AEAD ID
+/// 17) is added so a server that prefers the larger key still resolves to a
+/// same-family AEAD rather than falling back to GCM-SIV; GCM-SIV is the
+/// nonce-misuse-resistant fallback for servers that prefer it over either
+/// SIV-CMAC variant. The offered set lives in [`OFFERED_AEAD_IDS`] (in
+/// `crate::nts::ke`) — adding or removing an algorithm requires a
+/// single-site edit there, and the cross-surface invariant tests in that
+/// module catch any drift between the offered list, the `aead_key_len`
+/// lookup table, and the `AeadKey::from_keying_material` constructor at CI
+/// time.
 ///
 /// Returns the `Session` together with the per-phase wall-clock
 /// breakdown reported by [`perform_handshake`] so callers
