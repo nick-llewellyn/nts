@@ -545,6 +545,98 @@ mod validate_response {
         let p2 = validate_response("h", &offered, &server_picks_gcm).unwrap();
         assert_eq!(p2.aead_id, aead::AES_128_GCM_SIV);
     }
+
+    /// RFC 8915 §4.1.5 — the `AeadAlgorithm` record may carry an empty
+    /// body as a server-side refusal signal ("the server is unwilling
+    /// to use any of the client-offered algorithms"). That shape is
+    /// materially different from a fully missing record: the former
+    /// is a policy mismatch worth surfacing to the user, the latter
+    /// is a non-conforming server. `validate_response` must distinguish
+    /// the two via dedicated error variants.
+    #[test]
+    fn validate_response_distinguishes_empty_aead_from_missing() {
+        let mut records = well_formed_response();
+        if let RecordKind::AeadAlgorithm(v) = &mut records[1].kind {
+            v.clear();
+        }
+        match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::AeadNegotiationRefused) => {}
+            other => panic!("expected AeadNegotiationRefused, got {other:?}"),
+        }
+
+        // Sanity arm: fully removing the record still yields the
+        // pre-existing `MissingAead` variant — the two shapes do not
+        // collide.
+        let mut without_aead = well_formed_response();
+        without_aead.remove(1);
+        match validate_response("h", &[aead::AES_SIV_CMAC_256], &without_aead) {
+            Err(KeError::MissingAead) => {}
+            other => panic!("expected MissingAead, got {other:?}"),
+        }
+    }
+
+    /// RFC 8915 §4.1.5 still requires the Critical bit on the
+    /// `AeadAlgorithm` record even when its body is empty. The
+    /// non-critical violation must surface before the empty-body
+    /// refusal so the diagnostic remains deterministic: an attacker
+    /// who can strip the Critical bit must not be able to mask the
+    /// shape-level violation behind a content-level signal.
+    #[test]
+    fn validate_response_non_critical_aead_precedes_empty_body() {
+        let mut records = well_formed_response();
+        records[1] = rec(false, RecordKind::AeadAlgorithm(vec![]));
+        match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::NonCriticalAeadAlgorithm) => {}
+            other => panic!("expected NonCriticalAeadAlgorithm, got {other:?}"),
+        }
+    }
+
+    /// RFC 8915 §4.1.4 — unknown non-critical records MUST be ignored
+    /// (the response remains valid). The diagnostic-logging change in
+    /// nts-b8x must not alter that behaviour: a well-formed response
+    /// carrying a single unknown non-critical record must still parse
+    /// to the same `KeOutcomePartial` it would produce without the
+    /// extra record present.
+    #[test]
+    fn validate_response_ignores_unknown_non_critical_record() {
+        let mut records = well_formed_response();
+        // Insert just before the EOM (last element).
+        let eom_pos = records.len() - 1;
+        records.insert(
+            eom_pos,
+            rec(
+                false,
+                RecordKind::Unknown {
+                    record_type: 0x4242,
+                    body: vec![0xAA, 0xBB, 0xCC],
+                },
+            ),
+        );
+        let p =
+            validate_response("h", &[aead::AES_SIV_CMAC_256], &records).expect("response valid");
+        assert_eq!(p.aead_id, aead::AES_SIV_CMAC_256);
+        assert_eq!(p.cookies.len(), 2);
+    }
+
+    /// RFC 8915 §4.1.3 requires the Critical bit on the `Error`
+    /// record. A non-critical `Error` record is a protocol violation,
+    /// but the fail-safe contract is preserved — the server is still
+    /// telling us something went wrong, so the response is still
+    /// failed with `ServerError(code)`. The deviation is reported via
+    /// the log channel rather than promoted into a distinct error
+    /// variant; this test pins the fail-safe contract.
+    #[test]
+    fn validate_response_honors_non_critical_error_record() {
+        let records = vec![
+            rec(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4])),
+            rec(false, RecordKind::Error(ErrorCode::BadRequest)),
+            rec(true, RecordKind::EndOfMessage),
+        ];
+        match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::ServerError(ErrorCode::BadRequest)) => {}
+            other => panic!("expected ServerError(BadRequest), got {other:?}"),
+        }
+    }
 }
 
 mod connect {
