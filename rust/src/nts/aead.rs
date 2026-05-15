@@ -333,9 +333,13 @@ impl IdentityAead {
         Self { nonce_len }
     }
 
-    /// Deterministic nonce of `(0..nonce_len as u8).collect()`. The
-    /// sequence is fixed so framing assertions can pin the expected
-    /// nonce bytes without an RNG dependency.
+    /// Deterministic nonce: `(0..self.nonce_len).map(|i| i as u8)`
+    /// collected into a `Vec<u8>`. The sequence is fixed so framing
+    /// assertions can pin the expected nonce bytes without an RNG
+    /// dependency. The cast is applied per-element rather than to the
+    /// range bound so the boundary case `nonce_len == 256` (the
+    /// largest value [`Self::new`] accepts) yields the full
+    /// `[0, 1, …, 255]` sequence rather than an empty `0..0u8` range.
     pub(crate) fn nonce(&self) -> Vec<u8> {
         (0..self.nonce_len).map(|i| i as u8).collect()
     }
@@ -681,11 +685,19 @@ mod tests {
     }
 
     /// The deterministic-nonce property: [`IdentityAead::nonce`] yields
-    /// `(0..nonce_len as u8).collect()` exactly so framing assertions
-    /// can hard-code the expected nonce bytes. The length `11` matches
-    /// ntpd-rs `IdentityCipher::new(11)` in their framing tests; the
-    /// shorter run also doubles as a guard that the helper does not
-    /// implicitly fix the nonce at any AEAD-specific length.
+    /// `(0..self.nonce_len).map(|i| i as u8)` collected exactly so
+    /// framing assertions can hard-code the expected nonce bytes. The
+    /// length `11` matches ntpd-rs `IdentityCipher::new(11)` in their
+    /// framing tests; the shorter run also doubles as a guard that the
+    /// helper does not implicitly fix the nonce at any AEAD-specific
+    /// length.
+    ///
+    /// The `nonce_len = 256` arm pins the boundary case: per-element
+    /// `as u8` casting must produce the full `[0, 1, …, 255]` sequence
+    /// rather than the empty range a naive `(0..nonce_len as u8)`
+    /// would yield (`256 as u8 == 0`). Guards against a future
+    /// "simplification" of `nonce()` that reintroduces the cast on the
+    /// range bound.
     #[test]
     fn identity_aead_nonce_is_deterministic_sequence() {
         let aead = IdentityAead::new(11);
@@ -697,6 +709,13 @@ mod tests {
         let sealed = aead.seal(&[b"ad-one"], b"x").unwrap();
         let opened = aead.open(&[b"ad-two"], &nonce, &sealed).unwrap();
         assert_eq!(opened, b"x");
+
+        // Boundary: the largest `nonce_len` `IdentityAead::new` accepts.
+        let aead_max = IdentityAead::new(256);
+        let nonce_max = aead_max.nonce();
+        assert_eq!(nonce_max.len(), 256);
+        let expected_max: Vec<u8> = (0..=u8::MAX).collect();
+        assert_eq!(nonce_max, expected_max);
     }
 
     /// Even a pass-through `open` must validate the nonce length
