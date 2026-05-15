@@ -460,6 +460,17 @@ pub enum KeError {
     /// AeadAlgorithm record would let an on-path adversary nudge the
     /// client toward an algorithm it would otherwise reject.
     NonCriticalAeadAlgorithm,
+    /// RFC 8915 §4.1.5 — an `AeadAlgorithm` record was present but its
+    /// body listed no algorithm IDs. The spec permits an empty body as
+    /// a server-side refusal signal ("the server is unwilling to use
+    /// any of the client-offered algorithms"). Distinct from
+    /// [`Self::MissingAead`] (no `AeadAlgorithm` record at all) so the
+    /// diagnostic preserves the difference between "server refused
+    /// negotiation" and "server omitted a required record" — the two
+    /// shapes warrant different operator responses (the former is a
+    /// policy mismatch worth surfacing to the user; the latter is a
+    /// non-conforming server).
+    AeadNegotiationRefused,
     UnsupportedAead(u16),
     NoCookies,
     /// RFC 8915 §4.1.2 — the NTS Next Protocol Negotiation record
@@ -571,6 +582,10 @@ impl std::fmt::Display for KeError {
             Self::NonCriticalAeadAlgorithm => {
                 f.write_str("AEAD Algorithm record received without Critical bit (RFC 8915 §4.1.5)")
             }
+            Self::AeadNegotiationRefused => f.write_str(
+                "server returned empty AEAD Algorithm record (RFC 8915 §4.1.5 \
+                 negotiation refusal)",
+            ),
             Self::UnsupportedAead(id) => write!(f, "server selected unsupported AEAD ID {id}"),
             Self::NoCookies => f.write_str("response delivered no cookies"),
             Self::DuplicateNextProtocol => f.write_str(
@@ -701,21 +716,58 @@ fn build_request(aead_algorithms: &[u16]) -> Vec<u8> {
 // only a thin shim that discards the `KeOutcomePartial` payload
 // (which stays private), so widening from `fn` to `pub(crate)` does
 // not enlarge the cross-module API surface for ordinary builds.
+/// First-pass scan over a parsed response: surface fatal records
+/// (`Error`, unknown-critical) and log diagnostic deviations
+/// (non-critical `Error`, unknown non-critical drops) before
+/// `validate_response` proceeds to the structural checks.
+///
+/// Extracted from [`validate_response`] purely to keep the latter
+/// under the `clippy::too_many_lines` cap; behaviour is identical to
+/// running the loop inline.
+fn scan_for_fatal_or_log_deviations(records: &[Record]) -> Result<(), KeError> {
+    for r in records {
+        if let RecordKind::Error(code) = r.kind {
+            // RFC 8915 §4.1.3 requires the Error record to carry the
+            // Critical bit. A non-critical Error record is a protocol
+            // violation; the response is still failed (fail-safe — an
+            // Error record means something went wrong server-side
+            // regardless of the bit), but the violation is logged so
+            // operators can detect non-conforming servers without
+            // having to inspect packet captures.
+            if !r.critical {
+                log::warn!(
+                    target: "nts::ke",
+                    "NTS-KE Error record received without Critical bit \
+                     (RFC 8915 §4.1.3 requires Critical): code={code}",
+                );
+            }
+            return Err(KeError::ServerError(code));
+        }
+        if let RecordKind::Unknown { record_type: t, body } = &r.kind {
+            if r.critical {
+                return Err(KeError::UnknownCritical(*t));
+            }
+            // RFC 8915 §4.1.4 — unknown non-critical records MUST be
+            // ignored. Correct behaviour, but logging the drop helps
+            // operators notice a server that has started emitting a
+            // new record type over time.
+            log::debug!(
+                target: "nts::ke",
+                "ignoring unknown non-critical NTS-KE record \
+                 (RFC 8915 §4.1.4): type={t} body_len={}",
+                body.len(),
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_response(
     request_host: &str,
     offered_aead: &[u16],
     records: &[Record],
 ) -> Result<KeOutcomePartial, KeError> {
-    for r in records {
-        if let RecordKind::Error(code) = r.kind {
-            return Err(KeError::ServerError(code));
-        }
-        if r.critical {
-            if let RecordKind::Unknown { record_type: t, .. } = &r.kind {
-                return Err(KeError::UnknownCritical(*t));
-            }
-        }
-    }
+    scan_for_fatal_or_log_deviations(records)?;
     // RFC 8915 §4.1.2 / §4.1.5: the NextProtocol and AEAD Algorithm
     // records MUST appear exactly once in a server response. Detect
     // duplicates before the `find_map` walks below — those would
@@ -758,17 +810,26 @@ pub(crate) fn validate_response(
         return Err(KeError::NoCommonProtocol);
     }
     // RFC 8915 §4.1.5 — same Critical-bit requirement as NextProtocol,
-    // and same anti-downgrade rationale; see comment above.
-    let (aead_critical, aead_id) = records
+    // and same anti-downgrade rationale; see comment above. We bind
+    // the record's body slice (rather than just `first().copied()`)
+    // so an `AeadAlgorithm` record with an empty body is distinguished
+    // from a fully missing record: the spec permits an empty body as
+    // a server-side refusal signal, and collapsing it onto
+    // `MissingAead` would hide that the server explicitly declined
+    // every offered algorithm.
+    let (aead_critical, aead_body) = records
         .iter()
         .find_map(|r| match &r.kind {
-            RecordKind::AeadAlgorithm(v) => v.first().copied().map(|id| (r.critical, id)),
+            RecordKind::AeadAlgorithm(v) => Some((r.critical, v.as_slice())),
             _ => None,
         })
         .ok_or(KeError::MissingAead)?;
     if !aead_critical {
         return Err(KeError::NonCriticalAeadAlgorithm);
     }
+    let aead_id = *aead_body
+        .first()
+        .ok_or(KeError::AeadNegotiationRefused)?;
     if !offered_aead.contains(&aead_id) {
         return Err(KeError::UnsupportedAead(aead_id));
     }
