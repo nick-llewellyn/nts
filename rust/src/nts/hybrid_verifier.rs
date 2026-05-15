@@ -196,11 +196,6 @@ impl ServerCertVerifier for HybridVerifier {
             Err(Error::InvalidCertificate(CertificateError::Revoked))
                 if self.trust_mode == KeTrustMode::PlatformWithFallback =>
             {
-                let host = host_for_log(server_name);
-                log::warn!(
-                    target: "nts::hybrid_verifier",
-                    "platform verifier reported Revoked for {host}; retrying with webpki-roots (likely missing OCSP AIA, e.g. Let's Encrypt R12)",
-                );
                 let fallback = self.fallback()?;
                 let result = fallback.verify_server_cert(
                     end_entity,
@@ -209,13 +204,21 @@ impl ServerCertVerifier for HybridVerifier {
                     ocsp_response,
                     now,
                 );
-                // Bump only on a successful fallback so the counter
-                // measures "fallback overrode a platform verdict",
-                // not "fallback was attempted". A failed fallback
-                // surfaces as the underlying webpki error and is not
-                // an attribution-worthy event for the per-handshake
-                // `KeOutcome::trust_backend` field.
+                // Both the warn line and the counter bump are gated on
+                // `result.is_ok()` so they measure "fallback overrode a
+                // platform verdict", not "fallback was attempted". A
+                // failed fallback surfaces as the underlying webpki
+                // error verbatim — no `WARN nts::hybrid_verifier` line
+                // and no counter bump — so the invariant
+                // `(grep -c WARN nts::hybrid_verifier) ==
+                // nts_trust_status().android_hybrid_fallback_count`
+                // holds across a process lifetime.
                 if result.is_ok() {
+                    let host = host_for_log(server_name);
+                    log::warn!(
+                        target: "nts::hybrid_verifier",
+                        "platform verifier reported Revoked for {host}; webpki-roots fallback accepted the chain (likely missing OCSP AIA, e.g. Let's Encrypt R12)",
+                    );
                     self.record_fallback();
                 }
                 result
@@ -224,11 +227,6 @@ impl ServerCertVerifier for HybridVerifier {
                 if msg.contains(NATIVE_VERIFIER_JNI_MARKER)
                     && self.trust_mode == KeTrustMode::PlatformWithFallback =>
             {
-                let host = host_for_log(server_name);
-                log::warn!(
-                    target: "nts::hybrid_verifier",
-                    "platform verifier failed via JNI for {host} ({msg}); retrying with webpki-roots (likely R8 stripped org.rustls.platformverifier.* — see the nts plugin's android/consumer-rules.pro for the required keep rules)",
-                );
                 let fallback = self.fallback()?;
                 let result = fallback.verify_server_cert(
                     end_entity,
@@ -238,6 +236,11 @@ impl ServerCertVerifier for HybridVerifier {
                     now,
                 );
                 if result.is_ok() {
+                    let host = host_for_log(server_name);
+                    log::warn!(
+                        target: "nts::hybrid_verifier",
+                        "platform verifier failed via JNI for {host} ({msg}); webpki-roots fallback accepted the chain (likely R8 stripped org.rustls.platformverifier.* — see the nts plugin's android/consumer-rules.pro for the required keep rules)",
+                    );
                     self.record_fallback();
                 }
                 result
@@ -371,11 +374,16 @@ mod tests {
     /// the fake platform never inspects it, and the fallback path is
     /// what we want to assert is *not* taken in `PlatformOnly` mode
     /// (so the webpki-roots verifier never sees these bytes either).
-    /// The one test that *does* exercise the fallback path
-    /// (`platform_with_fallback_attempts_fallback_on_revoked`) uses
-    /// the verdict-shape — "result is no longer the platform's
-    /// `Revoked`" — rather than a successful chain validation, so a
-    /// non-conformant leaf is sufficient there too.
+    /// The tests that *do* exercise the fallback path
+    /// (`platform_with_fallback_revoked_dual_failure_does_not_attribute`
+    /// and its JNI-marker companion) use the verdict-shape — "result
+    /// is no longer the platform's original error" — rather than a
+    /// successful chain validation, so a non-conformant leaf is
+    /// sufficient there too. The stub leaf failing the
+    /// webpki-roots verifier is *load-bearing* for the `nts-7di`
+    /// dual-failure assertion: it guarantees `fallback_count` stays
+    /// at 0 on those paths, which transitively pins the absence of
+    /// a `WARN nts::hybrid_verifier` line.
     fn dummy_args() -> (
         CertificateDer<'static>,
         Vec<CertificateDer<'static>>,
@@ -480,19 +488,33 @@ mod tests {
         }
     }
 
-    /// `PlatformWithFallback` regression test: the historical safety
-    /// net still fires for `Revoked` so that 3.1.0's strict
-    /// `PlatformOnly` change does not accidentally regress the
-    /// default behaviour. We assert the *attempt* (not its
-    /// success) by observing that the fallback path is *taken*: the
-    /// platform-result error transforms into a `webpki`-flavoured
-    /// error rather than the original `Revoked`. The exact error
-    /// shape from the webpki-roots verifier on a stub `b"leaf-stub"`
-    /// chain is unimportant; what matters is that it is *not* the
-    /// `Revoked` returned by the fake, which would prove the
-    /// fallback path was never taken.
+    /// `PlatformWithFallback` regression test plus `nts-7di`
+    /// acceptance criterion: the historical safety net still fires
+    /// for `Revoked` so that 3.1.0's strict `PlatformOnly` change
+    /// does not accidentally regress the default behaviour, AND
+    /// when the fallback itself also rejects the chain (the stub
+    /// `b"leaf-stub"` will never validate against webpki-roots) no
+    /// fallback is attributed: this verifier's per-instance
+    /// `fallback_count()` stays at 0.
+    ///
+    /// Because the `log::warn!` and `record_fallback()` calls now
+    /// share the same `if result.is_ok()` predicate (and
+    /// `record_fallback()` bumps the per-instance counter and the
+    /// process-global `TRUST_STATE.android_hybrid_fallback_count`
+    /// in lockstep), the per-instance assertion below is a proxy
+    /// for "no `WARN nts::hybrid_verifier` line was emitted on
+    /// *this verifier's* verify call". The process-wide invariant
+    /// `(grep -c WARN nts::hybrid_verifier) ==
+    /// nts_trust_status().android_hybrid_fallback_count` also
+    /// holds by construction, but is not what this single-verifier
+    /// test directly asserts.
+    ///
+    /// We assert the fallback was *attempted* (the platform-result
+    /// error transforms into a `webpki`-flavoured error rather than
+    /// the original `Revoked`); the exact error shape from the
+    /// webpki-roots verifier on the stub leaf is unimportant.
     #[test]
-    fn platform_with_fallback_attempts_fallback_on_revoked() {
+    fn platform_with_fallback_revoked_dual_failure_does_not_attribute() {
         let fake = FakePlatform::new(|| Err(Error::InvalidCertificate(CertificateError::Revoked)));
         let verifier =
             HybridVerifier::with_platform(KeTrustMode::PlatformWithFallback, fake.clone());
@@ -506,8 +528,58 @@ mod tests {
             "fallback path was not taken: result still carries the platform's Revoked verdict ({result:?})",
         );
         assert_eq!(fake.call_count.load(Ordering::Relaxed), 1);
-        // `fallback_count` only bumps on a successful fallback, and
-        // a stub leaf will not validate against webpki-roots, so we
-        // don't assert on its value here.
+        assert_eq!(
+            verifier.fallback_count(),
+            0,
+            "stub leaf cannot validate against webpki-roots, so the fallback failed; \
+             `fallback_count` must stay at 0 to keep the warn/counter alignment \
+             (no `WARN nts::hybrid_verifier` line is emitted on a failed fallback)",
+        );
+    }
+
+    /// `nts-7di` acceptance criterion (JNI-marker arm): when the
+    /// platform raises an `Error::General` carrying the JNI marker
+    /// AND the webpki-roots fallback also rejects the chain, no
+    /// fallback is attributed to this verifier (per-instance
+    /// `fallback_count()` stays at 0) and — by virtue of sharing
+    /// the `if result.is_ok()` predicate with `record_fallback()`
+    /// — no `WARN nts::hybrid_verifier` line is emitted on this
+    /// verifier's verify call. The result carries the fallback's
+    /// webpki rejection, not the original `General` JNI error.
+    #[test]
+    fn platform_with_fallback_jni_dual_failure_does_not_attribute() {
+        let fake = FakePlatform::new(|| {
+            Err(Error::General(format!(
+                "{NATIVE_VERIFIER_JNI_MARKER}: synthetic-jni-failure",
+            )))
+        });
+        let verifier =
+            HybridVerifier::with_platform(KeTrustMode::PlatformWithFallback, fake.clone());
+        let (leaf, intermediates, server_name, now) = dummy_args();
+        let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+        // The fallback path was taken: the result is no longer the
+        // platform's JNI-marker `General` error.
+        match &result {
+            Err(Error::General(msg)) => {
+                assert!(
+                    !msg.contains(NATIVE_VERIFIER_JNI_MARKER),
+                    "fallback path was not taken: result still carries the platform's JNI marker ({msg:?})",
+                );
+            }
+            // Any non-`General` error (e.g. a webpki-flavoured
+            // `InvalidCertificate` variant) is also acceptable — it
+            // proves the fallback ran. Only an unexpected `Ok` would
+            // be wrong here, and the stub leaf cannot validate.
+            Ok(_) => panic!("stub leaf unexpectedly validated against webpki-roots"),
+            Err(_) => {}
+        }
+        assert_eq!(fake.call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            verifier.fallback_count(),
+            0,
+            "stub leaf cannot validate against webpki-roots, so the fallback failed; \
+             `fallback_count` must stay at 0 to keep the warn/counter alignment \
+             (no `WARN nts::hybrid_verifier` line is emitted on a failed fallback)",
+        );
     }
 }
