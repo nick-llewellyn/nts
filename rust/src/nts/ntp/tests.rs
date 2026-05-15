@@ -1,5 +1,5 @@
 use super::*;
-use crate::nts::aead::{AeadKey, NONCE_LEN_GCM_SIV};
+use crate::nts::aead::{AeadKey, IdentityAead, NONCE_LEN_GCM_SIV};
 use crate::nts::test_helpers::{
     craft_response, craft_response_with, craft_unauthenticated_ntsn, fresh_keys, sample_request,
     CLIENT_TX, COOKIE, S2C, UID,
@@ -117,6 +117,46 @@ mod authenticator {
         let parsed = parse_authenticator_body(&body).unwrap();
         assert_eq!(parsed.nonce, nonce);
         assert_eq!(parsed.ciphertext, ct);
+    }
+
+    /// Companion to [`authenticator_body_round_trips`] using
+    /// [`IdentityAead`] to pin the AEAD-agnosticism of
+    /// [`encode_authenticator_body`] / [`parse_authenticator_body`]:
+    /// the framing layer must accept whatever the AEAD layer produces
+    /// without coupling to algorithm-specific tag/nonce lengths.
+    ///
+    /// Identity-AEAD's pass-through `seal` makes the inner extension
+    /// structure visible verbatim in the wire ciphertext slot, so
+    /// framing assertions can pin the on-wire layout without driving a
+    /// real AES-SIV-CMAC round trip and treating the ciphertext as an
+    /// opaque blob. The nonce length `11` mirrors ntpd-rs's
+    /// `IdentityCipher::new(11)` in their framing tests; it also
+    /// exercises the non-aligned-to-4 padding path in
+    /// `encode_authenticator_body` (`nonce_padded = ceil(11/4)*4 = 12`)
+    /// that a 16-byte SIV nonce would skip.
+    ///
+    /// Ticket: bd nts-fa3.
+    #[test]
+    fn authenticator_body_round_trips_under_identity_aead() {
+        let aead = IdentityAead::new(11);
+        let nonce = aead.nonce();
+        // A "structured" plaintext — one NTS Cookie extension — so the
+        // assertion proves the wire ciphertext slot carries the exact
+        // encoded extension bytes, not just arbitrary 0x88 padding.
+        let plaintext = encode_extension(ext_type::NTS_COOKIE, &[0xAB; 32]);
+        let sealed = aead.seal(&[b"aad-header"], &plaintext).unwrap();
+        assert_eq!(
+            sealed, plaintext,
+            "IdentityAead must surface the plaintext verbatim",
+        );
+        let body = encode_authenticator_body(&nonce, &sealed, 0).unwrap();
+        let parsed = parse_authenticator_body(&body).unwrap();
+        assert_eq!(parsed.nonce, nonce.as_slice());
+        assert_eq!(parsed.ciphertext, plaintext.as_slice());
+        let opened = aead
+            .open(&[b"aad-header"], parsed.nonce, parsed.ciphertext)
+            .unwrap();
+        assert_eq!(opened, plaintext);
     }
 }
 
