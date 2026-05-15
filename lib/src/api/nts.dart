@@ -239,26 +239,43 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// `NtsPlugin` JNI bootstrap that runs before `main()`, distinct from
 /// `RustLib.init()`.
 ///
-/// Returns three observables that callers cannot recover from a
+/// Returns six observables that callers cannot recover from a
 /// per-query [NtsTimeSample] alone:
 ///
 /// 1. `defaultClientBackend` — backend the *default singleton*
 ///    [NtsClient] (used by [ntsQuery] and [ntsWarmCookies]) most
 ///    recently resolved to. `null` when no handshake has run yet
-///    against the singleton. Custom-client callers should read
+///    against the singleton. This is an overwrite-on-store event
+///    marker, not a steady-state signal: a transient
+///    `webpkiRoots`-resolving handshake latches this field
+///    permanently until the next `platform`-resolving one. Use the
+///    three counters in (2)–(4) for dashboard panels that need
+///    trend visibility. Custom-client callers should read
 ///    [NtsTimeSample.trustBackend] / [NtsWarmCookiesOutcome.trustBackend]
 ///    for accurate per-client attribution.
-/// 2. `androidPlatformInitSucceeded` — `true` iff the Android JNI
+/// 2. `defaultBackendPlatformCount` — cumulative count of singleton
+///    handshakes that resolved to [TrustBackend.platform].
+/// 3. `defaultBackendHybridCount` — cumulative count of singleton
+///    handshakes that resolved to
+///    [TrustBackend.platformWithHybridFallback]. Always zero on
+///    non-Android platforms.
+/// 4. `defaultBackendWebpkiCount` — cumulative count of singleton
+///    handshakes that resolved to [TrustBackend.webpkiRoots].
+/// 5. `androidPlatformInitSucceeded` — `true` iff the Android JNI
 ///    bootstrap reported success at least once. `false` on every
 ///    other platform.
-/// 3. `androidHybridFallbackCount` — cumulative count of TLS chains
+/// 6. `androidHybridFallbackCount` — cumulative count of TLS chains
 ///    the Android hybrid verifier has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
 ///    platforms.
 ///
 /// Per-counter monotonicity holds across consecutive snapshots; the
 /// snapshot is intended for human / dashboard consumption, not for
-/// cross-thread synchronisation.
+/// cross-thread synchronisation. Cross-counter invariants within a
+/// single snapshot do not hold — the sum of the three
+/// `defaultBackend*Count` fields can be observed to lag the
+/// [NtsTrustStatus.defaultClientBackend] pointer by a single
+/// store-pair across concurrent snapshots.
 NtsTrustStatus ntsTrustStatus() => _publicTrustStatus(ffi.ntsTrustStatus());
 
 /// Owned NTS client handle.
@@ -642,6 +659,9 @@ NtsTrustStatus _publicTrustStatus(ffi.NtsTrustStatus s) => NtsTrustStatus(
   defaultClientBackend: s.defaultClientBackend == null
       ? null
       : _publicTrustBackend(s.defaultClientBackend!),
+  defaultBackendPlatformCount: s.defaultBackendPlatformCount,
+  defaultBackendHybridCount: s.defaultBackendHybridCount,
+  defaultBackendWebpkiCount: s.defaultBackendWebpkiCount,
   androidPlatformInitSucceeded: s.androidPlatformInitSucceeded,
   androidHybridFallbackCount: s.androidHybridFallbackCount,
 );

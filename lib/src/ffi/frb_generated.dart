@@ -701,12 +701,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   NtsTrustStatus dco_decode_nts_trust_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 6)
+      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
     return NtsTrustStatus(
       defaultClientBackend: dco_decode_opt_box_autoadd_trust_backend(arr[0]),
-      androidPlatformInitSucceeded: dco_decode_bool(arr[1]),
-      androidHybridFallbackCount: dco_decode_u_64(arr[2]),
+      defaultBackendPlatformCount: dco_decode_u_64(arr[1]),
+      defaultBackendHybridCount: dco_decode_u_64(arr[2]),
+      defaultBackendWebpkiCount: dco_decode_u_64(arr[3]),
+      androidPlatformInitSucceeded: dco_decode_bool(arr[4]),
+      androidHybridFallbackCount: dco_decode_u_64(arr[5]),
     );
   }
 
@@ -1001,10 +1004,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     final var_defaultClientBackend = sse_decode_opt_box_autoadd_trust_backend(
       deserializer,
     );
+    final var_defaultBackendPlatformCount = sse_decode_u_64(deserializer);
+    final var_defaultBackendHybridCount = sse_decode_u_64(deserializer);
+    final var_defaultBackendWebpkiCount = sse_decode_u_64(deserializer);
     final var_androidPlatformInitSucceeded = sse_decode_bool(deserializer);
     final var_androidHybridFallbackCount = sse_decode_u_64(deserializer);
     return NtsTrustStatus(
       defaultClientBackend: var_defaultClientBackend,
+      defaultBackendPlatformCount: var_defaultBackendPlatformCount,
+      defaultBackendHybridCount: var_defaultBackendHybridCount,
+      defaultBackendWebpkiCount: var_defaultBackendWebpkiCount,
       androidPlatformInitSucceeded: var_androidPlatformInitSucceeded,
       androidHybridFallbackCount: var_androidHybridFallbackCount,
     );
@@ -1301,6 +1310,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       self.defaultClientBackend,
       serializer,
     );
+    sse_encode_u_64(self.defaultBackendPlatformCount, serializer);
+    sse_encode_u_64(self.defaultBackendHybridCount, serializer);
+    sse_encode_u_64(self.defaultBackendWebpkiCount, serializer);
     sse_encode_bool(self.androidPlatformInitSucceeded, serializer);
     sse_encode_u_64(self.androidHybridFallbackCount, serializer);
   }

@@ -337,6 +337,9 @@ ffi.NtsDnsPoolStats _zeroFfiDnsPoolStats() => ffi.NtsDnsPoolStats(
 );
 
 ffi.NtsTrustStatus _zeroFfiTrustStatus() => ffi.NtsTrustStatus(
+  defaultBackendPlatformCount: BigInt.zero,
+  defaultBackendHybridCount: BigInt.zero,
+  defaultBackendWebpkiCount: BigInt.zero,
   androidPlatformInitSucceeded: false,
   androidHybridFallbackCount: BigInt.zero,
 );
@@ -1336,23 +1339,35 @@ void main() {
     test('forwards the FFI snapshot and converts every field', () {
       api.nextTrustStatus = ffi.NtsTrustStatus(
         defaultClientBackend: ffi.TrustBackend.platform,
+        defaultBackendPlatformCount: BigInt.from(11),
+        defaultBackendHybridCount: BigInt.from(2),
+        defaultBackendWebpkiCount: BigInt.from(5),
         androidPlatformInitSucceeded: true,
         androidHybridFallbackCount: BigInt.from(7),
       );
       final status = ntsTrustStatus();
       expect(api.trustStatusCalls, 1);
       expect(status.defaultClientBackend, TrustBackend.platform);
+      expect(status.defaultBackendPlatformCount, BigInt.from(11));
+      expect(status.defaultBackendHybridCount, BigInt.from(2));
+      expect(status.defaultBackendWebpkiCount, BigInt.from(5));
       expect(status.androidPlatformInitSucceeded, isTrue);
       expect(status.androidHybridFallbackCount, BigInt.from(7));
     });
 
     test('null defaultClientBackend on the FFI side maps to null', () {
       api.nextTrustStatus = ffi.NtsTrustStatus(
+        defaultBackendPlatformCount: BigInt.zero,
+        defaultBackendHybridCount: BigInt.zero,
+        defaultBackendWebpkiCount: BigInt.zero,
         androidPlatformInitSucceeded: false,
         androidHybridFallbackCount: BigInt.zero,
       );
       final status = ntsTrustStatus();
       expect(status.defaultClientBackend, isNull);
+      expect(status.defaultBackendPlatformCount, BigInt.zero);
+      expect(status.defaultBackendHybridCount, BigInt.zero);
+      expect(status.defaultBackendWebpkiCount, BigInt.zero);
       expect(status.androidPlatformInitSucceeded, isFalse);
       expect(status.androidHybridFallbackCount, BigInt.zero);
     });
@@ -1370,6 +1385,9 @@ void main() {
         ]) {
           api.nextTrustStatus = ffi.NtsTrustStatus(
             defaultClientBackend: variant.$1,
+            defaultBackendPlatformCount: BigInt.zero,
+            defaultBackendHybridCount: BigInt.zero,
+            defaultBackendWebpkiCount: BigInt.zero,
             androidPlatformInitSucceeded: false,
             androidHybridFallbackCount: BigInt.zero,
           );
@@ -1377,41 +1395,106 @@ void main() {
         }
       },
     );
+
+    test('per-backend counters round-trip through the FFI -> public layer', () {
+      // Counter values chosen to be mutually distinct so an off-by-one
+      // wiring error (platform → hybrid swap, etc.) on either side of
+      // the FFI boundary fails this assertion rather than silently
+      // landing on a coincidentally-equal value.
+      api.nextTrustStatus = ffi.NtsTrustStatus(
+        defaultClientBackend: ffi.TrustBackend.platformWithHybridFallback,
+        defaultBackendPlatformCount: BigInt.from(13),
+        defaultBackendHybridCount: BigInt.from(17),
+        defaultBackendWebpkiCount: BigInt.from(19),
+        androidPlatformInitSucceeded: true,
+        androidHybridFallbackCount: BigInt.from(23),
+      );
+      final status = ntsTrustStatus();
+      expect(status.defaultBackendPlatformCount, BigInt.from(13));
+      expect(status.defaultBackendHybridCount, BigInt.from(17));
+      expect(status.defaultBackendWebpkiCount, BigInt.from(19));
+    });
   });
 
   group('NtsTrustStatus DTO', () {
     test('==, hashCode, toString — every field counts', () {
       final base = NtsTrustStatus(
         defaultClientBackend: TrustBackend.platform,
+        defaultBackendPlatformCount: BigInt.from(11),
+        defaultBackendHybridCount: BigInt.from(2),
+        defaultBackendWebpkiCount: BigInt.from(5),
         androidPlatformInitSucceeded: true,
         androidHybridFallbackCount: BigInt.from(3),
       );
       final sameValue = NtsTrustStatus(
         defaultClientBackend: TrustBackend.platform,
+        defaultBackendPlatformCount: BigInt.from(11),
+        defaultBackendHybridCount: BigInt.from(2),
+        defaultBackendWebpkiCount: BigInt.from(5),
         androidPlatformInitSucceeded: true,
         androidHybridFallbackCount: BigInt.from(3),
       );
       expect(base, equals(sameValue));
       expect(base.hashCode, sameValue.hashCode);
 
+      // Perturb each independent dimension in turn so a regression
+      // that drops one field from `==` / `hashCode` shows up here as
+      // a value-equality assertion failure on that specific
+      // perturbation rather than a uniform false positive.
       final perturbations = <NtsTrustStatus>[
         NtsTrustStatus(
           defaultClientBackend: TrustBackend.webpkiRoots,
+          defaultBackendPlatformCount: BigInt.from(11),
+          defaultBackendHybridCount: BigInt.from(2),
+          defaultBackendWebpkiCount: BigInt.from(5),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(3),
         ),
         NtsTrustStatus(
           defaultClientBackend: TrustBackend.platform,
+          defaultBackendPlatformCount: BigInt.from(12),
+          defaultBackendHybridCount: BigInt.from(2),
+          defaultBackendWebpkiCount: BigInt.from(5),
+          androidPlatformInitSucceeded: true,
+          androidHybridFallbackCount: BigInt.from(3),
+        ),
+        NtsTrustStatus(
+          defaultClientBackend: TrustBackend.platform,
+          defaultBackendPlatformCount: BigInt.from(11),
+          defaultBackendHybridCount: BigInt.from(3),
+          defaultBackendWebpkiCount: BigInt.from(5),
+          androidPlatformInitSucceeded: true,
+          androidHybridFallbackCount: BigInt.from(3),
+        ),
+        NtsTrustStatus(
+          defaultClientBackend: TrustBackend.platform,
+          defaultBackendPlatformCount: BigInt.from(11),
+          defaultBackendHybridCount: BigInt.from(2),
+          defaultBackendWebpkiCount: BigInt.from(6),
+          androidPlatformInitSucceeded: true,
+          androidHybridFallbackCount: BigInt.from(3),
+        ),
+        NtsTrustStatus(
+          defaultClientBackend: TrustBackend.platform,
+          defaultBackendPlatformCount: BigInt.from(11),
+          defaultBackendHybridCount: BigInt.from(2),
+          defaultBackendWebpkiCount: BigInt.from(5),
           androidPlatformInitSucceeded: false,
           androidHybridFallbackCount: BigInt.from(3),
         ),
         NtsTrustStatus(
           defaultClientBackend: TrustBackend.platform,
+          defaultBackendPlatformCount: BigInt.from(11),
+          defaultBackendHybridCount: BigInt.from(2),
+          defaultBackendWebpkiCount: BigInt.from(5),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(4),
         ),
         NtsTrustStatus(
           defaultClientBackend: null,
+          defaultBackendPlatformCount: BigInt.from(11),
+          defaultBackendHybridCount: BigInt.from(2),
+          defaultBackendWebpkiCount: BigInt.from(5),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(3),
         ),
@@ -1426,6 +1509,9 @@ void main() {
       expect(
         base.toString(),
         'NtsTrustStatus(defaultClientBackend: platform, '
+        'defaultBackendPlatformCount: 11, '
+        'defaultBackendHybridCount: 2, '
+        'defaultBackendWebpkiCount: 5, '
         'androidPlatformInitSucceeded: true, '
         'androidHybridFallbackCount: 3)',
       );
@@ -1436,12 +1522,18 @@ void main() {
       () {
         final unset = NtsTrustStatus(
           defaultClientBackend: null,
+          defaultBackendPlatformCount: BigInt.zero,
+          defaultBackendHybridCount: BigInt.zero,
+          defaultBackendWebpkiCount: BigInt.zero,
           androidPlatformInitSucceeded: false,
           androidHybridFallbackCount: BigInt.zero,
         );
         expect(
           unset.toString(),
           'NtsTrustStatus(defaultClientBackend: null, '
+          'defaultBackendPlatformCount: 0, '
+          'defaultBackendHybridCount: 0, '
+          'defaultBackendWebpkiCount: 0, '
           'androidPlatformInitSucceeded: false, '
           'androidHybridFallbackCount: 0)',
         );
