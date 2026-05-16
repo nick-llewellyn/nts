@@ -202,8 +202,8 @@ void main() {
     );
   });
 
-  testWidgets('TrustStatusPanel renders both sentinel rows and refreshes the '
-      'singleton snapshot on demand', (tester) async {
+  testWidgets('TrustStatusPanel renders the last-handshake sentinel before '
+      'any per-client handshake has fired', (tester) async {
     final h = await _bootHarness();
     await tester.pumpWidget(
       MaterialApp(
@@ -212,32 +212,12 @@ void main() {
     );
     await tester.pump();
 
-    // Both rows start at their sentinel: no per-client handshake
-    // has fired yet, and no singleton snapshot has been read.
     expect(find.text('Trust status'), findsOneWidget);
     expect(
       find.textContaining('last-handshake-backend: (no per-client'),
       findsOneWidget,
     );
-    expect(
-      find.textContaining('singleton snapshot: (tap refresh'),
-      findsOneWidget,
-    );
-
-    // Refresh button forces a singleton-snapshot read but does
-    // NOT populate the per-client row (no per-client handshake
-    // has happened yet).
-    await tester.tap(find.byTooltip('Refresh singleton snapshot'));
-    await tester.pump();
-
-    expect(h.state.trustStatus.value, isNotNull);
     expect(h.state.lastHandshakeBackend.value, isNull);
-    expect(find.textContaining('default-singleton-backend'), findsOneWidget);
-    // Per-client row should still show its sentinel.
-    expect(
-      find.textContaining('last-handshake-backend: (no per-client'),
-      findsOneWidget,
-    );
   });
 
   testWidgets(

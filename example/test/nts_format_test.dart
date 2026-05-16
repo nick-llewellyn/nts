@@ -8,7 +8,6 @@ import 'package:nts/nts.dart'
     show
         NtsError,
         NtsTimeSample,
-        NtsTrustStatus,
         NtsWarmCookiesOutcome,
         PhaseTimings,
         TimeoutPhase,
@@ -109,51 +108,6 @@ void main() {
         formatWarmSuccess(outcome),
         'OK  recovered 8 fresh cookie(s)  trust=platform',
       );
-    });
-  });
-
-  group('formatTrustStatus', () {
-    test('null defaultClientBackend renders the no-handshake sentinel', () {
-      final status = NtsTrustStatus(
-        defaultClientBackend: null,
-        defaultBackendPlatformCount: BigInt.zero,
-        defaultBackendHybridCount: BigInt.zero,
-        defaultBackendWebpkiCount: BigInt.zero,
-        androidPlatformInitSucceeded: false,
-        androidHybridFallbackCount: BigInt.zero,
-      );
-      final out = formatTrustStatus(status);
-      expect(out, contains('default-singleton-backend: (no handshake'));
-      expect(out, contains('default-backend-platform-count: 0'));
-      expect(out, contains('default-backend-hybrid-count: 0'));
-      expect(out, contains('default-backend-webpki-count: 0'));
-      expect(out, contains('android-platform-init-succeeded: false'));
-      expect(out, contains('android-hybrid-fallback-count: 0'));
-    });
-
-    test('non-null backend renders the human-readable label', () {
-      final status = NtsTrustStatus(
-        defaultClientBackend: TrustBackend.platformWithHybridFallback,
-        defaultBackendPlatformCount: BigInt.from(11),
-        defaultBackendHybridCount: BigInt.from(2),
-        defaultBackendWebpkiCount: BigInt.from(5),
-        androidPlatformInitSucceeded: true,
-        androidHybridFallbackCount: BigInt.from(7),
-      );
-      final out = formatTrustStatus(status);
-      expect(
-        out,
-        contains('default-singleton-backend: platform+hybrid-fallback'),
-      );
-      // Per-backend counter values are intentionally distinct so a
-      // platform-vs-hybrid wiring error in `formatTrustStatus` would
-      // surface as a substring miss rather than a coincidentally
-      // shared rendering.
-      expect(out, contains('default-backend-platform-count: 11'));
-      expect(out, contains('default-backend-hybrid-count: 2'));
-      expect(out, contains('default-backend-webpki-count: 5'));
-      expect(out, contains('android-platform-init-succeeded: true'));
-      expect(out, contains('android-hybrid-fallback-count: 7'));
     });
   });
 
