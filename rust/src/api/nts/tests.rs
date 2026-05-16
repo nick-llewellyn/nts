@@ -1595,12 +1595,42 @@ where
 /// endpoint has the expected shape. Centralised so both query-shaped
 /// probes (top-level `nts_query` and `NtsClient::query`) share one
 /// assertion vocabulary.
+///
+/// Numerical lower bounds (`round_trip_micros >= 1_000`,
+/// `fresh_cookies >= 1`) were measured against `time.cloudflare.com`
+/// on 2026-05-16 (15 fresh-KE samples from a developer machine,
+/// nts-dx2 sampling harness): RTT min 26 116 µs, median 31 467 µs,
+/// max 39 770 µs (26-40 ms range, all ≥ 26× the chosen 1 000 µs
+/// floor); `fresh_cookies` was exactly 2 on every sample. The RTT
+/// floor catches "calculation collapsed to ~0" regressions without
+/// flaking on either developer-machine variance or GHA-runner-to-
+/// Cloudflare variance (a Linux runner co-located with a Cloudflare
+/// PoP would still see > 1 000 µs by an order of magnitude). The
+/// `fresh_cookies >= 1` bound is the substantive protocol minimum
+/// (without at least one fresh cookie, every subsequent query would
+/// re-handshake); a hard pin to 2 would catch a regression in
+/// Cloudflare's cookie-buffer policy but would also flake the day
+/// Cloudflare moves to 1 or 3, so the soft floor is preferred.
 fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
     assert_eq!(sample.aead_id, aead_ids::AES_SIV_CMAC_256);
     assert!(sample.server_stratum > 0 && sample.server_stratum < 16);
-    assert!(sample.round_trip_micros > 0);
-    // NTS_query asks for one fresh cookie back; some servers honour, some don't.
-    assert!(sample.fresh_cookies <= 8);
+    assert!(
+        sample.round_trip_micros >= 1_000,
+        "round_trip_micros {} µs is implausibly low for a real Cloudflare \
+         query (measured min ~26 ms on 2026-05-16); RTT calculation may \
+         have collapsed to ~0",
+        sample.round_trip_micros,
+    );
+    // RFC 8915 caps cookies-out at 8; Cloudflare currently returns 2
+    // (measured 2026-05-16), but the substantive invariant is "at
+    // least one fresh cookie was delivered" — without that, the
+    // session jar drains across queries and every subsequent query
+    // re-handshakes.
+    assert!(
+        sample.fresh_cookies >= 1 && sample.fresh_cookies <= 8,
+        "fresh_cookies = {} outside the expected 1..=8 range",
+        sample.fresh_cookies,
+    );
     // Sanity: server time should be within ±5 minutes of local time.
     let now_us = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
