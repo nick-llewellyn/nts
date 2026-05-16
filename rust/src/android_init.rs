@@ -53,7 +53,18 @@ use crate::nts::trust_state::TRUST_STATE;
 /// `rustls_platform_verifier::android::init_with_env` upgrades the supplied
 /// `JObject` to a `GlobalRef` internally before the function returns, so the
 /// local reference passed in is safe to drop on return.
-#[no_mangle]
+#[expect(
+    unsafe_code,
+    reason = "JNI entry points require a stable C ABI symbol the JVM \
+              linker resolves by mangled class name; the duplicate-symbol \
+              concern the `unsafe_code` lint warns about does not apply \
+              here because the symbol is FQDN-namespaced under \
+              `com.nllewellyn.nts.PlatformInit` and has no plausible \
+              duplicate across this crate's deps. Remove if Rust ever \
+              ships a built-in JNI attribute that handles symbol export \
+              internally."
+)]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_nllewellyn_nts_PlatformInit_nativeInit<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
