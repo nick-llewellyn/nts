@@ -48,9 +48,13 @@ void main() {
       expect(formatTrustBackend(TrustBackend.platform), 'platform');
     });
     test('platformWithHybridFallback → short label', () {
+      // `webpki-fallback` (not the former `platform+hybrid-fallback`):
+      // the prior label was ambiguous about which root chain actually
+      // authenticated. See the formatTrustBackend dartdoc for the
+      // rename rationale (nts-t3p).
       expect(
         formatTrustBackend(TrustBackend.platformWithHybridFallback),
-        'platform+hybrid-fallback',
+        'webpki-fallback',
       );
     });
     test('webpkiRoots → short label', () {
@@ -93,7 +97,7 @@ void main() {
       expect(lines[1], contains('cookies=2'));
       // Trust backend goes on the continuation row alongside aead /
       // cookies so the headline stays scannable.
-      expect(lines[1], contains('trust=platform+hybrid-fallback'));
+      expect(lines[1], contains('trust=webpki-fallback'));
     });
   });
 
