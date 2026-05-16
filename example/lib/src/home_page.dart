@@ -92,25 +92,77 @@ class HomePage extends StatelessWidget {
 /// Catalog + action surface tab. Server list claims the upper
 /// flexible region; the three control / summary panels stack below
 /// at intrinsic heights, separated by hairline dividers.
+///
+/// Switches between two layouts based on the body height:
+///
+/// * **Roomy** (≥ 400dp tall) — `Expanded(ServerListView)` plus the
+///   four intrinsic-height panels in a `Column`. This is the
+///   normal phone-portrait and tablet path.
+/// * **Compact** (< 400dp tall) — a `SingleChildScrollView` with a
+///   fixed-height `ServerListView` on top and the four panels
+///   below. Covers tablet multi-window slices, foldables in the
+///   folded half-state, and the brief frame during a pending
+///   phone-to-portrait rotation before the orientation lock from
+///   [_lockOrientationOnPhones] takes effect. Without this dispatch
+///   the four panels (~220dp combined intrinsic) plus the filter
+///   bar's ~120dp minimum can't both fit, and the outer column
+///   surfaces a `RenderFlex` overflow.
 class _ClientTab extends StatelessWidget {
   const _ClientTab({required this.state, required this.controller});
 
   final AppState state;
   final NtsController controller;
 
+  /// Body-height threshold below which the layout switches to
+  /// scrollable-compact mode. Sits comfortably above realistic
+  /// phone-portrait and tablet-landscape body heights (each
+  /// ~450dp+ after AppBar + TabBar + SafeArea), and well above the
+  /// 255dp surface the original overflow report measured.
+  static const double _tightHeightFloorDp = 400.0;
+
+  /// Fixed height the server list claims in compact mode. Tuned so
+  /// the filter bar (~120dp) plus a few list rows (~50dp each)
+  /// stays useful without crowding out the action / status /
+  /// latest-result panels stacked below.
+  static const double _compactServerListHeightDp = 320.0;
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(child: ServerListView(state: state)),
-        const Divider(height: 1),
-        ActionPanel(state: state, controller: controller),
-        const Divider(height: 1),
-        TrustStatusPanel(state: state),
-        const Divider(height: 1),
-        LatestResultPanel(state: state),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // The four panels below the server list are identical in
+        // both layouts; only ServerListView's height-allocation
+        // strategy changes.
+        final bottomPanels = <Widget>[
+          const Divider(height: 1),
+          ActionPanel(state: state, controller: controller),
+          const Divider(height: 1),
+          TrustStatusPanel(state: state),
+          const Divider(height: 1),
+          LatestResultPanel(state: state),
+        ];
+        if (constraints.maxHeight < _tightHeightFloorDp) {
+          return SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  height: _compactServerListHeightDp,
+                  child: ServerListView(state: state),
+                ),
+                ...bottomPanels,
+              ],
+            ),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: ServerListView(state: state)),
+            ...bottomPanels,
+          ],
+        );
+      },
     );
   }
 }
