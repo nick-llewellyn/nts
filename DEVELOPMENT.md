@@ -70,9 +70,20 @@ flutter test
 
 This runs `test/ffi_smoke_test.dart`, which exercises the generated
 FRB API contract in mock mode. Live Dart→Rust→network round-trips
-run from the example app (`example/`); the underlying Rust crate has
-its own live integration probes gated behind `--ignored` (run with
-`cargo test --ignored` in `rust/`).
+run from the example app (`example/`); the underlying Rust crate
+ships live integration probes against `time.cloudflare.com` that
+run as part of `cargo test --lib` (un-gated from `#[ignore]` by
+`nts-dbg` once GHA runners proved to have stable outbound
+TCP/4460 + UDP/123 to Cloudflare). Network flake on those probes
+is absorbed by `retry_on_transient` in
+`rust/src/api/nts/tests.rs`, which retries up to three times with
+500 / 1000 ms back-off and panics on exhaustion with the full
+transient-error trail — every transient error observed across the
+attempts, in attempt order. A CI red signal therefore distinguishes
+"single flicker plus recovery" from "sustained outage" without
+re-running locally. The IPv6 / PTB probes remain `#[ignore]`d (run
+with `cargo test --ignored` in `rust/`); GHA Linux runners have
+inconsistent IPv6 connectivity by Azure region.
 
 ### Fuzzing the Rust parsers (cargo-fuzz)
 
