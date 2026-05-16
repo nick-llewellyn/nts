@@ -16,6 +16,8 @@
 //      mediated through the `signals` package.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'
+    show DeviceOrientation, SystemChrome;
 import 'package:nts/nts.dart' show RustLib;
 
 import 'src/data/server_entry.dart';
@@ -102,6 +104,7 @@ Future<_Boot> _bootstrap() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await _lockOrientationOnPhones();
   final boot = await _bootstrap();
   final state = AppState(
     bridgeMode: boot.label,
@@ -118,6 +121,42 @@ Future<void> main() async {
     state.log.warn('system', boot.loadError!);
   }
   runApp(NtsExampleApp(state: state));
+}
+
+/// Locks the example app to portrait orientation on phone-sized
+/// devices. Tablets (Pixel Tablet, iPad, etc.) keep their existing
+/// landscape support because the tabbed home layout has the
+/// headroom to render every Client-tab panel without overflow at
+/// those widths.
+///
+/// Phone detection uses the Material 600dp shortest-side
+/// breakpoint, which is the same threshold Material 3 itself uses
+/// to switch between "compact" and "medium" window-size classes.
+/// Reading the size off `PlatformDispatcher.views.first` rather
+/// than via `MediaQuery` keeps this a pure pre-`runApp` decision —
+/// the lock is installed before the widget tree exists, so no
+/// rebuild plumbing is needed.
+///
+/// `physicalSize` reports the current pixel dimensions in either
+/// orientation; the `shortestSide / devicePixelRatio` projection
+/// is orientation-invariant, so a phone launched in landscape is
+/// still classified as a phone and rotated back to portrait.
+///
+/// On platforms where orientation is meaningless (desktop, web)
+/// `SystemChrome.setPreferredOrientations` is a no-op on recent
+/// Flutter versions, so the conditional doesn't need a
+/// platform-specific guard.
+Future<void> _lockOrientationOnPhones() async {
+  final view = WidgetsBinding.instance.platformDispatcher.views.first;
+  final shortestSideDp =
+      view.physicalSize.shortestSide / view.devicePixelRatio;
+  const phoneBreakpointDp = 600.0;
+  if (shortestSideDp < phoneBreakpointDp) {
+    await SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+  }
 }
 
 class NtsExampleApp extends StatelessWidget {
