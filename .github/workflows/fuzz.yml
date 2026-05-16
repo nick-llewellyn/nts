@@ -130,9 +130,24 @@ jobs:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-${{ runner.os }}-0.13.1
 
+      # Deliberately no `--locked` here: cargo-fuzz 0.13.1 (Jun 2025)
+      # ships a `Cargo.lock` that pins `rustix v0.36.5`, which uses
+      # the unstable `rustc_attrs` feature attribute (via
+      # `#[cfg_attr(rustc_attrs, rustc_layout_scalar_valid_range_*)]`)
+      # without enabling the corresponding nightly feature gate. The
+      # current `dtolnay/rust-toolchain@nightly` snapshot has tightened
+      # its handling of those attributes and rejects the build with
+      # `cannot find attribute rustc_layout_scalar_valid_range_start
+      # in this scope`. Letting cargo resolve a fresh `rustix` (and
+      # the rest of cargo-fuzz's tooling deps) sidesteps the
+      # stale-lockfile failure without affecting the version of
+      # cargo-fuzz itself (still pinned via `--version 0.13.1`).
+      # Diverges from the `--locked` pattern used for cargo-tarpaulin
+      # in `ci.yml`; cargo-tarpaulin 0.35.2 is much newer and its
+      # lockfile still resolves cleanly against current nightlies.
       - name: Install cargo-fuzz
         if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
-        run: cargo install cargo-fuzz --locked --version 0.13.1
+        run: cargo install cargo-fuzz --version 0.13.1
 
       # `cargo fuzz run <target>` exits non-zero on a crash; libFuzzer
       # writes the reproducer to `rust/fuzz/artifacts/<target>/crash-*`.
