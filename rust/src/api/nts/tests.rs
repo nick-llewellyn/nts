@@ -1477,19 +1477,80 @@ fn nts_client_query_evicts_session_on_aead_failure_in_client_table() {
     );
 }
 
-/// Live integration probe — performs a real NTS-KE handshake and
-/// authenticated NTPv4 exchange against Cloudflare's public endpoint.
-/// Gated behind `--ignored` so the standard CI run never touches the
-/// network. Run manually with:
-///   cargo test -p nts_rust nts_query_live -- --ignored --nocapture
-#[test]
-#[ignore = "requires outbound TCP/4460 + UDP/123 to time.cloudflare.com"]
-fn nts_query_live_cloudflare() {
-    let spec = NtsServerSpec {
-        host: "time.cloudflare.com".to_owned(),
-        port: DEFAULT_KE_PORT,
-    };
-    let sample = nts_query(spec.clone(), 10_000, 0).expect("nts_query");
+// ------------------------------------------------------------------
+// Live integration probes — `nts-dbg` Avenue 0.
+//
+// These tests perform real NTS-KE handshakes and authenticated NTPv4
+// exchanges against Cloudflare's public endpoint
+// (`time.cloudflare.com`). They are the happy-path coverage layer
+// flagged by `nts-dbg`: the prior `#[ignore]`d single probe gave the
+// code paths zero codecov contribution, leaving `nts_query_inner` and
+// `nts_warm_cookies_inner` at ~70% line coverage with the gap entirely
+// in the post-handshake success arms. The four probes below cover the
+// `nts_query` / `NtsClient::query` and `nts_warm_cookies` /
+// `NtsClient::warm_cookies` quartet, each through the retry wrapper.
+//
+// Transient-vs-fatal classification: `Network` and `Timeout` are the
+// only variants that retry. Everything else (`KeProtocol`,
+// `NtpProtocol`, `Authentication`, `NoCookies`,
+// `TrustBackendUnavailable`, `Internal`, `InvalidSpec`) panics
+// immediately with the full diagnostic — those signal real protocol or
+// crate-level bugs, not network weather, and silencing them under
+// retry would erase the entire reason for running against a live
+// server. Three attempts with 500ms / 1000ms backoff keeps total
+// added wall-clock under 2s on the happy path and bounded on flakes.
+// ------------------------------------------------------------------
+
+/// Returns `true` for `NtsError` variants that we treat as network
+/// weather rather than a real failure — `Network` (TCP/UDP I/O,
+/// connection failure) and `Timeout` (any phase tripped its deadline).
+/// Every other variant indicates a protocol-level or crate-level
+/// problem the live probes should surface, not paper over.
+fn is_transient_nts_error(err: &NtsError) -> bool {
+    matches!(err, NtsError::Network { .. } | NtsError::Timeout { .. })
+}
+
+/// Retry `f` up to three times on `is_transient_nts_error` failures
+/// with 500ms / 1000ms back-off between attempts. Returns the success
+/// value on the first non-transient outcome; panics with the full
+/// diagnostic on any non-transient error or after the third transient
+/// failure exhausts the budget. `label` is included in stderr retry
+/// notices and in the final panic message so test logs name the probe.
+fn retry_on_transient<T, F>(label: &str, mut f: F) -> T
+where
+    F: FnMut() -> Result<T, NtsError>,
+{
+    const ATTEMPTS: u32 = 3;
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        match f() {
+            Ok(v) => return v,
+            Err(e) if !is_transient_nts_error(&e) => {
+                panic!(
+                    "{label} failed on attempt {attempt}/{ATTEMPTS} with non-transient error: {e:?}",
+                );
+            }
+            Err(e) if attempt >= ATTEMPTS => {
+                panic!(
+                    "{label} exhausted {ATTEMPTS} retry attempts; last transient error: {e:?}",
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "{label}: transient failure on attempt {attempt}/{ATTEMPTS}: {e:?}; retrying",
+                );
+                std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+            }
+        }
+    }
+}
+
+/// Helper: assert that an `NtsTimeSample` from Cloudflare's public
+/// endpoint has the expected shape. Centralised so both query-shaped
+/// probes (top-level `nts_query` and `NtsClient::query`) share one
+/// assertion vocabulary.
+fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
     assert_eq!(sample.aead_id, aead_ids::AES_SIV_CMAC_256);
     assert!(sample.server_stratum > 0 && sample.server_stratum < 16);
     assert!(sample.round_trip_micros > 0);
@@ -1506,20 +1567,153 @@ fn nts_query_live_cloudflare() {
         sample.utc_unix_micros,
         now_us,
     );
+}
 
-    // Second call should reuse the session and avoid a re-handshake.
-    let sample2 = nts_query(spec, 10_000, 0).expect("nts_query 2");
-    assert!(sample2.utc_unix_micros >= sample.utc_unix_micros);
+/// Live integration probe — real NTS-KE handshake and authenticated
+/// NTPv4 exchange against `time.cloudflare.com` via the top-level
+/// `nts_query` function (default-client path). Promoted out of
+/// `#[ignore]` by `nts-dbg`: the standard CI runner has outbound
+/// TCP/4460 + UDP/123 to Cloudflare, and transient network blips are
+/// absorbed by `retry_on_transient` so a flake re-runs rather than
+/// failing the suite. A protocol-level error (KE record validation,
+/// AEAD verify, etc.) is not retried — that signals a real bug.
+///
+/// Deliberately a single-call probe. The default singleton's session
+/// table is shared with `nts_warm_cookies_live_cloudflare` (and any
+/// future free-fn live probe), so a "second call reuses cached
+/// session" assertion here would be order-dependent: whichever live
+/// probe ran first would prime the cache for the others. The
+/// per-client reuse semantics are tested deterministically by
+/// `nts_query_live_cloudflare_via_client` below, which owns its own
+/// session table.
+#[test]
+fn nts_query_live_cloudflare() {
+    let spec = NtsServerSpec {
+        host: "time.cloudflare.com".to_owned(),
+        port: DEFAULT_KE_PORT,
+    };
+    let sample = retry_on_transient("nts_query cloudflare", || {
+        nts_query(spec.clone(), 10_000, 0)
+    });
+    assert_cloudflare_time_sample(&sample);
+}
+
+/// Live probe through the per-client API surface: `NtsClient::query`
+/// against `time.cloudflare.com` on a fresh client whose session table
+/// is independent of the default singleton's. Exercises the same
+/// post-handshake success arms as `nts_query_live_cloudflare` but
+/// drives them through the method delegation path, which `nts-dbg`
+/// flagged as separately uncovered in codecov even though it shares
+/// `nts_query_inner` with the free function.
+///
+/// Doubles as the deterministic cache-reuse probe: the second call
+/// asserts that all KE-phase timings are zero, which is the
+/// observable signal of a cache hit (the cached-session branch skips
+/// connect / TLS / KE-record-IO entirely). Safe to assert strictly
+/// here — the per-client `SessionTable` has its own singleflight
+/// `inflight` map, so no other test in the suite can land as a leader
+/// or waiter against this client's table.
+#[test]
+fn nts_query_live_cloudflare_via_client() {
+    let spec = NtsServerSpec {
+        host: "time.cloudflare.com".to_owned(),
+        port: DEFAULT_KE_PORT,
+    };
+    let client = NtsClient::new();
+    let sample = retry_on_transient("NtsClient::query cloudflare (fresh)", || {
+        client.query(spec.clone(), 10_000, 0)
+    });
+    assert_cloudflare_time_sample(&sample);
+
+    let sample2 = retry_on_transient("NtsClient::query cloudflare (reuse)", || {
+        client.query(spec.clone(), 10_000, 0)
+    });
+    assert_cloudflare_time_sample(&sample2);
+    // Cache-hit signal: the cached-session branch skips connect /
+    // TLS / KE-record-IO. `dns_micros` may be non-zero on the second
+    // call (the UDP-path NTPv4-host lookup still runs), so don't
+    // assert it.
+    assert_eq!(
+        sample2.phase_timings.connect_micros, 0,
+        "second per-client query must hit the cache (connect_micros)",
+    );
+    assert_eq!(
+        sample2.phase_timings.tls_handshake_micros, 0,
+        "second per-client query must hit the cache (tls_handshake_micros)",
+    );
+    assert_eq!(
+        sample2.phase_timings.ke_record_io_micros, 0,
+        "second per-client query must hit the cache (ke_record_io_micros)",
+    );
+}
+
+/// Live probe of `nts_warm_cookies` (top-level free function) against
+/// `time.cloudflare.com`. `nts_warm_cookies` always runs a fresh KE
+/// handshake (no cached-session short-circuit), so this exercises the
+/// KE-only path without a subsequent NTPv4 exchange — coverage that
+/// the query-shaped probes above do not provide.
+///
+/// `fresh_cookies > 0` is the substantive interop signal: a
+/// successful KE handshake against Cloudflare always returns at least
+/// one cookie. We deliberately do *not* assert on `phase_timings`
+/// fields here — under the singleflight machinery
+/// `SessionTable::warm_cookies` uses, a concurrent caller that lands
+/// as a waiter receives the leader's `fresh_cookies` payload but
+/// reports `KePhaseTimings::default()` (all zeros) because it did no
+/// KE work itself. The four live probes in this section run in
+/// parallel by default, so any of them landing as a waiter would
+/// trip a `phase_timings > 0` assertion.
+#[test]
+fn nts_warm_cookies_live_cloudflare() {
+    let spec = NtsServerSpec {
+        host: "time.cloudflare.com".to_owned(),
+        port: DEFAULT_KE_PORT,
+    };
+    let outcome = retry_on_transient("nts_warm_cookies cloudflare", || {
+        nts_warm_cookies(spec.clone(), 10_000, 0)
+    });
+    assert!(
+        outcome.fresh_cookies > 0,
+        "warm_cookies must harvest at least one cookie; got {}",
+        outcome.fresh_cookies,
+    );
+}
+
+/// Live probe of `NtsClient::warm_cookies` (per-client method) against
+/// `time.cloudflare.com`. Same KE-only handshake path as the free-
+/// function probe above, driven through the method delegation surface
+/// on a fresh `NtsClient` whose session table is independent of the
+/// default singleton's. See `nts_warm_cookies_live_cloudflare` for
+/// why phase-timing assertions are deliberately omitted.
+#[test]
+fn nts_warm_cookies_live_cloudflare_via_client() {
+    let spec = NtsServerSpec {
+        host: "time.cloudflare.com".to_owned(),
+        port: DEFAULT_KE_PORT,
+    };
+    let client = NtsClient::new();
+    let outcome = retry_on_transient("NtsClient::warm_cookies cloudflare", || {
+        client.warm_cookies(spec.clone(), 10_000, 0)
+    });
+    assert!(
+        outcome.fresh_cookies > 0,
+        "warm_cookies must harvest at least one cookie; got {}",
+        outcome.fresh_cookies,
+    );
 }
 
 /// IPv6-capable live probe — exercises the dual-stack code path
 /// against PTB's public NTS endpoint. PTB publishes AAAA records,
 /// so on a host that prefers IPv6 (RFC 6724 default) this drives
-/// the `[::]:0` bind branch. Gated behind `--ignored`. Run with:
+/// the `[::]:0` bind branch. Kept behind `#[ignore]` even after
+/// `nts-dbg` un-gated the Cloudflare probes above: GitHub Actions
+/// Linux runners have inconsistent IPv6 connectivity by Azure
+/// region, and this test's existing semantics are "skip gracefully
+/// on network failure" rather than "retry then fail". Mixing those
+/// two modes under the same retry wrapper would either spam stderr
+/// with retry notices on the common no-IPv6 path or turn a real
+/// PTB outage into a silent skip. Run manually with:
 ///   cargo test -p nts_rust nts_query_live_ipv6 -- --ignored --nocapture
-/// Skipped at runtime if the host has no IPv6 connectivity at all,
-/// which `bind_connected_udp` reports via its aggregated error
-/// (every candidate failed `bind` or `connect`).
 #[test]
 #[ignore = "requires outbound TCP/4460 + UDP/123 IPv6 to ptbtime1.ptb.de"]
 fn nts_query_live_ipv6_ptb() {
