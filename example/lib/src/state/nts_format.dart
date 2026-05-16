@@ -52,7 +52,16 @@ String formatRtt(int micros) {
 /// otherwise overflow.
 String formatTrustBackend(TrustBackend backend) => switch (backend) {
   TrustBackend.platform => 'platform',
-  TrustBackend.platformWithHybridFallback => 'platform+hybrid-fallback',
+  // `webpki-fallback` (not `platform+hybrid-fallback`) because this
+  // variant means the platform verifier *rejected* the chain and the
+  // webpki-roots bundle overrode that verdict for one of the curated
+  // fallback-eligible shapes (missing-OCSP-AIA chains, R8-stripped
+  // AAR classes). The prior label read like "platform plus a
+  // possible hybrid fallback" without saying which actually
+  // authenticated. Single-token form is safe for awk/grep on the
+  // CLI output that bin/nts_cli.dart produces via the same
+  // formatQuerySuccess / formatWarmSuccess helpers.
+  TrustBackend.platformWithHybridFallback => 'webpki-fallback',
   TrustBackend.webpkiRoots => 'webpki-roots',
 };
 

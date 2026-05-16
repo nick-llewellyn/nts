@@ -4,6 +4,23 @@
 
 ### Changed — example app
 
+- The `formatTrustBackend` helper now renders
+  `TrustBackend.platformWithHybridFallback` as `webpki-fallback`
+  (was `platform+hybrid-fallback`). This is the variant where the
+  platform verifier rejected the chain and the `webpki-roots`
+  bundle overrode that verdict for one of the curated
+  fallback-eligible shapes (missing-OCSP-AIA chains such as
+  Let's Encrypt R12, R8-stripped AAR classes). The prior label
+  read like "platform plus a possible hybrid fallback" without
+  saying which actually authenticated. The new single-token form
+  pairs naturally with the existing `webpki-roots` label for the
+  end-to-end-webpki variant (per-chain override vs. end-to-end
+  use) and stays safe for `awk` / `grep` pipelines against the
+  `bin/nts_cli.dart` stdout, which threads the same helper. The
+  underlying `TrustBackend` enum values are unchanged; only the
+  human-readable label inside `example/lib/src/state/nts_format.dart`
+  changed. (`nts-t3p`)
+
 - The "Trust status" panel now surfaces only the last-handshake row.
   The "Singleton snapshot" row that read the process-wide
   `ntsTrustStatus()` and its three `defaultBackend*Count` cumulative
