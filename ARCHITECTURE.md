@@ -210,16 +210,21 @@ of "libc is timing out internally as expected"; flat `recovered` with
 operators should alert on (the system resolver is wedged and raising
 the cap would only push more threads into the same wedge).
 
-Test-side isolation: every test under `rust/src/nts/dns.rs::tests`
-constructs its own private `PoolStats::new()` rather than asserting
-against the process-wide `GLOBAL_POOL_STATS`. Parallel test
-execution (`cargo test --lib` without `--test-threads=1`) can
-saturate the global pool with genuine concurrent lookups from
-sibling tests, so a counter assertion against the global instance
-would flake on parallel-execution timing alone. Per-test pools keep
-cap-exhaustion, slot-release, and recovery assertions deterministic
-without serialising the suite or depending on a real adversarial
-nameserver.
+Test-side isolation: tests under `rust/src/nts/dns.rs::tests` that
+assert on pool counters or expect to acquire a slot construct their
+own private `PoolStats::new()` rather than routing through the
+process-wide `GLOBAL_POOL_STATS`. Parallel test execution
+(`cargo test --lib` without `--test-threads=1`) can saturate the
+global pool with genuine concurrent lookups from sibling tests, so
+a counter assertion or a slot-acquisition expectation against the
+global instance would flake on parallel-execution timing alone.
+Per-test pools keep cap-exhaustion, slot-release, and recovery
+assertions deterministic without serialising the suite or depending
+on a real adversarial nameserver. `zero_budget_surfaces_as_timed_out`
+is the deliberate exception: it routes through the production
+`resolve_with_timeout` entry point and therefore the global pool,
+but its assertion is on the zero-budget error shape rather than on
+pool state, so global-pool saturation has no effect on its outcome.
 
 ## Phase attribution and timings
 
