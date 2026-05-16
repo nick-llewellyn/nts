@@ -95,14 +95,21 @@ String formatWarmSuccess(NtsWarmCookiesOutcome outcome) =>
 
 /// Multi-line summary of a [NtsTrustStatus] snapshot for the
 /// trust-status panel. Renders each field on its own line so the
-/// reader can scan the three independent dimensions
-/// (default-singleton-backend, Android JNI bootstrap, hybrid
-/// fallback counter) without parsing a single dense string.
+/// reader can scan every independent dimension
+/// (default-singleton-backend pointer, per-backend cumulative
+/// counters, Android JNI bootstrap, hybrid fallback counter)
+/// without parsing a single dense string.
 String formatTrustStatus(NtsTrustStatus status) {
   final backend = status.defaultClientBackend == null
       ? '(no handshake observed)'
       : formatTrustBackend(status.defaultClientBackend!);
   return 'default-singleton-backend: $backend\n'
+      'default-backend-platform-count: '
+      '${status.defaultBackendPlatformCount}\n'
+      'default-backend-hybrid-count: '
+      '${status.defaultBackendHybridCount}\n'
+      'default-backend-webpki-count: '
+      '${status.defaultBackendWebpkiCount}\n'
       'android-platform-init-succeeded: '
       '${status.androidPlatformInitSucceeded}\n'
       'android-hybrid-fallback-count: '

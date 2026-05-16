@@ -28,7 +28,7 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 
 /// Snapshot the process-global trust-anchor diagnostic state.
 ///
-/// Returns three observables that callers cannot recover from a
+/// Returns six observables that callers cannot recover from a
 /// per-query [`NtsTimeSample`] alone:
 ///
 /// 1. `default_client_backend` — backend the *default singleton*
@@ -36,25 +36,41 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 ///    [`nts_warm_cookies`]) most recently resolved to. `None` when
 ///    no handshake has run yet against the singleton (process just
 ///    started, or all queries so far went through caller-minted
-///    clients). Custom-client callers should read the per-handshake
+///    clients). This is an overwrite-on-store event marker, not a
+///    steady-state signal: callers that want trend visibility
+///    should read the three counters in (2)–(4) instead, since a
+///    transient `WebpkiRoots`-resolving handshake will latch this
+///    field permanently until the next `Platform`-resolving one.
+///    Custom-client callers should read the per-handshake
 ///    `trust_backend` field on [`NtsTimeSample`] /
 ///    [`NtsWarmCookiesOutcome`] for accurate per-client attribution
 ///    instead.
-/// 2. `android_platform_init_succeeded` — `true` iff
+/// 2. `default_backend_platform_count` — cumulative count of
+///    singleton handshakes that resolved to [`TrustBackend::Platform`].
+/// 3. `default_backend_hybrid_count` — cumulative count of
+///    singleton handshakes that resolved to
+///    [`TrustBackend::PlatformWithHybridFallback`]. Always zero on
+///    non-Android platforms (the fallback path only exists on Android).
+/// 4. `default_backend_webpki_count` — cumulative count of
+///    singleton handshakes that resolved to [`TrustBackend::WebpkiRoots`].
+/// 5. `android_platform_init_succeeded` — `true` iff
 ///    `com.nllewellyn.nts.PlatformInit.nativeInit` reported success
 ///    at least once. `false` on every other platform. A `false` value
 ///    on Android implies subsequent handshakes will run against the
 ///    `webpki-roots` static bundle regardless of [`TrustMode`].
-/// 3. `android_hybrid_fallback_count` — cumulative count of TLS
+/// 6. `android_hybrid_fallback_count` — cumulative count of TLS
 ///    chains the Android `HybridVerifier` has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
 ///    platforms. The curated fallback-eligible failure shapes are
 ///    documented on the `HybridVerifier` Rust source.
 ///
-/// Reads three atomics with `Relaxed` ordering. The snapshot is
+/// Reads six atomics with `Relaxed` ordering. The snapshot is
 /// intended for human / dashboard consumption, not for cross-thread
 /// synchronisation; per-counter monotonicity holds, but cross-counter
-/// invariants within a single snapshot do not.
+/// invariants within a single snapshot do not — e.g. the sum of the
+/// three `default_backend_*_count` fields can be observed to lag the
+/// `default_client_backend` pointer by a single store-pair across
+/// concurrent snapshots.
 ///
 /// Marked `#[frb(sync)]` for the same reason as
 /// [`nts_dns_pool_stats`]: the underlying state read is cheap enough
@@ -492,23 +508,51 @@ class NtsTimeSample {
 /// Process-global trust-anchor diagnostic snapshot returned by
 /// [`nts_trust_status`] (Dart: `ntsTrustStatus`).
 ///
-/// The fields combine static facts (which backend the default
-/// singleton client resolved to at first-handshake time, whether the
-/// Android JNI bootstrap succeeded) with one dynamic counter (how
-/// many times the Android hybrid verifier has overridden the
-/// platform verdict with a webpki-roots fallback since process
-/// start). Fields not relevant to the current platform are reported
-/// with the documented "n/a" sentinel rather than omitted, so the
-/// snapshot has the same shape on every host.
+/// The fields combine one overwrite-on-store event marker (which
+/// backend the default singleton client *most recently* resolved
+/// to), three cumulative counters that partition the singleton's
+/// resolution history by backend, a static flag indicating whether
+/// the Android JNI bootstrap succeeded, and one Android-only
+/// fallback counter. Fields not relevant to the current platform
+/// are reported with the documented "n/a" sentinel rather than
+/// omitted, so the snapshot has the same shape on every host.
 class NtsTrustStatus {
   /// Backend the default singleton client most recently resolved to
   /// at handshake time. `None` when no handshake has run yet
   /// against the singleton (e.g. process just started, or all
   /// queries so far went through caller-minted [`NtsClient`]
-  /// instances). Custom-client callers should read the per-handshake
-  /// `trust_backend` field on [`NtsTimeSample`] /
-  /// [`NtsWarmCookiesOutcome`] for accurate per-client attribution.
+  /// instances). This is an overwrite-on-store event marker, not
+  /// a steady-state signal: prefer the three `default_backend_*_count`
+  /// fields below for dashboard panels that need trend visibility
+  /// across the singleton's resolution history. Custom-client
+  /// callers should read the per-handshake `trust_backend` field
+  /// on [`NtsTimeSample`] / [`NtsWarmCookiesOutcome`] for accurate
+  /// per-client attribution.
   final TrustBackend? defaultClientBackend;
+
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [`TrustBackend::Platform`] since process start. Bumped
+  /// in lock-step with each `Platform` store on
+  /// `default_client_backend`. Never reset; weakly monotonic
+  /// across consecutive snapshots, with the same per-counter
+  /// monotonicity contract as `android_hybrid_fallback_count`.
+  final BigInt defaultBackendPlatformCount;
+
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [`TrustBackend::PlatformWithHybridFallback`] since process
+  /// start. Always zero on non-Android platforms (the
+  /// platform-verifier-with-`webpki-roots`-fallback path only
+  /// exists on Android). Same monotonicity contract as
+  /// `default_backend_platform_count`.
+  final BigInt defaultBackendHybridCount;
+
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [`TrustBackend::WebpkiRoots`] since process start. Bumped
+  /// every time `build_with_native_verifier` failed at TLS-config
+  /// construction time on a [`TrustMode::PlatformWithFallback`]
+  /// singleton. Same monotonicity contract as
+  /// `default_backend_platform_count`.
+  final BigInt defaultBackendWebpkiCount;
 
   /// On Android: `true` iff
   /// `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
@@ -530,6 +574,9 @@ class NtsTrustStatus {
 
   const NtsTrustStatus({
     this.defaultClientBackend,
+    required this.defaultBackendPlatformCount,
+    required this.defaultBackendHybridCount,
+    required this.defaultBackendWebpkiCount,
     required this.androidPlatformInitSucceeded,
     required this.androidHybridFallbackCount,
   });
@@ -537,6 +584,9 @@ class NtsTrustStatus {
   @override
   int get hashCode =>
       defaultClientBackend.hashCode ^
+      defaultBackendPlatformCount.hashCode ^
+      defaultBackendHybridCount.hashCode ^
+      defaultBackendWebpkiCount.hashCode ^
       androidPlatformInitSucceeded.hashCode ^
       androidHybridFallbackCount.hashCode;
 
@@ -546,6 +596,9 @@ class NtsTrustStatus {
       other is NtsTrustStatus &&
           runtimeType == other.runtimeType &&
           defaultClientBackend == other.defaultClientBackend &&
+          defaultBackendPlatformCount == other.defaultBackendPlatformCount &&
+          defaultBackendHybridCount == other.defaultBackendHybridCount &&
+          defaultBackendWebpkiCount == other.defaultBackendWebpkiCount &&
           androidPlatformInitSucceeded == other.androidPlatformInitSucceeded &&
           androidHybridFallbackCount == other.androidHybridFallbackCount;
 }

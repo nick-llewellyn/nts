@@ -2171,12 +2171,16 @@ fn nts_trust_status_snapshot_is_safe_with_no_handshake() {
     // on Android the test harness does not invoke the JNI bootstrap
     // either, so the same assertion holds.
     assert!(!status.android_platform_init_succeeded);
-    // hybrid_fallback_count is `Relaxed` and global; we cannot
+    // The cumulative counters are `Relaxed` and global; we cannot
     // assert == 0 because earlier tests in this process may have
-    // exercised the Android-only code path. Assert weak monotonicity:
-    // calling snapshot twice shows the second value is >= the first.
+    // exercised the Android-only code path or the singleton-handshake
+    // recording path. Assert weak monotonicity: calling snapshot
+    // twice shows each per-counter second value is >= the first.
     let second = nts_trust_status();
     assert!(second.android_hybrid_fallback_count >= status.android_hybrid_fallback_count);
+    assert!(second.default_backend_platform_count >= status.default_backend_platform_count);
+    assert!(second.default_backend_hybrid_count >= status.default_backend_hybrid_count);
+    assert!(second.default_backend_webpki_count >= status.default_backend_webpki_count);
 }
 
 /// Cached-session checkouts must surface the original handshake's
@@ -2960,6 +2964,18 @@ fn nts_trust_status_reads_singleton_and_converts_shape() {
              and DTO: {other:?}"
         ),
     }
+    assert_eq!(
+        status.default_backend_platform_count,
+        snap.default_backend_platform_count,
+    );
+    assert_eq!(
+        status.default_backend_hybrid_count,
+        snap.default_backend_hybrid_count,
+    );
+    assert_eq!(
+        status.default_backend_webpki_count,
+        snap.default_backend_webpki_count,
+    );
     assert_eq!(
         status.android_platform_init_succeeded,
         snap.android_platform_init_succeeded,

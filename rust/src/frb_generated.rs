@@ -770,10 +770,16 @@ impl SseDecode for crate::api::nts::NtsTrustStatus {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_defaultClientBackend =
             <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+        let mut var_defaultBackendPlatformCount = <u64>::sse_decode(deserializer);
+        let mut var_defaultBackendHybridCount = <u64>::sse_decode(deserializer);
+        let mut var_defaultBackendWebpkiCount = <u64>::sse_decode(deserializer);
         let mut var_androidPlatformInitSucceeded = <bool>::sse_decode(deserializer);
         let mut var_androidHybridFallbackCount = <u64>::sse_decode(deserializer);
         return crate::api::nts::NtsTrustStatus {
             default_client_backend: var_defaultClientBackend,
+            default_backend_platform_count: var_defaultBackendPlatformCount,
+            default_backend_hybrid_count: var_defaultBackendHybridCount,
+            default_backend_webpki_count: var_defaultBackendWebpkiCount,
             android_platform_init_succeeded: var_androidPlatformInitSucceeded,
             android_hybrid_fallback_count: var_androidHybridFallbackCount,
         };
@@ -1105,6 +1111,15 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTrustStatus {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.default_client_backend.into_into_dart().into_dart(),
+            self.default_backend_platform_count
+                .into_into_dart()
+                .into_dart(),
+            self.default_backend_hybrid_count
+                .into_into_dart()
+                .into_dart(),
+            self.default_backend_webpki_count
+                .into_into_dart()
+                .into_dart(),
             self.android_platform_init_succeeded
                 .into_into_dart()
                 .into_dart(),
@@ -1387,6 +1402,9 @@ impl SseEncode for crate::api::nts::NtsTrustStatus {
             self.default_client_backend,
             serializer,
         );
+        <u64>::sse_encode(self.default_backend_platform_count, serializer);
+        <u64>::sse_encode(self.default_backend_hybrid_count, serializer);
+        <u64>::sse_encode(self.default_backend_webpki_count, serializer);
         <bool>::sse_encode(self.android_platform_init_succeeded, serializer);
         <u64>::sse_encode(self.android_hybrid_fallback_count, serializer);
     }

@@ -75,6 +75,32 @@ class MockNtsApi implements RustLibApi {
   /// `NtsWarmCookiesOutcome`.
   TrustBackend? _lastResolvedBackend;
 
+  /// Cumulative singleton-path resolution counts, one per
+  /// [TrustBackend] variant. Bumped in lock-step with
+  /// [_lastResolvedBackend] by [_recordSingletonBackend] so the
+  /// trust-status panel's trend numbers grow as the mock runs,
+  /// matching the real-bridge contract on the three
+  /// `defaultBackend*Count` fields of [NtsTrustStatus].
+  BigInt _singletonPlatformCount = BigInt.zero;
+  BigInt _singletonHybridCount = BigInt.zero;
+  BigInt _singletonWebpkiCount = BigInt.zero;
+
+  /// Single recording point for the singleton-path trust-state
+  /// updates. Centralises the "overwrite the pointer + bump the
+  /// matching counter" pair so the two singleton call sites cannot
+  /// drift apart on a future edit.
+  void _recordSingletonBackend(TrustBackend b) {
+    _lastResolvedBackend = b;
+    switch (b) {
+      case TrustBackend.platform:
+        _singletonPlatformCount += BigInt.one;
+      case TrustBackend.platformWithHybridFallback:
+        _singletonHybridCount += BigInt.one;
+      case TrustBackend.webpkiRoots:
+        _singletonWebpkiCount += BigInt.one;
+    }
+  }
+
   @override
   Future<void> crateApiSimpleInitApp() async {}
 
@@ -97,9 +123,11 @@ class MockNtsApi implements RustLibApi {
     }
 
     // Singleton path -- record the backend on the snapshot so
-    // `crateApiNtsNtsTrustStatus().defaultClientBackend` matches
-    // real Rust-side semantics (singleton-only attribution).
-    _lastResolvedBackend = TrustBackend.platform;
+    // `crateApiNtsNtsTrustStatus().defaultClientBackend` and the
+    // matching per-backend counter match real Rust-side semantics
+    // (singleton-only attribution; pointer + counter updated in
+    // lock-step).
+    _recordSingletonBackend(TrustBackend.platform);
     return _mockSample(rttMs: rttMs, backend: TrustBackend.platform);
   }
 
@@ -110,7 +138,7 @@ class MockNtsApi implements RustLibApi {
     required int dnsConcurrencyCap,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 80));
-    _lastResolvedBackend = TrustBackend.platform;
+    _recordSingletonBackend(TrustBackend.platform);
     return _mockWarm(backend: TrustBackend.platform);
   }
 
@@ -181,6 +209,9 @@ class MockNtsApi implements RustLibApi {
   @override
   NtsTrustStatus crateApiNtsNtsTrustStatus() => NtsTrustStatus(
     defaultClientBackend: _lastResolvedBackend,
+    defaultBackendPlatformCount: _singletonPlatformCount,
+    defaultBackendHybridCount: _singletonHybridCount,
+    defaultBackendWebpkiCount: _singletonWebpkiCount,
     androidPlatformInitSucceeded: false,
     androidHybridFallbackCount: BigInt.zero,
   );

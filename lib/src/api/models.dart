@@ -317,24 +317,51 @@ enum TrustMode {
 /// Process-global trust-anchor diagnostic snapshot returned by
 /// `ntsTrustStatus()`.
 ///
-/// The fields combine static facts (which backend the default
-/// singleton client resolved to at first-handshake time, whether the
-/// Android JNI bootstrap succeeded) with one dynamic counter (how
-/// many times the Android hybrid verifier has overridden the
-/// platform verdict with a webpki-roots fallback since process
-/// start). Fields not relevant to the current platform are reported
-/// with the documented sentinel value (`null` / `false` / `0`)
-/// rather than omitted, so the snapshot has the same shape on every
-/// host.
+/// The fields combine one overwrite-on-store event marker (which
+/// backend the default singleton client *most recently* resolved
+/// to), three cumulative counters that partition the singleton's
+/// resolution history by backend, a static flag indicating whether
+/// the Android JNI bootstrap succeeded, and one Android-only
+/// fallback counter. Fields not relevant to the current platform
+/// are reported with the documented sentinel value (`null` /
+/// `false` / `0`) rather than omitted, so the snapshot has the
+/// same shape on every host.
 class NtsTrustStatus {
   /// Backend the default singleton client most recently resolved to
   /// at handshake time. `null` when no handshake has run yet against
   /// the singleton (process just started, or all queries so far went
-  /// through caller-minted [NtsClient] instances). Custom-client
-  /// callers should read the per-handshake [NtsTimeSample.trustBackend]
-  /// / [NtsWarmCookiesOutcome.trustBackend] for accurate per-client
+  /// through caller-minted [NtsClient] instances). This is an
+  /// overwrite-on-store event marker, not a steady-state signal:
+  /// prefer the three `defaultBackend*Count` fields below for
+  /// dashboard panels that need trend visibility across the
+  /// singleton's resolution history. Custom-client callers should
+  /// read the per-handshake [NtsTimeSample.trustBackend] /
+  /// [NtsWarmCookiesOutcome.trustBackend] for accurate per-client
   /// attribution.
   final TrustBackend? defaultClientBackend;
+
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [TrustBackend.platform] since process start. Bumped in
+  /// lock-step with each `platform` store on [defaultClientBackend].
+  /// Never reset; weakly monotonic across consecutive snapshots,
+  /// with the same per-counter monotonicity contract as
+  /// [androidHybridFallbackCount].
+  final BigInt defaultBackendPlatformCount;
+
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [TrustBackend.platformWithHybridFallback] since process
+  /// start. Always zero on non-Android platforms (the
+  /// platform-verifier-with-`webpki-roots`-fallback path only
+  /// exists on Android). Same monotonicity contract as
+  /// [defaultBackendPlatformCount].
+  final BigInt defaultBackendHybridCount;
+
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [TrustBackend.webpkiRoots] since process start. Bumped every
+  /// time platform-verifier configuration failed at build time on a
+  /// [TrustMode.platformWithFallback] singleton. Same monotonicity
+  /// contract as [defaultBackendPlatformCount].
+  final BigInt defaultBackendWebpkiCount;
 
   /// On Android: `true` iff the JNI bootstrap has reported success
   /// at least once. `false` on every other platform (no JNI
@@ -356,6 +383,9 @@ class NtsTrustStatus {
   /// boundary and for test fixtures.
   const NtsTrustStatus({
     required this.defaultClientBackend,
+    required this.defaultBackendPlatformCount,
+    required this.defaultBackendHybridCount,
+    required this.defaultBackendWebpkiCount,
     required this.androidPlatformInitSucceeded,
     required this.androidHybridFallbackCount,
   });
@@ -363,6 +393,9 @@ class NtsTrustStatus {
   @override
   int get hashCode => Object.hash(
     defaultClientBackend,
+    defaultBackendPlatformCount,
+    defaultBackendHybridCount,
+    defaultBackendWebpkiCount,
     androidPlatformInitSucceeded,
     androidHybridFallbackCount,
   );
@@ -372,6 +405,9 @@ class NtsTrustStatus {
       identical(this, other) ||
       (other is NtsTrustStatus &&
           defaultClientBackend == other.defaultClientBackend &&
+          defaultBackendPlatformCount == other.defaultBackendPlatformCount &&
+          defaultBackendHybridCount == other.defaultBackendHybridCount &&
+          defaultBackendWebpkiCount == other.defaultBackendWebpkiCount &&
           androidPlatformInitSucceeded == other.androidPlatformInitSucceeded &&
           androidHybridFallbackCount == other.androidHybridFallbackCount);
 
@@ -379,6 +415,9 @@ class NtsTrustStatus {
   String toString() =>
       'NtsTrustStatus(defaultClientBackend: '
       '${defaultClientBackend?.name ?? "null"}, '
+      'defaultBackendPlatformCount: $defaultBackendPlatformCount, '
+      'defaultBackendHybridCount: $defaultBackendHybridCount, '
+      'defaultBackendWebpkiCount: $defaultBackendWebpkiCount, '
       'androidPlatformInitSucceeded: $androidPlatformInitSucceeded, '
       'androidHybridFallbackCount: $androidHybridFallbackCount)';
 }
