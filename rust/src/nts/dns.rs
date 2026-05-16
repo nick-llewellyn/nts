@@ -339,10 +339,32 @@ mod tests {
 
     /// Numeric loopback resolves synchronously and well inside the
     /// budget on every supported platform.
+    ///
+    /// Uses a per-test [`PoolStats`] bundle (matching the pattern in
+    /// [`slow_resolver_surfaces_as_timed_out`] and
+    /// [`cap_reached_returns_would_block`] below) so the production
+    /// global resolver pool — shared under `cargo test --lib`
+    /// parallelism with the live-Cloudflare probes in
+    /// `rust/src/api/nts/tests.rs` and with the sibling
+    /// [`zero_budget_surfaces_as_timed_out`] (which leaks a detached
+    /// worker resolving `example.invalid` until NXDOMAIN lands) —
+    /// cannot saturate the cap and turn this test's slot acquisition
+    /// into a `WouldBlock` panic against the `.expect("loopback
+    /// resolves")` arm. `system_lookup` is still the lookup closure,
+    /// so the production resolver path stays exercised; only the
+    /// stats bundle is isolated.
     #[test]
     fn resolves_loopback_within_budget() {
-        let addrs = resolve_with_timeout("127.0.0.1", 1234, Duration::from_secs(2))
-            .expect("loopback resolves");
+        static STATS: PoolStats = PoolStats::new();
+        let addrs = resolve_with(
+            &STATS,
+            DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+            "127.0.0.1",
+            1234,
+            Duration::from_secs(2),
+            system_lookup,
+        )
+        .expect("loopback resolves");
         assert!(!addrs.is_empty(), "expected at least one address");
         assert!(
             addrs.iter().all(|a| a.port() == 1234),
