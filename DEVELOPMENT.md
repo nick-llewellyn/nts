@@ -93,12 +93,14 @@ capture, which is what lets a sustained outage's three matching
 errors versus a single bad sample followed by recovery flicker be
 told apart from the failure message alone without re-running
 locally. The `nts_query_live_ipv6_ptb` probe remains `#[ignore]`d
-(also `nts::ke::tests::live_integration::ke_live_cloudflare`); a
-broad `cargo test --ignored` runs both, so target the IPv6 probe
-directly when only that probe is wanted:
+(also `nts::ke::tests::live_integration::ke_live_cloudflare`);
+from `rust/`, a broad `cargo test -- --ignored` runs both
+(`--ignored` is a libtest flag, not a cargo flag, so the `--`
+separator is required), so target the IPv6 probe directly when
+only that probe is wanted:
 
 ```bash
-cargo test -p nts_rust nts_query_live_ipv6_ptb -- --ignored --nocapture
+cd rust && cargo test -p nts_rust nts_query_live_ipv6_ptb -- --ignored --nocapture
 ```
 
 GHA Linux runners have inconsistent IPv6 connectivity by Azure
