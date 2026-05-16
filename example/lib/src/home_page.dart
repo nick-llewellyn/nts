@@ -58,8 +58,19 @@ class HomePage extends StatelessWidget {
               ),
             ),
           ],
-          bottom: const TabBar(
-            tabs: [
+          bottom: TabBar(
+            // `indicatorSize: tab` paints the selection underline
+            // across the full tab cell rather than just the label
+            // glyph width, so the indicator reads as a section
+            // separator rather than a hairline beneath the text.
+            // `labelStyle` / `unselectedLabelStyle` bump the type
+            // up from the M3 default (~14sp titleSmall) to
+            // titleMedium (~16sp); TabBar applies labelColor and
+            // unselectedLabelColor on top from its M3 defaults.
+            indicatorSize: TabBarIndicatorSize.tab,
+            labelStyle: theme.textTheme.titleMedium,
+            unselectedLabelStyle: theme.textTheme.titleMedium,
+            tabs: const [
               Tab(text: 'Client'),
               Tab(text: 'Log'),
             ],
