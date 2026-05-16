@@ -16,7 +16,7 @@
 // propagate through `filteredServers` automatically thanks to the
 // signals-core dependency tracking.
 
-import 'package:nts/nts.dart' show NtsTrustStatus, TrustBackend, TrustMode;
+import 'package:nts/nts.dart' show TrustBackend, TrustMode;
 import 'package:signals/signals.dart'
     show Computed, ReadonlySignal, Signal, computed, signal;
 
@@ -51,7 +51,6 @@ class AppState {
        regionFilter = signal<String>(kAllRegions),
        favoritesOnly = signal<bool>(false),
        trustMode = signal<TrustMode>(TrustMode.platformWithFallback),
-       trustStatus = signal<NtsTrustStatus?>(null),
        lastHandshakeBackend = signal<TrustBackend?>(null) {
     filteredServers = computed<List<NtsServerEntry>>(_recomputeFiltered);
     regions = _collectRegions(catalog);
@@ -102,25 +101,14 @@ class AppState {
   /// pre-3.0.0 behaviour.
   final Signal<TrustMode> trustMode;
 
-  /// Most-recent process-wide trust-anchor diagnostic snapshot, or
-  /// `null` if the user has not requested one yet. Refreshed on
-  /// demand by the trust-status panel and after every successful
-  /// query / warm. The `defaultClientBackend` field of the snapshot
-  /// only reflects handshakes routed through the *default-singleton*
-  /// client (top-level `ntsQuery` / `ntsWarmCookies`); see
-  /// [lastHandshakeBackend] for the per-client handshake attribution
-  /// that this example actually drives.
-  final Signal<NtsTrustStatus?> trustStatus;
-
   /// Trust backend the controller's per-instance `NtsClient`
   /// resolved to on its most-recent successful query / warm.
   /// Updated in-band by [NtsController] from
   /// [NtsTimeSample.trustBackend] / [NtsWarmCookiesOutcome.trustBackend].
   /// `null` until the first successful per-client handshake. This is
   /// the load-bearing field for the trust-status panel's "last
-  /// handshake" row, because [trustStatus] is singleton-scoped on
-  /// the Rust side and stays at its sentinel for as long as only
-  /// per-instance clients are driving the bridge.
+  /// handshake" row, which is the sole surface for per-handshake
+  /// trust-anchor attribution in the example app.
   final Signal<TrustBackend?> lastHandshakeBackend;
 
   /// Computed view: catalog → filtered & sorted with favourites first.

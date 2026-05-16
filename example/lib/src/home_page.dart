@@ -63,7 +63,7 @@ class HomePage extends StatelessWidget {
             const Divider(height: 1),
             ActionPanel(state: state, controller: controller),
             const Divider(height: 1),
-            TrustStatusPanel(state: state, controller: controller),
+            TrustStatusPanel(state: state),
             const Divider(height: 1),
             Expanded(flex: 1, child: LogView(state: state)),
           ],

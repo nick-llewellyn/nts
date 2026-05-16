@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Changed — example app
+
+- The "Trust status" panel now surfaces only the last-handshake row.
+  The "Singleton snapshot" row that read the process-wide
+  `ntsTrustStatus()` and its three `defaultBackend*Count` cumulative
+  counters has been removed. Those counters are gated on the
+  `is_default` flag of the underlying `NtsClient` (only the top-level
+  `ntsQuery` / `ntsWarmCookies` route through the default singleton);
+  the example app always dispatches through a caller-minted client,
+  so the row was structurally destined to remain at its sentinel
+  `null` / 0 values during every demo run, which read as a bug to
+  users investigating the panel. The package's public
+  `ntsTrustStatus()` API is unchanged. (`nts-otu`)
+
+- Removed (example app, internal): `NtsController.refreshTrustStatus`,
+  `AppState.trustStatus`, `formatTrustStatus()` in
+  `lib/src/state/nts_format.dart`, and the covering
+  `group('formatTrustStatus', …)` block in `nts_format_test.dart`.
+  All were dead after the singleton-snapshot row was removed.
+
 ## 3.1.0
 
 Surface-uniformity follow-up to `3.0.0`, plus the three review

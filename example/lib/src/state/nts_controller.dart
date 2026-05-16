@@ -32,8 +32,7 @@ import 'package:nts/nts.dart'
         NtsErrorTimeout,
         NtsErrorTrustBackendUnavailable,
         TrustBackend,
-        TrustMode,
-        ntsTrustStatus;
+        TrustMode;
 
 import '../data/server_entry.dart';
 import 'app_state.dart';
@@ -153,24 +152,6 @@ class NtsController {
     );
   }
 
-  /// Refresh the singleton-side process-wide trust-status snapshot.
-  ///
-  /// Important: `ntsTrustStatus().defaultClientBackend` only updates
-  /// when the *top-level* `ntsQuery` / `ntsWarmCookies` (the default-
-  /// singleton client) runs a handshake. This controller dispatches
-  /// every query through a caller-minted [NtsClient], so the
-  /// singleton snapshot stays at its sentinel `null` for as long as
-  /// only this controller is driving the bridge. The per-handshake
-  /// backend that the controller's last query / warm actually used
-  /// is tracked separately on [AppState.lastHandshakeBackend], which
-  /// is the load-bearing field for the trust-status panel's "last
-  /// handshake" row. Bound to the panel's refresh button so a
-  /// curious user can still verify the singleton-side state on
-  /// demand.
-  void refreshTrustStatus() {
-    state.trustStatus.value = ntsTrustStatus();
-  }
-
   /// Run a single authenticated NTPv4 query against `entry`.
   ///
   /// ### Cold start (first call for a given host:port)
@@ -243,20 +224,16 @@ class NtsController {
         trustBackend: sample.trustBackend,
       );
       // Per-handshake backend goes straight onto AppState so the
-      // trust-status panel's "last handshake" row reflects what
-      // *the currently-active* caller-minted client used. Singleton
-      // snapshot is refreshed too for users who also poke the top-
-      // level ntsQuery / ntsWarmCookies in another path; on a
-      // controller-only run it stays at its sentinel `null`, which
-      // is correct. Stale completions skip both writes so a dropped
-      // client cannot overwrite the active client's attribution.
+      // trust-status panel's "last handshake" row reflects what the
+      // currently-active caller-minted client used. Stale completions
+      // skip the write so a dropped client cannot overwrite the
+      // active client's attribution.
       if (!stale) {
         _setLastHandshakeBackend(
           host: entry.hostname,
           backend: sample.trustBackend,
           source: 'nts_query',
         );
-        refreshTrustStatus();
       }
     } on NtsError catch (err) {
       _logError('nts_query', err, entry.hostname);
@@ -297,7 +274,6 @@ class NtsController {
           backend: outcome.trustBackend,
           source: 'nts_warm_cookies',
         );
-        refreshTrustStatus();
       }
     } on NtsError catch (err) {
       _logError('nts_warm_cookies', err, entry.hostname);
