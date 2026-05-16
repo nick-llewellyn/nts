@@ -60,8 +60,8 @@ class HomePage extends StatelessWidget {
           ],
           bottom: const TabBar(
             tabs: [
-              Tab(icon: Icon(Icons.dns_outlined), text: 'Client'),
-              Tab(icon: Icon(Icons.terminal), text: 'Log'),
+              Tab(text: 'Client'),
+              Tab(text: 'Log'),
             ],
           ),
         ),
