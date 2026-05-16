@@ -1513,15 +1513,22 @@ fn is_transient_nts_error(err: &NtsError) -> bool {
 /// Retry `f` up to three times on `is_transient_nts_error` failures
 /// with 500ms / 1000ms back-off between attempts. Returns the success
 /// value on the first non-transient outcome; panics with the full
-/// diagnostic on any non-transient error or after the third transient
-/// failure exhausts the budget. `label` is included in stderr retry
-/// notices and in the final panic message so test logs name the probe.
+/// diagnostic on any non-transient error, or — after the third
+/// transient failure exhausts the budget — panics with the *trail*
+/// of every transient error observed across the three attempts, in
+/// attempt order. The trail distinguishes a sustained Cloudflare
+/// outage (three matching errors) from a single bad sample followed
+/// by recovery flicker (mixed shapes) during the `nts-dbg` Avenue 0
+/// flake-rate measurement window. `label` is included in stderr
+/// retry notices and in the final panic message so test logs name
+/// the probe.
 fn retry_on_transient<T, F>(label: &str, mut f: F) -> T
 where
     F: FnMut() -> Result<T, NtsError>,
 {
     const ATTEMPTS: u32 = 3;
     let mut attempt: u32 = 0;
+    let mut history: Vec<NtsError> = Vec::with_capacity(ATTEMPTS as usize);
     loop {
         attempt += 1;
         match f() {
@@ -1532,14 +1539,16 @@ where
                 );
             }
             Err(e) if attempt >= ATTEMPTS => {
+                history.push(e);
                 panic!(
-                    "{label} exhausted {ATTEMPTS} retry attempts; last transient error: {e:?}",
+                    "{label} exhausted {ATTEMPTS} retry attempts; transient error trail: {history:?}",
                 );
             }
             Err(e) => {
                 eprintln!(
                     "{label}: transient failure on attempt {attempt}/{ATTEMPTS}: {e:?}; retrying",
                 );
+                history.push(e);
                 std::thread::sleep(Duration::from_millis(500 * attempt as u64));
             }
         }
