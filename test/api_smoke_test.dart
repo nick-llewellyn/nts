@@ -369,6 +369,14 @@ void main() {
       // have substituted, so callers using the constant by name see
       // no behaviour change. The wrapper now rejects literal `0` for
       // either u32 argument with `NtsError.invalidSpec`.
+      //
+      // Companion assertion: `defaults_match_dart_wrapper_constants`
+      // in `rust/src/api/nts/tests.rs` pins the same numerics on the
+      // Rust side. The pair catches cross-layer drift: a change to
+      // either side without mirroring the other breaks the test on
+      // the changed side. The two constants are NOT code-generated
+      // from a single source of truth — keep them in sync by hand
+      // when bumping the package's tuned defaults.
       expect(kDefaultTimeoutMs, 5000);
       expect(kDefaultDnsConcurrencyCap, 4);
     });

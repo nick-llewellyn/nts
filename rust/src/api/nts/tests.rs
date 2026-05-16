@@ -45,6 +45,42 @@ fn effective_timeout_substitutes_default_when_zero() {
     assert_eq!(effective_timeout(1234), Duration::from_millis(1234));
 }
 
+/// Pins the cross-layer contract between the Rust-side defaults
+/// (`DEFAULT_TIMEOUT_MS` here, `DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS` in
+/// `rust/src/nts/dns.rs`) and the Dart wrapper constants that expose
+/// the same numeric values to consumers (`kDefaultTimeoutMs` and
+/// `kDefaultDnsConcurrencyCap` in `lib/src/api/nts.dart`).
+///
+/// The Dart wrapper rejects `0` for either argument and steers
+/// callers to pass `kDefault*` instead, so the Rust-side 0-as-default
+/// sentinel handled by [`effective_timeout`] and
+/// [`effective_dns_concurrency_cap`] is unreachable from Dart callers.
+/// The two layers therefore agree on the effective value only as long
+/// as the literal numerics agree. There is no compile-time link
+/// between them (the Dart constants are not code-generated from the
+/// Rust ones), so a change to either side that is not mirrored on the
+/// other silently drifts the Dart-documented default away from the
+/// Rust runtime default.
+///
+/// This test plus its companion in `test/api_smoke_test.dart`
+/// (`'exported defaults expose the actual numeric values'`) catch
+/// that drift on both sides: tightening one constant without updating
+/// the other breaks the test on the changed side, forcing the
+/// developer to consider the other layer before merging.
+#[test]
+fn defaults_match_dart_wrapper_constants() {
+    assert_eq!(
+        DEFAULT_TIMEOUT_MS, 5_000,
+        "DEFAULT_TIMEOUT_MS must equal kDefaultTimeoutMs in lib/src/api/nts.dart; \
+         update both sides in lockstep",
+    );
+    assert_eq!(
+        DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS, 4,
+        "DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS must equal kDefaultDnsConcurrencyCap in \
+         lib/src/api/nts.dart; update both sides in lockstep",
+    );
+}
+
 #[test]
 fn ntp64_round_trips_through_micros() {
     // 2026-04-25T00:00:00Z = 1777334400 unix seconds = 3986323200 NTP seconds.
