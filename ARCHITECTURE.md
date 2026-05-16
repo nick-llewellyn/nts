@@ -210,6 +210,22 @@ of "libc is timing out internally as expected"; flat `recovered` with
 operators should alert on (the system resolver is wedged and raising
 the cap would only push more threads into the same wedge).
 
+Test-side isolation: tests under `rust/src/nts/dns.rs::tests` that
+assert on pool counters or expect to acquire a slot construct their
+own private `PoolStats::new()` rather than routing through the
+process-wide `GLOBAL_POOL_STATS`. Parallel test execution
+(`cargo test --lib` without `--test-threads=1`) can saturate the
+global pool with genuine concurrent lookups from sibling tests, so
+a counter assertion or a slot-acquisition expectation against the
+global instance would flake on parallel-execution timing alone.
+Per-test pools keep cap-exhaustion, slot-release, and recovery
+assertions deterministic without serialising the suite or depending
+on a real adversarial nameserver. `zero_budget_surfaces_as_timed_out`
+is the deliberate exception: it routes through the production
+`resolve_with_timeout` entry point and therefore the global pool,
+but its assertion is on the zero-budget error shape rather than on
+pool state, so global-pool saturation has no effect on its outcome.
+
 ## Phase attribution and timings
 
 The shared deadline accounts for *when* a budget elapses but not for
@@ -515,6 +531,20 @@ The wrapper has three jobs:
    variant names (`NtsError_InvalidSpec`, …) survive as
    `@Deprecated` typedef aliases for one release; they are scheduled
    for removal at 4.0.
+
+The wrapper's default constants (`kDefaultTimeoutMs`,
+`kDefaultDnsConcurrencyCap`) are pinned against their Rust
+counterparts (`DEFAULT_TIMEOUT_MS` in `rust/src/api/nts.rs`,
+`DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS` in `rust/src/nts/dns.rs`) by
+paired tests: `defaults_match_dart_wrapper_constants` in
+`rust/src/api/nts/tests.rs` asserts the Rust literals, and
+`'exported defaults expose the actual numeric values'` in
+`test/api_smoke_test.dart` asserts the Dart literals. Either side
+shifting silently — a Rust bump that forgets the Dart wrapper, or
+a Dart-side type or literal change — fails one of the paired
+assertions before the drift can reach a release. Both sites carry
+cross-references in their doc comments so a future maintainer who
+trips one assertion has a direct pointer to the other.
 
 The deprecation policy for future Rust-side removals is symmetric:
 when an underlying Rust parameter or field is dropped, its public

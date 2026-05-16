@@ -70,9 +70,41 @@ flutter test
 
 This runs `test/ffi_smoke_test.dart`, which exercises the generated
 FRB API contract in mock mode. Live Dart→Rust→network round-trips
-run from the example app (`example/`); the underlying Rust crate has
-its own live integration probes gated behind `--ignored` (run with
-`cargo test --ignored` in `rust/`).
+run from the example app (`example/`); the underlying Rust crate
+ships live integration probes against `time.cloudflare.com` that
+run as part of `cargo test --lib` (un-gated from `#[ignore]` by
+`nts-dbg` once GHA runners proved to have stable outbound
+TCP/4460 + UDP/123 to Cloudflare). Network flake on those probes
+is absorbed by `retry_on_transient` in
+`rust/src/api/nts/tests.rs`, which retries up to three times with
+500 / 1000 ms back-off. The helper signals on two channels: each
+transient attempt emits a per-attempt stderr notice
+(`<label>: transient failure on attempt N/3: <error>; retrying`),
+and exhaustion after three transient failures panics with the full
+transient-error trail (every transient error observed across the
+three attempts, in attempt order). Rust's test harness captures
+stderr on passing tests, so the per-attempt notices are visible
+under exhaustion (a failing test) or when the developer passes
+`-- --nocapture` to `cargo test`; CI's `cargo test --lib --locked`
+invocation does not pass `--nocapture`, so on a green run the
+notices stay captured. The exhaustion panic itself always surfaces
+because the test harness reports the panic message regardless of
+capture, which is what lets a sustained outage's three matching
+errors versus a single bad sample followed by recovery flicker be
+told apart from the failure message alone without re-running
+locally. The `nts_query_live_ipv6_ptb` probe remains `#[ignore]`d
+(also `nts::ke::tests::live_integration::ke_live_cloudflare`);
+from `rust/`, a broad `cargo test -- --ignored` runs both
+(`--ignored` is a libtest flag, not a cargo flag, so the `--`
+separator is required), so target the IPv6 probe directly when
+only that probe is wanted:
+
+```bash
+cd rust && cargo test -p nts_rust nts_query_live_ipv6_ptb -- --ignored --nocapture
+```
+
+GHA Linux runners have inconsistent IPv6 connectivity by Azure
+region, which is the reason the IPv6 probe stays gated.
 
 ### Fuzzing the Rust parsers (cargo-fuzz)
 
