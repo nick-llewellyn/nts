@@ -1521,30 +1521,35 @@ where
     F: FnMut() -> Result<T, NtsError>,
 {
     const ATTEMPTS: u32 = 3;
-    let mut last_err: Option<NtsError> = None;
-    for attempt in 1..=ATTEMPTS {
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
         match f() {
             Ok(v) => return v,
-            Err(e) if is_transient_nts_error(&e) && attempt < ATTEMPTS => {
+            Err(e) if !is_transient_nts_error(&e) => {
+                panic!(
+                    "{label} failed on attempt {attempt}/{ATTEMPTS} with non-transient error: {e:?}",
+                );
+            }
+            Err(e) if attempt >= ATTEMPTS => {
+                panic!(
+                    "{label} exhausted {ATTEMPTS} retry attempts; last transient error: {e:?}",
+                );
+            }
+            Err(e) => {
                 eprintln!(
                     "{label}: transient failure on attempt {attempt}/{ATTEMPTS}: {e:?}; retrying",
                 );
-                last_err = Some(e);
                 std::thread::sleep(Duration::from_millis(500 * attempt as u64));
             }
-            Err(e) => panic!("{label} failed on attempt {attempt}/{ATTEMPTS}: {e:?}"),
         }
     }
-    panic!(
-        "{label} exhausted {ATTEMPTS} retry attempts; last transient error: {:?}",
-        last_err.expect("loop body always populates last_err before exhausting"),
-    );
 }
 
 /// Helper: assert that an `NtsTimeSample` from Cloudflare's public
-/// endpoint has the expected shape. Centralised so the four
-/// query-shaped probes (top-level `nts_query` and `NtsClient::query`,
-/// each across single + reuse calls) share one assertion vocabulary.
+/// endpoint has the expected shape. Centralised so both query-shaped
+/// probes (top-level `nts_query` and `NtsClient::query`) share one
+/// assertion vocabulary.
 fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
     assert_eq!(sample.aead_id, aead_ids::AES_SIV_CMAC_256);
     assert!(sample.server_stratum > 0 && sample.server_stratum < 16);
@@ -1572,22 +1577,25 @@ fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
 /// absorbed by `retry_on_transient` so a flake re-runs rather than
 /// failing the suite. A protocol-level error (KE record validation,
 /// AEAD verify, etc.) is not retried — that signals a real bug.
+///
+/// Deliberately a single-call probe. The default singleton's session
+/// table is shared with `nts_warm_cookies_live_cloudflare` (and any
+/// future free-fn live probe), so a "second call reuses cached
+/// session" assertion here would be order-dependent: whichever live
+/// probe ran first would prime the cache for the others. The
+/// per-client reuse semantics are tested deterministically by
+/// `nts_query_live_cloudflare_via_client` below, which owns its own
+/// session table.
 #[test]
 fn nts_query_live_cloudflare() {
     let spec = NtsServerSpec {
         host: "time.cloudflare.com".to_owned(),
         port: DEFAULT_KE_PORT,
     };
-    let sample = retry_on_transient("nts_query cloudflare (fresh)", || {
+    let sample = retry_on_transient("nts_query cloudflare", || {
         nts_query(spec.clone(), 10_000, 0)
     });
     assert_cloudflare_time_sample(&sample);
-
-    // Second call should reuse the session and avoid a re-handshake.
-    let sample2 = retry_on_transient("nts_query cloudflare (reuse)", || {
-        nts_query(spec.clone(), 10_000, 0)
-    });
-    assert!(sample2.utc_unix_micros >= sample.utc_unix_micros);
 }
 
 /// Live probe through the per-client API surface: `NtsClient::query`
@@ -1597,6 +1605,14 @@ fn nts_query_live_cloudflare() {
 /// drives them through the method delegation path, which `nts-dbg`
 /// flagged as separately uncovered in codecov even though it shares
 /// `nts_query_inner` with the free function.
+///
+/// Doubles as the deterministic cache-reuse probe: the second call
+/// asserts that all KE-phase timings are zero, which is the
+/// observable signal of a cache hit (the cached-session branch skips
+/// connect / TLS / KE-record-IO entirely). Safe to assert strictly
+/// here — the per-client `SessionTable` has its own singleflight
+/// `inflight` map, so no other test in the suite can land as a leader
+/// or waiter against this client's table.
 #[test]
 fn nts_query_live_cloudflare_via_client() {
     let spec = NtsServerSpec {
@@ -1612,7 +1628,23 @@ fn nts_query_live_cloudflare_via_client() {
     let sample2 = retry_on_transient("NtsClient::query cloudflare (reuse)", || {
         client.query(spec.clone(), 10_000, 0)
     });
-    assert!(sample2.utc_unix_micros >= sample.utc_unix_micros);
+    assert_cloudflare_time_sample(&sample2);
+    // Cache-hit signal: the cached-session branch skips connect /
+    // TLS / KE-record-IO. `dns_micros` may be non-zero on the second
+    // call (the UDP-path NTPv4-host lookup still runs), so don't
+    // assert it.
+    assert_eq!(
+        sample2.phase_timings.connect_micros, 0,
+        "second per-client query must hit the cache (connect_micros)",
+    );
+    assert_eq!(
+        sample2.phase_timings.tls_handshake_micros, 0,
+        "second per-client query must hit the cache (tls_handshake_micros)",
+    );
+    assert_eq!(
+        sample2.phase_timings.ke_record_io_micros, 0,
+        "second per-client query must hit the cache (ke_record_io_micros)",
+    );
 }
 
 /// Live probe of `nts_warm_cookies` (top-level free function) against
