@@ -102,7 +102,11 @@ pub struct HybridVerifier {
     platform: Arc<dyn ServerCertVerifier>,
     /// Lazily built; the parsing cost of the bundled trust-anchor set is
     /// paid once, only on the first `Revoked` we actually see in the wild.
-    fallback: OnceLock<Arc<WebPkiServerVerifier>>,
+    /// Typed as `dyn ServerCertVerifier` so unit tests can pre-populate
+    /// the `OnceLock` with a fake fallback via
+    /// [`Self::with_platform_and_fallback`] without standing up a real
+    /// `webpki-roots`-backed chain.
+    fallback: OnceLock<Arc<dyn ServerCertVerifier>>,
     /// Per-instance count of `verify_server_cert` calls in which the
     /// `webpki-roots` fallback overrode a platform verdict. Read by
     /// `crate::nts::ke::perform_handshake` after the TLS handshake
@@ -147,6 +151,31 @@ impl HybridVerifier {
         }
     }
 
+    /// Test-only constructor that injects both a fake platform
+    /// verifier *and* a pre-populated fake fallback. Lets unit tests
+    /// exercise the successful-fallback success path — the `Ok` arm
+    /// of the `if result.is_ok()` block in each of the two curated
+    /// fallback paths of [`Self::verify_server_cert`] — without
+    /// having to construct a chain that actually validates against
+    /// the bundled `webpki-roots`. The fallback is `.set()` into the
+    /// `OnceLock` at construction so `verify_server_cert` reaches it
+    /// without triggering the lazy webpki-roots build path.
+    #[cfg(test)]
+    pub(crate) fn with_platform_and_fallback(
+        trust_mode: KeTrustMode,
+        platform: Arc<dyn ServerCertVerifier>,
+        fallback: Arc<dyn ServerCertVerifier>,
+    ) -> Self {
+        let fallback_lock = OnceLock::new();
+        let _ = fallback_lock.set(fallback);
+        Self {
+            platform,
+            fallback: fallback_lock,
+            fallback_count: AtomicU64::new(0),
+            trust_mode,
+        }
+    }
+
     /// Snapshot the per-instance fallback counter. `perform_handshake`
     /// samples this before-and-after to detect a hybrid-fallback
     /// firing on this specific handshake.
@@ -159,13 +188,17 @@ impl HybridVerifier {
         TRUST_STATE.bump_hybrid_fallback();
     }
 
-    fn fallback(&self) -> Result<&Arc<WebPkiServerVerifier>, Error> {
+    fn fallback(&self) -> Result<&Arc<dyn ServerCertVerifier>, Error> {
         if let Some(v) = self.fallback.get() {
             return Ok(v);
         }
         let mut roots = RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let verifier = WebPkiServerVerifier::builder(Arc::new(roots))
+        // The builder returns `Arc<WebPkiServerVerifier>`; the explicit
+        // annotation coerces it to `Arc<dyn ServerCertVerifier>` at the
+        // assignment site so the `OnceLock::set` call below has nothing
+        // to infer.
+        let verifier: Arc<dyn ServerCertVerifier> = WebPkiServerVerifier::builder(Arc::new(roots))
             .build()
             .map_err(|e| Error::General(format!("nts: webpki-roots fallback unavailable: {e}")))?;
         // First-writer-wins under a TLS-config build race; the loser drops
@@ -374,16 +407,21 @@ mod tests {
     /// the fake platform never inspects it, and the fallback path is
     /// what we want to assert is *not* taken in `PlatformOnly` mode
     /// (so the webpki-roots verifier never sees these bytes either).
-    /// The tests that *do* exercise the fallback path
-    /// (`platform_with_fallback_revoked_dual_failure_does_not_attribute`
-    /// and its JNI-marker companion) use the verdict-shape — "result
-    /// is no longer the platform's original error" — rather than a
-    /// successful chain validation, so a non-conformant leaf is
-    /// sufficient there too. The stub leaf failing the
+    /// The four tests that exercise the fallback path
+    /// (`platform_with_fallback_{revoked,jni}_dual_failure_does_not_attribute`
+    /// and `platform_with_fallback_{revoked,jni}_success_path_attributes_fallback`)
+    /// rely on the verdict-shape rather than on a successful chain
+    /// validation against `webpki-roots`: the dual-failure pair pins
+    /// "result is no longer the platform's original error", and the
+    /// success-path pair injects a fake fallback returning `Ok`
+    /// directly (via `with_platform_and_fallback`), so a non-conformant
+    /// leaf is sufficient for all four. The stub leaf failing the
     /// webpki-roots verifier is *load-bearing* for the `nts-7di`
     /// dual-failure assertion: it guarantees `fallback_count` stays
     /// at 0 on those paths, which transitively pins the absence of
-    /// a `WARN nts::hybrid_verifier` line.
+    /// a `WARN nts::hybrid_verifier` line. The success-path pair
+    /// bypasses webpki-roots entirely so this load-bearing property
+    /// does not apply to them.
     fn dummy_args() -> (
         CertificateDer<'static>,
         Vec<CertificateDer<'static>>,
@@ -580,6 +618,95 @@ mod tests {
             "stub leaf cannot validate against webpki-roots, so the fallback failed; \
              `fallback_count` must stay at 0 to keep the warn/counter alignment \
              (no `WARN nts::hybrid_verifier` line is emitted on a failed fallback)",
+        );
+    }
+
+    /// `nts-6ff` acceptance criterion (Revoked arm): when the
+    /// platform raises `Revoked` AND the (injected fake) fallback
+    /// accepts the chain, the success path through the `Revoked`
+    /// arm's `if result.is_ok()` block is exercised end-to-end:
+    /// `verify_server_cert` returns `Ok`, the per-instance
+    /// `fallback_count()` bumps to 1, and the process-global
+    /// `TRUST_STATE.android_hybrid_fallback_count` increments in
+    /// lockstep via `record_fallback()`.
+    ///
+    /// Companion to
+    /// `platform_with_fallback_revoked_dual_failure_does_not_attribute`
+    /// above; together they pin both branches of the shared
+    /// `if result.is_ok()` predicate that gates the warn line and
+    /// the counter bump in `verify_server_cert`.
+    ///
+    /// `TRUST_STATE` is process-global, so its post-condition is
+    /// "incremented by at least 1" rather than an exact-value
+    /// equality: other tests in the same `cargo test --lib` run
+    /// may also bump it concurrently. The per-instance
+    /// `fallback_count() == 1` is the strong, race-free assertion
+    /// that the success path ran exactly once for *this* verifier.
+    #[test]
+    fn platform_with_fallback_revoked_success_path_attributes_fallback() {
+        let platform =
+            FakePlatform::new(|| Err(Error::InvalidCertificate(CertificateError::Revoked)));
+        let fallback = FakePlatform::new(|| Ok(ServerCertVerified::assertion()));
+        let trust_state_before = TRUST_STATE.snapshot().android_hybrid_fallback_count;
+        let verifier = HybridVerifier::with_platform_and_fallback(
+            KeTrustMode::PlatformWithFallback,
+            platform.clone(),
+            fallback.clone(),
+        );
+        let (leaf, intermediates, server_name, now) = dummy_args();
+        let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+        assert!(result.is_ok(), "expected fallback to accept; got {result:?}");
+        assert_eq!(platform.call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(fallback.call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            verifier.fallback_count(),
+            1,
+            "per-instance fallback_count must bump exactly once when the fallback accepts",
+        );
+        let trust_state_after = TRUST_STATE.snapshot().android_hybrid_fallback_count;
+        assert!(
+            trust_state_after > trust_state_before,
+            "TRUST_STATE.android_hybrid_fallback_count must increment in lockstep with \
+             record_fallback() (before: {trust_state_before}, after: {trust_state_after})",
+        );
+    }
+
+    /// `nts-6ff` acceptance criterion (JNI-marker arm): the
+    /// JNI-flavoured platform error is the second of the two
+    /// fallback-eligible cases curated by `verify_server_cert`.
+    /// When the (injected fake) fallback accepts the chain, the
+    /// success path through the JNI-marker arm's `if result.is_ok()`
+    /// block is exercised end-to-end. Same shape and assertions as
+    /// the `Revoked` companion above.
+    #[test]
+    fn platform_with_fallback_jni_success_path_attributes_fallback() {
+        let platform = FakePlatform::new(|| {
+            Err(Error::General(format!(
+                "{NATIVE_VERIFIER_JNI_MARKER}: synthetic-jni-failure",
+            )))
+        });
+        let fallback = FakePlatform::new(|| Ok(ServerCertVerified::assertion()));
+        let trust_state_before = TRUST_STATE.snapshot().android_hybrid_fallback_count;
+        let verifier = HybridVerifier::with_platform_and_fallback(
+            KeTrustMode::PlatformWithFallback,
+            platform.clone(),
+            fallback.clone(),
+        );
+        let (leaf, intermediates, server_name, now) = dummy_args();
+        let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+        assert!(result.is_ok(), "expected fallback to accept; got {result:?}");
+        assert_eq!(platform.call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(fallback.call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            verifier.fallback_count(),
+            1,
+            "per-instance fallback_count must bump exactly once when the fallback accepts",
+        );
+        let trust_state_after = TRUST_STATE.snapshot().android_hybrid_fallback_count;
+        assert!(
+            trust_state_after > trust_state_before,
+            "TRUST_STATE.android_hybrid_fallback_count must increment in lockstep with \
+             record_fallback() (before: {trust_state_before}, after: {trust_state_after})",
         );
     }
 }
