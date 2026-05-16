@@ -167,7 +167,21 @@ impl HybridVerifier {
         fallback: Arc<dyn ServerCertVerifier>,
     ) -> Self {
         let fallback_lock = OnceLock::new();
-        let _ = fallback_lock.set(fallback);
+        // The lock is freshly constructed and uniquely owned within
+        // this function, so `set` cannot fail. Use `.expect()` rather
+        // than `let _ =` so a future refactor that reorders the
+        // construction (e.g. populating the lock elsewhere before
+        // this point) fails loudly at the construction site rather
+        // than silently no-opping the `set` and leaving the verifier
+        // exercising the lazy `webpki-roots` build path the test seam
+        // was meant to bypass. NB: the *production* lazy-init in
+        // `Self::fallback()` deliberately uses `let _ = ... .set(...)`
+        // because the race-loser there must silently drop its own
+        // verifier — that pattern is correct in context and must not
+        // be changed in lockstep with this site.
+        fallback_lock
+            .set(fallback)
+            .expect("fresh OnceLock cannot already be set");
         Self {
             platform,
             fallback: fallback_lock,
