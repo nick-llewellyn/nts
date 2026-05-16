@@ -4,6 +4,33 @@
 
 ### Changed — example app
 
+- The home page is now split across two tabs ("Client" / "Log")
+  driven by a `DefaultTabController`. The Client tab carries the
+  server list, action panel, trust-status row, and a new
+  single-entry "Latest result" summary card; the Log tab gives the
+  live-log card a full viewport height. The previous single-Column
+  layout squeezed `_LogHeader` past its intrinsic minimum on
+  landscape phones / tablets and triggered `RenderFlex` overflow
+  warnings; the tabbed layout removes the squeeze without changing
+  any underlying widget contracts. (`nts-a3o`)
+- The action panel's `TrustMode` selector is now a compact
+  `DropdownButton<TrustMode>` inlined alongside the "NTS Query" and
+  "Warm Cookies" buttons inside a single `Wrap`. On landscape
+  viewports everything fits on one row (~64dp tall vs. the previous
+  ~132dp two-row layout); on narrow phone widths the `Wrap` rolls
+  the dropdown onto a second line. The set of selectable trust
+  modes (`platformWithFallback`, `platformOnly`) and the
+  controller-side cookie-pool-drop semantics on flip are unchanged.
+  (`nts-a3o`)
+- The "Favourites only" filter chip is now labelled "Favourites".
+  Same behaviour, shorter text — widens the available space in the
+  filter row's `Region` dropdown on narrow viewports. (`nts-a3o`)
+- New `LatestResultPanel` widget on the Client tab surfaces the
+  most recent `NtsLogEntry` in a single-line summary card,
+  rendered byte-for-byte identically to its sibling row on the Log
+  tab via the hoisted `buildLogEntrySpans` helper. Bounded to four
+  visible lines via `SelectableText.rich.maxLines`. (`nts-a3o`)
+
 - The `formatTrustBackend` helper now renders
   `TrustBackend.platformWithHybridFallback` as `webpki-fallback`
   (was `platform+hybrid-fallback`). This is the variant where the

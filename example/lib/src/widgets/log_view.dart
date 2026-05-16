@@ -141,7 +141,7 @@ class _LogViewState extends State<LogView> {
                       children: [
                         for (var i = 0; i < entries.length; i++) ...[
                           if (i > 0) const TextSpan(text: '\n'),
-                          ..._spansFor(theme, colors, entries[i]),
+                          ...buildLogEntrySpans(theme, colors, entries[i]),
                         ],
                       ],
                     ),
@@ -159,61 +159,66 @@ class _LogViewState extends State<LogView> {
     );
   }
 
-  /// Render one log entry as a sequence of styled spans so the
-  /// metadata (timestamp, level, source, host) can dim into the
-  /// background while the actual message stays at full strength.
-  /// `SelectableText.rich` walks the span tree to assemble the copied
-  /// payload, so this still yields a clean grep-friendly line when the
-  /// user drags a selection across it.
-  ///
-  /// No trailing newline: separators between entries are emitted by
-  /// the build-site loop so the very last entry doesn't leave a
-  /// phantom blank line below itself, which would otherwise inflate
-  /// the gap between the newest log line and the bottom of the card.
-  ///
-  /// Colour assignment funnels through [NtsColors]:
-  /// - `info` lines whose message starts with `OK ` (the success
-  ///   marker emitted by `nts_format::formatQuerySuccess` /
-  ///   `formatWarmSuccess`) render in `ntsSuccess` so a successful
-  ///   handshake reads at a glance against neutral status lines.
-  /// - other `info` lines render in the default `onSurface` tone.
-  /// - `warn` and `error` map to `ntsWarning` and `ntsError`.
-  static List<InlineSpan> _spansFor(
-    ThemeData theme,
-    NtsColors colors,
-    NtsLogEntry e,
-  ) {
-    final messageColour = switch (e.level) {
-      NtsLogLevel.info =>
-        e.message.startsWith('OK ')
-            ? colors.ntsSuccess
-            : theme.colorScheme.onSurface,
-      NtsLogLevel.warn => colors.ntsWarning,
-      NtsLogLevel.error => colors.ntsError,
-    };
-    final dimColour = colors.logTimestamp;
-    final ts = e.timestamp.toIso8601String();
-    final lvl = e.level.name.toUpperCase().padRight(5);
-    final hostPart = e.host == null ? '' : ' [${e.host}]';
-    return [
-      TextSpan(
-        text: '$ts ',
-        style: TextStyle(color: dimColour),
-      ),
-      TextSpan(
-        text: '$lvl ',
-        style: TextStyle(color: messageColour, fontWeight: FontWeight.w600),
-      ),
-      TextSpan(
-        text: '${e.source}$hostPart  ',
-        style: TextStyle(color: dimColour),
-      ),
-      TextSpan(
-        text: e.message,
-        style: TextStyle(color: messageColour),
-      ),
-    ];
-  }
+}
+
+/// Render one log entry as a sequence of styled spans so the
+/// metadata (timestamp, level, source, host) can dim into the
+/// background while the actual message stays at full strength.
+/// `SelectableText.rich` walks the span tree to assemble the copied
+/// payload, so this still yields a clean grep-friendly line when the
+/// user drags a selection across it.
+///
+/// No trailing newline: separators between entries are emitted by
+/// the build-site loop so the very last entry doesn't leave a
+/// phantom blank line below itself, which would otherwise inflate
+/// the gap between the newest log line and the bottom of the card.
+///
+/// Colour assignment funnels through [NtsColors]:
+/// - `info` lines whose message starts with `OK ` (the success
+///   marker emitted by `nts_format::formatQuerySuccess` /
+///   `formatWarmSuccess`) render in `ntsSuccess` so a successful
+///   handshake reads at a glance against neutral status lines.
+/// - other `info` lines render in the default `onSurface` tone.
+/// - `warn` and `error` map to `ntsWarning` and `ntsError`.
+///
+/// Hoisted to a top-level function so both the full [LogView] card
+/// on the Log tab and the single-entry summary card on the Client
+/// tab ([LatestResultPanel]) render rows byte-for-byte identically.
+List<InlineSpan> buildLogEntrySpans(
+  ThemeData theme,
+  NtsColors colors,
+  NtsLogEntry e,
+) {
+  final messageColour = switch (e.level) {
+    NtsLogLevel.info =>
+      e.message.startsWith('OK ')
+          ? colors.ntsSuccess
+          : theme.colorScheme.onSurface,
+    NtsLogLevel.warn => colors.ntsWarning,
+    NtsLogLevel.error => colors.ntsError,
+  };
+  final dimColour = colors.logTimestamp;
+  final ts = e.timestamp.toIso8601String();
+  final lvl = e.level.name.toUpperCase().padRight(5);
+  final hostPart = e.host == null ? '' : ' [${e.host}]';
+  return [
+    TextSpan(
+      text: '$ts ',
+      style: TextStyle(color: dimColour),
+    ),
+    TextSpan(
+      text: '$lvl ',
+      style: TextStyle(color: messageColour, fontWeight: FontWeight.w600),
+    ),
+    TextSpan(
+      text: '${e.source}$hostPart  ',
+      style: TextStyle(color: dimColour),
+    ),
+    TextSpan(
+      text: e.message,
+      style: TextStyle(color: messageColour),
+    ),
+  ];
 }
 
 class _LogHeader extends StatelessWidget {
