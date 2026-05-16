@@ -78,8 +78,8 @@ its own live integration probes gated behind `--ignored` (run with
 
 The Rust crate ships a `cargo-fuzz` workspace under `rust/fuzz/` that
 targets the parser surfaces directly exposed to attacker-controlled
-network bytes (currently `parse_extensions`; `parse_message` and
-`validate_response` are queued as follow-ups). The workspace is a
+network bytes (`parse_extensions`, `parse_message`, and
+`validate_response`). The workspace is a
 separate Cargo workspace so the parent `cargo test` / `cargo clippy`
 invocations remain on stable toolchain — `libfuzzer-sys` itself
 builds on stable, but `cargo fuzz {build,run}` enables sanitizer
@@ -118,9 +118,18 @@ fuzz / coverage crates that are themselves excluded from the
 published artefact (see `.pubignore`). Never enable it from
 `hook/build.dart` or the FRB codegen.
 
-CI integration is not wired up yet; follow-up tickets cover both
-adding the additional fuzz targets and a nightly job that runs each
-target for a fixed wall-clock budget.
+CI integration: `.github/workflows/fuzz.yml` runs each of the three
+targets nightly (06:00 UTC) for a 60-second wall-clock budget per
+target, in a per-target matrix so a crash on one target does not
+short-circuit the others. Crash reproducers from a red run are
+uploaded as `fuzz-crashes-<target>-<run-id>` artefacts with 30-day
+retention. `workflow_dispatch` accepts a `max_total_time` input
+override for ad-hoc longer runs. The workflow is intentionally NOT
+in branch protection's required status checks on `main` — a red
+nightly fuzz signal is an actionable finding to triage, not a
+per-commit merge blocker. It is also a sibling workflow to
+`ci.yml`, not a job within it, so the per-toolchain split is
+clean: `ci.yml` stays on stable, `fuzz.yml` installs nightly.
 
 ## Rust log verbosity
 

@@ -1,0 +1,189 @@
+name: Nightly fuzz
+
+# Nightly cargo-fuzz job for the `nts_rust` parser surface.
+#
+# Separate workflow from `ci.yml` because:
+#   - Trigger shape differs: this runs on cron + manual dispatch,
+#     not on every push/PR. cargo-fuzz on every PR would burn
+#     GHA minutes for no real signal -- new bugs come from
+#     mutated inputs over time, not from a 60-second run on the
+#     PR commit.
+#   - Toolchain differs: this needs the nightly toolchain for the
+#     sanitizer-coverage instrumentation that `cargo fuzz {build,run}`
+#     injects (`-Zsanitizer`, etc.). The parent `ci.yml` pins
+#     stable. Keeping the two workflows separate means a nightly
+#     compiler regression cannot break the PR-blocking jobs.
+#   - Status-check semantics differ: this workflow is NOT listed
+#     in branch protection's required status checks on `main`. A
+#     red nightly fuzz signal is an actionable finding to triage,
+#     not a per-commit merge blocker. The required-checks list
+#     stays at the six entries from `ci.yml` plus `Detect changed
+#     paths`.
+#
+# Workflow runs the three fuzz targets under `rust/fuzz/`
+# (`parse_extensions`, `parse_message`, `validate_response`) in a
+# per-target matrix so a crash on one target does not short-circuit
+# the others. New crash reproducers are uploaded as artefacts so a
+# red run is actionable without re-running locally.
+#
+# Out of scope: surfacing fuzz coverage as a percentage, integrating
+# the corpus into Codecov, or feeding crashes back into the
+# regression-seed corpus automatically (that step is intentionally
+# manual -- a maintainer reviews the crash, fixes the bug, then
+# copies the reproducer into `rust/fuzz/corpus/<target>/` as a
+# regression seed).
+
+on:
+  # Daily at 06:00 UTC. Adjustable; the only constraint is finishing
+  # within the GHA per-step 6h timeout, which 60 s/target × 3 targets
+  # comfortably clears even with cold-cache build time included.
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: 'Wall-clock seconds per fuzz target (libFuzzer -max_total_time)'
+        required: false
+        default: '60'
+  # PR trigger is scoped so the workflow only runs on changes that
+  # could actually break it: the workflow file itself, or the fuzz
+  # workspace. The vast majority of PRs do not touch either path
+  # and skip this job entirely. Skipped jobs do not count against
+  # branch protection here because this job is not in the required
+  # checks list.
+  pull_request:
+    paths:
+      - '.github/workflows/fuzz.yml'
+      - 'rust/fuzz/**'
+
+# Workflow-wide GITHUB_TOKEN baseline: `contents: read` is the
+# minimum `actions/checkout` needs and implicitly denies every
+# other scope. This workflow uploads only artefacts (no Codecov,
+# no release uploads), so no further scopes are opted in.
+permissions:
+  contents: read
+
+# Per-ref concurrency. cancel-in-progress is false here, unlike the
+# parent `ci.yml` where it is true on PRs: a force-push to a PR
+# branch that touched `rust/fuzz/**` should let the previous fuzz
+# run finish so a crash it found is not lost to mid-run cancellation.
+# Cron runs use `refs/heads/main` and the group keys the workflow
+# name + ref, so cron and PR runs land in different groups and
+# never queue against each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      # A crash on one target should surface alongside the green
+      # signal from the other two, not pre-empt them. Each leg is
+      # independent: separate cache key, separate artefact bundle,
+      # separate runner.
+      fail-fast: false
+      matrix:
+        target:
+          - parse_extensions
+          - parse_message
+          - validate_response
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # cargo-fuzz requires nightly for the sanitizer-coverage
+      # instrumentation `cargo fuzz {build,run}` injects into the
+      # target binary. `dtolnay/rust-toolchain@nightly` installs
+      # the latest nightly snapshot and sets it as the default
+      # toolchain on the runner. The explicit `cargo +nightly`
+      # invocations below double-pin against any future regression
+      # that changes default-toolchain semantics.
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      # cargo-fuzz writes incremental build output to
+      # `rust/fuzz/target/`. Including `${{ matrix.target }}` in the
+      # key keeps per-leg caches separate so one leg's incremental
+      # state does not stomp on another's. `workspaces` points at
+      # the standalone `rust/fuzz/` Cargo workspace (intentionally
+      # separate from the parent `rust/` workspace -- see
+      # `rust/fuzz/Cargo.toml` for the rationale).
+      - name: Cache cargo registry + fuzz target dir
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: rust/fuzz
+          key: ${{ matrix.target }}
+
+      # `cargo install cargo-fuzz` is the dominant cold-build cost
+      # of this workflow (~2-3 min from source). The version is
+      # embedded in the cache key so a deliberate bump (edit both
+      # the version pin below AND the cache key) actually
+      # invalidates the cache and reinstalls; floating to
+      # whatever `latest` resolved to on a cold miss would silently
+      # change CI behaviour.
+      - name: Cache cargo-fuzz binary
+        id: cargo-fuzz-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-0.13.1
+
+      # Deliberately no `--locked` here: cargo-fuzz 0.13.1 (Jun 2025)
+      # ships a `Cargo.lock` that pins `rustix v0.36.5`, which uses
+      # the unstable `rustc_attrs` feature attribute (via
+      # `#[cfg_attr(rustc_attrs, rustc_layout_scalar_valid_range_*)]`)
+      # without enabling the corresponding nightly feature gate. The
+      # current `dtolnay/rust-toolchain@nightly` snapshot has tightened
+      # its handling of those attributes and rejects the build with
+      # `cannot find attribute rustc_layout_scalar_valid_range_start
+      # in this scope`. Letting cargo resolve a fresh `rustix` (and
+      # the rest of cargo-fuzz's tooling deps) sidesteps the
+      # stale-lockfile failure without affecting the version of
+      # cargo-fuzz itself (still pinned via `--version 0.13.1`).
+      # Diverges from the `--locked` pattern used for cargo-tarpaulin
+      # in `ci.yml`; cargo-tarpaulin 0.35.2 is much newer and its
+      # lockfile still resolves cleanly against current nightlies.
+      - name: Install cargo-fuzz
+        if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --version 0.13.1
+
+      # `cargo fuzz run <target>` exits non-zero on a crash; libFuzzer
+      # writes the reproducer to `rust/fuzz/artifacts/<target>/crash-*`.
+      # The `if: failure()` artefact-upload step below captures those
+      # files so the job's red signal is actionable rather than just
+      # a red dot in the Actions tab.
+      #
+      # libFuzzer flags:
+      #   -max_total_time: wall-clock budget for this run. Default
+      #     60 s on cron; overridable via workflow_dispatch input.
+      #   -timeout: per-input timeout in seconds. Set lower than the
+      #     total budget so a stuck input does not eat the run.
+      #   -print_final_stats=1: print exec/s, edges-covered, etc. on
+      #     exit so the run logs carry a baseline trend without
+      #     needing a separate stats-publishing step.
+      - name: Run fuzz target
+        working-directory: rust/fuzz
+        env:
+          MAX_TOTAL_TIME: ${{ github.event.inputs.max_total_time || '60' }}
+        run: |
+          cargo +nightly fuzz run "${{ matrix.target }}" -- \
+            -max_total_time=$MAX_TOTAL_TIME \
+            -timeout=25 \
+            -print_final_stats=1
+
+      # Uploaded only on failure (`if: failure()`). A green run has
+      # nothing in `rust/fuzz/artifacts/<target>/` worth retaining.
+      # 30-day retention gives a maintainer time to triage the
+      # crash, decide whether it is a real bug or a fuzzer artefact,
+      # and copy the reproducer into `rust/fuzz/corpus/<target>/`
+      # as a regression seed before the artefact expires.
+      - name: Upload crash artefacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crashes-${{ matrix.target }}-${{ github.run_id }}
+          path: rust/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: warn
+          retention-days: 30
