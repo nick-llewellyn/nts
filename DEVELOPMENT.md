@@ -95,10 +95,14 @@ told apart from the failure message alone without re-running
 locally. The `nts_query_live_ipv6_ptb` probe remains `#[ignore]`d
 (also `nts::ke::tests::live_integration::ke_live_cloudflare`); a
 broad `cargo test --ignored` runs both, so target the IPv6 probe
-directly with `cargo test -p nts_rust nts_query_live_ipv6_ptb
--- --ignored --nocapture` when only that probe is wanted. GHA
-Linux runners have inconsistent IPv6 connectivity by Azure region,
-which is the reason the IPv6 probe stays gated.
+directly when only that probe is wanted:
+
+```bash
+cargo test -p nts_rust nts_query_live_ipv6_ptb -- --ignored --nocapture
+```
+
+GHA Linux runners have inconsistent IPv6 connectivity by Azure
+region, which is the reason the IPv6 probe stays gated.
 
 ### Fuzzing the Rust parsers (cargo-fuzz)
 
