@@ -79,19 +79,26 @@ is absorbed by `retry_on_transient` in
 `rust/src/api/nts/tests.rs`, which retries up to three times with
 500 / 1000 ms back-off. The helper signals on two channels: each
 transient attempt emits a per-attempt stderr notice
-(`<label>: transient failure on attempt N/3: <error>; retrying`)
-that surfaces in the CI run log regardless of whether the suite
-eventually passes, so an intermittent flicker that recovered on a
-later retry stays visible in the log without producing a red
-signal; only retry exhaustion produces a red signal, and the
-exhaustion panic carries the full transient-error trail (every
-transient error observed across the three attempts, in attempt
-order) so a sustained outage's three matching errors versus a
-single bad sample followed by recovery flicker can be told apart
-from the failure message alone without re-running locally. The
-`nts_query_live_ipv6_ptb` probe remains `#[ignore]`d (run with
-`cargo test --ignored` in `rust/`); GHA Linux runners have
-inconsistent IPv6 connectivity by Azure region.
+(`<label>: transient failure on attempt N/3: <error>; retrying`),
+and exhaustion after three transient failures panics with the full
+transient-error trail (every transient error observed across the
+three attempts, in attempt order). Rust's test harness captures
+stderr on passing tests, so the per-attempt notices are visible
+under exhaustion (a failing test) or when the developer passes
+`-- --nocapture` to `cargo test`; CI's `cargo test --lib --locked`
+invocation does not pass `--nocapture`, so on a green run the
+notices stay captured. The exhaustion panic itself always surfaces
+because the test harness reports the panic message regardless of
+capture, which is what lets a sustained outage's three matching
+errors versus a single bad sample followed by recovery flicker be
+told apart from the failure message alone without re-running
+locally. The `nts_query_live_ipv6_ptb` probe remains `#[ignore]`d
+(also `nts::ke::tests::live_integration::ke_live_cloudflare`); a
+broad `cargo test --ignored` runs both, so target the IPv6 probe
+directly with `cargo test -p nts_rust nts_query_live_ipv6_ptb
+-- --ignored --nocapture` when only that probe is wanted. GHA
+Linux runners have inconsistent IPv6 connectivity by Azure region,
+which is the reason the IPv6 probe stays gated.
 
 ### Fuzzing the Rust parsers (cargo-fuzz)
 
