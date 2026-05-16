@@ -78,6 +78,16 @@ jobs:
   fuzz:
     name: Fuzz ${{ matrix.target }}
     runs-on: ubuntu-latest
+    # Single source of truth for the cargo-fuzz binary version
+    # consumed by both the cache step (key segment) and the install
+    # step (`--version` arg). Bumping this env var propagates the new
+    # pin to both sites in lockstep; the cache invalidates on the new
+    # key, the install step picks up the new version on the resulting
+    # miss, and no manual two-site edit is required. See the
+    # `Install cargo-fuzz` step below for the comment on why
+    # `--locked` is deliberately omitted at this pin.
+    env:
+      CARGO_FUZZ_VERSION: '0.13.1'
     strategy:
       # A crash on one target should surface alongside the green
       # signal from the other two, not pre-empt them. Each leg is
@@ -118,21 +128,26 @@ jobs:
 
       # `cargo install cargo-fuzz` is the dominant cold-build cost
       # of this workflow (~2-3 min from source). The version is
-      # embedded in the cache key so a deliberate bump (edit both
-      # the version pin below AND the cache key) actually
-      # invalidates the cache and reinstalls; floating to
-      # whatever `latest` resolved to on a cold miss would silently
-      # change CI behaviour.
+      # interpolated from the job-level `CARGO_FUZZ_VERSION` env
+      # var (defined at the top of this job) into both the cache
+      # key below and the install step's `--version` arg further
+      # down, so a deliberate bump propagates to both sites in
+      # lockstep. Without the env-var indirection a bump would
+      # require updating two literals and silently degrade to a
+      # stale cache hit if either was missed; floating to whatever
+      # `latest` resolved to on a cold miss would silently change
+      # CI behaviour.
       - name: Cache cargo-fuzz binary
         id: cargo-fuzz-cache
         uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cargo-fuzz
-          key: cargo-fuzz-${{ runner.os }}-0.13.1
+          key: cargo-fuzz-${{ runner.os }}-${{ env.CARGO_FUZZ_VERSION }}
 
-      # Deliberately no `--locked` here: cargo-fuzz 0.13.1 (Jun 2025)
-      # ships a `Cargo.lock` that pins `rustix v0.36.5`, which uses
-      # the unstable `rustc_attrs` feature attribute (via
+      # Deliberately no `--locked` here: the cargo-fuzz version
+      # currently pinned by `CARGO_FUZZ_VERSION` (0.13.1, released
+      # Jun 2025) ships a `Cargo.lock` that pins `rustix v0.36.5`,
+      # which uses the unstable `rustc_attrs` feature attribute (via
       # `#[cfg_attr(rustc_attrs, rustc_layout_scalar_valid_range_*)]`)
       # without enabling the corresponding nightly feature gate. The
       # current `dtolnay/rust-toolchain@nightly` snapshot has tightened
@@ -141,13 +156,16 @@ jobs:
       # in this scope`. Letting cargo resolve a fresh `rustix` (and
       # the rest of cargo-fuzz's tooling deps) sidesteps the
       # stale-lockfile failure without affecting the version of
-      # cargo-fuzz itself (still pinned via `--version 0.13.1`).
+      # cargo-fuzz itself (still pinned via `--version "$CARGO_FUZZ_VERSION"`
+      # below). Re-evaluate when bumping `CARGO_FUZZ_VERSION`: a newer
+      # release may ship a lockfile that resolves cleanly, in which
+      # case `--locked` can be restored.
       # Diverges from the `--locked` pattern used for cargo-tarpaulin
       # in `ci.yml`; cargo-tarpaulin 0.35.2 is much newer and its
       # lockfile still resolves cleanly against current nightlies.
       - name: Install cargo-fuzz
         if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
-        run: cargo install cargo-fuzz --version 0.13.1
+        run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION"
 
       # `cargo fuzz run <target>` exits non-zero on a crash; libFuzzer
       # writes the reproducer to `rust/fuzz/artifacts/<target>/crash-*`.
