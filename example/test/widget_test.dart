@@ -384,4 +384,47 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'compact ClientTab branch renders without a multiple-'
+    'PrimaryScrollController assertion under a short body height',
+    (tester) async {
+      // Drive the LayoutBuilder dispatch in _ClientTab into its
+      // compact branch by handing the test surface a body height
+      // below _tightHeightFloorDp (~400dp). The branch wraps the
+      // server list + four bottom panels in a SingleChildScrollView,
+      // and without `primary: false` on that outer scroller the
+      // inner ListView.builder's default primary attachment would
+      // collide with it and throw a Flutter assertion the moment a
+      // real `Scrollable` instantiates.
+      final binding = tester.binding;
+      binding.platformDispatcher.views.first.physicalSize = const Size(
+        865,
+        320,
+      );
+      binding.platformDispatcher.views.first.devicePixelRatio = 1.0;
+      addTearDown(() {
+        binding.platformDispatcher.views.first.physicalSize = const Size(
+          1080,
+          1800,
+        );
+      });
+
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      // No exceptions surfaced — the assertion-free pump itself is
+      // the load-bearing assertion of this test. Sanity-check that
+      // the compact branch actually rendered the catalog rows
+      // (i.e. that ServerListView's inner ListView built without
+      // tripping the PrimaryScrollController collision).
+      expect(find.text('time.cloudflare.com'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

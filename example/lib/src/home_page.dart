@@ -142,7 +142,17 @@ class _ClientTab extends StatelessWidget {
           LatestResultPanel(state: state),
         ];
         if (constraints.maxHeight < _tightHeightFloorDp) {
+          // `primary: false` is load-bearing here: ServerListView's
+          // inner ListView.builder default-attaches to the ambient
+          // PrimaryScrollController, and a SingleChildScrollView in
+          // a vertical axis would too by default. Two scroll views
+          // claiming the same PrimaryScrollController throws a
+          // runtime assertion the moment a real `Scrollable` builds
+          // ('ScrollController attached to multiple scroll views').
+          // Marking the outer scroller non-primary leaves the inner
+          // ListView as the sole PrimaryScrollController consumer.
           return SingleChildScrollView(
+            primary: false,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
