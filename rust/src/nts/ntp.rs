@@ -9,6 +9,8 @@
 //! caller; this module is free of `getrandom`/`rand` dependencies and stays
 //! deterministic for unit tests.
 
+use zeroize::Zeroizing;
+
 use super::aead::{AeadError, AeadKey, TAG_LEN};
 
 /// Length of the fixed NTPv4 header preceding any extensions (RFC 5905 §7.3).
@@ -359,18 +361,56 @@ pub fn parse_authenticator_body(body: &[u8]) -> Result<AuthenticatorBody<'_>, Nt
 
 /// Inputs for [`build_client_request`]. All randomness is supplied by the
 /// caller; the api layer threads the OS RNG through in phase 3.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is implemented manually below to redact the `cookie`
+/// field. RFC 8915 §6 treats cookies as authentication material; a
+/// recovered cookie lets an attacker mint requests on the client's
+/// behalf without re-handshaking. Without the manual impl,
+/// `Zeroizing<Vec<u8>>`'s derived `Debug` would delegate to the
+/// inner `Vec<u8>` and print the raw cookie bytes verbatim through
+/// any `{:?}` site (assertion-failure messages, panic payloads,
+/// accidental log lines). Mirrors the redaction discipline already
+/// applied to [`crate::nts::ke::KeOutcome::cookies`] and
+/// [`crate::nts::cookies::CookieJar`].
+#[derive(Clone)]
 pub struct ClientRequest {
     /// Per-packet identifier (RFC 8915 §5.3); 32 octets is the canonical size.
     pub unique_id: Vec<u8>,
     /// One cookie value spent for this packet (RFC 8915 §5.4).
-    pub cookie: Vec<u8>,
+    /// Wrapped in [`Zeroizing`] so the spent cookie bytes are wiped
+    /// from RAM when this `ClientRequest` drops (after
+    /// `build_client_request` has serialised them onto the wire) —
+    /// the last residual surface in the
+    /// [`crate::nts::cookies::CookieJar`] → `QueryContext` →
+    /// `ClientRequest` → packet pipeline where a spent cookie could
+    /// linger in a freed allocation.
+    pub cookie: Zeroizing<Vec<u8>>,
     /// Number of NTS Cookie Placeholder fields requesting extra cookies in the reply.
     pub placeholder_count: usize,
     /// SIV nonce; `RECOMMENDED_NONCE_LEN` octets matches the high-level Aead trait.
     pub nonce: Vec<u8>,
     /// Client transmit timestamp (NTP 64-bit short format).
     pub transmit_timestamp: u64,
+}
+
+impl std::fmt::Debug for ClientRequest {
+    /// Manual `Debug` that redacts the `cookie` field; renders it as
+    /// `<redacted; N bytes>` so the on-wire cookie length stays
+    /// observable for diagnostics without leaking the underlying
+    /// authentication material. Non-secret fields pass through
+    /// verbatim. See the type-level rustdoc for the threat model.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientRequest")
+            .field("unique_id", &self.unique_id)
+            .field(
+                "cookie",
+                &format_args!("<redacted; {} bytes>", self.cookie.len()),
+            )
+            .field("placeholder_count", &self.placeholder_count)
+            .field("nonce", &self.nonce)
+            .field("transmit_timestamp", &self.transmit_timestamp)
+            .finish()
+    }
 }
 
 /// Build a fully-authenticated NTPv4 client request packet.

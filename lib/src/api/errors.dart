@@ -27,7 +27,7 @@
 //   back-compat. The five `trustBackend`-carrying variants made the
 //   move in 3.0.0; the three remaining single-payload variants
 //   (`invalidSpec`, `trustBackendUnavailable`, `internal`) made the
-//   move in 3.1.0 for surface uniformity.
+//   move in 4.0.0 for surface uniformity.
 // - For SemVer compatibility with pre-3.0 callers, the underscore-
 //   prefixed names (`NtsError_InvalidSpec`, ...) survive as deprecated
 //   typedef aliases at the bottom of this file. They will be removed
@@ -193,9 +193,27 @@ sealed class NtsError implements Exception {
   const factory NtsError.internal({required String message}) = NtsErrorInternal;
 }
 
-/// Variant: `spec` was rejected before any I/O happened. The check
-/// runs in the Rust API entry point (`rust/src/api/nts.rs::validate`),
-/// not in the Dart wrapper, which forwards `spec` verbatim.
+/// Variant: `spec` (or one of the integer arguments accompanying
+/// it) was rejected before any I/O happened. Surfaced from two
+/// layers:
+///
+/// - **Dart wrapper, pre-FFI dispatch (new in 4.0.0).** The four
+///   wrapper entry points ([ntsQuery], [ntsWarmCookies],
+///   [NtsClient.query], [NtsClient.warmCookies]) reject `spec.port`
+///   outside `1..65535`, and `timeoutMs` / `dnsConcurrencyCap`
+///   outside `1..0xFFFFFFFF`, with a wrapper-authored message
+///   before any FFI dispatch happens. Values that would otherwise
+///   escape as `RangeError` from the FRB encoder land here as
+///   `NtsError.invalidSpec` instead, keeping the wrapper's
+///   "single error surface" contract honest.
+/// - **Rust API entry point (`rust/src/api/nts.rs::validate`).**
+///   The Rust-side validator still catches the residual shapes
+///   the wrapper does not check (e.g. empty `spec.host`) and
+///   serves as the load-bearing guard for callers that bypass the
+///   wrapper (direct Rust API consumers, in-tree integration
+///   tests). Its `port` and `timeout` checks remain in place as
+///   defence-in-depth, even though the wrapper now front-loads
+///   them.
 final class NtsErrorInvalidSpec extends NtsError {
   /// Reason the spec was rejected.
   final String message;

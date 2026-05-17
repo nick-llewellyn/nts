@@ -1136,6 +1136,80 @@ mod streaming_read {
     }
 }
 
+mod alpn_verification {
+    use super::*;
+
+    /// Pins the post-handshake ALPN check (RFC 8915 §4): when the
+    /// server selects the `ntske/1` protocol identifier we advertised
+    /// in `alpn_protocols`, [`check_negotiated_alpn`] must accept.
+    /// Mirrors `next_chunk_within_budget`'s testing strategy: factor
+    /// the decision out of the I/O-bound caller so a unit test can
+    /// exercise the guard without standing up a TLS handshake.
+    #[test]
+    fn check_negotiated_alpn_accepts_ntske_one() {
+        check_negotiated_alpn(Some(b"ntske/1")).expect("`ntske/1` selection must be accepted");
+    }
+
+    /// `rustls` raises `Error::NoApplicationProtocol` during the
+    /// handshake when the server respects ALPN but has no protocol in
+    /// common with our offer; this test pins the *other* shape — a
+    /// server that completes the TLS handshake without advertising any
+    /// ALPN extension at all. `check_negotiated_alpn(None)` must trip
+    /// [`KeError::AlpnMismatch`] with `negotiated: None` so the
+    /// diagnostic distinguishes "no ALPN at all" from "wrong ALPN".
+    #[test]
+    fn check_negotiated_alpn_rejects_missing_extension() {
+        match check_negotiated_alpn(None) {
+            Err(KeError::AlpnMismatch { negotiated: None }) => {}
+            other => panic!("expected AlpnMismatch {{ negotiated: None }}, got {other:?}",),
+        }
+    }
+
+    /// Pins the wrong-protocol shape: a server that completes the TLS
+    /// handshake having selected an ALPN value other than `ntske/1`
+    /// (e.g. `h2`, because the server treated our `[ntske/1]` offer
+    /// as advisory and negotiated its own preferred protocol).
+    /// `check_negotiated_alpn(Some(other))` must trip
+    /// [`KeError::AlpnMismatch`] and surface the actual server
+    /// selection in `negotiated` so an operator can attribute the
+    /// failure without parsing free-form strings.
+    #[test]
+    fn check_negotiated_alpn_rejects_wrong_protocol() {
+        match check_negotiated_alpn(Some(b"h2")) {
+            Err(KeError::AlpnMismatch {
+                negotiated: Some(bytes),
+            }) => assert_eq!(
+                bytes, b"h2",
+                "negotiated payload must carry the server's actual selection verbatim",
+            ),
+            other => {
+                panic!("expected AlpnMismatch {{ negotiated: Some(b\"h2\") }}, got {other:?}",)
+            }
+        }
+    }
+
+    /// Boundary case: empty ALPN payload. A misbehaving server could
+    /// in principle complete the handshake having selected an empty
+    /// byte string; the check must still reject (since the empty
+    /// string is not `ntske/1`) and the diagnostic must carry the
+    /// empty payload verbatim rather than collapsing onto the `None`
+    /// arm — the two are different on-the-wire shapes (no extension
+    /// vs extension carrying a zero-length protocol) and we want the
+    /// surfaced error to preserve that distinction.
+    #[test]
+    fn check_negotiated_alpn_rejects_empty_payload_distinctly_from_missing() {
+        match check_negotiated_alpn(Some(b"")) {
+            Err(KeError::AlpnMismatch {
+                negotiated: Some(bytes),
+            }) => assert!(
+                bytes.is_empty(),
+                "empty-payload selection must survive as `Some(empty)`, not collapse to None",
+            ),
+            other => panic!("expected AlpnMismatch {{ negotiated: Some(empty) }}, got {other:?}",),
+        }
+    }
+}
+
 mod ke_outcome {
     use super::*;
 
@@ -1234,6 +1308,58 @@ mod ke_outcome {
                 "byte token {hex_token:?} from test fixture leaked into Debug output: {rendered}",
             );
         }
+        assert!(
+            rendered.contains("3 cookies"),
+            "redacted cookies field must surface the count for diagnostics: {rendered}",
+        );
+        assert!(
+            rendered.contains("ntp.example.test"),
+            "non-secret host field must remain visible: {rendered}",
+        );
+    }
+}
+
+mod ke_outcome_partial {
+    use super::*;
+
+    /// Pins the manual `Debug` redaction on [`KeOutcomePartial`].
+    /// Although the type is `pub(crate)` so its surface is
+    /// internal, any `{:?}` site reached during a refactor (panic
+    /// backtrace, `dbg!`, internal error formatting in a future
+    /// `From<KeError>` chain) would leak the cookies a
+    /// `#[derive(Debug)]` would emit verbatim. The cookies in this
+    /// partial outcome are the same RFC 8915 §6 authentication
+    /// material the post-handshake [`KeOutcome`] holds, so the
+    /// redaction discipline matches: see the sibling
+    /// `ke_outcome_debug_redacts_exporter_keys_and_cookies` test
+    /// for the `KeOutcome` mirror.
+    ///
+    /// The runtime constructor stays inside the `ke` module so the
+    /// `pub(crate)` `KeOutcomePartial` (and its private fields) are
+    /// reachable from this test file. The sentinel cookie payload
+    /// `0xBB` is chosen so the hex token `0xbb` that
+    /// `Vec<u8>::Debug` would emit on a regression cannot collide
+    /// with any decimal field rendering, making the negative
+    /// assertion unambiguous.
+    #[test]
+    fn ke_outcome_partial_debug_redacts_cookies() {
+        let partial = KeOutcomePartial {
+            ntpv4_host: "ntp.example.test".to_owned(),
+            ntpv4_port: 4123,
+            aead_id: 15,
+            cookies: vec![vec![0xBBu8; 64]; 3],
+            warnings: Vec::new(),
+        };
+        let rendered = format!("{partial:?}");
+        assert_eq!(
+            rendered.matches("<redacted").count(),
+            1,
+            "expected exactly one redacted marker (cookies): {rendered}",
+        );
+        assert!(
+            !rendered.contains("0xbb"),
+            "cookie byte token leaked into Debug output: {rendered}",
+        );
         assert!(
             rendered.contains("3 cookies"),
             "redacted cookies field must surface the count for diagnostics: {rendered}",

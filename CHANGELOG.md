@@ -1,6 +1,129 @@
 # Changelog
 
-## Unreleased
+## 4.0.0
+
+This major release consolidates the post-3.0 work that landed on
+`main` between the 3.0 cut and this tag. It is a **major version
+bump** because several of the items below break the public Dart or
+Rust API surface, and one (the strict per-chain `PlatformOnly`
+semantics on Android) is a deliberate behaviour change for a
+caller-opted-in mode.
+
+The headline shape changes:
+
+1. **`NtsError` surface uniformity** — the three remaining
+   single-payload `NtsError` variants (`invalidSpec`,
+   `trustBackendUnavailable`, `internal`) move from positional to
+   named-parameter constructors so every `String`-payloaded
+   variant binds to the same name (`message`) and every variant
+   with a non-`trustBackend` payload is constructed with named
+   arguments. The five `network` / `keProtocol` / `ntpProtocol` /
+   `authentication` / `timeout` variants already moved in 3.0.0;
+   this completes the sweep.
+
+2. **Wrapper-side integer-range validation** — the four async
+   wrapper entry points and `NtsClient.invalidate` now reject
+   out-of-range `port` / `timeoutMs` / `dnsConcurrencyCap`
+   arguments as `NtsError.invalidSpec` before any FFI dispatch,
+   closing the gap where a `RangeError` thrown by the FRB encoder
+   used to escape the wrapper's "single error surface" contract.
+   `kDefaultDnsConcurrencyCap` is bumped from the `0` sentinel to
+   the actual numeric default (`4`) so consumers reading the
+   constant see what the package actually applies.
+
+3. **Strict per-chain `TrustMode::PlatformOnly` on Android** — the
+   Android-side `HybridVerifier` no longer silently retries
+   against the `webpki-roots` static bundle for the two curated
+   fallback-eligible failure shapes (`Revoked` from
+   missing-OCSP-AIA chains; `General("failed to call native
+   verifier: …")` from R8-stripped JNI glue) when the caller is
+   running under `TrustMode::PlatformOnly`. The platform
+   verifier's error propagates verbatim. `PlatformWithFallback`
+   (the historic default) is unchanged.
+
+4. **NTS-KE streaming-read budget hardened to 16 KiB** — the
+   streaming layer in `rust/src/nts/ke.rs::read_to_end_capped`
+   now refuses to accumulate more than 16 KiB per handshake (down
+   from the 64 KiB codec ceiling), closing a memory-pressure
+   vector where a malicious or buggy server could force ~64 KiB
+   of heap allocation per failed handshake. The codec-layer
+   ceiling at 64 KiB stays in place as the RFC 8915 §4.1.4 upper
+   bound for valid messages.
+
+5. **MSRV pinned at Rust 1.87** — the actual functional floor
+   (transitive `security-framework 3.7.0` requires edition2024
+   plus `usize::is_multiple_of` from 1.87) is now declared in
+   `rust/Cargo.toml` and matched in `rust/clippy.toml` so
+   downstream consumers see an accurate `rust-version` without
+   over-constraining their toolchain pin.
+
+The `nts_rust` crate is bumped from `0.4.0` to `0.5.0` to reflect
+items 3, 4, and 5 (the on-the-wire NTS-KE / NTPv4 framing is
+unchanged; the crate bump tracks the Rust-side API shape change
+in `KeError` and the new streaming-read budget). The Dart-facing
+FRB surface gains no new public types; the surface changes are
+the constructor reshape in item 1 and the new rejected-input
+paths in item 2.
+
+Internal-only improvements that ride along: `nts_warm_cookies`
+now collapses concurrent forced refreshes through the same
+singleflight `inflight` registry that `nts_query` already used,
+the example app is reorganised across two tabs ("Client" / "Log")
+with a compacted `ActionPanel` and a new single-entry
+`LatestResultPanel` summary card to eliminate `RenderFlex`
+overflows on landscape phones / tablets, the
+`formatTrustBackend` helper renames the
+`platformWithHybridFallback` rendering to `webpki-fallback` to
+match the authentication mechanism, and the Trust-status panel
+drops the singleton-snapshot row that was structurally destined
+to remain at sentinel values during every demo run.
+
+Seven hygiene fixes from two rounds of external code review of
+the release branch land on top — six code-level fixes documented
+in the `### Security` subsection below, and one docs-level fix
+(README "Security considerations") in the `### Documentation`
+subsection. The six code-level fixes:
+
+1. cookie bytes zeroize on every `CookieJar` *in-jar* eviction
+   path — capacity-overflow eviction in `put`, authentication-
+   failure clears in `clear_host`, and a new `impl Drop for
+   CookieJar` (matching the discipline already applied to AEAD
+   key material). Together with item 6 below this closes both
+   in-jar and post-take residual surfaces;
+2. `CookieJar`'s `Debug` impl renders per-host counts only
+   (matching the redacted `Debug` on `KeOutcome`);
+3. `perform_handshake` verifies that the post-handshake
+   negotiated ALPN matches `ntske/1` (the value
+   `build_tls_config` already advertised; RFC 8915 §4 requires
+   it), via a new `KeError::AlpnMismatch` variant;
+4. every `.lock().expect(…)` site in `api::nts` now routes
+   through a private `lock_recover` helper that recovers from
+   poisoning instead of panicking, so a single panic on any
+   thread holding one of the module's mutexes cannot turn into
+   a permanent crash-on-use mode for the client across the FRB
+   boundary;
+5. `KeOutcomePartial`'s `Debug` impl renders cookies as a count
+   only, mirroring the discipline already applied to
+   `KeOutcome`;
+6. spent cookies zeroize end-to-end through the
+   `CookieJar::take` → `QueryContext.cookie` →
+   `ClientRequest.cookie` → outbound packet pipeline via
+   `Zeroizing<Vec<u8>>` wrapping at every intermediate holder
+   — the popped cookie is *not* wiped at jar-pop time
+   (`build_client_request` has not yet serialised it onto the
+   wire) but does wipe on drop of the `Zeroizing` wrapper once
+   the in-flight NTPv4 exchange completes. `ClientRequest` also
+   gains a manual redacted `Debug` that prints the cookie field
+   as `<redacted; N bytes>`.
+
+Plus the docs-level fix (`### Documentation` subsection below):
+README "Security considerations" calls out the SSRF / internal-
+network-reachability surface inherent in a caller-supplied-host
+network library.
+
+All seven are internal-only — no public Dart-facing surface
+change; see the `### Security` subsection below for the full
+per-finding writeup.
 
 ### Changed — example app
 
@@ -67,29 +190,6 @@
   `group('formatTrustStatus', …)` block in `nts_format_test.dart`.
   All were dead after the singleton-snapshot row was removed.
 
-## 3.1.0
-
-Surface-uniformity follow-up to `3.0.0`, plus the three review
-findings raised against the merged 3.1.0 branch before the tag.
-Promotes the three remaining single-payload `NtsError` variants
-(`invalidSpec`, `trustBackendUnavailable`, `internal`) to the same
-named-parameter constructor shape that `network`, `keProtocol`,
-`ntpProtocol`, `authentication`, and `timeout` adopted in `3.0.0`;
-every `String`-payloaded variant now binds to the same name
-(`message`) and every variant with a non-`trustBackend` payload is
-constructed with named arguments. The wrapper now validates the
-three integer arguments (`spec.port`, `timeoutMs`,
-`dnsConcurrencyCap`) against the FFI encoding range before any
-dispatch and rejects out-of-range values as
-`NtsError.invalidSpec`, closing the gap where a `RangeError`
-thrown by the FRB encoder used to escape the wrapper's "single
-error surface" contract. `kDefaultDnsConcurrencyCap` is bumped
-from the `0` sentinel to the actual numeric default (`4`) so
-consumers reading the constant value see what the package
-actually applies. README and dartdoc are refreshed in lockstep.
-No Rust source touched; the `nts_rust` crate stays at `0.4.0` and
-the on-the-wire NTS-KE / NTPv4 framing is unchanged.
-
 ### Changed — `NtsError` variant constructors
 
 - **BREAKING** — the three previously single-positional `NtsError`
@@ -102,7 +202,7 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
     `NtsError.internal(message: x)`
 
   Same shape change `3.0.0` made for the other five variants;
-  applied here for surface uniformity. The pre-3.1 single-positional
+  applied here for surface uniformity. The pre-4.0 single-positional
   shape survives as a `@Deprecated` `field0` getter on each variant
   subclass so 2.x and 3.0.x callers that *read* the payload (in
   pattern-match destructurings or direct field reads) keep
@@ -113,7 +213,7 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   `NtsError.internal(message)` render exactly as in 3.0.x.
 - The five 3.0.0 named-parameter variants (`network`, `keProtocol`,
   `ntpProtocol`, `authentication`, `timeout`) are unchanged in
-  3.1.0; their `field0` getters retain their existing deprecation.
+  4.0.0; their `field0` getters retain their existing deprecation.
 
 ### Changed — wrapper now validates integer ranges before FFI dispatch
 
@@ -144,13 +244,13 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
 
   Strictly additive for callers who already passed in-range values:
   no behavioural change. Callers who passed literal `0` for
-  `timeoutMs` or `dnsConcurrencyCap` to ride the pre-3.1 sentinel
+  `timeoutMs` or `dnsConcurrencyCap` to ride the pre-4.0 sentinel
   now see `NtsError.invalidSpec` on `await` and must switch to the
   named constants — see the migration section below.
 
 - **BREAKING (additive)** — `NtsClient.invalidate` now applies the
   same `port ∈ 1..65535` validation as the four async wrappers
-  above. The pre-3.1 sync sister bypassed `_validateRanges` and
+  above. The pre-4.0 sync sister bypassed `_validateRanges` and
   forwarded `spec.port` directly into the FRB `u16` encoder, so
   out-of-range ports (negative, or `>65535`) escaped the documented
   `NtsError`-only contract as `RangeError` from the FFI bridge.
@@ -166,7 +266,7 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
 ### Changed — `kDefaultDnsConcurrencyCap` exposes the actual numeric default
 
 - **BREAKING (constant-value change)** — `kDefaultDnsConcurrencyCap`
-  changes from `0` (the pre-3.1 sentinel that delegated to the
+  changes from `0` (the pre-4.0 sentinel that delegated to the
   Rust-side `DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`) to `4` (the actual
   numeric value the Rust side substituted). Callers who omit the
   parameter or who reference the constant by name see no behavioural
@@ -195,7 +295,7 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   regardless of `TrustMode`, and the only signal a `PlatformOnly`
   caller had that the static bundle had been consulted was a
   post-hoc `KeOutcome::trust_backend == PlatformWithHybridFallback`
-  on the resulting sample. As of 3.1.0 the `HybridVerifier` is
+  on the resulting sample. As of 4.0.0 the `HybridVerifier` is
   constructed with the `KeTrustMode` and gates both arms on
   `PlatformWithFallback`; in `PlatformOnly` mode the platform
   verifier's error propagates verbatim and `webpki-roots` is never
@@ -216,13 +316,71 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
     and there is no opt-out behaviour change for callers who never
     constructed a `PlatformOnly` client.
 
-  The pre-3.1 dartdoc on `TrustMode::PlatformOnly` framed the
+  The pre-4.0 dartdoc on `TrustMode::PlatformOnly` framed the
   per-chain limitation as inherent ("`PlatformOnly` therefore means
   'no silent build-time downgrade', not 'the public-CA bundle is
   unreachable'"). The strict semantics this release ships replace
   that disclaimer with the contract Android callers actually want.
 
   Resolves the bd-tracked finding `nts-2lh`.
+
+### Changed — NTS-KE streaming read budget capped at 16 KiB
+
+- **BREAKING (Rust-side error variant)** — `KeError::MessageTooLarge`
+  is replaced by `KeError::ResponseTooLarge { received, cap }`.
+  The new variant surfaces the would-be post-append accumulator
+  length so an operator inspecting a handshake failure can see
+  how far over the streaming budget the offending read pushed the
+  accumulator. The variant is internal to `KeError`; the
+  `From<KeError> for NtsError` mapping already routes unmatched
+  variants through `NtsError::KeProtocol { message, .. }`, so the
+  new shape surfaces to Dart callers with the diagnostic preserved
+  verbatim and **no change to the public Dart-facing surface**.
+- **Behaviour change** — the streaming layer in
+  `rust/src/nts/ke.rs::read_to_end_capped` now caps the read
+  accumulator at the new `NTS_KE_READ_BUDGET = 16_384` (16 KiB)
+  rather than at the 64 KiB codec ceiling. A malicious or buggy
+  NTS-KE server can no longer force ~64 KiB of heap allocation
+  per failed handshake; 64 KiB × N concurrent handshakes was a
+  memory-pressure vector on memory-constrained mobile processes.
+  Comparable Rust NTS implementations cap at 4 KiB
+  (`ntpd-rs::ntp-proto::nts::messages::MAX_MESSAGE_SIZE`); the
+  16 KiB pick leaves ample slack for an NTS-KE server that ships
+  an unusually large but otherwise valid response (multiple
+  cookies, server-name overrides) without re-exposing the
+  original 64 KiB vector.
+- The cap decision is factored out of the streaming read loop
+  into a pure helper `next_chunk_within_budget(buf_len, n, cap)`
+  so the streaming-budget guard can be exercised by unit tests
+  without standing up a TLS stream. Three regression tests pin
+  the change: the strict inequality between streaming budget and
+  codec ceiling, the exact-fit / overshoot boundary, and a
+  chunk-stride simulation that drives a 100 KB body through the
+  same 4 KiB chunks the live read loop uses.
+- The 64 KiB codec ceiling (`MAX_MESSAGE_BYTES` in
+  `rust/src/nts/records.rs`) is unchanged — it stays in place as
+  the RFC 8915 §4.1.4 upper bound for valid messages, reachable
+  from non-streaming entry points like tests and file-based
+  inputs.
+
+  Resolves the bd-tracked finding `nts-dsi`.
+
+### Changed — MSRV pinned at Rust 1.87
+
+- **BREAKING (toolchain)** — `rust/Cargo.toml` now declares
+  `rust-version = "1.87"`. The actual functional floor is set by
+  the transitive `security-framework 3.7.0` (pulled in by
+  `rustls-platform-verifier`, which requires edition2024) plus
+  `usize::is_multiple_of` (stable in 1.87, used in `nts::ntp` and
+  `nts::records` for the extension-field length validators). The
+  active toolchain pin in `rust-toolchain.toml` is higher
+  (currently 1.92.0); the matching `msrv` entry in
+  `rust/clippy.toml` keeps clippy's msrv-aware suggestions
+  accurate.
+- Consumers building the crate as a Rust dependency need at
+  minimum a 1.87 toolchain. Flutter consumers using the package
+  via the standard build flow are unaffected because the bundled
+  toolchain pin already exceeds 1.87.
 
 ### Changed — `nts_warm_cookies` collapses concurrent forced refreshes via singleflight
 
@@ -237,10 +395,10 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
 - **Internal behaviour change** — the implementation now routes
   through `SessionTable::warm_cookies`, which shares the
   singleflight `inflight` registry with the cache-aware
-  `SessionTable::checkout` machinery used by `nts_query`. Pre-3.1
+  `SessionTable::checkout` machinery used by `nts_query`. Pre-4.0
   `nts_warm_cookies` called `establish_session` directly, so N
   concurrent `nts_warm_cookies` calls against the same `host:port`
-  produced N parallel KE handshakes. As of 3.1.0:
+  produced N parallel KE handshakes. As of 4.0.0:
   - N concurrent `nts_warm_cookies` against the same `host:port`
     collapse onto exactly one KE handshake. The first arrival
     becomes the singleflight leader, runs the handshake without
@@ -280,6 +438,144 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
     variant and payload, so waiters do not silently retry against a
     server that just rejected the leader.
 
+### Security
+
+Six code-level hygiene fixes raised by two rounds of external
+code review of the release branch land here; the seventh review
+finding (README "Security considerations" / SSRF surface
+call-out) is docs-only and lives in the `### Documentation`
+subsection below. None changes the public Dart-facing surface
+(no `NtsError` variant added at the Dart layer; the new internal
+`KeError::AlpnMismatch` flows through the existing catch-all
+mapping to `NtsError.keProtocol`). All six are belt-and-braces
+in the same direction the package already takes — AEAD keys
+already zeroize on drop and `KeOutcome` already has a redacted
+`Debug` impl; these extend the same discipline end-to-end
+across cookies, add a spec-correctness guard on the TLS
+handshake, and turn the Rust API layer's `.lock().expect(…)`
+sites into recoverable operations so a single panic can no
+longer permanently crash an `NtsClient` across the FRB boundary.
+
+- **Cookie bytes are now zeroized on every *in-jar* eviction
+  path.** The per-host FIFO store in `rust/src/nts/cookies.rs`
+  previously held cookies as plain `Vec<u8>` and dropped them
+  with `pop_front` / `VecDeque::clear` on overflow eviction,
+  `clear_host`, and `Drop`. None of those paths wiped the
+  backing allocation, so a process-memory scrape after eviction
+  could in principle recover the cookie bytes. Cookies are NTS
+  authentication material (RFC 8915 §6: "use at most once" /
+  "keep at most 8 unused per server"), so the discipline
+  already applied to AEAD key material in
+  `rust/src/nts/aead.rs` (via `ZeroizeOnDrop`) now extends to
+  the cookie store: capacity-overflow eviction in
+  `CookieJar::put`, authentication-failure clears in
+  `CookieJar::clear_host`, and a new `impl Drop for CookieJar`
+  all call `Vec::zeroize` before the backing allocation is
+  released. The `take` path is *not* wiped at jar-pop time —
+  that path hands the cookie to the in-flight NTPv4 exchange
+  that has yet to spend it, so wiping at the pop site would
+  defeat the consumer. The complementary fix below in the
+  end-to-end-cookie-zeroize entry extends the discipline
+  across the take path itself: the popped cookie now rides
+  inside a `Zeroizing<Vec<u8>>` wrapper from the jar boundary
+  to the wire and wipes on drop once `build_client_request`
+  has serialised the bytes into the outbound packet, so both
+  the in-jar and post-take paths are covered.
+
+- **`CookieJar`'s `Debug` impl no longer prints cookie bytes.**
+  The struct's previous `#[derive(Debug, Clone)]` rendered the
+  full per-host `Vec<Vec<u8>>` on any `{:?}` formatting site.
+  Cookies are authentication material; an accidental panic
+  backtrace, log macro, or diagnostic format could leak them.
+  `Debug` is now hand-rolled to print per-host *counts only*,
+  mirroring the redacted `Debug` already applied to `KeOutcome`.
+  Internal change; no public-API impact.
+
+- **NTS-KE now verifies the negotiated TLS ALPN matches
+  `ntske/1`.** `build_tls_config` already advertised
+  `alpn_protocols = [b"ntske/1"]` per RFC 8915 §4, but
+  `perform_handshake` did not call `ClientConnection::alpn_protocol()`
+  after the handshake completed. A TLS 1.3 server that completed
+  the handshake without honouring our ALPN selection (either
+  omitting the ALPN extension entirely or selecting a different
+  protocol) would have its payload flow into `read_to_end_capped`
+  and surface as a less-specific NTS-KE record-parse error.
+  After this release, the post-handshake guard explicitly checks
+  `alpn_protocol() == Some(b"ntske/1")` and returns a new
+  `KeError::AlpnMismatch { negotiated: Option<Vec<u8>> }`
+  otherwise (distinct from `rustls::Error::NoApplicationProtocol`,
+  which fires *during* the handshake when ALPN is mutually
+  required by the server). The new variant surfaces to Dart via
+  the catch-all `From<KeError> for NtsError` mapping as
+  `NtsError.keProtocol`; no Dart-side surface change. Three
+  regression tests pin the helper at the variant level (accept
+  `Some(b"ntske/1")`, reject `None`, reject `Some(b"h2")`,
+  preserve `Some(empty)` as distinct from `None`).
+
+- **`api::nts` mutex sites now recover from poisoning instead of
+  panicking.** Every `Mutex::lock` call in `rust/src/api/nts.rs`
+  (the `SessionTable.map` and `SessionTable.inflight` caches,
+  and the per-key `HandshakeSlot.result` singleflight slot) used
+  to call `.expect("…")` on the returned `LockResult`. If any
+  thread panicked while holding one of those locks the mutex
+  became poisoned and every subsequent FRB-boundary call from
+  any thread would deterministically panic too — turning one
+  recoverable failure into a permanent "this `NtsClient` is dead
+  forever" mode across the Dart bridge. A new private
+  `lock_recover(&mutex)` helper returns the inner guard via
+  `PoisonError::into_inner` regardless of the poison flag, and
+  every `.lock().expect(…)` site has been swept to use it. The
+  caches and singleflight registry are tolerant of mid-update
+  panics by construction (caches: at worst a stale entry that
+  the next eviction reaps; singleflight: `LeaderGuard::drop`
+  already publishes an `Internal` error to waiters on the
+  leader-aborted path), so unpoisoned access is safe. Two
+  regression tests pin the recovery semantics: one asserts a
+  poisoned-then-recovered mutex returns the inner value, and
+  one asserts mutations through `lock_recover` survive across
+  recovery while plain `Mutex::lock` still reports the poison
+  flag (recovery is opt-in per call site, not a global unpoison).
+
+- **`KeOutcomePartial`'s `Debug` impl no longer prints cookie
+  bytes.** The internal partial-outcome struct returned by
+  `validate_response` previously had `#[derive(Debug)]` over a
+  `cookies: Vec<Vec<u8>>` field. Although `pub(crate)` so the
+  type does not surface beyond this crate, any `{:?}` site
+  reached during a refactor (panic backtrace, `dbg!`, internal
+  error-formatting chain that ever touches the partial outcome)
+  would leak the cookies the post-handshake `KeOutcome` already
+  redacts. `Debug` is now hand-rolled to render `cookies` as
+  `<redacted; N cookies>` — same shape as the `KeOutcome`
+  manual impl. A regression test mirrors the existing
+  `ke_outcome_debug_redacts_exporter_keys_and_cookies` shape,
+  pinning the marker count and the absence of cookie byte
+  tokens in the rendered output.
+
+- **Spent cookies are now zeroized end-to-end through the
+  `CookieJar` → outbound packet pipeline.** The 4.0.0 first
+  security pass added zeroization to the `CookieJar` eviction
+  paths (`put` overflow, `clear_host`, `Drop`), but the "happy
+  path" `take` returned a plain `Vec<u8>` that then moved
+  through `QueryContext.cookie: Vec<u8>` → `ClientRequest.cookie:
+  Vec<u8>` → `build_client_request` → outbound packet, with no
+  intermediate allocation wiped after the packet was built and
+  sent. `CookieJar::take` now returns `Option<Zeroizing<Vec<u8>>>`
+  so the spent bytes ride inside the same `Zeroizing` wrapper
+  from the jar boundary all the way to the wire; `QueryContext.cookie`
+  and `ClientRequest.cookie` were both retyped to
+  `Zeroizing<Vec<u8>>` (same shape as `KeOutcome.c2s_key` /
+  `s2c_key` already use), so each intermediate holder wipes the
+  cookie bytes on `Drop`. `ClientRequest` additionally drops its
+  `#[derive(Debug, Clone)]` for a manual `Debug` impl that
+  redacts the cookie field as `<redacted; N bytes>` — closing
+  the cookie-Debug-leak path one step further along the
+  pipeline. Two regression tests pin the change: a compile-time
+  `assert_zeroizing_vec` helper accepts only
+  `&Zeroizing<Vec<u8>>` on `QueryContext.cookie` and
+  `ClientRequest.cookie`, and a runtime test asserts
+  `format!("{req:?}")` does not surface cookie byte tokens for a
+  sentinel-payloaded `ClientRequest`.
+
 ### Documentation
 
 - README's "API summary" table now includes:
@@ -314,6 +610,66 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   `trustBackend` field on `NtsTimeSample` / `NtsWarmCookiesOutcome`
   and the `defaultClientBackend` field on `NtsTrustStatus` to a
   concrete enum without leaving the README.
+- New `## Security considerations` section in `README.md` between
+  `Production Considerations` and the `API summary`. Documents the
+  inherent SSRF surface a "take a caller-supplied hostname, do
+  DNS / TCP / UDP against it" library carries — the package
+  cannot constrain *which* hosts a caller is allowed to reach,
+  so call sites that accept hostnames from untrusted input must
+  apply allowlists / private-range rejection / port gating
+  themselves. Cross-links the bounded DNS pool to make the
+  "amplification is bounded, destination is not" distinction
+  explicit. Surfaces a recommendation raised by an external
+  code review of the release branch.
+- Android `PlatformInit.kt` log messages and KDoc no longer claim
+  unconditional fallback to `webpki-roots` when `System.loadLibrary`
+  or `nativeInit` fails. With the 4.0.0 strict per-chain
+  `TrustMode.platformOnly` semantics in place, that fallback only
+  applies to `TrustMode.platformWithFallback` callers; `platformOnly`
+  callers see the same failure surface as
+  `NtsError.trustBackendUnavailable` at handshake time. The
+  `UnsatisfiedLinkError` log, the `nativeInit`-returned-false log,
+  and the `init` KDoc all now name both branches. Surfaces a
+  platform-glue review observation against the release branch.
+- iOS `os_log` subsystem renamed from `com.nts.example` to
+  `com.nllewellyn.nts`. The previous string read as a placeholder
+  that escaped from an early draft and its docstring falsely
+  claimed it tracked the host application's reverse-DNS bundle
+  convention. The new identifier is library-owned (a stable handle
+  consumers can pin Console.app filters against across `nts`
+  versions) and matches the Android plugin package
+  (`com.nllewellyn.nts.PlatformInit`) so the same filter string
+  works on both platforms. Updated sites: `rust/src/ios_init.rs`
+  (`SUBSYSTEM` constant + module-level docstring),
+  `rust/src/api/simple.rs` (`init_app` docstring),
+  `rust/Cargo.toml` (Console.app filter comment),
+  `example/pubspec.yaml` (verbose-logs guidance comment), and
+  `DEVELOPMENT.md` (verbose-logs section). Hosts that had pinned
+  a Console.app filter against the previous string need to update
+  it to `com.nllewellyn.nts`; this is the only externally visible
+  consequence and is documented here so users investigating a
+  silent filter break after the 4.0.0 upgrade find it.
+- README's `## Security considerations` section gains a
+  `### Non-Flutter Dart callers must pass externalLibrary
+  explicitly` subsection. Documents the relative-`ioDirectory`
+  library-hijack surface in
+  `RustLib.kDefaultExternalLibraryLoaderConfig`
+  (`ioDirectory: 'rust/target/release/'`): inside a Flutter host
+  the Native Assets pipeline supplies a controlled absolute load
+  path before that default ever runs, but a non-Flutter Dart
+  caller (`dart run` CLI, Dart server runtime, integration-test
+  harness) that calls `RustLib.init()` without an `externalLibrary`
+  argument while running from an attacker-influenced working
+  directory will load whatever `rust/target/release/libnts_rust.*`
+  has been planted there. The bundled
+  `example/bin/nts_cli.dart` already follows the recommended
+  pattern (auto-locate to an absolute path, then
+  `ExternalLibrary.open(resolved)`) and the new subsection
+  cross-references it. The hijack is independent of NTS itself —
+  `RustLib.init()` resolves before any TLS / NTS code runs — but
+  the package is the vehicle, so the documentation surface is the
+  appropriate mitigation layer. Surfaces a platform-glue review
+  observation against the release branch.
 
 ### Migration from 3.0.x
 
@@ -328,7 +684,7 @@ const NtsError.invalidSpec('host is empty')
 const NtsError.trustBackendUnavailable('platform CA bundle missing')
 const NtsError.internal('unreachable')
 
-// 3.1.0
+// 4.0.0
 const NtsError.invalidSpec(message: 'host is empty')
 const NtsError.trustBackendUnavailable(message: 'platform CA bundle missing')
 const NtsError.internal(message: 'unreachable')
@@ -347,7 +703,7 @@ keeps working because `field0` survives as a `@Deprecated` getter
 alias, so this is optional, not required:
 
 ```dart
-// Both compile in 3.1.0; the new form drops the deprecation
+// Both compile in 4.0.0; the new form drops the deprecation
 // warning and matches the binder name used by every other
 // `String`-payloaded variant in the same switch.
 final detail = switch (err) {
@@ -374,10 +730,10 @@ await ntsQuery(
   dnsConcurrencyCap: 0,    // same
 );
 
-// 3.1.0 — option A: omit, inherit the constant default
+// 4.0.0 — option A: omit, inherit the constant default
 await ntsQuery(spec: spec);
 
-// 3.1.0 — option B: name the constant explicitly
+// 4.0.0 — option B: name the constant explicitly
 await ntsQuery(
   spec: spec,
   timeoutMs: kDefaultTimeoutMs,
@@ -393,12 +749,18 @@ failure mode for code that *meant* something else by `0`.
 ### Out of scope
 
 - The deprecated `NtsError_*` underscore-prefixed typedefs (e.g.
-  `NtsError_InvalidSpec`) are unchanged in 3.1.0; their removal
-  remains a 4.0.0 sweep.
-- The `@Deprecated` `field0` getter aliases on every variant
-  remain too — they are the read-side back-compat for 2.x / 3.0.x
-  callers and will be removed in the same 4.0.0 sweep that drops
-  the underscore typedefs.
+  `NtsError_InvalidSpec`) and the `@Deprecated` `field0` getter
+  aliases on every variant survive into 4.0.0. They remain the
+  read-side back-compat for 2.x / 3.0.x callers and were
+  originally slated for removal in this same 4.0.0 sweep, but
+  the named-constructor migration (item 1 in the framing above),
+  the strict-`PlatformOnly` behaviour change (item 3), and the
+  16 KiB streaming budget (item 4) are already the load-bearing
+  breaking changes for this release. Folding the typedef +
+  getter removal in would not change the migration surface for
+  any caller who hadn't already updated for those items, so the
+  cleanup defers to a follow-up release. The existing
+  deprecation warnings stay in place.
 
 ## 3.0.0
 

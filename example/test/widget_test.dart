@@ -344,93 +344,88 @@ void main() {
     );
   });
 
-  testWidgets(
-    'LatestResultPanel shows the empty-state copy before any query '
-    'runs, then surfaces the most recent log entry afterwards',
-    (tester) async {
-      final h = await _bootHarness();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: HomePage(state: h.state, controller: h.controller),
-        ),
-      );
-      await tester.pump();
+  testWidgets('LatestResultPanel shows the empty-state copy before any query '
+      'runs, then surfaces the most recent log entry afterwards', (
+    tester,
+  ) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
 
-      // Empty state: card header + the empty-state hint that names
-      // the verb on the action button.
-      expect(find.text('Latest result'), findsOneWidget);
-      expect(
-        find.textContaining('No queries yet'),
-        findsOneWidget,
-      );
+    // Empty state: card header + the empty-state hint that names
+    // the verb on the action button.
+    expect(find.text('Latest result'), findsOneWidget);
+    expect(find.textContaining('No queries yet'), findsOneWidget);
 
-      // Fire a query through the mock; the panel should swap to a
-      // rendered span tree built from the latest log entry. The
-      // span tree carries the `OK ` success marker emitted by
-      // `formatQuerySuccess`, so we use a substring assertion
-      // rather than pinning the full timestamped line.
-      await tester.tap(find.text('NTS Query'));
-      await tester.pump(const Duration(milliseconds: 200));
-      await tester.pump();
-      expect(
-        find.textContaining('No queries yet'),
-        findsNothing,
-        reason: 'empty-state copy should disappear after first entry',
-      );
-      expect(
-        find.textContaining('OK '),
-        findsAtLeastNWidgets(1),
-        reason: 'latest-result row should render the success line',
-      );
-    },
-  );
+    // Fire a query through the mock; the panel should swap to a
+    // rendered span tree built from the latest log entry. The
+    // span tree carries the `OK ` success marker emitted by
+    // `formatQuerySuccess`, so we use a substring assertion
+    // rather than pinning the full timestamped line.
+    await tester.tap(find.text('NTS Query'));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump();
+    expect(
+      find.textContaining('No queries yet'),
+      findsNothing,
+      reason: 'empty-state copy should disappear after first entry',
+    );
+    expect(
+      find.textContaining('OK '),
+      findsAtLeastNWidgets(1),
+      reason: 'latest-result row should render the success line',
+    );
+  });
 
-  testWidgets(
-    'compact ClientTab branch renders without a multiple-'
-    'PrimaryScrollController assertion under a short body height',
-    (tester) async {
-      // Drive the LayoutBuilder dispatch in _ClientTab into its
-      // compact branch by handing the test surface a body height
-      // below _tightHeightFloorDp (~400dp). The branch wraps the
-      // server list + four bottom panels in a SingleChildScrollView,
-      // and without `primary: false` on that outer scroller the
-      // inner ListView.builder's default primary attachment would
-      // collide with it and throw a Flutter assertion the moment a
-      // real `Scrollable` instantiates.
-      final binding = tester.binding;
-      final view = binding.platformDispatcher.views.first;
-      // Snapshot the values the outer `setUp` block installed so
-      // we can roll back precisely on tearDown, instead of writing
-      // hard-coded constants that drift apart from the setUp
-      // numbers if either side later changes. Restoring both
-      // physicalSize and devicePixelRatio keeps the binding state
-      // isolated even if a future test runs after this one and
-      // expects the setUp defaults rather than this branch's
-      // overrides.
-      final previousSize = view.physicalSize;
-      final previousDpr = view.devicePixelRatio;
-      view.physicalSize = const Size(865, 320);
-      view.devicePixelRatio = 1.0;
-      addTearDown(() {
-        view.physicalSize = previousSize;
-        view.devicePixelRatio = previousDpr;
-      });
+  testWidgets('compact ClientTab branch renders without a multiple-'
+      'PrimaryScrollController assertion under a short body height', (
+    tester,
+  ) async {
+    // Drive the LayoutBuilder dispatch in _ClientTab into its
+    // compact branch by handing the test surface a body height
+    // below _tightHeightFloorDp (~400dp). The branch wraps the
+    // server list + four bottom panels in a SingleChildScrollView,
+    // and without `primary: false` on that outer scroller the
+    // inner ListView.builder's default primary attachment would
+    // collide with it and throw a Flutter assertion the moment a
+    // real `Scrollable` instantiates.
+    final binding = tester.binding;
+    final view = binding.platformDispatcher.views.first;
+    // Snapshot the values the outer `setUp` block installed so
+    // we can roll back precisely on tearDown, instead of writing
+    // hard-coded constants that drift apart from the setUp
+    // numbers if either side later changes. Restoring both
+    // physicalSize and devicePixelRatio keeps the binding state
+    // isolated even if a future test runs after this one and
+    // expects the setUp defaults rather than this branch's
+    // overrides.
+    final previousSize = view.physicalSize;
+    final previousDpr = view.devicePixelRatio;
+    view.physicalSize = const Size(865, 320);
+    view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      view.physicalSize = previousSize;
+      view.devicePixelRatio = previousDpr;
+    });
 
-      final h = await _bootHarness();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: HomePage(state: h.state, controller: h.controller),
-        ),
-      );
-      await tester.pump();
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
 
-      // No exceptions surfaced — the assertion-free pump itself is
-      // the load-bearing assertion of this test. Sanity-check that
-      // the compact branch actually rendered the catalog rows
-      // (i.e. that ServerListView's inner ListView built without
-      // tripping the PrimaryScrollController collision).
-      expect(find.text('time.cloudflare.com'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    },
-  );
+    // No exceptions surfaced — the assertion-free pump itself is
+    // the load-bearing assertion of this test. Sanity-check that
+    // the compact branch actually rendered the catalog rows
+    // (i.e. that ServerListView's inner ListView built without
+    // tripping the PrimaryScrollController collision).
+    expect(find.text('time.cloudflare.com'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

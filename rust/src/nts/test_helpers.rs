@@ -15,6 +15,8 @@
 //!
 //! Ticket: bd nts-wzg.
 
+use zeroize::Zeroizing;
+
 use crate::nts::aead::{AeadKey, RECOMMENDED_NONCE_LEN};
 use crate::nts::ntp::{
     encode_authenticator_body, encode_extension, ext_type, mode, ClientRequest, NtpHeader,
@@ -68,7 +70,7 @@ pub(crate) fn fresh_keys() -> (AeadKey, AeadKey) {
 pub(crate) fn sample_request() -> ClientRequest {
     ClientRequest {
         unique_id: UID.to_vec(),
-        cookie: COOKIE.to_vec(),
+        cookie: Zeroizing::new(COOKIE.to_vec()),
         placeholder_count: 0,
         nonce: NONCE.to_vec(),
         transmit_timestamp: CLIENT_TX,

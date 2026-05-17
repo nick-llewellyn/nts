@@ -220,6 +220,96 @@ the offset onto `DateTime.now()` are all workload specific. The
 [`example/main.dart`](example/main.dart) snippet shows the minimum
 burst-filter-compensate flow described above.
 
+## Security considerations
+
+The package handles authentication and replay protection on its own
+side of the wire (RFC 8915 NTS over TLS 1.3, AEAD on every NTPv4
+exchange, single-use cookies, UID and origin-timestamp echo checks,
+strict `TrustMode.platformOnly` available for callers who want the
+platform CA store with no static-bundle downgrade). What it does
+*not* do — and structurally cannot do, because the whole point of
+the API is "take a caller-supplied host and connect to it" — is
+constrain *which* hosts a caller is allowed to reach.
+
+If your app accepts hostnames from untrusted input (e.g. a user-
+entered NTS server URL, a remotely-fetched server list, a deep-link
+parameter) and passes them through to `ntsQuery` / `ntsWarmCookies`
+/ `NtsClient`, treat those call sites as a server-side-request-
+forgery (SSRF) surface and apply the validation your threat model
+requires *before* dispatching into this library. Reasonable
+controls include:
+
+- **Allowlist** — pin the set of acceptable hosts at the
+  application layer (e.g. against a curated catalog like the one
+  the [Flutter showcase](example/lib/src/data/) ships). Most
+  consumer-facing apps that need authenticated time can ship with a
+  fixed allowlist and never resolve attacker-controlled hostnames
+  at all.
+- **Reject private-range resolution** — if you do accept arbitrary
+  hostnames, resolve them yourself first, refuse the call if the
+  resolved address falls in an RFC 1918 / RFC 4193 / loopback /
+  link-local range, and only then pass the (resolved, validated)
+  hostname through. This is a textbook SSRF mitigation; this
+  library cannot apply it on your behalf because legitimate
+  on-premise deployments routinely point at RFC 1918 hostnames
+  (a stratum-1 GPS receiver on a corporate VLAN) and the library
+  has no way to tell those apart from a callsite that's being
+  exploited.
+- **Constrain the port** — the wrapper rejects ports outside
+  `1..65535` as `NtsError.invalidSpec`, but every value inside that
+  range is reachable. If your threat model requires it, gate the
+  port at the application layer before the call.
+
+The bounded DNS worker pool (`kDefaultDnsConcurrencyCap = 4`, see
+the [Production Considerations](#production-considerations)
+section) bounds the *amplification* exposure of a saturated
+hostname-resolution path, but does not gate *destinations* — that
+gate is the caller's responsibility.
+
+### Non-Flutter Dart callers must pass `externalLibrary` explicitly
+
+The FRB-generated default loader
+(`RustLib.kDefaultExternalLibraryLoaderConfig`) advertises
+`rust/target/release/` as the `ioDirectory` for the bundled dylib.
+Inside a Flutter host the Native Assets pipeline supplies a
+controlled absolute load path before that default ever runs, so the
+relative directory is unreachable. Outside Flutter — a `dart run`
+CLI, a Dart server runtime, an integration-test harness, anything
+else that imports `package:nts` directly — the relative directory
+*is* what the loader resolves against the current working
+directory.
+
+A non-Flutter call site that does `await RustLib.init()` (no
+`externalLibrary:` argument) while running from a working directory
+an attacker can influence is therefore a library-hijack surface:
+dropping a malicious `rust/target/release/libnts_rust.dylib` (or
+`.so` / `.dll`) into that directory yields arbitrary code execution
+under the calling process's privileges. The hijack is independent
+of NTS itself — `RustLib.init()` runs before any of this package's
+TLS / NTS code is reached — but the package is the vehicle.
+
+The mitigation is the pattern the bundled
+[`example/bin/nts_cli.dart`](example/bin/nts_cli.dart) already
+uses: resolve an absolute path to the dylib yourself (or accept one
+on the command line) and pass it through explicitly:
+
+```dart
+import 'package:nts/nts.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge.dart'
+    show ExternalLibrary;
+
+await RustLib.init(
+  externalLibrary: ExternalLibrary.open('/absolute/path/to/libnts_rust.dylib'),
+);
+```
+
+The absolute path should come from a trusted source (a packaged
+install location, an environment variable owned by the deploying
+operator, etc.) — not from a relative lookup against the working
+directory. Flutter callers can keep using the bare
+`await RustLib.init()` form: Native Assets supplies the load path
+before the relative fallback can fire.
+
 ## API summary
 
 | Symbol | Purpose |
@@ -271,7 +361,7 @@ pthread stack per leaked worker). Server-side callers that
 legitimately need higher fan-out can override per call (`32`, `64`,
 etc.); values must lie in `1..4294967295`, with literal `0` rejected
 as `NtsError.invalidSpec` rather than silently substituting the
-default the way the pre-3.1.0 wrapper did. The cap is compared
+default the way the pre-4.0.0 wrapper did. The cap is compared
 against the *global* counter, so two concurrent callers passing
 different values share the same in-flight pool: the effective ceiling
 at any moment is whichever caller is currently being admitted.

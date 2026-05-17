@@ -55,13 +55,18 @@ object PlatformInit {
      * subsequent calls are no-ops. Safe to call from any thread; a
      * `synchronized` block guards the one-shot initialization.
      *
-     * Failures are logged and swallowed: when initialization fails the
-     * `nts` Rust code falls back to the `webpki-roots` static trust
-     * bundle (see `nts/ke.rs::build_tls_config`), which still produces a
-     * working NTS-KE handshake against the major public NTS providers
-     * but loses enterprise/MDM-managed root visibility. Failed attempts
-     * do not latch the no-op gate, so a later call with a valid
-     * application `Context` will retry the JNI bootstrap.
+     * Failures are logged and swallowed: the handshake-time consequence
+     * then depends on the caller's `TrustMode`. With the default
+     * `TrustMode.platformWithFallback`, the `nts` Rust code falls back to
+     * the `webpki-roots` static trust bundle (see
+     * `nts/ke.rs::build_tls_config`), which still produces a working
+     * NTS-KE handshake against the major public NTS providers but loses
+     * enterprise/MDM-managed root visibility. With the strict
+     * `TrustMode.platformOnly` (added in 4.0.0), the same failure
+     * surfaces at handshake time as `NtsError.trustBackendUnavailable`
+     * instead of falling back. Failed attempts do not latch the no-op
+     * gate, so a later call with a valid application `Context` will
+     * retry the JNI bootstrap.
      */
     @JvmStatic
     fun init(context: Context) {
@@ -75,7 +80,9 @@ object PlatformInit {
                     TAG,
                     "Could not load libnts_rust.so; " +
                         "rustls-platform-verifier will not be initialized. " +
-                        "TLS will fall back to webpki-roots in the Rust crate.",
+                        "Handshake behaviour then depends on TrustMode: " +
+                        "platformWithFallback falls back to webpki-roots, " +
+                        "platformOnly surfaces NtsError.trustBackendUnavailable.",
                     t,
                 )
                 return
@@ -86,9 +93,10 @@ object PlatformInit {
                     TAG,
                     "rustls-platform-verifier nativeInit returned false; " +
                         "verifier may be unusable on this attempt. " +
-                        "Falling back to webpki-roots inside the Rust " +
-                        "crate. A later init(context) call with a valid " +
-                        "Context will retry.",
+                        "Handshake behaviour then depends on TrustMode: " +
+                        "platformWithFallback falls back to webpki-roots, " +
+                        "platformOnly surfaces NtsError.trustBackendUnavailable. " +
+                        "A later init(context) call with a valid Context will retry.",
                 )
                 return
             }

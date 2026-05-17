@@ -362,8 +362,8 @@ void main() {
     const spec = NtsServerSpec(host: 'time.example', port: 4460);
 
     test('exported defaults expose the actual numeric values', () {
-      // 3.1.0: `kDefaultDnsConcurrencyCap` is the actual numeric
-      // default (4) rather than the pre-3.1.0 `0`-as-sentinel that
+      // 4.0.0: `kDefaultDnsConcurrencyCap` is the actual numeric
+      // default (4) rather than the pre-4.0.0 `0`-as-sentinel that
       // delegated to the Rust-side `DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`.
       // The numeric value is the same default the Rust side would
       // have substituted, so callers using the constant by name see
@@ -400,7 +400,7 @@ void main() {
       'ntsQuery rejects port outside 1..65535 with NtsError.invalidSpec',
       () async {
         // Port=0 used to fall through to Rust's `port must be non-zero`
-        // spec validator; from 3.1.0 the wrapper rejects it before any
+        // spec validator; from 4.0.0 the wrapper rejects it before any
         // FFI dispatch, so the returned Future completes with
         // NtsError.invalidSpec carrying a wrapper-authored message and
         // `api.lastQuery*` stay null. `expectLater` is awaited so the
