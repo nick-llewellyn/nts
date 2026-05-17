@@ -52,14 +52,13 @@ class LatestResultPanel extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Watch((context) {
-              final entries = state.log.entries.value;
-              if (entries.isEmpty) {
+              final latest = state.log.entries.value.lastOrNull;
+              if (latest == null) {
                 return Text(
                   'No queries yet — tap NTS Query to populate.',
                   style: theme.textTheme.bodySmall,
                 );
               }
-              final latest = entries.last;
               return SelectableText.rich(
                 TextSpan(
                   children: buildLogEntrySpans(theme, colors, latest),

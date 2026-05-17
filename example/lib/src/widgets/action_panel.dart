@@ -82,34 +82,48 @@ class _TrustModeDropdown extends StatelessWidget {
     final theme = Theme.of(context);
     return Watch((context) {
       final mode = state.trustMode.value;
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.shield_outlined,
-            size: 18,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 6),
-          DropdownButton<TrustMode>(
-            value: mode,
-            isDense: true,
-            underline: const SizedBox.shrink(),
-            onChanged: (v) {
-              if (v != null) state.trustMode.value = v;
-            },
-            items: const [
-              DropdownMenuItem<TrustMode>(
-                value: TrustMode.platformWithFallback,
-                child: Text('Platform + fallback'),
+      // `Semantics(label: 'Trust mode', container: true)` collapses
+      // the icon + `DropdownButton` pair into a single accessibility
+      // node and announces "Trust mode, <selected value>" on screen
+      // readers, mirroring the labelling story the Region
+      // `DropdownButtonFormField` gets for free via its `labelText`.
+      // A sibling `Tooltip` on the icon gives sighted users the same
+      // label on hover (desktop) / long-press (mobile).
+      return Semantics(
+        label: 'Trust mode',
+        container: true,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              message: 'Trust mode',
+              child: Icon(
+                Icons.shield_outlined,
+                size: 18,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
-              DropdownMenuItem<TrustMode>(
-                value: TrustMode.platformOnly,
-                child: Text('Platform only'),
-              ),
-            ],
-          ),
-        ],
+            ),
+            const SizedBox(width: 6),
+            DropdownButton<TrustMode>(
+              value: mode,
+              isDense: true,
+              underline: const SizedBox.shrink(),
+              onChanged: (v) {
+                if (v != null) state.trustMode.value = v;
+              },
+              items: const [
+                DropdownMenuItem<TrustMode>(
+                  value: TrustMode.platformWithFallback,
+                  child: Text('Platform + fallback'),
+                ),
+                DropdownMenuItem<TrustMode>(
+                  value: TrustMode.platformOnly,
+                  child: Text('Platform only'),
+                ),
+              ],
+            ),
+          ],
+        ),
       );
     });
   }
