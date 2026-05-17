@@ -83,11 +83,20 @@ void main() {
     );
     await tester.pump();
 
+    // Client tab is the default landing surface: catalog rows, the
+    // two action buttons, the trust-status row, and the new
+    // latest-result summary card all live here.
     for (final entry in _testCatalog) {
       expect(find.text(entry.hostname), findsOneWidget);
     }
     expect(find.text('NTS Query'), findsOneWidget);
     expect(find.text('Warm Cookies'), findsOneWidget);
+    expect(find.text('Latest result'), findsOneWidget);
+
+    // The full live log moved to its own tab so it can claim a full
+    // viewport height. Switch over and verify the header renders.
+    await tester.tap(find.text('Log'));
+    await tester.pumpAndSettle();
     expect(find.text('Live log'), findsOneWidget);
   });
 
@@ -184,9 +193,13 @@ void main() {
     // Default policy is platform-with-fallback.
     expect(h.state.trustMode.value, TrustMode.platformWithFallback);
 
-    // Tap the "Platform only" segment of the segmented button.
-    await tester.tap(find.text('Platform only'));
-    await tester.pump();
+    // The trust-mode selector is a DropdownButton<TrustMode> inlined
+    // in the action row: tap the currently-rendered selection to
+    // expand the menu, then tap the alternative.
+    await tester.tap(find.text('Platform + fallback'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Platform only').last);
+    await tester.pumpAndSettle();
 
     expect(h.state.trustMode.value, TrustMode.platformOnly);
     // The controller's subscription posts a `system` line that
@@ -264,9 +277,12 @@ void main() {
       // Flip the trust mode -- the controller mints a new NtsClient
       // and must clear the now-stale attribution because the backend
       // recorded earlier belongs to a session table that has just
-      // been dropped.
-      await tester.tap(find.text('Platform only'));
-      await tester.pump();
+      // been dropped. Dropdown selection requires expanding the menu
+      // first since "Platform only" is only painted once open.
+      await tester.tap(find.text('Platform + fallback'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Platform only').last);
+      await tester.pumpAndSettle();
 
       expect(h.state.trustMode.value, TrustMode.platformOnly);
       expect(h.state.lastHandshakeBackend.value, isNull);
@@ -289,10 +305,19 @@ void main() {
 
     // Kick off a query against the default (PlatformWithFallback)
     // client and immediately flip the toggle while the future is
-    // still suspended on the mock's 25-65ms delay.
+    // still suspended on the mock's 25-65ms delay. Driving the
+    // signal directly here (rather than opening the DropdownButton
+    // and tapping the menu item) is deliberate: the dropdown's
+    // route-open animation requires `pumpAndSettle`, which would
+    // drain enough simulated time for the mock's `Future.delayed`
+    // to fire before the flip — defeating the race the test is
+    // specifically built to exercise. The controller's
+    // `_onTrustModeChanged` subscription runs synchronously off the
+    // signal write, so this still funnels through the production
+    // path it cares about.
     await tester.tap(find.text('NTS Query'));
     await tester.pump();
-    await tester.tap(find.text('Platform only'));
+    h.state.trustMode.value = TrustMode.platformOnly;
     await tester.pump();
 
     // Flush the in-flight future.
@@ -318,4 +343,94 @@ void main() {
       reason: 'stale completion should be tagged in the log',
     );
   });
+
+  testWidgets(
+    'LatestResultPanel shows the empty-state copy before any query '
+    'runs, then surfaces the most recent log entry afterwards',
+    (tester) async {
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      // Empty state: card header + the empty-state hint that names
+      // the verb on the action button.
+      expect(find.text('Latest result'), findsOneWidget);
+      expect(
+        find.textContaining('No queries yet'),
+        findsOneWidget,
+      );
+
+      // Fire a query through the mock; the panel should swap to a
+      // rendered span tree built from the latest log entry. The
+      // span tree carries the `OK ` success marker emitted by
+      // `formatQuerySuccess`, so we use a substring assertion
+      // rather than pinning the full timestamped line.
+      await tester.tap(find.text('NTS Query'));
+      await tester.pump(const Duration(milliseconds: 200));
+      await tester.pump();
+      expect(
+        find.textContaining('No queries yet'),
+        findsNothing,
+        reason: 'empty-state copy should disappear after first entry',
+      );
+      expect(
+        find.textContaining('OK '),
+        findsAtLeastNWidgets(1),
+        reason: 'latest-result row should render the success line',
+      );
+    },
+  );
+
+  testWidgets(
+    'compact ClientTab branch renders without a multiple-'
+    'PrimaryScrollController assertion under a short body height',
+    (tester) async {
+      // Drive the LayoutBuilder dispatch in _ClientTab into its
+      // compact branch by handing the test surface a body height
+      // below _tightHeightFloorDp (~400dp). The branch wraps the
+      // server list + four bottom panels in a SingleChildScrollView,
+      // and without `primary: false` on that outer scroller the
+      // inner ListView.builder's default primary attachment would
+      // collide with it and throw a Flutter assertion the moment a
+      // real `Scrollable` instantiates.
+      final binding = tester.binding;
+      final view = binding.platformDispatcher.views.first;
+      // Snapshot the values the outer `setUp` block installed so
+      // we can roll back precisely on tearDown, instead of writing
+      // hard-coded constants that drift apart from the setUp
+      // numbers if either side later changes. Restoring both
+      // physicalSize and devicePixelRatio keeps the binding state
+      // isolated even if a future test runs after this one and
+      // expects the setUp defaults rather than this branch's
+      // overrides.
+      final previousSize = view.physicalSize;
+      final previousDpr = view.devicePixelRatio;
+      view.physicalSize = const Size(865, 320);
+      view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        view.physicalSize = previousSize;
+        view.devicePixelRatio = previousDpr;
+      });
+
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      // No exceptions surfaced — the assertion-free pump itself is
+      // the load-bearing assertion of this test. Sanity-check that
+      // the compact branch actually rendered the catalog rows
+      // (i.e. that ServerListView's inner ListView built without
+      // tripping the PrimaryScrollController collision).
+      expect(find.text('time.cloudflare.com'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

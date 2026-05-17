@@ -16,6 +16,8 @@
 //      mediated through the `signals` package.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'
+    show DeviceOrientation, SystemChrome;
 import 'package:nts/nts.dart' show RustLib;
 
 import 'src/data/server_entry.dart';
@@ -102,6 +104,7 @@ Future<_Boot> _bootstrap() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await _lockOrientationOnPhones();
   final boot = await _bootstrap();
   final state = AppState(
     bridgeMode: boot.label,
@@ -118,6 +121,55 @@ Future<void> main() async {
     state.log.warn('system', boot.loadError!);
   }
   runApp(NtsExampleApp(state: state));
+}
+
+/// Locks the example app to portrait orientation when the launch
+/// view's shortest side falls below the Material 600dp
+/// "compact / medium" window-size-class breakpoint — the same
+/// threshold M3 itself uses to switch between compact and medium
+/// layouts. This is a *window-size* check, not a hardware check:
+///
+/// * Phones (whose physical screens are below 600dp regardless of
+///   orientation) always trip the check and get locked.
+/// * Tablets running fullscreen (Pixel Tablet, iPad, etc.) sit
+///   well above 600dp shortest-side and do NOT get locked — they
+///   keep their landscape support because the tabbed home layout
+///   has the headroom to render every Client-tab panel without
+///   overflow at those widths.
+/// * Tablets launched into a compact multi-window slice
+///   (Android split-screen, foldable folded-state, etc.) where
+///   the launch view's shortest side measures below 600dp DO trip
+///   the check and get locked to portrait, on the basis that the
+///   slice is too narrow for landscape to work anyway. The
+///   `LayoutBuilder` fallback in `_ClientTab` covers the residual
+///   short-body case if the lock isn't enough.
+///
+/// Reading the size off `PlatformDispatcher.views.first` rather
+/// than via `MediaQuery` keeps this a pure pre-`runApp` decision —
+/// the lock is installed before the widget tree exists, so no
+/// rebuild plumbing is needed.
+///
+/// `physicalSize` reports the current pixel dimensions in either
+/// orientation; the `shortestSide / devicePixelRatio` projection
+/// is orientation-invariant, so a phone launched in landscape is
+/// still classified as compact and the OS rotates it back to
+/// portrait once the preferred-orientations call lands.
+///
+/// On platforms where orientation is meaningless (desktop, web)
+/// `SystemChrome.setPreferredOrientations` is a no-op on recent
+/// Flutter versions, so the conditional doesn't need a
+/// platform-specific guard.
+Future<void> _lockOrientationOnPhones() async {
+  final view = WidgetsBinding.instance.platformDispatcher.views.first;
+  final shortestSideDp =
+      view.physicalSize.shortestSide / view.devicePixelRatio;
+  const phoneBreakpointDp = 600.0;
+  if (shortestSideDp < phoneBreakpointDp) {
+    await SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+  }
 }
 
 class NtsExampleApp extends StatelessWidget {

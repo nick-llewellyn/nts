@@ -118,7 +118,7 @@ class _FilterBar extends StatelessWidget {
                     size: 18,
                     color: active ? Colors.amber.shade600 : null,
                   ),
-                  label: const Text('Favourites only'),
+                  label: const Text('Favourites'),
                 );
               }),
             ],
