@@ -78,11 +78,18 @@ match the authentication mechanism, and the Trust-status panel
 drops the singleton-snapshot row that was structurally destined
 to remain at sentinel values during every demo run.
 
-Six hygiene fixes from two rounds of external code review of the
-release branch land on top:
+Seven hygiene fixes from two rounds of external code review of
+the release branch land on top — six code-level fixes documented
+in the `### Security` subsection below, and one docs-level fix
+(README "Security considerations") in the `### Documentation`
+subsection. The six code-level fixes:
 
-1. cookie bytes zeroize on every `CookieJar` eviction path
-   (matching the discipline already applied to AEAD key material);
+1. cookie bytes zeroize on every `CookieJar` *in-jar* eviction
+   path — capacity-overflow eviction in `put`, authentication-
+   failure clears in `clear_host`, and a new `impl Drop for
+   CookieJar` (matching the discipline already applied to AEAD
+   key material). Together with item 6 below this closes both
+   in-jar and post-take residual surfaces;
 2. `CookieJar`'s `Debug` impl renders per-host counts only
    (matching the redacted `Debug` on `KeOutcome`);
 3. `perform_handshake` verifies that the post-handshake
@@ -101,12 +108,21 @@ release branch land on top:
 6. spent cookies zeroize end-to-end through the
    `CookieJar::take` → `QueryContext.cookie` →
    `ClientRequest.cookie` → outbound packet pipeline via
-   `Zeroizing<Vec<u8>>` wrapping at every intermediate holder;
-   `ClientRequest` also gains a manual redacted `Debug` that
-   prints the cookie field as `<redacted; N bytes>`.
+   `Zeroizing<Vec<u8>>` wrapping at every intermediate holder
+   — the popped cookie is *not* wiped at jar-pop time
+   (`build_client_request` has not yet serialised it onto the
+   wire) but does wipe on drop of the `Zeroizing` wrapper once
+   the in-flight NTPv4 exchange completes. `ClientRequest` also
+   gains a manual redacted `Debug` that prints the cookie field
+   as `<redacted; N bytes>`.
 
-Internal-only — no public Dart-facing surface change; see the
-`### Security` subsection below for the full shape and the
+Plus the docs-level fix (`### Documentation` subsection below):
+README "Security considerations" calls out the SSRF / internal-
+network-reachability surface inherent in a caller-supplied-host
+network library.
+
+All seven are internal-only — no public Dart-facing surface
+change; see the `### Security` subsection below for the full
 per-finding writeup.
 
 ### Changed — example app
@@ -424,36 +440,47 @@ per-finding writeup.
 
 ### Security
 
-Six hygiene fixes raised by two rounds of external code review of
-the release branch. None changes the public Dart-facing surface
+Six code-level hygiene fixes raised by two rounds of external
+code review of the release branch land here; the seventh review
+finding (README "Security considerations" / SSRF surface
+call-out) is docs-only and lives in the `### Documentation`
+subsection below. None changes the public Dart-facing surface
 (no `NtsError` variant added at the Dart layer; the new internal
 `KeError::AlpnMismatch` flows through the existing catch-all
-mapping to `NtsError.keProtocol`). All six are belt-and-braces in
-the same direction the package already takes — AEAD keys already
-zeroize on drop and `KeOutcome` already has a redacted `Debug`
-impl; these extend the same discipline end-to-end across cookies,
-add a spec-correctness guard on the TLS handshake, and turn the
-Rust API layer's `.lock().expect(…)` sites into recoverable
-operations so a single panic can no longer permanently crash an
-`NtsClient` across the FRB boundary.
+mapping to `NtsError.keProtocol`). All six are belt-and-braces
+in the same direction the package already takes — AEAD keys
+already zeroize on drop and `KeOutcome` already has a redacted
+`Debug` impl; these extend the same discipline end-to-end
+across cookies, add a spec-correctness guard on the TLS
+handshake, and turn the Rust API layer's `.lock().expect(…)`
+sites into recoverable operations so a single panic can no
+longer permanently crash an `NtsClient` across the FRB boundary.
 
-- **Cookie bytes are now zeroized on every eviction path.** The
-  per-host FIFO store in `rust/src/nts/cookies.rs` previously held
-  cookies as plain `Vec<u8>` and dropped them with `pop_front` /
-  `VecDeque::clear` on overflow eviction, `clear_host`, and `Drop`.
-  None of those paths wiped the backing allocation, so a process-
-  memory scrape after eviction could in principle recover the
-  cookie bytes. Cookies are NTS authentication material (RFC 8915
-  §6: "use at most once" / "keep at most 8 unused per server"),
-  so the discipline already applied to AEAD key material in
-  `rust/src/nts/aead.rs` (via `ZeroizeOnDrop`) now extends to the
-  cookie store: capacity-overflow eviction in `CookieJar::put`,
-  authentication-failure clears in `CookieJar::clear_host`, and
-  a new `impl Drop for CookieJar` all call `Vec::zeroize` before
-  the backing allocation is released. The `take` path is
-  intentionally not wiped — that path hands the cookie to the
-  in-flight NTPv4 exchange that will spend it, so wiping would
-  defeat the consumer.
+- **Cookie bytes are now zeroized on every *in-jar* eviction
+  path.** The per-host FIFO store in `rust/src/nts/cookies.rs`
+  previously held cookies as plain `Vec<u8>` and dropped them
+  with `pop_front` / `VecDeque::clear` on overflow eviction,
+  `clear_host`, and `Drop`. None of those paths wiped the
+  backing allocation, so a process-memory scrape after eviction
+  could in principle recover the cookie bytes. Cookies are NTS
+  authentication material (RFC 8915 §6: "use at most once" /
+  "keep at most 8 unused per server"), so the discipline
+  already applied to AEAD key material in
+  `rust/src/nts/aead.rs` (via `ZeroizeOnDrop`) now extends to
+  the cookie store: capacity-overflow eviction in
+  `CookieJar::put`, authentication-failure clears in
+  `CookieJar::clear_host`, and a new `impl Drop for CookieJar`
+  all call `Vec::zeroize` before the backing allocation is
+  released. The `take` path is *not* wiped at jar-pop time —
+  that path hands the cookie to the in-flight NTPv4 exchange
+  that has yet to spend it, so wiping at the pop site would
+  defeat the consumer. The complementary fix below in the
+  end-to-end-cookie-zeroize entry extends the discipline
+  across the take path itself: the popped cookie now rides
+  inside a `Zeroizing<Vec<u8>>` wrapper from the jar boundary
+  to the wire and wipes on drop once `build_client_request`
+  has serialised the bytes into the outbound packet, so both
+  the in-jar and post-take paths are covered.
 
 - **`CookieJar`'s `Debug` impl no longer prints cookie bytes.**
   The struct's previous `#[derive(Debug, Clone)]` rendered the
