@@ -398,16 +398,22 @@ void main() {
       // collide with it and throw a Flutter assertion the moment a
       // real `Scrollable` instantiates.
       final binding = tester.binding;
-      binding.platformDispatcher.views.first.physicalSize = const Size(
-        865,
-        320,
-      );
-      binding.platformDispatcher.views.first.devicePixelRatio = 1.0;
+      final view = binding.platformDispatcher.views.first;
+      // Snapshot the values the outer `setUp` block installed so
+      // we can roll back precisely on tearDown, instead of writing
+      // hard-coded constants that drift apart from the setUp
+      // numbers if either side later changes. Restoring both
+      // physicalSize and devicePixelRatio keeps the binding state
+      // isolated even if a future test runs after this one and
+      // expects the setUp defaults rather than this branch's
+      // overrides.
+      final previousSize = view.physicalSize;
+      final previousDpr = view.devicePixelRatio;
+      view.physicalSize = const Size(865, 320);
+      view.devicePixelRatio = 1.0;
       addTearDown(() {
-        binding.platformDispatcher.views.first.physicalSize = const Size(
-          1080,
-          1800,
-        );
+        view.physicalSize = previousSize;
+        view.devicePixelRatio = previousDpr;
       });
 
       final h = await _bootHarness();

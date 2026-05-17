@@ -123,15 +123,27 @@ Future<void> main() async {
   runApp(NtsExampleApp(state: state));
 }
 
-/// Locks the example app to portrait orientation on phone-sized
-/// devices. Tablets (Pixel Tablet, iPad, etc.) keep their existing
-/// landscape support because the tabbed home layout has the
-/// headroom to render every Client-tab panel without overflow at
-/// those widths.
+/// Locks the example app to portrait orientation when the launch
+/// view's shortest side falls below the Material 600dp
+/// "compact / medium" window-size-class breakpoint — the same
+/// threshold M3 itself uses to switch between compact and medium
+/// layouts. This is a *window-size* check, not a hardware check:
 ///
-/// Phone detection uses the Material 600dp shortest-side
-/// breakpoint, which is the same threshold Material 3 itself uses
-/// to switch between "compact" and "medium" window-size classes.
+/// * Phones (whose physical screens are below 600dp regardless of
+///   orientation) always trip the check and get locked.
+/// * Tablets running fullscreen (Pixel Tablet, iPad, etc.) sit
+///   well above 600dp shortest-side and do NOT get locked — they
+///   keep their landscape support because the tabbed home layout
+///   has the headroom to render every Client-tab panel without
+///   overflow at those widths.
+/// * Tablets launched into a compact multi-window slice
+///   (Android split-screen, foldable folded-state, etc.) where
+///   the launch view's shortest side measures below 600dp DO trip
+///   the check and get locked to portrait, on the basis that the
+///   slice is too narrow for landscape to work anyway. The
+///   `LayoutBuilder` fallback in `_ClientTab` covers the residual
+///   short-body case if the lock isn't enough.
+///
 /// Reading the size off `PlatformDispatcher.views.first` rather
 /// than via `MediaQuery` keeps this a pure pre-`runApp` decision —
 /// the lock is installed before the widget tree exists, so no
@@ -140,7 +152,8 @@ Future<void> main() async {
 /// `physicalSize` reports the current pixel dimensions in either
 /// orientation; the `shortestSide / devicePixelRatio` projection
 /// is orientation-invariant, so a phone launched in landscape is
-/// still classified as a phone and rotated back to portrait.
+/// still classified as compact and the OS rotates it back to
+/// portrait once the preferred-orientations call lands.
 ///
 /// On platforms where orientation is meaningless (desktop, web)
 /// `SystemChrome.setPreferredOrientations` is a no-op on recent
