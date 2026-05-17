@@ -1,13 +1,16 @@
-// Action strip rendered between the server list and the live log:
-// the two action buttons that drive the underlying [NtsController]
-// plus a TrustMode dropdown that picks which trust-anchor policy
-// the next query / warm runs under. Buttons are disabled only when
+// Action strip rendered on the Client tab between `ServerListView`
+// and the trust-status / latest-result panels: the two action
+// buttons that drive the underlying [NtsController] plus a
+// TrustMode dropdown that picks which trust-anchor policy the
+// next query / warm runs under. Buttons are disabled only when
 // no server is selected — operations are intentionally re-entrant,
 // so the user can stack overlapping requests and watch them
-// complete asynchronously in the log below. All outcome detail
-// (sample fields, error variant, timing, trust backend) lands
-// directly in the log, tagged by host so concurrent results stay
-// distinguishable.
+// complete asynchronously in the log on the sibling Log tab. All
+// outcome detail (sample fields, error variant, timing, trust
+// backend) lands directly in the log, tagged by host so concurrent
+// results stay distinguishable; the most recent entry is also
+// mirrored into the `LatestResultPanel` card below this strip so
+// the user doesn't need to switch tabs for the common case.
 //
 // Layout uses [Wrap] so the buttons-plus-dropdown row collapses
 // onto a single line on landscape tablets and wraps to two lines
