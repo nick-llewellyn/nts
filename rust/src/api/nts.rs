@@ -35,8 +35,10 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
+
+use zeroize::Zeroizing;
 
 use crate::nts::aead::{AeadError, AeadKey};
 use crate::nts::cookies::CookieJar;
@@ -961,6 +963,43 @@ struct HandshakeSlotOk {
     trust_backend: TrustBackend,
 }
 
+/// Recover the inner `MutexGuard` from a poisoned mutex instead of
+/// panicking. Every mutex in this module protects a cache or
+/// singleflight registry — `SessionTable.map` (a `HashMap<String,
+/// Session>` keyed by `host:port`), `SessionTable.inflight` (a
+/// `HashMap<String, Arc<HandshakeSlot>>` registering in-flight
+/// leaders), and `HandshakeSlot.result` (an `Option<Result<…>>`
+/// holding the leader's publish slot). None of these data structures
+/// carry an invariant whose violation by a mid-update panic could
+/// produce silently-wrong NTS behaviour: at worst the cache holds a
+/// stale entry that the next cache-invalidation or eviction path
+/// reaps, and the singleflight registry self-cleans through
+/// [`LeaderGuard::drop`] which already publishes an `Internal` error
+/// to waiters on the leader-aborted-mid-handshake path.
+///
+/// Without recovery, the first `.lock().expect("…")` site that ever
+/// fires (during a panic on any other thread) poisons the mutex
+/// permanently and every subsequent FRB-boundary call from any
+/// thread panics deterministically — a single recoverable failure
+/// turns into a permanent "this `NtsClient` is dead forever" mode
+/// across the Dart bridge. Recovering the inner guard preserves the
+/// availability guarantee: the next caller observes the same cache
+/// state the panicking thread was working against and proceeds.
+///
+/// Exposed as a free function rather than an extension method on
+/// `Mutex` so FRB's `api/` scanner does not surface a placeholder
+/// `LockExt` abstract Dart class and a `MutexGuardT` opaque
+/// pointer — `#[frb(ignore)]` on a trait function suppresses the
+/// function but not the trait shell, but a private free function
+/// is invisible to FRB by construction (the same path that hides
+/// every other private helper in this module). The `#[cfg(test)]`
+/// submodule reaches it through Rust's "descendant modules see
+/// private items" rule, which is all the recovery-regression
+/// tests need.
+fn lock_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Per-key singleflight slot. One slot exists per `host:port` while a
 /// leader is mid-handshake, so concurrent `checkout` calls against the
 /// same key park on the slot rather than each running their own
@@ -1004,7 +1043,7 @@ impl HandshakeSlot {
     /// on deadline expiry. Each waiter receives an independent
     /// `Clone` of the leader's `Result`.
     fn wait_until(&self, deadline: Instant) -> Option<Result<HandshakeSlotOk, NtsError>> {
-        let mut g = self.result.lock().expect("singleflight slot poisoned");
+        let mut g = lock_recover(&self.result);
         loop {
             if let Some(r) = g.as_ref() {
                 return Some(r.clone());
@@ -1016,7 +1055,7 @@ impl HandshakeSlot {
             let (next_g, _) = self
                 .cv
                 .wait_timeout(g, deadline - now)
-                .expect("singleflight slot poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             g = next_g;
         }
     }
@@ -1026,7 +1065,7 @@ impl HandshakeSlot {
     /// path can fire after a normal explicit completion without
     /// clobbering the published value.
     fn complete(&self, result: Result<HandshakeSlotOk, NtsError>) {
-        let mut g = self.result.lock().expect("singleflight slot poisoned");
+        let mut g = lock_recover(&self.result);
         if g.is_none() {
             *g = Some(result);
             self.cv.notify_all();
@@ -1080,11 +1119,7 @@ impl<'a> LeaderGuard<'a> {
     /// ordering and there is no deadlock risk against the waiter
     /// path (which releases `inflight` before parking on the slot).
     fn complete(&mut self, result: Result<HandshakeSlotOk, NtsError>) {
-        let mut g = self
-            .table
-            .inflight
-            .lock()
-            .expect("inflight singleflight map poisoned");
+        let mut g = lock_recover(&self.table.inflight);
         self.slot.complete(result);
         g.remove(&self.key);
         self.completed = true;
@@ -1106,11 +1141,7 @@ impl Drop for LeaderGuard<'_> {
             // become a waiter on a slot whose result is already
             // published-but-not-yet-cleared and busy-spin until the
             // remove lands.
-            let mut g = self
-                .table
-                .inflight
-                .lock()
-                .expect("inflight singleflight map poisoned");
+            let mut g = lock_recover(&self.table.inflight);
             self.slot.complete(Err(NtsError::Internal(
                 "singleflight leader aborted before publishing a result".into(),
             )));
@@ -1531,7 +1562,14 @@ struct QueryContext {
     /// The deposit-side cookie writer compares it against the live session
     /// to refuse stale writes; see [`deposit_cookies`].
     session_generation: u64,
-    cookie: Vec<u8>,
+    /// Spent cookie carried across the `CookieJar` → outbound packet
+    /// pipeline. Wrapped in [`Zeroizing`] so the cookie bytes are
+    /// wiped from RAM when the context drops (after
+    /// [`build_client_request`] has serialised the cookie onto the
+    /// wire) — the residual-memory-scrape surface the in-jar
+    /// zeroize-on-eviction/drop discipline does not cover on its
+    /// own. Mirrors the wrapper on `Session::c2s_key`/`s2c_key`.
+    cookie: Zeroizing<Vec<u8>>,
     c2s_key: AeadKey,
     s2c_key: AeadKey,
     ntpv4_host: String,
@@ -1568,7 +1606,14 @@ type HandshakeFn =
 /// Build a [`QueryContext`] from a session and a freshly-popped cookie.
 /// Extracted so both the cache-hit and post-handshake branches in
 /// `checkout_with` share the same construction shape.
-fn build_query_context(s: &Session, cookie: Vec<u8>) -> QueryContext {
+///
+/// The `cookie` parameter is a [`Zeroizing<Vec<u8>>`] (the return
+/// shape of [`CookieJar::take`]) so the spent bytes ride through
+/// the cache → `QueryContext` → [`ClientRequest`] → packet pipeline
+/// inside the same wrapper from the jar boundary to the wire — no
+/// intermediate bare `Vec<u8>` exists for a residual-memory-scrape
+/// attacker to recover post-send.
+fn build_query_context(s: &Session, cookie: Zeroizing<Vec<u8>>) -> QueryContext {
     QueryContext {
         session_generation: s.generation,
         cookie,
@@ -1649,7 +1694,7 @@ impl SessionTable {
             // singleflight work so a slow leader cannot serialize
             // unrelated cache hits behind itself.
             {
-                let mut g = self.map.lock().expect("session table poisoned");
+                let mut g = lock_recover(&self.map);
                 if let Some(s) = g.get_mut(&key) {
                     if s.cookies_remaining() > 0 {
                         // `cookies_remaining > 0` implies `take` returns
@@ -1682,10 +1727,7 @@ impl SessionTable {
             // Phase B: leader-or-waiter election. Holding only the
             // `inflight` lock; never the `map` lock at the same time.
             let role = {
-                let mut g = self
-                    .inflight
-                    .lock()
-                    .expect("inflight singleflight map poisoned");
+                let mut g = lock_recover(&self.inflight);
                 if let Some(slot) = g.get(&key) {
                     Role::Waiter(slot.clone())
                 } else {
@@ -1785,7 +1827,7 @@ impl SessionTable {
                             // error) rather than panicking with
                             // `expect`.
                             let cookie_opt = {
-                                let mut g = self.map.lock().expect("session table poisoned");
+                                let mut g = lock_recover(&self.map);
                                 g.insert(key.clone(), session);
                                 let s = g.get_mut(&key).expect("just inserted under this key");
                                 s.jar
@@ -1916,10 +1958,7 @@ impl SessionTable {
         // (`HandshakeSlotOk`), so they never re-acquire the session
         // map and the role-election runs at most once per call.
         let role = {
-            let mut g = self
-                .inflight
-                .lock()
-                .expect("inflight singleflight map poisoned");
+            let mut g = lock_recover(&self.inflight);
             if let Some(slot) = g.get(&key) {
                 Role::Waiter(slot.clone())
             } else {
@@ -1978,10 +2017,7 @@ impl SessionTable {
                         // `cookies_remaining() == 0` guard above
                         // exists to suppress.
                         let count = session.cookies_remaining() as u32;
-                        self.map
-                            .lock()
-                            .expect("session table poisoned")
-                            .insert(key.clone(), session);
+                        lock_recover(&self.map).insert(key.clone(), session);
                         // Publish the leader's harvested count
                         // and trust-backend on the singleflight
                         // slot so warm-cookies waiters can return
@@ -2072,7 +2108,7 @@ impl SessionTable {
         if cookies.is_empty() {
             return;
         }
-        let mut guard = self.map.lock().expect("session table poisoned");
+        let mut guard = lock_recover(&self.map);
         if let Some(session) = guard.get_mut(spec_key) {
             if session.generation != expected_generation {
                 // Session has been replaced since checkout; these cookies
@@ -2108,7 +2144,7 @@ impl SessionTable {
     /// single transient auth error would force every concurrent caller
     /// for the same host through a redundant re-handshake.
     fn evict_session(&self, spec_key: &str, expected_generation: u64) {
-        let mut guard = self.map.lock().expect("session table poisoned");
+        let mut guard = lock_recover(&self.map);
         if let Some(session) = guard.get(spec_key) {
             if session.generation == expected_generation {
                 guard.remove(spec_key);
@@ -2129,25 +2165,18 @@ impl SessionTable {
     #[cfg(test)]
     fn install(&self, spec: &NtsServerSpec, session: Session) {
         let key = session_key(spec);
-        self.map
-            .lock()
-            .expect("session table poisoned")
-            .insert(key, session);
+        lock_recover(&self.map).insert(key, session);
     }
 
     /// Drop the cached session for `spec`'s `host:port`. Returns whether
     /// an entry was actually removed.
     fn invalidate(&self, spec: &NtsServerSpec) -> bool {
-        self.map
-            .lock()
-            .expect("session table poisoned")
-            .remove(&session_key(spec))
-            .is_some()
+        lock_recover(&self.map).remove(&session_key(spec)).is_some()
     }
 
     /// Drop every cached session.
     fn clear(&self) {
-        self.map.lock().expect("session table poisoned").clear();
+        lock_recover(&self.map).clear();
     }
 }
 

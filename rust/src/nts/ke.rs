@@ -18,8 +18,8 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, SupportedPro
 use zeroize::Zeroizing;
 
 use super::records::{
-    aead, parse_message, serialize_message, CodecError, ErrorCode, Record, RecordKind,
-    WarningCode, NEXT_PROTO_NTPV4,
+    aead, parse_message, serialize_message, CodecError, ErrorCode, Record, RecordKind, WarningCode,
+    NEXT_PROTO_NTPV4,
 };
 
 /// RFC 8915 §5.1 fixed exporter label.
@@ -775,7 +775,11 @@ fn scan_for_fatal_or_log_deviations(records: &[Record]) -> Result<(), KeError> {
             }
             return Err(KeError::ServerError(code));
         }
-        if let RecordKind::Unknown { record_type: t, body } = &r.kind {
+        if let RecordKind::Unknown {
+            record_type: t,
+            body,
+        } = &r.kind
+        {
             if r.critical {
                 return Err(KeError::UnknownCritical(*t));
             }
@@ -859,9 +863,7 @@ pub(crate) fn validate_response(
     if !aead_critical {
         return Err(KeError::NonCriticalAeadAlgorithm);
     }
-    let aead_id = *aead_body
-        .first()
-        .ok_or(KeError::AeadNegotiationRefused)?;
+    let aead_id = *aead_body.first().ok_or(KeError::AeadNegotiationRefused)?;
     if !offered_aead.contains(&aead_id) {
         return Err(KeError::UnsupportedAead(aead_id));
     }
@@ -913,13 +915,43 @@ pub(crate) fn validate_response(
 // private (no `pub` on any field) — only the type-name visibility
 // changes, not the data exposure. The shim discards the value via
 // `.map(|_| ())` so the harness never observes the contents.
-#[derive(Debug)]
+///
+/// `Debug` is implemented manually below to redact the `cookies`
+/// field. The cookies in this partial outcome are the same RFC
+/// 8915 §6 authentication material the post-handshake
+/// [`KeOutcome`] holds; without the manual impl, `#[derive(Debug)]`
+/// would print them verbatim through any `{:?}` site (assertion-
+/// failure messages, panic payloads, accidental log lines). The
+/// `pub(crate)` visibility limits the surface to this crate but
+/// does not eliminate it — internal refactors, `dbg!` macros, or a
+/// future error-formatting chain that touches the partial outcome
+/// could all leak cookies otherwise. Mirrors the redaction on
+/// [`KeOutcome`].
 pub(crate) struct KeOutcomePartial {
     ntpv4_host: String,
     ntpv4_port: u16,
     aead_id: u16,
     cookies: Vec<Vec<u8>>,
     warnings: Vec<WarningCode>,
+}
+
+impl std::fmt::Debug for KeOutcomePartial {
+    /// Manual `Debug` that redacts the `cookies` field; renders it
+    /// as `<redacted; N cookies>` so the count survives for
+    /// diagnostics without leaking bytes. Non-secret fields pass
+    /// through verbatim. See the type-level rustdoc for rationale.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeOutcomePartial")
+            .field("ntpv4_host", &self.ntpv4_host)
+            .field("ntpv4_port", &self.ntpv4_port)
+            .field("aead_id", &self.aead_id)
+            .field(
+                "cookies",
+                &format_args!("<redacted; {} cookies>", self.cookies.len()),
+            )
+            .field("warnings", &self.warnings)
+            .finish()
+    }
 }
 
 /// Result of [`build_tls_config`]: the assembled `ClientConfig`, the

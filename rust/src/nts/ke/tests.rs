@@ -1318,3 +1318,55 @@ mod ke_outcome {
         );
     }
 }
+
+mod ke_outcome_partial {
+    use super::*;
+
+    /// Pins the manual `Debug` redaction on [`KeOutcomePartial`].
+    /// Although the type is `pub(crate)` so its surface is
+    /// internal, any `{:?}` site reached during a refactor (panic
+    /// backtrace, `dbg!`, internal error formatting in a future
+    /// `From<KeError>` chain) would leak the cookies a
+    /// `#[derive(Debug)]` would emit verbatim. The cookies in this
+    /// partial outcome are the same RFC 8915 §6 authentication
+    /// material the post-handshake [`KeOutcome`] holds, so the
+    /// redaction discipline matches: see the sibling
+    /// `ke_outcome_debug_redacts_exporter_keys_and_cookies` test
+    /// for the `KeOutcome` mirror.
+    ///
+    /// The runtime constructor stays inside the `ke` module so the
+    /// `pub(crate)` `KeOutcomePartial` (and its private fields) are
+    /// reachable from this test file. The sentinel cookie payload
+    /// `0xBB` is chosen so the hex token `0xbb` that
+    /// `Vec<u8>::Debug` would emit on a regression cannot collide
+    /// with any decimal field rendering, making the negative
+    /// assertion unambiguous.
+    #[test]
+    fn ke_outcome_partial_debug_redacts_cookies() {
+        let partial = KeOutcomePartial {
+            ntpv4_host: "ntp.example.test".to_owned(),
+            ntpv4_port: 4123,
+            aead_id: 15,
+            cookies: vec![vec![0xBBu8; 64]; 3],
+            warnings: Vec::new(),
+        };
+        let rendered = format!("{partial:?}");
+        assert_eq!(
+            rendered.matches("<redacted").count(),
+            1,
+            "expected exactly one redacted marker (cookies): {rendered}",
+        );
+        assert!(
+            !rendered.contains("0xbb"),
+            "cookie byte token leaked into Debug output: {rendered}",
+        );
+        assert!(
+            rendered.contains("3 cookies"),
+            "redacted cookies field must surface the count for diagnostics: {rendered}",
+        );
+        assert!(
+            rendered.contains("ntp.example.test"),
+            "non-secret host field must remain visible: {rendered}",
+        );
+    }
+}

@@ -3334,7 +3334,7 @@ fn consecutive_request_uids_from_helper_are_distinct() {
 
         let req = ClientRequest {
             unique_id: uid.to_vec(),
-            cookie: cookie.clone(),
+            cookie: zeroize::Zeroizing::new(cookie.clone()),
             placeholder_count: 0,
             nonce,
             transmit_timestamp: 0,
@@ -3365,4 +3365,126 @@ fn consecutive_request_uids_from_helper_are_distinct() {
         "expected 100 distinct UIDs, got {}",
         seen.len()
     );
+}
+
+/// Regression tests for the [`super::lock_recover`] poisoning-
+/// recovery helper. Every `.lock().expect(…)` site in the
+/// `api::nts` module has been swept to `lock_recover(&...)` so a
+/// panic on any thread holding any of the module's mutexes does
+/// not turn into a permanent crash-on-use mode for the client
+/// across the FRB boundary. See the helper's rustdoc for the
+/// safety argument.
+mod lock_recover {
+    use super::super::lock_recover;
+    use std::panic;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    /// Poisons a `Mutex` by panicking from a thread that holds the
+    /// lock, then asserts the recovery helper succeeds where a
+    /// plain `Mutex::lock` would propagate the `PoisonError`. The
+    /// `catch_unwind`-style join is the canonical idiom for
+    /// observing a poisoned mutex from a test harness without
+    /// taking the harness down.
+    #[test]
+    fn lock_recover_returns_inner_guard_after_poisoning() {
+        let m = Arc::new(Mutex::new(42u32));
+        let m2 = Arc::clone(&m);
+
+        // A no-op hook avoids stderr noise when the worker thread
+        // panics during this test; restored on drop so neighbouring
+        // tests are unaffected.
+        let prev_hook = panic::take_hook();
+        panic::set_hook(Box::new(|_| {}));
+        let join_result = thread::spawn(move || {
+            let _g = m2.lock().expect("first lock must succeed");
+            panic!("deliberate panic to poison the mutex");
+        })
+        .join();
+        panic::set_hook(prev_hook);
+
+        // The worker thread panicked: the join returns `Err` and
+        // the mutex is now poisoned.
+        assert!(join_result.is_err(), "worker thread should have panicked");
+        assert!(
+            m.lock().is_err(),
+            "Mutex must be poisoned after the worker thread panicked under the lock",
+        );
+
+        // `lock_recover` extracts the inner guard regardless of
+        // the poison flag and returns the value the worker thread
+        // had written before it panicked (`42`, the initial
+        // value, since the worker did not mutate it).
+        assert_eq!(
+            *lock_recover(&m),
+            42,
+            "lock_recover must return the inner guard even though the mutex is poisoned",
+        );
+    }
+
+    /// Mutations through `lock_recover` are visible to subsequent
+    /// `lock_recover` calls, demonstrating the guard returned by
+    /// the recovery path is the genuine `MutexGuard` (not a
+    /// throwaway). A subsequent plain `lock()` would still report
+    /// the poison flag — recovery clears the inability-to-lock
+    /// failure mode, not the poison bit itself; the `is_err`
+    /// assertion below pins that semantic.
+    #[test]
+    fn lock_recover_guard_is_writable_after_poisoning() {
+        let m = Arc::new(Mutex::new(0u32));
+        let m2 = Arc::clone(&m);
+
+        let prev_hook = panic::take_hook();
+        panic::set_hook(Box::new(|_| {}));
+        let _ = thread::spawn(move || {
+            let _g = m2.lock().expect("first lock must succeed");
+            panic!("poison");
+        })
+        .join();
+        panic::set_hook(prev_hook);
+
+        *lock_recover(&m) = 7;
+        assert_eq!(
+            *lock_recover(&m),
+            7,
+            "lock_recover writes must be visible to subsequent lock_recover reads",
+        );
+        // Plain `lock()` still sees the poison flag — recovery is
+        // opt-in per call site, not a global unpoison.
+        assert!(
+            m.lock().is_err(),
+            "lock_recover does not clear the poison flag; plain lock() still reports it",
+        );
+    }
+}
+
+/// Compile-time pin that the cookie field on [`super::QueryContext`]
+/// is wrapped in [`zeroize::Zeroizing`]. The wrapper's `Drop` impl
+/// wipes the underlying `Vec<u8>` allocation when the context is
+/// dropped, so a spent cookie does not linger in freed heap pages
+/// between the `CookieJar` boundary and the moment
+/// [`crate::nts::ntp::build_client_request`] consumes it. Mirrors
+/// the analogous pin on [`crate::nts::ke::KeOutcome::c2s_key`] in
+/// `ke/tests.rs`. The function-signature trick
+/// (`assert_zeroizing_vec` accepts only `&Zeroizing<Vec<u8>>`)
+/// makes the test fail at compile time if the field is reverted to
+/// a bare `Vec<u8>`.
+#[test]
+fn query_context_cookie_is_zeroizing_wrapped() {
+    use crate::nts::aead::AeadKey;
+    use crate::nts::records::aead::AES_SIV_CMAC_256;
+    use zeroize::Zeroizing;
+
+    fn assert_zeroizing_vec(_: &Zeroizing<Vec<u8>>) {}
+    let ctx = super::QueryContext {
+        session_generation: 0,
+        cookie: Zeroizing::new(vec![0u8; 1]),
+        c2s_key: AeadKey::from_keying_material(AES_SIV_CMAC_256, &[0u8; 32]).unwrap(),
+        s2c_key: AeadKey::from_keying_material(AES_SIV_CMAC_256, &[0u8; 32]).unwrap(),
+        ntpv4_host: String::new(),
+        ntpv4_port: 0,
+        aead_id: AES_SIV_CMAC_256,
+        trust_backend: super::TrustBackend::Platform,
+    };
+    assert_zeroizing_vec(&ctx.cookie);
 }

@@ -9,7 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Default per-host capacity. RFC 8915 §6 advises clients keep at most 8
 /// unused cookies per server to bound exposure if KE state is later
@@ -35,9 +35,11 @@ pub const DEFAULT_CAPACITY: usize = 8;
 /// allocator, and the [`fmt::Debug`] implementation renders only
 /// per-host counts so accidental `{:?}` formatting in logs, panic
 /// messages, or diagnostic output cannot leak bytes. [`Self::take`]
-/// is the one path that does *not* wipe on the way out — that path
-/// hands the cookie to the in-flight NTPv4 exchange that will spend
-/// it, so wiping there would defeat the consumer.
+/// returns the popped cookie wrapped in [`Zeroizing`] so the bytes
+/// are also wiped from RAM once the in-flight NTPv4 exchange drops
+/// the wrapper after building the outbound packet — closing the
+/// last residual surface where a spent cookie could linger in a
+/// freed `Vec<u8>` allocation between the jar and the wire.
 #[derive(Clone)]
 pub struct CookieJar {
     capacity: usize,
@@ -120,8 +122,20 @@ impl CookieJar {
     }
 
     /// Pop and return the oldest unused cookie for `host`, if any.
-    pub fn take(&mut self, host: &str) -> Option<Vec<u8>> {
-        self.inner.get_mut(host).and_then(VecDeque::pop_front)
+    ///
+    /// The cookie is returned inside a [`Zeroizing`] wrapper so its
+    /// bytes are wiped from RAM when the consumer drops the wrapper
+    /// (typically at the end of the NTPv4 exchange that spent it).
+    /// Without the wrapper the spent `Vec<u8>` allocation would
+    /// linger in freed memory until the allocator next overwrote
+    /// the page — the same residual-memory-scrape surface
+    /// [`Self::put`]/[`Self::clear_host`]/[`Drop`] already close
+    /// for the in-jar eviction paths.
+    pub fn take(&mut self, host: &str) -> Option<Zeroizing<Vec<u8>>> {
+        self.inner
+            .get_mut(host)
+            .and_then(VecDeque::pop_front)
+            .map(Zeroizing::new)
     }
 
     /// Number of cookies currently stored for `host`.
@@ -190,9 +204,9 @@ mod tests {
             jar.put(HOST_A, vec![i]);
         }
         assert_eq!(jar.count(HOST_A), 3);
-        assert_eq!(jar.take(HOST_A), Some(vec![0]));
-        assert_eq!(jar.take(HOST_A), Some(vec![1]));
-        assert_eq!(jar.take(HOST_A), Some(vec![2]));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![0])));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![1])));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![2])));
         assert_eq!(jar.take(HOST_A), None);
     }
 
@@ -204,9 +218,9 @@ mod tests {
         }
         assert_eq!(jar.count(HOST_A), 3);
         // Cookies 0 and 1 evicted; 2, 3, 4 survive.
-        assert_eq!(jar.take(HOST_A), Some(vec![2]));
-        assert_eq!(jar.take(HOST_A), Some(vec![3]));
-        assert_eq!(jar.take(HOST_A), Some(vec![4]));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![2])));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![3])));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![4])));
     }
 
     #[test]
@@ -214,8 +228,8 @@ mod tests {
         let mut jar = CookieJar::with_capacity(2);
         jar.put_many(HOST_A, [vec![0u8], vec![1], vec![2], vec![3]]);
         assert_eq!(jar.count(HOST_A), 2);
-        assert_eq!(jar.take(HOST_A), Some(vec![2]));
-        assert_eq!(jar.take(HOST_A), Some(vec![3]));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![2])));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![3])));
     }
 
     #[test]
@@ -305,5 +319,28 @@ mod tests {
             rendered.contains(": 2") && rendered.contains(": 1"),
             "Debug output must surface per-host counts (full output: {rendered})",
         );
+    }
+
+    /// Compile-time pin that [`CookieJar::take`] returns
+    /// `Option<Zeroizing<Vec<u8>>>` so the spent cookie bytes are
+    /// wiped from RAM once the in-flight NTPv4 exchange drops the
+    /// wrapper. A regression that reverted the return type to
+    /// `Option<Vec<u8>>` would re-open the residual-memory-scrape
+    /// surface this wrapper closes; the `assert_zeroizing_vec`
+    /// helper accepts only `&Zeroizing<Vec<u8>>` so the test fails
+    /// at compile time on that regression. Mirrors the analogous
+    /// pin on [`crate::nts::ke::KeOutcome::c2s_key`] /
+    /// [`crate::nts::ke::KeOutcome::s2c_key`] in `ke/tests.rs`.
+    #[test]
+    fn take_returns_zeroizing_wrapped_cookie() {
+        fn assert_zeroizing_vec(_: &Zeroizing<Vec<u8>>) {}
+        let mut jar = CookieJar::new();
+        jar.put(HOST_A, vec![0xAB; 64]);
+        let cookie = jar.take(HOST_A).expect("just-put cookie must pop");
+        assert_zeroizing_vec(&cookie);
+        // Sanity-check the inner bytes survive the wrapper (the
+        // wipe happens only on drop, not on construction).
+        assert_eq!(cookie.len(), 64);
+        assert!(cookie.iter().all(|&b| b == 0xAB));
     }
 }

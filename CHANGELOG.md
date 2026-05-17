@@ -404,15 +404,18 @@ Internal-only — no public Dart-facing surface change; see the
 
 ### Security
 
-Three hygiene fixes raised by an external code review of the
-release branch. None changes the public Dart-facing surface (no
-`NtsError` variant added at the Dart layer; the new internal
+Six hygiene fixes raised by two rounds of external code review of
+the release branch. None changes the public Dart-facing surface
+(no `NtsError` variant added at the Dart layer; the new internal
 `KeError::AlpnMismatch` flows through the existing catch-all
-mapping to `NtsError.keProtocol`). All three are belt-and-braces
-in the same direction the package already takes — AEAD keys
-already zeroize on drop and `KeOutcome` already has a redacted
-`Debug` impl; these extend the same discipline to cookies and
-add a spec-correctness guard on the TLS handshake.
+mapping to `NtsError.keProtocol`). All six are belt-and-braces in
+the same direction the package already takes — AEAD keys already
+zeroize on drop and `KeOutcome` already has a redacted `Debug`
+impl; these extend the same discipline end-to-end across cookies,
+add a spec-correctness guard on the TLS handshake, and turn the
+Rust API layer's `.lock().expect(…)` sites into recoverable
+operations so a single panic can no longer permanently crash an
+`NtsClient` across the FRB boundary.
 
 - **Cookie bytes are now zeroized on every eviction path.** The
   per-host FIFO store in `rust/src/nts/cookies.rs` previously held
@@ -461,6 +464,70 @@ add a spec-correctness guard on the TLS handshake.
   regression tests pin the helper at the variant level (accept
   `Some(b"ntske/1")`, reject `None`, reject `Some(b"h2")`,
   preserve `Some(empty)` as distinct from `None`).
+
+- **`api::nts` mutex sites now recover from poisoning instead of
+  panicking.** Every `Mutex::lock` call in `rust/src/api/nts.rs`
+  (the `SessionTable.map` and `SessionTable.inflight` caches,
+  and the per-key `HandshakeSlot.result` singleflight slot) used
+  to call `.expect("…")` on the returned `LockResult`. If any
+  thread panicked while holding one of those locks the mutex
+  became poisoned and every subsequent FRB-boundary call from
+  any thread would deterministically panic too — turning one
+  recoverable failure into a permanent "this `NtsClient` is dead
+  forever" mode across the Dart bridge. A new private
+  `lock_recover(&mutex)` helper returns the inner guard via
+  `PoisonError::into_inner` regardless of the poison flag, and
+  every `.lock().expect(…)` site has been swept to use it. The
+  caches and singleflight registry are tolerant of mid-update
+  panics by construction (caches: at worst a stale entry that
+  the next eviction reaps; singleflight: `LeaderGuard::drop`
+  already publishes an `Internal` error to waiters on the
+  leader-aborted path), so unpoisoned access is safe. Two
+  regression tests pin the recovery semantics: one asserts a
+  poisoned-then-recovered mutex returns the inner value, and
+  one asserts mutations through `lock_recover` survive across
+  recovery while plain `Mutex::lock` still reports the poison
+  flag (recovery is opt-in per call site, not a global unpoison).
+
+- **`KeOutcomePartial`'s `Debug` impl no longer prints cookie
+  bytes.** The internal partial-outcome struct returned by
+  `validate_response` previously had `#[derive(Debug)]` over a
+  `cookies: Vec<Vec<u8>>` field. Although `pub(crate)` so the
+  type does not surface beyond this crate, any `{:?}` site
+  reached during a refactor (panic backtrace, `dbg!`, internal
+  error-formatting chain that ever touches the partial outcome)
+  would leak the cookies the post-handshake `KeOutcome` already
+  redacts. `Debug` is now hand-rolled to render `cookies` as
+  `<redacted; N cookies>` — same shape as the `KeOutcome`
+  manual impl. A regression test mirrors the existing
+  `ke_outcome_debug_redacts_exporter_keys_and_cookies` shape,
+  pinning the marker count and the absence of cookie byte
+  tokens in the rendered output.
+
+- **Spent cookies are now zeroized end-to-end through the
+  `CookieJar` → outbound packet pipeline.** The 4.0.0 first
+  security pass added zeroization to the `CookieJar` eviction
+  paths (`put` overflow, `clear_host`, `Drop`), but the "happy
+  path" `take` returned a plain `Vec<u8>` that then moved
+  through `QueryContext.cookie: Vec<u8>` → `ClientRequest.cookie:
+  Vec<u8>` → `build_client_request` → outbound packet, with no
+  intermediate allocation wiped after the packet was built and
+  sent. `CookieJar::take` now returns `Option<Zeroizing<Vec<u8>>>`
+  so the spent bytes ride inside the same `Zeroizing` wrapper
+  from the jar boundary all the way to the wire; `QueryContext.cookie`
+  and `ClientRequest.cookie` were both retyped to
+  `Zeroizing<Vec<u8>>` (same shape as `KeOutcome.c2s_key` /
+  `s2c_key` already use), so each intermediate holder wipes the
+  cookie bytes on `Drop`. `ClientRequest` additionally drops its
+  `#[derive(Debug, Clone)]` for a manual `Debug` impl that
+  redacts the cookie field as `<redacted; N bytes>` — closing
+  the cookie-Debug-leak path one step further along the
+  pipeline. Two regression tests pin the change: a compile-time
+  `assert_zeroizing_vec` helper accepts only
+  `&Zeroizing<Vec<u8>>` on `QueryContext.cookie` and
+  `ClientRequest.cookie`, and a runtime test asserts
+  `format!("{req:?}")` does not surface cookie byte tokens for a
+  sentinel-payloaded `ClientRequest`.
 
 ### Documentation
 

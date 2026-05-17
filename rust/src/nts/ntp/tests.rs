@@ -1,4 +1,6 @@
 use super::*;
+use zeroize::Zeroizing;
+
 use crate::nts::aead::{AeadKey, IdentityAead, NONCE_LEN_GCM_SIV};
 use crate::nts::test_helpers::{
     craft_response, craft_response_with, craft_unauthenticated_ntsn, fresh_keys, sample_request,
@@ -657,7 +659,7 @@ mod alt_aead {
         // whatever the caller produced, so substitute a 12-byte one here.
         let req = ClientRequest {
             unique_id: UID.to_vec(),
-            cookie: COOKIE.to_vec(),
+            cookie: Zeroizing::new(COOKIE.to_vec()),
             placeholder_count: 0,
             nonce: vec![0x44; NONCE_LEN_GCM_SIV],
             transmit_timestamp: CLIENT_TX,
@@ -787,6 +789,78 @@ mod regression {
         assert!(
             parse_extensions(&PACKET[HEADER_LEN..]).is_err(),
             "extension parser must reject undersized-encryption EF without panicking",
+        );
+    }
+}
+
+mod client_request {
+    use super::*;
+
+    /// Compile-time pin that [`ClientRequest::cookie`] is wrapped in
+    /// [`zeroize::Zeroizing`] so the spent cookie bytes are wiped
+    /// from RAM when the `ClientRequest` drops (after
+    /// [`build_client_request`] has serialised them onto the wire).
+    /// The function-signature trick (`assert_zeroizing_vec` accepts
+    /// only `&Zeroizing<Vec<u8>>`) makes the test fail at compile
+    /// time if the field is reverted to a bare `Vec<u8>`.
+    #[test]
+    fn cookie_field_is_zeroizing_wrapped() {
+        fn assert_zeroizing_vec(_: &Zeroizing<Vec<u8>>) {}
+        let req = sample_request();
+        assert_zeroizing_vec(&req.cookie);
+    }
+
+    /// Pins the manual `Debug` redaction on [`ClientRequest`]: the
+    /// `cookie` field must not appear in the rendered output, even
+    /// though `Zeroizing<Vec<u8>>` derives `Debug` from the inner
+    /// `Vec<u8>` and would otherwise emit the cookie bytes
+    /// verbatim. A regression that reverted to `#[derive(Debug)]`
+    /// on `ClientRequest` would re-expose live cookies in any
+    /// `{:?}` formatting site (assertion-failure messages, panic
+    /// payloads, accidental log lines).
+    ///
+    /// Mirrors the cookies-debug-redaction test pattern on
+    /// [`crate::nts::ke::KeOutcome`] in `ke/tests.rs`. The
+    /// sentinel cookie bytes (`0xAB`) are chosen so the hex
+    /// rendering `Vec<u8>::Debug` produces (`0xab`) cannot collide
+    /// with any decimal field rendering, making the negative
+    /// assertion unambiguous.
+    #[test]
+    fn debug_redacts_cookie() {
+        let req = ClientRequest {
+            unique_id: vec![0x12; 32],
+            cookie: Zeroizing::new(vec![0xABu8; 64]),
+            placeholder_count: 3,
+            nonce: vec![0x34; 16],
+            transmit_timestamp: 0xDEAD_BEEF_DEAD_BEEFu64,
+        };
+        let rendered = format!("{req:?}");
+
+        // The redaction marker must appear for the cookie field
+        // and only for the cookie field — non-secret fields pass
+        // through verbatim.
+        assert_eq!(
+            rendered.matches("<redacted").count(),
+            1,
+            "expected exactly one redacted marker (the cookie field): {rendered}",
+        );
+        // The literal `0xab` hex token `Vec<u8>::Debug` would emit
+        // for the cookie bytes must not appear anywhere in the
+        // rendered output.
+        assert!(
+            !rendered.contains("0xab"),
+            "cookie byte token leaked into Debug output: {rendered}",
+        );
+        // The redacted form must surface the on-wire length for
+        // diagnostics.
+        assert!(
+            rendered.contains("64 bytes"),
+            "redacted cookie field must surface the byte count: {rendered}",
+        );
+        // Non-secret fields pass through verbatim.
+        assert!(
+            rendered.contains("placeholder_count: 3"),
+            "non-secret placeholder_count must remain visible: {rendered}",
         );
     }
 }
