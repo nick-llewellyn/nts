@@ -78,6 +78,17 @@ match the authentication mechanism, and the Trust-status panel
 drops the singleton-snapshot row that was structurally destined
 to remain at sentinel values during every demo run.
 
+Three hygiene fixes from an external code review of the release
+branch land on top: cookie bytes now zeroize on every eviction
+path (matching the discipline already applied to AEAD key
+material), `CookieJar`'s `Debug` impl renders counts only
+(matching the redacted `Debug` on `KeOutcome`), and
+`perform_handshake` now verifies that the post-handshake
+negotiated ALPN matches `ntske/1` (the value
+`build_tls_config` already advertised; RFC 8915 §4 requires it).
+Internal-only — no public Dart-facing surface change; see the
+`### Security` subsection below for the full shape.
+
 ### Changed — example app
 
 - The home page is now split across two tabs ("Client" / "Log")
@@ -391,6 +402,66 @@ to remain at sentinel values during every demo run.
     variant and payload, so waiters do not silently retry against a
     server that just rejected the leader.
 
+### Security
+
+Three hygiene fixes raised by an external code review of the
+release branch. None changes the public Dart-facing surface (no
+`NtsError` variant added at the Dart layer; the new internal
+`KeError::AlpnMismatch` flows through the existing catch-all
+mapping to `NtsError.keProtocol`). All three are belt-and-braces
+in the same direction the package already takes — AEAD keys
+already zeroize on drop and `KeOutcome` already has a redacted
+`Debug` impl; these extend the same discipline to cookies and
+add a spec-correctness guard on the TLS handshake.
+
+- **Cookie bytes are now zeroized on every eviction path.** The
+  per-host FIFO store in `rust/src/nts/cookies.rs` previously held
+  cookies as plain `Vec<u8>` and dropped them with `pop_front` /
+  `VecDeque::clear` on overflow eviction, `clear_host`, and `Drop`.
+  None of those paths wiped the backing allocation, so a process-
+  memory scrape after eviction could in principle recover the
+  cookie bytes. Cookies are NTS authentication material (RFC 8915
+  §6: "use at most once" / "keep at most 8 unused per server"),
+  so the discipline already applied to AEAD key material in
+  `rust/src/nts/aead.rs` (via `ZeroizeOnDrop`) now extends to the
+  cookie store: capacity-overflow eviction in `CookieJar::put`,
+  authentication-failure clears in `CookieJar::clear_host`, and
+  a new `impl Drop for CookieJar` all call `Vec::zeroize` before
+  the backing allocation is released. The `take` path is
+  intentionally not wiped — that path hands the cookie to the
+  in-flight NTPv4 exchange that will spend it, so wiping would
+  defeat the consumer.
+
+- **`CookieJar`'s `Debug` impl no longer prints cookie bytes.**
+  The struct's previous `#[derive(Debug, Clone)]` rendered the
+  full per-host `Vec<Vec<u8>>` on any `{:?}` formatting site.
+  Cookies are authentication material; an accidental panic
+  backtrace, log macro, or diagnostic format could leak them.
+  `Debug` is now hand-rolled to print per-host *counts only*,
+  mirroring the redacted `Debug` already applied to `KeOutcome`.
+  Internal change; no public-API impact.
+
+- **NTS-KE now verifies the negotiated TLS ALPN matches
+  `ntske/1`.** `build_tls_config` already advertised
+  `alpn_protocols = [b"ntske/1"]` per RFC 8915 §4, but
+  `perform_handshake` did not call `ClientConnection::alpn_protocol()`
+  after the handshake completed. A TLS 1.3 server that completed
+  the handshake without honouring our ALPN selection (either
+  omitting the ALPN extension entirely or selecting a different
+  protocol) would have its payload flow into `read_to_end_capped`
+  and surface as a less-specific NTS-KE record-parse error.
+  After this release, the post-handshake guard explicitly checks
+  `alpn_protocol() == Some(b"ntske/1")` and returns a new
+  `KeError::AlpnMismatch { negotiated: Option<Vec<u8>> }`
+  otherwise (distinct from `rustls::Error::NoApplicationProtocol`,
+  which fires *during* the handshake when ALPN is mutually
+  required by the server). The new variant surfaces to Dart via
+  the catch-all `From<KeError> for NtsError` mapping as
+  `NtsError.keProtocol`; no Dart-side surface change. Three
+  regression tests pin the helper at the variant level (accept
+  `Some(b"ntske/1")`, reject `None`, reject `Some(b"h2")`,
+  preserve `Some(empty)` as distinct from `None`).
+
 ### Documentation
 
 - README's "API summary" table now includes:
@@ -425,6 +496,17 @@ to remain at sentinel values during every demo run.
   `trustBackend` field on `NtsTimeSample` / `NtsWarmCookiesOutcome`
   and the `defaultClientBackend` field on `NtsTrustStatus` to a
   concrete enum without leaving the README.
+- New `## Security considerations` section in `README.md` between
+  `Production Considerations` and the `API summary`. Documents the
+  inherent SSRF surface a "take a caller-supplied hostname, do
+  DNS / TCP / UDP against it" library carries — the package
+  cannot constrain *which* hosts a caller is allowed to reach,
+  so call sites that accept hostnames from untrusted input must
+  apply allowlists / private-range rejection / port gating
+  themselves. Cross-links the bounded DNS pool to make the
+  "amplification is bounded, destination is not" distinction
+  explicit. Surfaces a recommendation raised by an external
+  code review of the release branch.
 
 ### Migration from 3.0.x
 

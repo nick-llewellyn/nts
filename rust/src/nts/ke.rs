@@ -504,6 +504,24 @@ pub enum KeError {
         received: usize,
         cap: usize,
     },
+    /// TLS 1.3 handshake completed but the server did not select the
+    /// `ntske/1` ALPN protocol identifier required by RFC 8915 §4.
+    ///
+    /// `negotiated` carries the bytes the server actually selected:
+    /// `None` when the server omitted the ALPN extension entirely
+    /// (a TLS 1.3 server that doesn't speak ALPN at all), and
+    /// `Some(bytes)` when the server picked a different protocol
+    /// (e.g. an `h2`-only server that completed the TLS handshake
+    /// despite our `alpn_protocols = [ntske/1]` preference list).
+    ///
+    /// Distinct from `Tls(rustls::Error::NoApplicationProtocol)`,
+    /// which `rustls` raises *during* the handshake when the server
+    /// respects ALPN but has no protocol in common with our offer.
+    /// `AlpnMismatch` is the post-handshake guard for servers that
+    /// complete the handshake without honouring the ALPN selection.
+    AlpnMismatch {
+        negotiated: Option<Vec<u8>>,
+    },
 }
 
 /// A [`KeError`] paired with the trust-anchor backend resolved by
@@ -602,6 +620,18 @@ impl std::fmt::Display for KeError {
             Self::TrustBackendUnavailable(m) => {
                 write!(f, "trust backend unavailable (PlatformOnly mode): {m}")
             }
+            Self::AlpnMismatch { negotiated: None } => f.write_str(
+                "TLS handshake completed without negotiating any ALPN \
+                 protocol; RFC 8915 §4 requires `ntske/1`",
+            ),
+            Self::AlpnMismatch {
+                negotiated: Some(bytes),
+            } => write!(
+                f,
+                "TLS handshake negotiated ALPN {:?}, expected `ntske/1` \
+                 (RFC 8915 §4)",
+                String::from_utf8_lossy(bytes),
+            ),
         }
     }
 }
@@ -1186,6 +1216,20 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
             .flush()
             .map_err(|e| attribute(phase_io_to_ke(e, KeTimeoutPhase::Tls)))?;
         let tls_handshake_micros = tls_started.elapsed().as_micros() as i64;
+        // Post-handshake ALPN verification (RFC 8915 §4). `flush()`
+        // forces the TLS 1.3 handshake to completion under rustls'
+        // lazy-handshake model, so by this point `alpn_protocol()`
+        // reflects the server's actual selection. `rustls` raises
+        // `Error::NoApplicationProtocol` during the handshake when
+        // the server respects ALPN but has no protocol in common
+        // with our offer; this check catches the *other* shape — a
+        // server that completes the handshake without honouring our
+        // `alpn_protocols = [ntske/1]` preference (either ignoring
+        // ALPN entirely or selecting a different protocol). Without
+        // this check, such a server's TLS payload would flow into
+        // `read_to_end_capped` and the failure would surface as a
+        // less-specific record-parse error.
+        check_negotiated_alpn(stream.conn.alpn_protocol()).map_err(attribute)?;
         let record_started = Instant::now();
         let response = read_to_end_capped(&mut stream, deadline.as_ref()).map_err(attribute)?;
         let ke_record_io_micros = record_started.elapsed().as_micros() as i64;
@@ -1457,6 +1501,26 @@ fn next_chunk_within_budget(buf_len: usize, n: usize, cap: usize) -> Result<(), 
         Err(KeError::ResponseTooLarge { received, cap })
     } else {
         Ok(())
+    }
+}
+
+/// Pure ALPN-verification decision extracted from [`perform_handshake`]
+/// so the post-handshake check can be exercised by a unit test
+/// without standing up a TLS handshake. Returns `Ok(())` if the
+/// server selected the `ntske/1` ALPN protocol identifier required by
+/// RFC 8915 §4; returns [`KeError::AlpnMismatch`] otherwise, with
+/// `negotiated` populated from the server's actual selection (either
+/// `None` for "no ALPN extension at all" or `Some(bytes)` for "ALPN
+/// negotiated but to a different protocol"). The byte payload is
+/// owned (`Vec<u8>`) so the error variant survives past the
+/// `ClientConnection`'s lifetime.
+fn check_negotiated_alpn(actual: Option<&[u8]>) -> Result<(), KeError> {
+    if actual == Some(ALPN_NTSKE) {
+        Ok(())
+    } else {
+        Err(KeError::AlpnMismatch {
+            negotiated: actual.map(<[u8]>::to_vec),
+        })
     }
 }
 

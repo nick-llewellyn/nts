@@ -7,6 +7,9 @@
 //! to bound exposure if the host's KE state is later compromised.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
+
+use zeroize::Zeroize;
 
 /// Default per-host capacity. RFC 8915 §6 advises clients keep at most 8
 /// unused cookies per server to bound exposure if KE state is later
@@ -21,10 +24,43 @@ pub const DEFAULT_CAPACITY: usize = 8;
 /// dropped to make room for the newest. `take` also pops from the front so
 /// the oldest cookie in the pool is spent first; combined this means a cookie
 /// is either spent or evicted (never reused), satisfying RFC 8915 §6.
-#[derive(Debug, Clone)]
+///
+/// Cookies are NTS authentication material (RFC 8915 §6): a recovered
+/// cookie lets an attacker impersonate the original client to the NTS
+/// server for the lifetime of the cookie's server-side AEAD key. The
+/// jar therefore treats cookie bytes the way [`crate::nts::aead`]
+/// treats AEAD key material: bytes are wiped from RAM at every
+/// eviction path ([`Self::put`] overflow, [`Self::clear_host`], and
+/// [`Drop`]) before the backing allocation is returned to the
+/// allocator, and the [`fmt::Debug`] implementation renders only
+/// per-host counts so accidental `{:?}` formatting in logs, panic
+/// messages, or diagnostic output cannot leak bytes. [`Self::take`]
+/// is the one path that does *not* wipe on the way out — that path
+/// hands the cookie to the in-flight NTPv4 exchange that will spend
+/// it, so wiping there would defeat the consumer.
+#[derive(Clone)]
 pub struct CookieJar {
     capacity: usize,
     inner: HashMap<String, VecDeque<Vec<u8>>>,
+}
+
+impl fmt::Debug for CookieJar {
+    /// Render counts only; cookies are NTS authentication material
+    /// (RFC 8915 §6) and must not leak via accidental `{:?}` in logs,
+    /// panic messages, or diagnostic output. Mirrors the redacted
+    /// `Debug` on [`crate::nts::ke::KeOutcome`] so the same hygiene
+    /// applies at both ends of the KE → cache pipeline.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let counts: HashMap<&str, usize> = self
+            .inner
+            .iter()
+            .map(|(host, queue)| (host.as_str(), queue.len()))
+            .collect();
+        f.debug_struct("CookieJar")
+            .field("capacity", &self.capacity)
+            .field("counts", &counts)
+            .finish()
+    }
 }
 
 impl Default for CookieJar {
@@ -55,11 +91,19 @@ impl CookieJar {
     }
 
     /// Insert a single cookie, evicting the oldest when at capacity.
+    ///
+    /// Evicted cookies are zeroized before their backing allocation
+    /// is released so the bytes cannot be recovered by a later
+    /// memory-scrape on a compromised process — matches the
+    /// `ZeroizeOnDrop` discipline [`crate::nts::aead`] applies to
+    /// AEAD key material.
     pub fn put(&mut self, host: &str, cookie: Vec<u8>) {
         let queue = self.inner.entry(host.to_owned()).or_default();
         queue.push_back(cookie);
         while queue.len() > self.capacity {
-            queue.pop_front();
+            if let Some(mut victim) = queue.pop_front() {
+                victim.zeroize();
+            }
         }
     }
 
@@ -92,14 +136,36 @@ impl CookieJar {
 
     /// Drop every cookie for `host`. Useful when a query returns an
     /// authentication failure and the entire pool must be invalidated.
+    ///
+    /// Each cookie is zeroized before being dropped so an
+    /// authentication-failure-driven pool invalidation does not leave
+    /// the rejected cookies recoverable in freed allocations.
     pub fn clear_host(&mut self, host: &str) {
         if let Some(queue) = self.inner.get_mut(host) {
-            queue.clear();
+            for mut cookie in queue.drain(..) {
+                cookie.zeroize();
+            }
         }
     }
 
     pub fn hosts(&self) -> impl Iterator<Item = &str> {
         self.inner.keys().map(String::as_str)
+    }
+}
+
+impl Drop for CookieJar {
+    /// Zeroize every remaining cookie before the jar's backing
+    /// allocations are released. Triggered on every drop path:
+    /// `SessionTable` eviction, `NtsClient::clear`, process teardown,
+    /// or the jar simply going out of scope. Without this the
+    /// `HashMap` / `VecDeque` / `Vec<u8>` natural-drop chain would
+    /// release the cookie bytes back to the allocator intact.
+    fn drop(&mut self) {
+        for queue in self.inner.values_mut() {
+            for cookie in queue.iter_mut() {
+                cookie.zeroize();
+            }
+        }
     }
 }
 

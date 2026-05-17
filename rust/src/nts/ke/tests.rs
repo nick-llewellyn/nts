@@ -1136,6 +1136,85 @@ mod streaming_read {
     }
 }
 
+mod alpn_verification {
+    use super::*;
+
+    /// Pins the post-handshake ALPN check (RFC 8915 §4): when the
+    /// server selects the `ntske/1` protocol identifier we advertised
+    /// in `alpn_protocols`, [`check_negotiated_alpn`] must accept.
+    /// Mirrors `next_chunk_within_budget`'s testing strategy: factor
+    /// the decision out of the I/O-bound caller so a unit test can
+    /// exercise the guard without standing up a TLS handshake.
+    #[test]
+    fn check_negotiated_alpn_accepts_ntske_one() {
+        check_negotiated_alpn(Some(b"ntske/1"))
+            .expect("`ntske/1` selection must be accepted");
+    }
+
+    /// `rustls` raises `Error::NoApplicationProtocol` during the
+    /// handshake when the server respects ALPN but has no protocol in
+    /// common with our offer; this test pins the *other* shape — a
+    /// server that completes the TLS handshake without advertising any
+    /// ALPN extension at all. `check_negotiated_alpn(None)` must trip
+    /// [`KeError::AlpnMismatch`] with `negotiated: None` so the
+    /// diagnostic distinguishes "no ALPN at all" from "wrong ALPN".
+    #[test]
+    fn check_negotiated_alpn_rejects_missing_extension() {
+        match check_negotiated_alpn(None) {
+            Err(KeError::AlpnMismatch { negotiated: None }) => {}
+            other => panic!(
+                "expected AlpnMismatch {{ negotiated: None }}, got {other:?}",
+            ),
+        }
+    }
+
+    /// Pins the wrong-protocol shape: a server that completes the TLS
+    /// handshake having selected an ALPN value other than `ntske/1`
+    /// (e.g. `h2`, because the server treated our `[ntske/1]` offer
+    /// as advisory and negotiated its own preferred protocol).
+    /// `check_negotiated_alpn(Some(other))` must trip
+    /// [`KeError::AlpnMismatch`] and surface the actual server
+    /// selection in `negotiated` so an operator can attribute the
+    /// failure without parsing free-form strings.
+    #[test]
+    fn check_negotiated_alpn_rejects_wrong_protocol() {
+        match check_negotiated_alpn(Some(b"h2")) {
+            Err(KeError::AlpnMismatch {
+                negotiated: Some(bytes),
+            }) => assert_eq!(
+                bytes, b"h2",
+                "negotiated payload must carry the server's actual selection verbatim",
+            ),
+            other => panic!(
+                "expected AlpnMismatch {{ negotiated: Some(b\"h2\") }}, got {other:?}",
+            ),
+        }
+    }
+
+    /// Boundary case: empty ALPN payload. A misbehaving server could
+    /// in principle complete the handshake having selected an empty
+    /// byte string; the check must still reject (since the empty
+    /// string is not `ntske/1`) and the diagnostic must carry the
+    /// empty payload verbatim rather than collapsing onto the `None`
+    /// arm — the two are different on-the-wire shapes (no extension
+    /// vs extension carrying a zero-length protocol) and we want the
+    /// surfaced error to preserve that distinction.
+    #[test]
+    fn check_negotiated_alpn_rejects_empty_payload_distinctly_from_missing() {
+        match check_negotiated_alpn(Some(b"")) {
+            Err(KeError::AlpnMismatch {
+                negotiated: Some(bytes),
+            }) => assert!(
+                bytes.is_empty(),
+                "empty-payload selection must survive as `Some(empty)`, not collapse to None",
+            ),
+            other => panic!(
+                "expected AlpnMismatch {{ negotiated: Some(empty) }}, got {other:?}",
+            ),
+        }
+    }
+}
+
 mod ke_outcome {
     use super::*;
 
