@@ -183,7 +183,7 @@ class _LogViewState extends State<LogView> {
 ///
 /// Hoisted to a top-level function so both the full [LogView] card
 /// on the Log tab and the single-entry summary card on the Client
-/// tab ([LatestResultPanel]) render rows byte-for-byte identically.
+/// tab (`LatestResultPanel`) render rows byte-for-byte identically.
 List<InlineSpan> buildLogEntrySpans(
   ThemeData theme,
   NtsColors colors,

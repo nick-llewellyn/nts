@@ -2,15 +2,15 @@
 //
 // Reads `state.log.entries.value.lastOrNull` through `Watch` and
 // renders that one entry using the same span structure the full
-// [LogView] uses on the Log tab — see [buildLogEntrySpans]. The
+// `LogView` uses on the Log tab — see [buildLogEntrySpans]. The
 // goal is byte-for-byte rendering parity so the user can compare a
 // summary line on the Client tab against its sibling row on the
 // Log tab without noticing any difference in formatting.
 //
-// Bounded to four visible lines via [SelectableText.rich.maxLines]
-// so a long success payload doesn't push the surrounding panels
-// off-screen on shorter viewports; the user can flip to the Log tab
-// for the full rendering.
+// Bounded to four visible lines via the `maxLines` parameter on
+// `SelectableText.rich` so a long success payload doesn't push the
+// surrounding panels off-screen on shorter viewports; the user can
+// flip to the Log tab for the full rendering.
 //
 // Empty-state copy reuses the verb from the action button so a new
 // user is told exactly where to tap next.

@@ -103,10 +103,10 @@ class HomePage extends StatelessWidget {
 ///   below. Covers tablet multi-window slices, foldables in the
 ///   folded half-state, and the brief frame during a pending
 ///   phone-to-portrait rotation before the orientation lock from
-///   [_lockOrientationOnPhones] takes effect. Without this dispatch
-///   the four panels (~220dp combined intrinsic) plus the filter
-///   bar's ~120dp minimum can't both fit, and the outer column
-///   surfaces a `RenderFlex` overflow.
+///   `_lockOrientationOnPhones` (in `main.dart`) takes effect.
+///   Without this dispatch the four panels (~220dp combined
+///   intrinsic) plus the filter bar's ~120dp minimum can't both
+///   fit, and the outer column surfaces a `RenderFlex` overflow.
 class _ClientTab extends StatelessWidget {
   const _ClientTab({required this.state, required this.controller});
 
