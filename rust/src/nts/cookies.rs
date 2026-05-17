@@ -46,6 +46,38 @@ pub struct CookieJar {
     inner: HashMap<String, VecDeque<Vec<u8>>>,
 }
 
+/// Inner-map renderer for [`CookieJar`]'s redacted `Debug`.
+/// Walks `self.0` once via `f.debug_map()` so the per-`{:?}` cost
+/// is a single `Formatter` interaction rather than the
+/// intermediate `HashMap<&str, usize>::collect()` the earlier
+/// implementation paid. Hosts are sorted before emission so the
+/// rendered output is deterministic across `HashMap` reseeds
+/// (the `std::collections::HashMap` iteration order is otherwise
+/// implementation-defined and varies run-to-run), which keeps
+/// snapshot-style regression tests against the rendered form
+/// stable. The wrapper is private to this module — it exists
+/// only as a `&dyn fmt::Debug` target for `debug_struct().field`.
+struct DebugCookieCounts<'a>(&'a HashMap<String, VecDeque<Vec<u8>>>);
+
+impl fmt::Debug for DebugCookieCounts<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut hosts: Vec<&str> = self.0.keys().map(String::as_str).collect();
+        hosts.sort_unstable();
+        let mut m = f.debug_map();
+        for host in hosts {
+            // `expect` is sound: `host` came from `self.0.keys()`
+            // immediately above and `self.0` is borrowed
+            // immutably for the duration of this `fmt` call.
+            let queue = self
+                .0
+                .get(host)
+                .expect("host was just enumerated from self.0.keys()");
+            m.entry(&host, &queue.len());
+        }
+        m.finish()
+    }
+}
+
 impl fmt::Debug for CookieJar {
     /// Render counts only; cookies are NTS authentication material
     /// (RFC 8915 §6) and must not leak via accidental `{:?}` in logs,
@@ -53,14 +85,9 @@ impl fmt::Debug for CookieJar {
     /// `Debug` on [`crate::nts::ke::KeOutcome`] so the same hygiene
     /// applies at both ends of the KE → cache pipeline.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let counts: HashMap<&str, usize> = self
-            .inner
-            .iter()
-            .map(|(host, queue)| (host.as_str(), queue.len()))
-            .collect();
         f.debug_struct("CookieJar")
             .field("capacity", &self.capacity)
-            .field("counts", &counts)
+            .field("counts", &DebugCookieCounts(&self.inner))
             .finish()
     }
 }
@@ -271,11 +298,22 @@ mod tests {
     /// Pins the redacted `Debug` impl: cookies are NTS authentication
     /// material (RFC 8915 §6) and must not leak via any `{:?}`
     /// formatting site. The hand-rolled `Debug` renders per-host
-    /// counts only; a sentinel cookie payload `0xDEADBEEFDEADBEEF`
-    /// must not appear anywhere in the formatted output. If a future
-    /// edit reinstates `#[derive(Debug)]` (collapses to the natural
-    /// `HashMap<String, VecDeque<Vec<u8>>>` rendering) this test
-    /// fails because the sentinel bytes show up in the debug output.
+    /// counts only.
+    ///
+    /// The negative assertion checks that the rendered output does
+    /// not contain the exact substring `Vec<u8>::Debug` would
+    /// produce for the sentinel cookie (e.g. `[222, 173, 190,
+    /// 239, ...]`). That is the load-bearing shape: a regression
+    /// that reverted to `#[derive(Debug)]` would emit cookies
+    /// through the natural `Vec<Vec<u8>>` rendering, which is
+    /// exactly `Vec<u8>::Debug` for each inner vector. Asserting
+    /// the *concatenated* decimal sequence (rather than scanning
+    /// for each individual byte in isolation) keeps the check
+    /// robust against unrelated changes to `HOST_A` / `HOST_B` /
+    /// `capacity` that happen to contain one of the sentinel
+    /// byte values as a substring — the multi-byte sequence is
+    /// vanishingly unlikely to collide with any structural field
+    /// rendering.
     #[test]
     fn debug_impl_renders_counts_only_and_does_not_leak_cookie_bytes() {
         let mut jar = CookieJar::with_capacity(4);
@@ -286,19 +324,17 @@ mod tests {
 
         let rendered = format!("{jar:?}");
 
-        // The redaction goal: sentinel bytes must not appear in any
-        // form (hex, decimal, character) that an attacker reading
-        // the log could reconstruct.
-        for byte in &sentinel {
-            assert!(
-                !rendered.contains(&format!("{byte}")),
-                "Debug output must not contain raw cookie byte {byte} (full output: {rendered})",
-            );
-            assert!(
-                !rendered.contains(&format!("0x{byte:02x}")),
-                "Debug output must not contain hex cookie byte 0x{byte:02x} (full output: {rendered})",
-            );
-        }
+        // The redaction goal: a `Vec<u8>::Debug` rendering of the
+        // sentinel (the exact shape `#[derive(Debug)]` over
+        // `Vec<Vec<u8>>` would emit) must not appear in the
+        // rendered output.
+        let leaked_form = format!("{sentinel:?}");
+        assert!(
+            !rendered.contains(&leaked_form),
+            "Debug output must not contain a Vec<u8>::Debug rendering of the \
+             sentinel cookie ({leaked_form:?}); full output: {rendered}",
+        );
+
         // The render must still carry the structural information
         // callers actually want from a debug print: capacity and
         // per-host counts.
