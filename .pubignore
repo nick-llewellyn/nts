@@ -94,3 +94,20 @@ tool/
 # in this repo's CI; it is not part of the public API and does not
 # help consumers verify their integration.
 test/
+
+# Test-only Rust modules. Each external `tests.rs` sibling file (and
+# the shared `test_helpers` module under nts/) is referenced via
+# `#[cfg(test)] mod tests;` / `#[cfg(test)] pub(crate) mod
+# test_helpers;` in the parent file, so Native Assets'
+# `cargo build --release` against the consumer's machine never
+# compiles or even parses them — the `#[cfg(test)]` attribute removes
+# the module reference before file lookup. Inline
+# `#[cfg(test)] mod tests { … }` blocks inside files like
+# `rust/src/nts/cookies.rs` / `dns.rs` / `aead.rs` stay in place
+# because those parent files are required by release builds; only the
+# inner `tests` mod is cfg-gated. Excluding the sibling test files
+# shaves ~243 KB uncompressed (~80 KB compressed, ~15% of the 4.0.0
+# archive) without breaking any consumer-visible build path. Glob
+# form so future test-module extractions are covered automatically.
+rust/src/**/tests.rs
+rust/src/**/test_helpers.rs
