@@ -11,7 +11,7 @@
 //   * **Client** tab — `ServerListView` (Expanded), `ActionPanel`,
 //     `TrustStatusPanel`, `LatestResultPanel`. This is the
 //     interactive surface: pick a server, pick a trust mode, fire
-//     a query, read the one-line summary.
+//     a query, read the single-entry summary.
 //   * **Log** tab — `LogView` fills the whole tab body so the user
 //     can scroll history without the action surface stealing
 //     vertical space.

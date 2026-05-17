@@ -26,10 +26,11 @@
   Same behaviour, shorter text — widens the available space in the
   filter row's `Region` dropdown on narrow viewports. (`nts-a3o`)
 - New `LatestResultPanel` widget on the Client tab surfaces the
-  most recent `NtsLogEntry` in a single-line summary card,
+  most recent `NtsLogEntry` in a single-entry summary card,
   rendered byte-for-byte identically to its sibling row on the Log
   tab via the hoisted `buildLogEntrySpans` helper. Bounded to four
-  visible lines via `SelectableText.rich.maxLines`. (`nts-a3o`)
+  visible lines via the `maxLines` parameter on
+  `SelectableText.rich`. (`nts-a3o`)
 
 - The `formatTrustBackend` helper now renders
   `TrustBackend.platformWithHybridFallback` as `webpki-fallback`
