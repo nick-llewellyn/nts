@@ -78,16 +78,36 @@ match the authentication mechanism, and the Trust-status panel
 drops the singleton-snapshot row that was structurally destined
 to remain at sentinel values during every demo run.
 
-Three hygiene fixes from an external code review of the release
-branch land on top: cookie bytes now zeroize on every eviction
-path (matching the discipline already applied to AEAD key
-material), `CookieJar`'s `Debug` impl renders counts only
-(matching the redacted `Debug` on `KeOutcome`), and
-`perform_handshake` now verifies that the post-handshake
-negotiated ALPN matches `ntske/1` (the value
-`build_tls_config` already advertised; RFC 8915 §4 requires it).
+Six hygiene fixes from two rounds of external code review of the
+release branch land on top:
+
+1. cookie bytes zeroize on every `CookieJar` eviction path
+   (matching the discipline already applied to AEAD key material);
+2. `CookieJar`'s `Debug` impl renders per-host counts only
+   (matching the redacted `Debug` on `KeOutcome`);
+3. `perform_handshake` verifies that the post-handshake
+   negotiated ALPN matches `ntske/1` (the value
+   `build_tls_config` already advertised; RFC 8915 §4 requires
+   it), via a new `KeError::AlpnMismatch` variant;
+4. every `.lock().expect(…)` site in `api::nts` now routes
+   through a private `lock_recover` helper that recovers from
+   poisoning instead of panicking, so a single panic on any
+   thread holding one of the module's mutexes cannot turn into
+   a permanent crash-on-use mode for the client across the FRB
+   boundary;
+5. `KeOutcomePartial`'s `Debug` impl renders cookies as a count
+   only, mirroring the discipline already applied to
+   `KeOutcome`;
+6. spent cookies zeroize end-to-end through the
+   `CookieJar::take` → `QueryContext.cookie` →
+   `ClientRequest.cookie` → outbound packet pipeline via
+   `Zeroizing<Vec<u8>>` wrapping at every intermediate holder;
+   `ClientRequest` also gains a manual redacted `Debug` that
+   prints the cookie field as `<redacted; N bytes>`.
+
 Internal-only — no public Dart-facing surface change; see the
-`### Security` subsection below for the full shape.
+`### Security` subsection below for the full shape and the
+per-finding writeup.
 
 ### Changed — example app
 
