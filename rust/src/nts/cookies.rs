@@ -253,4 +253,57 @@ mod tests {
     fn zero_capacity_panics() {
         let _ = CookieJar::with_capacity(0);
     }
+
+    /// Pins the redacted `Debug` impl: cookies are NTS authentication
+    /// material (RFC 8915 §6) and must not leak via any `{:?}`
+    /// formatting site. The hand-rolled `Debug` renders per-host
+    /// counts only; a sentinel cookie payload `0xDEADBEEFDEADBEEF`
+    /// must not appear anywhere in the formatted output. If a future
+    /// edit reinstates `#[derive(Debug)]` (collapses to the natural
+    /// `HashMap<String, VecDeque<Vec<u8>>>` rendering) this test
+    /// fails because the sentinel bytes show up in the debug output.
+    #[test]
+    fn debug_impl_renders_counts_only_and_does_not_leak_cookie_bytes() {
+        let mut jar = CookieJar::with_capacity(4);
+        let sentinel = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
+        jar.put(HOST_A, sentinel.clone());
+        jar.put(HOST_A, sentinel.clone());
+        jar.put(HOST_B, sentinel.clone());
+
+        let rendered = format!("{jar:?}");
+
+        // The redaction goal: sentinel bytes must not appear in any
+        // form (hex, decimal, character) that an attacker reading
+        // the log could reconstruct.
+        for byte in &sentinel {
+            assert!(
+                !rendered.contains(&format!("{byte}")),
+                "Debug output must not contain raw cookie byte {byte} (full output: {rendered})",
+            );
+            assert!(
+                !rendered.contains(&format!("0x{byte:02x}")),
+                "Debug output must not contain hex cookie byte 0x{byte:02x} (full output: {rendered})",
+            );
+        }
+        // The render must still carry the structural information
+        // callers actually want from a debug print: capacity and
+        // per-host counts.
+        assert!(
+            rendered.contains("CookieJar"),
+            "Debug output must identify the type (full output: {rendered})",
+        );
+        assert!(
+            rendered.contains("capacity: 4"),
+            "Debug output must carry the capacity (full output: {rendered})",
+        );
+        assert!(
+            rendered.contains(HOST_A) && rendered.contains(HOST_B),
+            "Debug output must list each host (full output: {rendered})",
+        );
+        // Counts: 2 for HOST_A, 1 for HOST_B.
+        assert!(
+            rendered.contains(": 2") && rendered.contains(": 1"),
+            "Debug output must surface per-host counts (full output: {rendered})",
+        );
+    }
 }

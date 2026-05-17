@@ -1147,8 +1147,7 @@ mod alpn_verification {
     /// exercise the guard without standing up a TLS handshake.
     #[test]
     fn check_negotiated_alpn_accepts_ntske_one() {
-        check_negotiated_alpn(Some(b"ntske/1"))
-            .expect("`ntske/1` selection must be accepted");
+        check_negotiated_alpn(Some(b"ntske/1")).expect("`ntske/1` selection must be accepted");
     }
 
     /// `rustls` raises `Error::NoApplicationProtocol` during the
@@ -1162,9 +1161,7 @@ mod alpn_verification {
     fn check_negotiated_alpn_rejects_missing_extension() {
         match check_negotiated_alpn(None) {
             Err(KeError::AlpnMismatch { negotiated: None }) => {}
-            other => panic!(
-                "expected AlpnMismatch {{ negotiated: None }}, got {other:?}",
-            ),
+            other => panic!("expected AlpnMismatch {{ negotiated: None }}, got {other:?}",),
         }
     }
 
@@ -1185,9 +1182,9 @@ mod alpn_verification {
                 bytes, b"h2",
                 "negotiated payload must carry the server's actual selection verbatim",
             ),
-            other => panic!(
-                "expected AlpnMismatch {{ negotiated: Some(b\"h2\") }}, got {other:?}",
-            ),
+            other => {
+                panic!("expected AlpnMismatch {{ negotiated: Some(b\"h2\") }}, got {other:?}",)
+            }
         }
     }
 
@@ -1208,9 +1205,7 @@ mod alpn_verification {
                 bytes.is_empty(),
                 "empty-payload selection must survive as `Some(empty)`, not collapse to None",
             ),
-            other => panic!(
-                "expected AlpnMismatch {{ negotiated: Some(empty) }}, got {other:?}",
-            ),
+            other => panic!("expected AlpnMismatch {{ negotiated: Some(empty) }}, got {other:?}",),
         }
     }
 }
