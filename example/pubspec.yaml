@@ -84,7 +84,7 @@ flutter_launcher_icons:
 # elided).
 #
 # To enable verbose Rust traces locally — including `rustls` protocol
-# events under iOS Console.app subsystem `com.nts.example` and
+# events under iOS Console.app subsystem `com.nllewellyn.nts` and
 # Android `logcat` — flip the value below to `true` and run
 # `flutter clean` before the next build so Native Assets re-runs the
 # hook against the new user-define. Restore to `false` before

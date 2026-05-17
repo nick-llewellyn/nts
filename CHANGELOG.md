@@ -621,6 +621,55 @@ longer permanently crash an `NtsClient` across the FRB boundary.
   "amplification is bounded, destination is not" distinction
   explicit. Surfaces a recommendation raised by an external
   code review of the release branch.
+- Android `PlatformInit.kt` log messages and KDoc no longer claim
+  unconditional fallback to `webpki-roots` when `System.loadLibrary`
+  or `nativeInit` fails. With the 4.0.0 strict per-chain
+  `TrustMode.platformOnly` semantics in place, that fallback only
+  applies to `TrustMode.platformWithFallback` callers; `platformOnly`
+  callers see the same failure surface as
+  `NtsError.trustBackendUnavailable` at handshake time. The
+  `UnsatisfiedLinkError` log, the `nativeInit`-returned-false log,
+  and the `init` KDoc all now name both branches. Surfaces a
+  platform-glue review observation against the release branch.
+- iOS `os_log` subsystem renamed from `com.nts.example` to
+  `com.nllewellyn.nts`. The previous string read as a placeholder
+  that escaped from an early draft and its docstring falsely
+  claimed it tracked the host application's reverse-DNS bundle
+  convention. The new identifier is library-owned (a stable handle
+  consumers can pin Console.app filters against across `nts`
+  versions) and matches the Android plugin package
+  (`com.nllewellyn.nts.PlatformInit`) so the same filter string
+  works on both platforms. Updated sites: `rust/src/ios_init.rs`
+  (`SUBSYSTEM` constant + module-level docstring),
+  `rust/src/api/simple.rs` (`init_app` docstring),
+  `rust/Cargo.toml` (Console.app filter comment),
+  `example/pubspec.yaml` (verbose-logs guidance comment), and
+  `DEVELOPMENT.md` (verbose-logs section). Hosts that had pinned
+  a Console.app filter against the previous string need to update
+  it to `com.nllewellyn.nts`; this is the only externally visible
+  consequence and is documented here so users investigating a
+  silent filter break after the 4.0.0 upgrade find it.
+- README's `## Security considerations` section gains a
+  `### Non-Flutter Dart callers must pass externalLibrary
+  explicitly` subsection. Documents the relative-`ioDirectory`
+  library-hijack surface in
+  `RustLib.kDefaultExternalLibraryLoaderConfig`
+  (`ioDirectory: 'rust/target/release/'`): inside a Flutter host
+  the Native Assets pipeline supplies a controlled absolute load
+  path before that default ever runs, but a non-Flutter Dart
+  caller (`dart run` CLI, Dart server runtime, integration-test
+  harness) that calls `RustLib.init()` without an `externalLibrary`
+  argument while running from an attacker-influenced working
+  directory will load whatever `rust/target/release/libnts_rust.*`
+  has been planted there. The bundled
+  `example/bin/nts_cli.dart` already follows the recommended
+  pattern (auto-locate to an absolute path, then
+  `ExternalLibrary.open(resolved)`) and the new subsection
+  cross-references it. The hijack is independent of NTS itself —
+  `RustLib.init()` resolves before any TLS / NTS code runs — but
+  the package is the vehicle, so the documentation surface is the
+  appropriate mitigation layer. Surfaces a platform-glue review
+  observation against the release branch.
 
 ### Migration from 3.0.x
 

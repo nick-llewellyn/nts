@@ -266,6 +266,50 @@ section) bounds the *amplification* exposure of a saturated
 hostname-resolution path, but does not gate *destinations* — that
 gate is the caller's responsibility.
 
+### Non-Flutter Dart callers must pass `externalLibrary` explicitly
+
+The FRB-generated default loader
+(`RustLib.kDefaultExternalLibraryLoaderConfig`) advertises
+`rust/target/release/` as the `ioDirectory` for the bundled dylib.
+Inside a Flutter host the Native Assets pipeline supplies a
+controlled absolute load path before that default ever runs, so the
+relative directory is unreachable. Outside Flutter — a `dart run`
+CLI, a Dart server runtime, an integration-test harness, anything
+else that imports `package:nts` directly — the relative directory
+*is* what the loader resolves against the current working
+directory.
+
+A non-Flutter call site that does `await RustLib.init()` (no
+`externalLibrary:` argument) while running from a working directory
+an attacker can influence is therefore a library-hijack surface:
+dropping a malicious `rust/target/release/libnts_rust.dylib` (or
+`.so` / `.dll`) into that directory yields arbitrary code execution
+under the calling process's privileges. The hijack is independent
+of NTS itself — `RustLib.init()` runs before any of this package's
+TLS / NTS code is reached — but the package is the vehicle.
+
+The mitigation is the pattern the bundled
+[`example/bin/nts_cli.dart`](example/bin/nts_cli.dart) already
+uses: resolve an absolute path to the dylib yourself (or accept one
+on the command line) and pass it through explicitly:
+
+```dart
+import 'package:nts/nts.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge.dart'
+    show ExternalLibrary;
+
+await RustLib.init(
+  externalLibrary: ExternalLibrary.open('/absolute/path/to/libnts_rust.dylib'),
+);
+```
+
+The absolute path should come from a trusted source (a packaged
+install location, an environment variable owned by the deploying
+operator, etc.) — not from a relative lookup against the working
+directory. Flutter callers can keep using the bare
+`await RustLib.init()` form: Native Assets supplies the load path
+before the relative fallback can fire.
+
 ## API summary
 
 | Symbol | Purpose |

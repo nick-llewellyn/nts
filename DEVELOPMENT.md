@@ -184,7 +184,7 @@ where those obfuscators are not in play.
 ### Enabling verbose logs locally
 
 To see `rustls` handshake traces and the crate's own `info!` / `debug!`
-events on iOS Console.app (subsystem `com.nts.example`) or
+events on iOS Console.app (subsystem `com.nllewellyn.nts`) or
 Android `logcat`, edit the example app's pubspec and rebuild:
 
 ```yaml

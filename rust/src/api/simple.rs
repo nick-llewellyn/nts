@@ -18,7 +18,7 @@
 /// On iOS we replace that helper with our own
 /// [`crate::ios_init::init_logging`] so a `tracing-oslog` subscriber
 /// can claim the global `log` slot under the
-/// `com.nts.example` subsystem instead of FRB's generic
+/// `com.nllewellyn.nts` subsystem instead of FRB's generic
 /// `frb_user` one — see [`crate::ios_init`] for the rationale. The
 /// panic backtrace setup is still applied via the directly-exposed
 /// `setup_backtrace` so iOS keeps parity with the other platforms.

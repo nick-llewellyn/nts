@@ -9,10 +9,13 @@
 //! # Subsystem and category
 //!
 //! All events surface under the `os_log` subsystem
-//! `com.nts.example` so a Console.app filter of
-//! `process:Runner subsystem:com.nts.example` isolates the crate's
-//! output from system noise. A single category (`nts`) is used
-//! for the first iteration; per-module categories (`ke`, `ntp`,
+//! `com.nllewellyn.nts` so a Console.app filter of
+//! `process:Runner subsystem:com.nllewellyn.nts` isolates the crate's
+//! output from system noise. The subsystem is library-owned (not host-
+//! owned) and deliberately matches the Android plugin's reverse-DNS
+//! identifier (`com.nllewellyn.nts.PlatformInit`) so consumers debug
+//! both platforms with the same string. A single category (`nts`) is
+//! used for the first iteration; per-module categories (`ke`, `ntp`,
 //! `hybrid_verifier`, …) can be added later by registering additional
 //! `OsLogger` layers with target filters when filtering pressure
 //! justifies the extra wiring.
@@ -48,10 +51,13 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// `os_log` subsystem string for every event emitted by this crate on iOS.
 ///
-/// Mirrors the Android `logcat` tag prefix conceptually; chosen to match
-/// the host application's reverse-DNS bundle convention so Console.app
-/// filtering works without further configuration.
-const SUBSYSTEM: &str = "com.nts.example";
+/// Library-owned identifier, deliberately stable so host apps can pin
+/// Console.app filters against it across `nts` versions. Aligned with
+/// the Android plugin's reverse-DNS identifier
+/// (`com.nllewellyn.nts.PlatformInit`) so the same filter string works
+/// on both platforms; *not* shaped to match the host app's own bundle ID
+/// (the host has no equivalent on Android either).
+const SUBSYSTEM: &str = "com.nllewellyn.nts";
 
 /// `os_log` category attached to every event from the single subscriber.
 ///
