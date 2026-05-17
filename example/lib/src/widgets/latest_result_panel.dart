@@ -41,11 +41,7 @@ class LatestResultPanel extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(
-                  Icons.history,
-                  size: 18,
-                  color: theme.colorScheme.primary,
-                ),
+                Icon(Icons.history, size: 18, color: theme.colorScheme.primary),
                 const SizedBox(width: 8),
                 Text('Latest result', style: theme.textTheme.titleSmall),
               ],
@@ -60,9 +56,7 @@ class LatestResultPanel extends StatelessWidget {
                 );
               }
               return SelectableText.rich(
-                TextSpan(
-                  children: buildLogEntrySpans(theme, colors, latest),
-                ),
+                TextSpan(children: buildLogEntrySpans(theme, colors, latest)),
                 style: theme.textTheme.bodySmall?.copyWith(
                   fontFamily: 'monospace',
                   height: 1.35,

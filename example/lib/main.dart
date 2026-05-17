@@ -16,8 +16,7 @@
 //      mediated through the `signals` package.
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'
-    show DeviceOrientation, SystemChrome;
+import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
 import 'package:nts/nts.dart' show RustLib;
 
 import 'src/data/server_entry.dart';
@@ -161,8 +160,7 @@ Future<void> main() async {
 /// platform-specific guard.
 Future<void> _lockOrientationOnPhones() async {
   final view = WidgetsBinding.instance.platformDispatcher.views.first;
-  final shortestSideDp =
-      view.physicalSize.shortestSide / view.devicePixelRatio;
+  final shortestSideDp = view.physicalSize.shortestSide / view.devicePixelRatio;
   const phoneBreakpointDp = 600.0;
   if (shortestSideDp < phoneBreakpointDp) {
     await SystemChrome.setPreferredOrientations(const [

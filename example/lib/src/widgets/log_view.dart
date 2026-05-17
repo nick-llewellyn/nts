@@ -158,7 +158,6 @@ class _LogViewState extends State<LogView> {
       ),
     );
   }
-
 }
 
 /// Render one log entry as a sequence of styled spans so the
