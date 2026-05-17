@@ -456,7 +456,7 @@ pub enum TrustMode {
     /// 1. **Build-time** (3.0.0): `build_with_native_verifier`
     ///    failure surfaces as [`NtsError::TrustBackendUnavailable`]
     ///    rather than constructing a `webpki-roots` config.
-    /// 2. **Per-chain** on Android (3.1.0, BREAKING): the
+    /// 2. **Per-chain** on Android (4.0.0, BREAKING): the
     ///    `HybridVerifier` no longer retries against `webpki-roots`
     ///    for the two curated fallback-eligible failure shapes
     ///    (missing-OCSP-AIA chains such as Let's Encrypt R12, and
@@ -2117,7 +2117,7 @@ impl SessionTable {
     }
 
     /// Replace any existing entry for `spec`'s `host:port` with `session`.
-    /// Test-only since 3.1.0: `nts_warm_cookies_inner` now installs
+    /// Test-only since 4.0.0: `nts_warm_cookies_inner` now installs
     /// through [`Self::warm_cookies_with`]'s singleflight leader path,
     /// which inserts under the `map` lock and then publishes the
     /// leader's harvested count on the singleflight slot, so cache

@@ -27,7 +27,7 @@
 //   back-compat. The five `trustBackend`-carrying variants made the
 //   move in 3.0.0; the three remaining single-payload variants
 //   (`invalidSpec`, `trustBackendUnavailable`, `internal`) made the
-//   move in 3.1.0 for surface uniformity.
+//   move in 4.0.0 for surface uniformity.
 // - For SemVer compatibility with pre-3.0 callers, the underscore-
 //   prefixed names (`NtsError_InvalidSpec`, ...) survive as deprecated
 //   typedef aliases at the bottom of this file. They will be removed

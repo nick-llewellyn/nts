@@ -24,12 +24,12 @@
 //! of OCSP — while letting Let's Encrypt-style chains succeed against
 //! a static webpki-roots anchor set.
 //!
-//! # `TrustMode` gating (3.1.0)
+//! # `TrustMode` gating (4.0.0)
 //!
 //! Both per-chain fallback arms are gated by the [`KeTrustMode`]
 //! plumbed in at `HybridVerifier::new(trust_mode)`. In
 //! [`KeTrustMode::PlatformWithFallback`] (the historic default) the
-//! safety net fires exactly as it did pre-3.1.0. In
+//! safety net fires exactly as it did pre-4.0.0. In
 //! [`KeTrustMode::PlatformOnly`] both arms are suppressed and the
 //! platform verifier's error propagates verbatim — the `webpki-roots`
 //! anchor set is never consulted. This makes `PlatformOnly` honour
@@ -542,7 +542,7 @@ mod tests {
 
     /// `PlatformWithFallback` regression test plus `nts-7di`
     /// acceptance criterion: the historical safety net still fires
-    /// for `Revoked` so that 3.1.0's strict `PlatformOnly` change
+    /// for `Revoked` so that 4.0.0's strict `PlatformOnly` change
     /// does not accidentally regress the default behaviour, AND
     /// when the fallback itself also rejects the chain (the stub
     /// `b"leaf-stub"` will never validate against webpki-roots) no

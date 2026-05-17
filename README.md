@@ -271,7 +271,7 @@ pthread stack per leaked worker). Server-side callers that
 legitimately need higher fan-out can override per call (`32`, `64`,
 etc.); values must lie in `1..4294967295`, with literal `0` rejected
 as `NtsError.invalidSpec` rather than silently substituting the
-default the way the pre-3.1.0 wrapper did. The cap is compared
+default the way the pre-4.0.0 wrapper did. The cap is compared
 against the *global* counter, so two concurrent callers passing
 different values share the same in-flight pool: the effective ceiling
 at any moment is whichever caller is currently being admitted.

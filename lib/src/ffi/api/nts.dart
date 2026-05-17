@@ -831,7 +831,7 @@ enum TrustMode {
   /// 1. **Build-time** (3.0.0): `build_with_native_verifier`
   ///    failure surfaces as [`NtsError::TrustBackendUnavailable`]
   ///    rather than constructing a `webpki-roots` config.
-  /// 2. **Per-chain** on Android (3.1.0, BREAKING): the
+  /// 2. **Per-chain** on Android (4.0.0, BREAKING): the
   ///    `HybridVerifier` no longer retries against `webpki-roots`
   ///    for the two curated fallback-eligible failure shapes
   ///    (missing-OCSP-AIA chains such as Let's Encrypt R12, and

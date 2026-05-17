@@ -2491,7 +2491,7 @@ fn checkout_cache_hit_preserves_session_trust_backend() {
 
 /// `nts-upv` acceptance criterion: N concurrent
 /// `warm_cookies_with` calls against the same `host:port`
-/// collapse onto exactly ONE KE handshake. Pre-3.1.0
+/// collapse onto exactly ONE KE handshake. Pre-4.0.0
 /// `nts_warm_cookies` called `establish_session` directly,
 /// bypassing the singleflight machinery and producing N parallel
 /// handshakes. Same `BoundedRelease` + `await_singleflight_state`

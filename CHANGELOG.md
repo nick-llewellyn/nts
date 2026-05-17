@@ -1,6 +1,82 @@
 # Changelog
 
-## Unreleased
+## 4.0.0
+
+This major release consolidates the post-3.0 work that landed on
+`main` between the 3.0 cut and this tag. It is a **major version
+bump** because several of the items below break the public Dart or
+Rust API surface, and one (the strict per-chain `PlatformOnly`
+semantics on Android) is a deliberate behaviour change for a
+caller-opted-in mode.
+
+The headline shape changes:
+
+1. **`NtsError` surface uniformity** — the three remaining
+   single-payload `NtsError` variants (`invalidSpec`,
+   `trustBackendUnavailable`, `internal`) move from positional to
+   named-parameter constructors so every `String`-payloaded
+   variant binds to the same name (`message`) and every variant
+   with a non-`trustBackend` payload is constructed with named
+   arguments. The five `network` / `keProtocol` / `ntpProtocol` /
+   `authentication` / `timeout` variants already moved in 3.0.0;
+   this completes the sweep.
+
+2. **Wrapper-side integer-range validation** — the four async
+   wrapper entry points and `NtsClient.invalidate` now reject
+   out-of-range `port` / `timeoutMs` / `dnsConcurrencyCap`
+   arguments as `NtsError.invalidSpec` before any FFI dispatch,
+   closing the gap where a `RangeError` thrown by the FRB encoder
+   used to escape the wrapper's "single error surface" contract.
+   `kDefaultDnsConcurrencyCap` is bumped from the `0` sentinel to
+   the actual numeric default (`4`) so consumers reading the
+   constant see what the package actually applies.
+
+3. **Strict per-chain `TrustMode::PlatformOnly` on Android** — the
+   Android-side `HybridVerifier` no longer silently retries
+   against the `webpki-roots` static bundle for the two curated
+   fallback-eligible failure shapes (`Revoked` from
+   missing-OCSP-AIA chains; `General("failed to call native
+   verifier: …")` from R8-stripped JNI glue) when the caller is
+   running under `TrustMode::PlatformOnly`. The platform
+   verifier's error propagates verbatim. `PlatformWithFallback`
+   (the historic default) is unchanged.
+
+4. **NTS-KE streaming-read budget hardened to 16 KiB** — the
+   streaming layer in `rust/src/nts/ke.rs::read_to_end_capped`
+   now refuses to accumulate more than 16 KiB per handshake (down
+   from the 64 KiB codec ceiling), closing a memory-pressure
+   vector where a malicious or buggy server could force ~64 KiB
+   of heap allocation per failed handshake. The codec-layer
+   ceiling at 64 KiB stays in place as the RFC 8915 §4.1.4 upper
+   bound for valid messages.
+
+5. **MSRV pinned at Rust 1.87** — the actual functional floor
+   (transitive `security-framework 3.7.0` requires edition2024
+   plus `usize::is_multiple_of` from 1.87) is now declared in
+   `rust/Cargo.toml` and matched in `rust/clippy.toml` so
+   downstream consumers see an accurate `rust-version` without
+   over-constraining their toolchain pin.
+
+The `nts_rust` crate is bumped from `0.4.0` to `0.5.0` to reflect
+items 3, 4, and 5 (the on-the-wire NTS-KE / NTPv4 framing is
+unchanged; the crate bump tracks the Rust-side API shape change
+in `KeError` and the new streaming-read budget). The Dart-facing
+FRB surface gains no new public types; the surface changes are
+the constructor reshape in item 1 and the new rejected-input
+paths in item 2.
+
+Internal-only improvements that ride along: `nts_warm_cookies`
+now collapses concurrent forced refreshes through the same
+singleflight `inflight` registry that `nts_query` already used,
+the example app is reorganised across two tabs ("Client" / "Log")
+with a compacted `ActionPanel` and a new single-entry
+`LatestResultPanel` summary card to eliminate `RenderFlex`
+overflows on landscape phones / tablets, the
+`formatTrustBackend` helper renames the
+`platformWithHybridFallback` rendering to `webpki-fallback` to
+match the authentication mechanism, and the Trust-status panel
+drops the singleton-snapshot row that was structurally destined
+to remain at sentinel values during every demo run.
 
 ### Changed — example app
 
@@ -67,29 +143,6 @@
   `group('formatTrustStatus', …)` block in `nts_format_test.dart`.
   All were dead after the singleton-snapshot row was removed.
 
-## 3.1.0
-
-Surface-uniformity follow-up to `3.0.0`, plus the three review
-findings raised against the merged 3.1.0 branch before the tag.
-Promotes the three remaining single-payload `NtsError` variants
-(`invalidSpec`, `trustBackendUnavailable`, `internal`) to the same
-named-parameter constructor shape that `network`, `keProtocol`,
-`ntpProtocol`, `authentication`, and `timeout` adopted in `3.0.0`;
-every `String`-payloaded variant now binds to the same name
-(`message`) and every variant with a non-`trustBackend` payload is
-constructed with named arguments. The wrapper now validates the
-three integer arguments (`spec.port`, `timeoutMs`,
-`dnsConcurrencyCap`) against the FFI encoding range before any
-dispatch and rejects out-of-range values as
-`NtsError.invalidSpec`, closing the gap where a `RangeError`
-thrown by the FRB encoder used to escape the wrapper's "single
-error surface" contract. `kDefaultDnsConcurrencyCap` is bumped
-from the `0` sentinel to the actual numeric default (`4`) so
-consumers reading the constant value see what the package
-actually applies. README and dartdoc are refreshed in lockstep.
-No Rust source touched; the `nts_rust` crate stays at `0.4.0` and
-the on-the-wire NTS-KE / NTPv4 framing is unchanged.
-
 ### Changed — `NtsError` variant constructors
 
 - **BREAKING** — the three previously single-positional `NtsError`
@@ -102,7 +155,7 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
     `NtsError.internal(message: x)`
 
   Same shape change `3.0.0` made for the other five variants;
-  applied here for surface uniformity. The pre-3.1 single-positional
+  applied here for surface uniformity. The pre-4.0 single-positional
   shape survives as a `@Deprecated` `field0` getter on each variant
   subclass so 2.x and 3.0.x callers that *read* the payload (in
   pattern-match destructurings or direct field reads) keep
@@ -113,7 +166,7 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   `NtsError.internal(message)` render exactly as in 3.0.x.
 - The five 3.0.0 named-parameter variants (`network`, `keProtocol`,
   `ntpProtocol`, `authentication`, `timeout`) are unchanged in
-  3.1.0; their `field0` getters retain their existing deprecation.
+  4.0.0; their `field0` getters retain their existing deprecation.
 
 ### Changed — wrapper now validates integer ranges before FFI dispatch
 
@@ -144,13 +197,13 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
 
   Strictly additive for callers who already passed in-range values:
   no behavioural change. Callers who passed literal `0` for
-  `timeoutMs` or `dnsConcurrencyCap` to ride the pre-3.1 sentinel
+  `timeoutMs` or `dnsConcurrencyCap` to ride the pre-4.0 sentinel
   now see `NtsError.invalidSpec` on `await` and must switch to the
   named constants — see the migration section below.
 
 - **BREAKING (additive)** — `NtsClient.invalidate` now applies the
   same `port ∈ 1..65535` validation as the four async wrappers
-  above. The pre-3.1 sync sister bypassed `_validateRanges` and
+  above. The pre-4.0 sync sister bypassed `_validateRanges` and
   forwarded `spec.port` directly into the FRB `u16` encoder, so
   out-of-range ports (negative, or `>65535`) escaped the documented
   `NtsError`-only contract as `RangeError` from the FFI bridge.
@@ -166,7 +219,7 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
 ### Changed — `kDefaultDnsConcurrencyCap` exposes the actual numeric default
 
 - **BREAKING (constant-value change)** — `kDefaultDnsConcurrencyCap`
-  changes from `0` (the pre-3.1 sentinel that delegated to the
+  changes from `0` (the pre-4.0 sentinel that delegated to the
   Rust-side `DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS`) to `4` (the actual
   numeric value the Rust side substituted). Callers who omit the
   parameter or who reference the constant by name see no behavioural
@@ -195,7 +248,7 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
   regardless of `TrustMode`, and the only signal a `PlatformOnly`
   caller had that the static bundle had been consulted was a
   post-hoc `KeOutcome::trust_backend == PlatformWithHybridFallback`
-  on the resulting sample. As of 3.1.0 the `HybridVerifier` is
+  on the resulting sample. As of 4.0.0 the `HybridVerifier` is
   constructed with the `KeTrustMode` and gates both arms on
   `PlatformWithFallback`; in `PlatformOnly` mode the platform
   verifier's error propagates verbatim and `webpki-roots` is never
@@ -216,13 +269,71 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
     and there is no opt-out behaviour change for callers who never
     constructed a `PlatformOnly` client.
 
-  The pre-3.1 dartdoc on `TrustMode::PlatformOnly` framed the
+  The pre-4.0 dartdoc on `TrustMode::PlatformOnly` framed the
   per-chain limitation as inherent ("`PlatformOnly` therefore means
   'no silent build-time downgrade', not 'the public-CA bundle is
   unreachable'"). The strict semantics this release ships replace
   that disclaimer with the contract Android callers actually want.
 
   Resolves the bd-tracked finding `nts-2lh`.
+
+### Changed — NTS-KE streaming read budget capped at 16 KiB
+
+- **BREAKING (Rust-side error variant)** — `KeError::MessageTooLarge`
+  is replaced by `KeError::ResponseTooLarge { received, cap }`.
+  The new variant surfaces the would-be post-append accumulator
+  length so an operator inspecting a handshake failure can see
+  how far over the streaming budget the offending read pushed the
+  accumulator. The variant is internal to `KeError`; the
+  `From<KeError> for NtsError` mapping already routes unmatched
+  variants through `NtsError::KeProtocol { message, .. }`, so the
+  new shape surfaces to Dart callers with the diagnostic preserved
+  verbatim and **no change to the public Dart-facing surface**.
+- **Behaviour change** — the streaming layer in
+  `rust/src/nts/ke.rs::read_to_end_capped` now caps the read
+  accumulator at the new `NTS_KE_READ_BUDGET = 16_384` (16 KiB)
+  rather than at the 64 KiB codec ceiling. A malicious or buggy
+  NTS-KE server can no longer force ~64 KiB of heap allocation
+  per failed handshake; 64 KiB × N concurrent handshakes was a
+  memory-pressure vector on memory-constrained mobile processes.
+  Comparable Rust NTS implementations cap at 4 KiB
+  (`ntpd-rs::ntp-proto::nts::messages::MAX_MESSAGE_SIZE`); the
+  16 KiB pick leaves ample slack for an NTS-KE server that ships
+  an unusually large but otherwise valid response (multiple
+  cookies, server-name overrides) without re-exposing the
+  original 64 KiB vector.
+- The cap decision is factored out of the streaming read loop
+  into a pure helper `next_chunk_within_budget(buf_len, n, cap)`
+  so the streaming-budget guard can be exercised by unit tests
+  without standing up a TLS stream. Three regression tests pin
+  the change: the strict inequality between streaming budget and
+  codec ceiling, the exact-fit / overshoot boundary, and a
+  chunk-stride simulation that drives a 100 KB body through the
+  same 4 KiB chunks the live read loop uses.
+- The 64 KiB codec ceiling (`MAX_MESSAGE_BYTES` in
+  `rust/src/nts/records.rs`) is unchanged — it stays in place as
+  the RFC 8915 §4.1.4 upper bound for valid messages, reachable
+  from non-streaming entry points like tests and file-based
+  inputs.
+
+  Resolves the bd-tracked finding `nts-dsi`.
+
+### Changed — MSRV pinned at Rust 1.87
+
+- **BREAKING (toolchain)** — `rust/Cargo.toml` now declares
+  `rust-version = "1.87"`. The actual functional floor is set by
+  the transitive `security-framework 3.7.0` (pulled in by
+  `rustls-platform-verifier`, which requires edition2024) plus
+  `usize::is_multiple_of` (stable in 1.87, used in `nts::ntp` and
+  `nts::records` for the extension-field length validators). The
+  active toolchain pin in `rust-toolchain.toml` is higher
+  (currently 1.92.0); the matching `msrv` entry in
+  `rust/clippy.toml` keeps clippy's msrv-aware suggestions
+  accurate.
+- Consumers building the crate as a Rust dependency need at
+  minimum a 1.87 toolchain. Flutter consumers using the package
+  via the standard build flow are unaffected because the bundled
+  toolchain pin already exceeds 1.87.
 
 ### Changed — `nts_warm_cookies` collapses concurrent forced refreshes via singleflight
 
@@ -237,10 +348,10 @@ the on-the-wire NTS-KE / NTPv4 framing is unchanged.
 - **Internal behaviour change** — the implementation now routes
   through `SessionTable::warm_cookies`, which shares the
   singleflight `inflight` registry with the cache-aware
-  `SessionTable::checkout` machinery used by `nts_query`. Pre-3.1
+  `SessionTable::checkout` machinery used by `nts_query`. Pre-4.0
   `nts_warm_cookies` called `establish_session` directly, so N
   concurrent `nts_warm_cookies` calls against the same `host:port`
-  produced N parallel KE handshakes. As of 3.1.0:
+  produced N parallel KE handshakes. As of 4.0.0:
   - N concurrent `nts_warm_cookies` against the same `host:port`
     collapse onto exactly one KE handshake. The first arrival
     becomes the singleflight leader, runs the handshake without
@@ -328,7 +439,7 @@ const NtsError.invalidSpec('host is empty')
 const NtsError.trustBackendUnavailable('platform CA bundle missing')
 const NtsError.internal('unreachable')
 
-// 3.1.0
+// 4.0.0
 const NtsError.invalidSpec(message: 'host is empty')
 const NtsError.trustBackendUnavailable(message: 'platform CA bundle missing')
 const NtsError.internal(message: 'unreachable')
@@ -347,7 +458,7 @@ keeps working because `field0` survives as a `@Deprecated` getter
 alias, so this is optional, not required:
 
 ```dart
-// Both compile in 3.1.0; the new form drops the deprecation
+// Both compile in 4.0.0; the new form drops the deprecation
 // warning and matches the binder name used by every other
 // `String`-payloaded variant in the same switch.
 final detail = switch (err) {
@@ -374,10 +485,10 @@ await ntsQuery(
   dnsConcurrencyCap: 0,    // same
 );
 
-// 3.1.0 — option A: omit, inherit the constant default
+// 4.0.0 — option A: omit, inherit the constant default
 await ntsQuery(spec: spec);
 
-// 3.1.0 — option B: name the constant explicitly
+// 4.0.0 — option B: name the constant explicitly
 await ntsQuery(
   spec: spec,
   timeoutMs: kDefaultTimeoutMs,
@@ -393,12 +504,18 @@ failure mode for code that *meant* something else by `0`.
 ### Out of scope
 
 - The deprecated `NtsError_*` underscore-prefixed typedefs (e.g.
-  `NtsError_InvalidSpec`) are unchanged in 3.1.0; their removal
-  remains a 4.0.0 sweep.
-- The `@Deprecated` `field0` getter aliases on every variant
-  remain too — they are the read-side back-compat for 2.x / 3.0.x
-  callers and will be removed in the same 4.0.0 sweep that drops
-  the underscore typedefs.
+  `NtsError_InvalidSpec`) and the `@Deprecated` `field0` getter
+  aliases on every variant survive into 4.0.0. They remain the
+  read-side back-compat for 2.x / 3.0.x callers and were
+  originally slated for removal in this same 4.0.0 sweep, but
+  the named-constructor migration (item 1 in the framing above),
+  the strict-`PlatformOnly` behaviour change (item 3), and the
+  16 KiB streaming budget (item 4) are already the load-bearing
+  breaking changes for this release. Folding the typedef +
+  getter removal in would not change the migration surface for
+  any caller who hadn't already updated for those items, so the
+  cleanup defers to a follow-up release. The existing
+  deprecation warnings stay in place.
 
 ## 3.0.0
 
