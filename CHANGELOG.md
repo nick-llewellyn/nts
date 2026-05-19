@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- The FRB bridge entrypoint class is renamed from `RustLib` to
+  `NtsRustLib`, with `RustLibApi` / `RustLibApiImpl` / `RustLibWire`
+  becoming `NtsRustLibApi` / `NtsRustLibApiImpl` / `NtsRustLibWire`.
+  Replace `await RustLib.init()` with `await NtsRustLib.init()` (and
+  the same for `RustLib.initMock`). The rename lets consumers depend
+  on multiple `flutter_rust_bridge`-backed packages without
+  `import ... as prefix` aliasing.
+
+
 ### Packaging
 
 - `.pubignore` now excludes the test-only Rust modules

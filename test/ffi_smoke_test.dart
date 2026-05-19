@@ -32,7 +32,7 @@ import 'package:nts/src/ffi/api/nts.dart'
         ntsWarmCookies;
 import 'package:nts/src/ffi/frb_generated.dart';
 
-class _FakeRustLibApi implements NtsRustLibApi {
+class _FakeNtsRustLibApi implements NtsRustLibApi {
   @override
   Future<void> crateApiSimpleInitApp() async {}
 
@@ -82,7 +82,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUpAll(() {
-    NtsRustLib.initMock(api: _FakeRustLibApi());
+    NtsRustLib.initMock(api: _FakeNtsRustLibApi());
   });
 
   group('FRB toolchain smoke test', () {
@@ -91,7 +91,7 @@ void main() {
       // FFI surface: every parameter is `required` per FRB v2 codegen,
       // so the wrapper-layer omission convenience does not apply here.
       // The literal `4` is an arbitrary in-range non-zero value chosen
-      // because `_FakeRustLibApi` ignores the parameter; this file
+      // because `_FakeNtsRustLibApi` ignores the parameter; this file
       // intentionally imports nothing from the public layer (see the
       // file-level comment), so the wrapper's `kDefaultDnsConcurrencyCap`
       // is deliberately not referenced here.

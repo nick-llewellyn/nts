@@ -294,9 +294,9 @@ Concrete partitioning today:
   `lib/src/ffi/api/nts.dart`. All four are FRB-emitted Dart bindings,
   but the rationale for excluding them differs by file:
   - The three `frb_generated*.dart` files contain the
-    `RustLibApiImpl` class — the FFI dispatch that loads the dylib
+    `NtsRustLibApiImpl` class — the FFI dispatch that loads the dylib
     and marshals every `crateApi*` call across the bridge.
-    `NtsRustLib.initMock()` substitutes the entire `RustLibApi`
+    `NtsRustLib.initMock()` substitutes the entire `NtsRustLibApi`
     instance via `instance.initMockImpl(api: api)`, so this impl
     class is never constructed in mock mode and its method bodies
     are genuinely unreachable from the test suite.
