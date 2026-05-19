@@ -32,6 +32,14 @@
   filters and the CodeQL configuration. Findings are surfaced
   to the Security tab. (PR #87, bead `nts-wat`)
 
+### Maintenance
+
+- Added **GitHub Dependabot** configuration to track updates for Dart
+  (`pub`), Rust (`cargo`), and GitHub Actions. Excluded
+  `flutter_rust_bridge` from automated updates to maintain
+  coordinated pinning across the Dart/Rust boundary. (bead `nts-tqp`)
+
+
 ## 4.0.0
 
 This major release consolidates the post-3.0 work that landed on
