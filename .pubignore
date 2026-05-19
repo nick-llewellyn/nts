@@ -106,7 +106,7 @@ test/
 # `rust/src/nts/cookies.rs` / `dns.rs` / `aead.rs` stay in place
 # because those parent files are required by release builds; only the
 # inner `tests` mod is cfg-gated. Excluding the sibling test files
-# shaves ~243 KB uncompressed (~80 KB compressed, ~15% of the 4.0.0
+# shaves ~243 KB uncompressed (~60 KB compressed, ~11% of the 4.0.0
 # archive) without breaking any consumer-visible build path. Glob
 # form so future test-module extractions are covered automatically.
 rust/src/**/tests.rs
