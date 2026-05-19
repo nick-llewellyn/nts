@@ -38,6 +38,13 @@
   (`pub`), Rust (`cargo`), and GitHub Actions. Excluded
   `flutter_rust_bridge` from automated updates to maintain
   coordinated pinning across the Dart/Rust boundary. (bead `nts-tqp`)
+- Removed the deprecated underscore-prefixed `NtsError_*` typedefs
+  (`NtsError_InvalidSpec`, etc.) and the `@Deprecated` `field0`
+  getter aliases on every `NtsError` variant. All construction and
+  pattern-matching should now use the idiomatic PascalCase variant
+  names and the `message` / `phase` payload names introduced in 3.0.0.
+  (bead `nts-c7p`)
+
 
 ## 4.0.0
 

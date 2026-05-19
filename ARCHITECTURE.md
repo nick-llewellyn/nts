@@ -527,10 +527,7 @@ The wrapper has three jobs:
    and the `TimeoutPhase` enum. The wrapper catches the FFI-side
    `NtsError` and rethrows the public twin via an exhaustive
    conversion `switch`, so the FFI's freezed-generated shape is
-   contained at the boundary. The pre-3.0 underscore-prefixed
-   variant names (`NtsError_InvalidSpec`, …) survive as
-   `@Deprecated` typedef aliases for one release; they are scheduled
-   for removal at 4.0.
+   contained at the boundary.
 
 The wrapper's default constants (`kDefaultTimeoutMs`,
 `kDefaultDnsConcurrencyCap`) are pinned against their Rust
