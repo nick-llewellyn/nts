@@ -1083,8 +1083,10 @@ fn build_with_native_verifier_android(
     rustls::Error,
 > {
     use crate::nts::hybrid_verifier::HybridVerifier;
-    let hybrid = Arc::new(HybridVerifier::new(trust_mode));
-    let cfg = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
+    let builder = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS);
+    let provider = builder.crypto_provider().clone();
+    let hybrid = Arc::new(HybridVerifier::new(trust_mode, provider)?);
+    let cfg = builder
         .dangerous()
         .with_custom_certificate_verifier(hybrid.clone())
         .with_no_client_auth();
@@ -1101,12 +1103,13 @@ fn build_with_native_verifier() -> Result<ClientConfig, rustls::Error> {
     // `Verifier` directly and threading it through the protocol-version-
     // pinned builder keeps the TLS 1.3-only invariant intact.
     use rustls_platform_verifier::Verifier as PlatformVerifier;
-    Ok(
-        ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(PlatformVerifier::new()))
-            .with_no_client_auth(),
-    )
+    let builder = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS);
+    let provider = builder.crypto_provider().clone();
+    let verifier = PlatformVerifier::new(provider)?;
+    Ok(builder
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth())
 }
 
 fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {

@@ -62,6 +62,7 @@ use std::sync::{Arc, OnceLock};
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::WebPkiServerVerifier;
+use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{
     CertificateError, DigitallySignedStruct, Error, PeerIncompatible, RootCertStore,
@@ -123,14 +124,16 @@ pub struct HybridVerifier {
 }
 
 impl HybridVerifier {
-    #[must_use]
-    pub fn new(trust_mode: KeTrustMode) -> Self {
-        Self {
-            platform: Arc::new(PlatformVerifier::new()),
+    pub fn new(
+        trust_mode: KeTrustMode,
+        crypto_provider: Arc<CryptoProvider>,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            platform: Arc::new(PlatformVerifier::new(crypto_provider)?),
             fallback: OnceLock::new(),
             fallback_count: AtomicU64::new(0),
             trust_mode,
-        }
+        })
     }
 
     /// Test-only constructor that injects a fake [`ServerCertVerifier`]
