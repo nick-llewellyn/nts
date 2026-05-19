@@ -106,7 +106,7 @@ zeroize = { version = "1.8", default-features = false, features = ["alloc", "der
 # Android library module (`android/src/main/kotlin/com/nllewellyn/nts/PlatformInit.kt`);
 # see `src/android_init.rs` for the Rust counterpart.
 [target.'cfg(target_os = "android")'.dependencies]
-jni = { version = "0.21", default-features = false }
+jni = { version = "0.22", default-features = false }
 
 # iOS-only: subscriber stack that pipes `tracing` events and `log::*!`
 # records into Apple's unified logging system (`os_log`). Initialized once
