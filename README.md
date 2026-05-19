@@ -411,7 +411,7 @@ For internals, contribution workflow, and operational tuning:
 Maintainer: Nicholas Llewellyn — `nllewelln@gmail.com`. For bugs and
 feature requests, prefer
 [GitHub issues](https://github.com/nick-llewellyn/nts/issues); for
-private security reports, email the maintainer directly.
+private security reports, see [`SECURITY.md`](SECURITY.md).
 
 ## License
 
