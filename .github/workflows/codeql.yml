@@ -1,0 +1,78 @@
+name: "CodeQL"
+
+# Static analysis for the Rust core using GitHub CodeQL.
+#
+# Scanned languages: Rust.
+# Scanned paths: `rust/**`.
+#
+# This workflow is informational and is NOT a required status check for
+# merging into `main`. Findings should be triaged in the Security tab.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/codeql.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/codeql.yml'
+  schedule:
+    # Weekly on Sunday at 03:00 UTC
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+# Workflow-wide GITHUB_TOKEN baseline: `contents: read` for checkout,
+# `security-events: write` to publish the SARIF results to the Security tab.
+permissions:
+  contents: read
+  security-events: write
+
+# Cancel superseded runs on PR branches.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # Pin to the same toolchain as `ci.yml` and `rust/rust-toolchain.toml`
+      # to ensure the CodeQL IR extraction matches our production build.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+
+      # Reuse the same cache logic as `ci.yml` to minimize cold-build time.
+      - name: Cache cargo registry + crate target
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: rust
+
+      # Initializes the CodeQL tools for scanning.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+          config-file: .github/codeql/codeql-config.yml
+          build-mode: manual
+
+      # Manual build step for Rust. CodeQL needs a build to extract the
+      # data flow graph.
+      - name: Build Rust crate
+        working-directory: rust
+        run: cargo build --locked
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
