@@ -3283,7 +3283,7 @@ fn nts_client_trust_mode_round_trips_construction_choice() {
 /// `nts_query_inner` uses to mint per-request UIDs and nonces.
 ///
 /// Anchoring the assertion to the helper (rather than calling
-/// `getrandom::getrandom` directly here in the test) means a
+/// `getrandom::fill` directly here in the test) means a
 /// regression where `nts_query_inner` stops calling the helper —
 /// or where the helper itself is rewritten to reuse a cached
 /// UID, swap in constant bytes during a debugging session, or
