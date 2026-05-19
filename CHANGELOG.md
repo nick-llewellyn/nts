@@ -30,10 +30,10 @@
   are required by release builds; only the inner `tests` mod is
   cfg-gated. These optimizations shave ~243 KB uncompressed
   (~60 KB compressed) from the Rust tree, partially offsetting the
-  addition of high-quality screenshots for pub.dev. The final
-  compressed archive size is approximately 783 KB. No
-  consumer-visible behaviour change; surfaces a post-4.0.0
-  archive-sanity-check observation.
+  addition of high-quality screenshots for pub.dev; the final
+  published tarball is approximately 783 KB. No consumer-visible
+  behaviour change; surfaces a post-4.0.0 archive-sanity-check
+  observation.
 
 ### Security
 
