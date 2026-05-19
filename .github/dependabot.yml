@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # Dart dependencies for the core package
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "flutter_rust_bridge"
+
+  # Dart dependencies for the showcase example
+  - package-ecosystem: "pub"
+    directory: "/example"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "flutter_rust_bridge"
+
+  # Rust dependencies for the core native library
+  - package-ecosystem: "cargo"
+    directory: "/rust"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "flutter_rust_bridge"
+
+  # Rust dependencies for the fuzzing harnesses
+  - package-ecosystem: "cargo"
+    directory: "/rust/fuzz"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actions updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
