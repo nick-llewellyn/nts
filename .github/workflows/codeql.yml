@@ -3,7 +3,8 @@ name: "CodeQL"
 # Static analysis for the Rust core using GitHub CodeQL.
 #
 # Scanned languages: Rust.
-# Scanned paths: `rust/**`.
+# Scanned paths: `rust/**`, excluding `rust/fuzz/**` (mirrored in both the
+# `on.*.paths` filters below and `.github/codeql/codeql-config.yml`).
 #
 # This workflow is informational and is NOT a required status check for
 # merging into `main`. Findings should be triaged in the Security tab.
