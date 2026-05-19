@@ -28,9 +28,10 @@
   blocks inside files like `rust/src/nts/cookies.rs` /
   `dns.rs` / `aead.rs` stay in place because those parent files
   are required by release builds; only the inner `tests` mod is
-  cfg-gated. Net effect on the published archive: ~243 KB
-  uncompressed / ~60 KB compressed shaved (~11 % of the 4.0.0
-  archive size), restoring the pre-extraction footprint. No
+  cfg-gated. These optimizations shave ~243 KB uncompressed
+  (~60 KB compressed) from the Rust tree, partially offsetting the
+  addition of high-quality screenshots for pub.dev. The final
+  compressed archive size is approximately 783 KB. No
   consumer-visible behaviour change; surfaces a post-4.0.0
   archive-sanity-check observation.
 
