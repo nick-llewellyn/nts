@@ -49,10 +49,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # Pin to the same toolchain as `ci.yml` and `rust/rust-toolchain.toml`
-      # to ensure the CodeQL IR extraction matches our production build.
+      # `dtolnay/rust-toolchain` only auto-detects rust-toolchain.toml at the
+      # repo root. Ours lives in `rust/`, so we extract the channel explicitly
+      # to keep `rust/rust-toolchain.toml` the single source of truth.
+      - name: Read pinned Rust channel
+        id: toolchain
+        run: |
+          channel=$(grep '^channel' rust/rust-toolchain.toml | sed 's/.*"\(.*\)"/\1/')
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      # Install the exact toolchain used by ci.yml so CodeQL IR extraction
+      # matches the production build.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
 
       # Reuse the same cache logic as `ci.yml` to minimize cold-build time.
       - name: Cache cargo registry + crate target
