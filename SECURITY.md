@@ -16,6 +16,6 @@ Please **do not** report security vulnerabilities through public GitHub issues.
 Instead, report security issues either:
 
 - By email: `nllewelln@gmail.com`, or
-- Via GitHub's **Private Vulnerability Reporting** feature (if available for this repository).
+- Via GitHub's **Private Vulnerability Reporting** feature.
 
 You can expect an **initial response within 48 hours**. Further updates will be provided as the issue is triaged and addressed.
