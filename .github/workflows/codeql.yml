@@ -48,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       # `dtolnay/rust-toolchain` only auto-detects rust-toolchain.toml at the
       # repo root. Ours lives in `rust/`, so we extract the channel explicitly

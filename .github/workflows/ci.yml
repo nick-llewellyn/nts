@@ -58,7 +58,7 @@ jobs:
       hooks: ${{ steps.filter.outputs.hooks }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Filter changed paths
         id: filter
@@ -126,7 +126,7 @@ jobs:
         flutter: ['3.38.10', 'stable']
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       # `subosito/flutter-action@v2` does not accept channel names as a
       # `flutter-version` value, so the `stable` matrix entry is mapped to
@@ -278,7 +278,7 @@ jobs:
       needs.changes.outputs.ci == 'true'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -399,7 +399,7 @@ jobs:
       needs.changes.outputs.ci == 'true'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -477,7 +477,7 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Review dependencies
         # Pinned to v5.0.0 (May 2026) rather than the floating `v5` tag
@@ -541,7 +541,7 @@ jobs:
       || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Verify each required hook is present, executable, and parses
         run: |
@@ -625,7 +625,7 @@ jobs:
       || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Run functional hook tests
         run: sh tool/hooks/test_hooks.sh

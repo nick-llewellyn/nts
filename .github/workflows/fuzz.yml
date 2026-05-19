@@ -101,7 +101,7 @@ jobs:
           - validate_response
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       # cargo-fuzz requires nightly for the sanitizer-coverage
       # instrumentation `cargo fuzz {build,run}` injects into the
