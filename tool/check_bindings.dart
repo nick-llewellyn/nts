@@ -28,7 +28,7 @@
 // `frb_generated.{rs,dart}` but leaves the previously-emitted Dart
 // module on disk. The stale module then references symbols that no
 // longer exist in the dispatcher, which surfaces as an opaque "symbol
-// not found in `RustLibApi`" build break under `flutter analyze` /
+// not found in `NtsRustLibApi`" build break under `flutter analyze` /
 // `flutter test` rather than at codegen time.
 //
 // `_checkForOrphanedApiModules` flags any `lib/src/ffi/api/*.dart` that

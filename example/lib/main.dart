@@ -17,7 +17,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
-import 'package:nts/nts.dart' show RustLib;
+import 'package:nts/nts.dart' show NtsRustLib;
 
 import 'src/data/server_entry.dart';
 import 'src/data/server_loader.dart';
@@ -53,15 +53,15 @@ Future<_Boot> _bootstrap() async {
   String? loadError;
   if (_bridgeMode == 'real') {
     try {
-      await RustLib.init();
+      await NtsRustLib.init();
       label = 'real bridge';
     } catch (e) {
       // Fall back to mock so the UI still renders; the banner will
       // explain why we ended up here.
-      RustLib.initMock(api: MockNtsApi());
+      NtsRustLib.initMock(api: MockNtsApi());
       label = 'mock (load failed)';
       loadError =
-          'RustLib.init() failed: $e\n'
+          'NtsRustLib.init() failed: $e\n'
           'The Native Assets hook (hook/build.dart) should bundle '
           'libnts_rust automatically; check that the host '
           'triple is pinned in rust/rust-toolchain.toml and that '
@@ -69,7 +69,7 @@ Future<_Boot> _bootstrap() async {
           '--dart-define=NTS_BRIDGE=mock to silence this banner.';
     }
   } else {
-    RustLib.initMock(api: MockNtsApi());
+    NtsRustLib.initMock(api: MockNtsApi());
     label = 'mock';
   }
 

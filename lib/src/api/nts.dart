@@ -176,7 +176,7 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 /// future / isolate hop): backed by four atomic-relaxed loads, cheap
 /// enough to call from a UI poll loop.
 ///
-/// Requires `await RustLib.init()` to have completed on the calling
+/// Requires `await NtsRustLib.init()` to have completed on the calling
 /// isolate before invocation: the four atomic reads happen on the Rust
 /// side and dispatch through the FRB v2 dispatch table even though the
 /// call returns synchronously, so a missed initialization fails with a
@@ -227,7 +227,7 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// loads, cheap enough to call from a UI poll loop or a pre-flight
 /// "can I even validate against the platform store?" check.
 ///
-/// Requires `await RustLib.init()` to have completed on the calling
+/// Requires `await NtsRustLib.init()` to have completed on the calling
 /// isolate before invocation: the three atomic reads happen on the
 /// Rust side and dispatch through the FRB v2 dispatch table even
 /// though the call returns synchronously, so a missed initialization
@@ -237,7 +237,7 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// `androidPlatformInitSucceeded` and `androidHybridFallbackCount`
 /// observables below are populated by the separate Android
 /// `NtsPlugin` JNI bootstrap that runs before `main()`, distinct from
-/// `RustLib.init()`.
+/// `NtsRustLib.init()`.
 ///
 /// Returns six observables that callers cannot recover from a
 /// per-query [NtsTimeSample] alone:
@@ -313,7 +313,7 @@ NtsTrustStatus ntsTrustStatus() => _publicTrustStatus(ffi.ntsTrustStatus());
 /// them. There is no clone-as-sendable-token API on the public
 /// surface today.
 ///
-/// **Initialization**: `await RustLib.init()` from
+/// **Initialization**: `await NtsRustLib.init()` from
 /// `package:nts/src/ffi/frb_generated.dart` must have completed
 /// before the [NtsClient] default constructor or any of its
 /// methods is called — the constructor synchronously dispatches
@@ -346,11 +346,11 @@ class NtsClient {
   /// for the life of the client.
   ///
   /// Synchronous: dispatches through the FRB bridge to mint the
-  /// underlying Rust handle in-line. `await RustLib.init()` must
+  /// underlying Rust handle in-line. `await NtsRustLib.init()` must
   /// have completed first; calling this before init throws a
   /// `StateError` from FRB's dispatcher rather than an [NtsError].
   /// Apps that mint a long-lived [NtsClient] during startup should
-  /// do so after the same `await RustLib.init()` they would do
+  /// do so after the same `await NtsRustLib.init()` they would do
   /// before calling [ntsQuery].
   factory NtsClient({TrustMode trustMode = TrustMode.platformWithFallback}) {
     final inner = trustMode == TrustMode.platformWithFallback
@@ -362,7 +362,7 @@ class NtsClient {
   /// Trust-anchor policy this client was constructed with.
   /// Synchronous: backed by a one-byte read on the Rust side.
   ///
-  /// Requires `await RustLib.init()` to have completed on the
+  /// Requires `await NtsRustLib.init()` to have completed on the
   /// calling isolate before invocation: the read happens on the Rust
   /// side and dispatches through the FRB v2 dispatch table even
   /// though the call returns synchronously, so a missed
@@ -460,7 +460,7 @@ class NtsClient {
   /// other semantically-invalid-but-encodable spec trivially have
   /// no cached entry and return `false`.
   ///
-  /// Requires `await RustLib.init()` to have completed on the
+  /// Requires `await NtsRustLib.init()` to have completed on the
   /// calling isolate before invocation: the mutex acquisition and
   /// `HashMap::remove` happen on the Rust side and dispatch through
   /// the FRB v2 dispatch table even though the call returns
@@ -481,7 +481,7 @@ class NtsClient {
   /// Synchronous: backed by one mutex acquisition and one
   /// `HashMap::clear` on the Rust side; no isolate hop.
   ///
-  /// Requires `await RustLib.init()` to have completed on the
+  /// Requires `await NtsRustLib.init()` to have completed on the
   /// calling isolate before invocation: the mutex acquisition and
   /// `HashMap::clear` happen on the Rust side and dispatch through
   /// the FRB v2 dispatch table even though the call returns

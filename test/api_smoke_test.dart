@@ -26,7 +26,7 @@ import 'package:nts/nts.dart';
 import 'package:nts/src/ffi/api/nts.dart' as ffi;
 import 'package:nts/src/ffi/frb_generated.dart';
 
-class _RecordingApi implements RustLibApi {
+class _RecordingApi implements NtsRustLibApi {
   int? lastQueryTimeoutMs;
   int? lastQueryDnsCap;
   int? lastWarmTimeoutMs;
@@ -247,29 +247,29 @@ class _RecordingApi implements RustLibApi {
 // wrapper holds one of these as its `_inner` field whenever
 // `_RecordingApi.crateApiNtsNtsClientNew` is the active mock; the
 // fake re-routes each `clear` / `invalidate` / `query` / `warmCookies`
-// call back through `RustLib.instance.api`, which is the same
+// call back through `NtsRustLib.instance.api`, which is the same
 // `_RecordingApi` instance, so the mock observes the call exactly as
 // the real `NtsClientImpl` would have routed it. `dispose` /
 // `isDisposed` are stubbed because the real `RustOpaqueInterface`
 // requires them but the test mock has no `Arc` to release.
 class _FakeFfiNtsClient implements ffi.NtsClient {
   @override
-  void clear() => RustLib.instance.api.crateApiNtsNtsClientClear(that: this);
+  void clear() => NtsRustLib.instance.api.crateApiNtsNtsClientClear(that: this);
 
   @override
-  bool invalidate({required ffi.NtsServerSpec spec}) => RustLib.instance.api
+  bool invalidate({required ffi.NtsServerSpec spec}) => NtsRustLib.instance.api
       .crateApiNtsNtsClientInvalidate(that: this, spec: spec);
 
   @override
   ffi.TrustMode trustMode() =>
-      RustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
+      NtsRustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
 
   @override
   Future<ffi.NtsTimeSample> query({
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
-  }) => RustLib.instance.api.crateApiNtsNtsClientQuery(
+  }) => NtsRustLib.instance.api.crateApiNtsNtsClientQuery(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
@@ -281,7 +281,7 @@ class _FakeFfiNtsClient implements ffi.NtsClient {
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
-  }) => RustLib.instance.api.crateApiNtsNtsClientWarmCookies(
+  }) => NtsRustLib.instance.api.crateApiNtsNtsClientWarmCookies(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
@@ -347,13 +347,13 @@ ffi.NtsTrustStatus _zeroFfiTrustStatus() => ffi.NtsTrustStatus(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  // `RustLib.initMock` rejects a second call within a single test process,
+  // `NtsRustLib.initMock` rejects a second call within a single test process,
   // so the mock is wired exactly once and its recording state is cleared
   // between tests instead.
   final api = _RecordingApi();
 
   setUpAll(() {
-    RustLib.initMock(api: api);
+    NtsRustLib.initMock(api: api);
   });
 
   setUp(api.reset);

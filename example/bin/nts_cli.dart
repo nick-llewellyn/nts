@@ -53,7 +53,7 @@ import 'package:args/args.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show ExternalLibrary;
 import 'package:nts/nts.dart'
-    show NtsError, NtsServerSpec, RustLib, ntsQuery, ntsWarmCookies;
+    show NtsError, NtsServerSpec, NtsRustLib, ntsQuery, ntsWarmCookies;
 
 import 'package:nts_example/src/mock_api.dart';
 import 'package:nts_example/src/state/nts_format.dart';
@@ -174,7 +174,7 @@ Future<void> _initBridge({
   required String? libraryPath,
 }) async {
   if (useMock) {
-    RustLib.initMock(api: MockNtsApi());
+    NtsRustLib.initMock(api: MockNtsApi());
     return;
   }
   final resolved = libraryPath ?? _autoLocateDylib();
@@ -191,7 +191,7 @@ Future<void> _initBridge({
     exit(70);
   }
   try {
-    await RustLib.init(externalLibrary: ExternalLibrary.open(resolved));
+    await NtsRustLib.init(externalLibrary: ExternalLibrary.open(resolved));
   } catch (e) {
     stderr.writeln('error: failed to initialize Rust bridge: $e');
     exit(70);
@@ -201,7 +201,7 @@ Future<void> _initBridge({
 /// Walk the well-known build locations for a host-arch dylib. Returns
 /// the first match or null. Mirrors the Native Assets pipeline's
 /// stem (`nts_rust`) and the `rust/target/release/`
-/// convention encoded in `RustLib.kDefaultExternalLibraryLoaderConfig`.
+/// convention encoded in `NtsRustLib.kDefaultExternalLibraryLoaderConfig`.
 String? _autoLocateDylib() {
   final ext = Platform.isMacOS
       ? 'dylib'

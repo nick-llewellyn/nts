@@ -17,5 +17,11 @@ rust_output: rust/src/frb_generated.rs
 # Rust `api::` tree (e.g. `lib/src/ffi/api/simple.dart`).
 dart_output: lib/src/ffi
 
+# Rename the generated FRB entrypoint class from the generic `NtsRustLib` to a
+# package-specific name. This prevents consumers who depend on multiple
+# flutter_rust_bridge-backed packages from having to use `import ... as <prefix>`
+# to disambiguate the entrypoint, since each package's class name is unique.
+dart_entrypoint_class_name: NtsRustLib
+
 # Path to the Rust crate root (Cargo.toml lives in this directory).
 rust_root: rust/

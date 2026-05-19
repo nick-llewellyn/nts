@@ -181,7 +181,7 @@ class NtsController {
   /// The cold-start cost is a property of the NTS protocol (RFC 8915
   /// §4) — it is the price of mutual authentication and forward secrecy,
   /// not bridge overhead. By the time this method is reachable from the
-  /// UI, `RustLib.init()` has already been awaited during bootstrap, the
+  /// UI, `NtsRustLib.init()` has already been awaited during bootstrap, the
   /// native library is loaded via the Native Assets pipeline, and the
   /// FRB worker pool is up. Per-call FFI overhead is microseconds, well
   /// below user-perceptible latency. This GUI is a protocol-observation

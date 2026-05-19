@@ -15,7 +15,7 @@
 ///    ahead of plugin registration) can call
 ///    `com.nllewellyn.nts.PlatformInit.init(context)` from Kotlin
 ///    directly.
-/// 2. **Dart/FRB initialization** — `await RustLib.init()` once during
+/// 2. **Dart/FRB initialization** — `await NtsRustLib.init()` once during
 ///    startup before any `nts*` entry point. This loads the bundled
 ///    Rust dylib through the Native Assets pipeline and wires the
 ///    `flutter_rust_bridge` v2 dispatch table on the Dart isolate.
@@ -29,14 +29,14 @@
 /// `ARCHITECTURE.md`'s "Public API stability layer" for the rationale.
 library;
 
-// Bridge entrypoint. `await RustLib.init()` is mandatory on every
+// Bridge entrypoint. `await NtsRustLib.init()` is mandatory on every
 // platform: it loads the bundled Rust dylib via the Native Assets
 // pipeline and binds the FRB v2 dispatch table on the calling isolate.
 // The Android `NtsPlugin` does *not* subsume this step -- it only
 // handles the JNI handle capture for `rustls-platform-verifier`, which
 // is a separate concern that runs on the platform thread before Dart
 // `main()` starts. Subsequent invocations are no-ops.
-export 'src/ffi/frb_generated.dart' show RustLib;
+export 'src/ffi/frb_generated.dart' show NtsRustLib;
 
 // Public NTS surface (RFC 8915). The wrapper layer carries the
 // dartdoc that consumers see and applies the package's default values

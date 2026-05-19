@@ -296,16 +296,16 @@ Concrete partitioning today:
   - The three `frb_generated*.dart` files contain the
     `RustLibApiImpl` class — the FFI dispatch that loads the dylib
     and marshals every `crateApi*` call across the bridge.
-    `RustLib.initMock()` substitutes the entire `RustLibApi`
+    `NtsRustLib.initMock()` substitutes the entire `RustLibApi`
     instance via `instance.initMockImpl(api: api)`, so this impl
     class is never constructed in mock mode and its method bodies
     are genuinely unreachable from the test suite.
   - `lib/src/ffi/api/nts.dart` holds the public-facing forwarders
     (e.g.
-    `ntsQuery(...) => RustLib.instance.api.crateApiNtsNtsQuery(...)`).
+    `ntsQuery(...) => NtsRustLib.instance.api.crateApiNtsNtsQuery(...)`).
     These bodies *are* reached when the smoke tests call `ntsQuery`
     / `ntsWarmCookies`; the mock intercepts at the
-    `RustLib.instance.api` level, one frame deeper. The exclusion
+    `NtsRustLib.instance.api` level, one frame deeper. The exclusion
     is therefore on **low-signal grounds** — single-expression
     `=>` dispatchers that only forward arguments add line count
     without measuring authored logic — not on unreachability.
