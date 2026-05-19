@@ -94,7 +94,7 @@ rustls-platform-verifier = "0.7"
 # `tracing::Subscriber` (Android, macOS host, desktop) events are
 # silently dropped, so this dep adds no host-side noise.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 zeroize = { version = "1.8", default-features = false, features = ["alloc", "derive"] }
 
 # Android-only: JNI handles for bootstrapping `rustls-platform-verifier`'s
