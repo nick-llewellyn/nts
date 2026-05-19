@@ -450,4 +450,3 @@ final class NtsErrorInternal extends NtsError {
   @override
   String toString() => 'NtsError.internal($message)';
 }
-
