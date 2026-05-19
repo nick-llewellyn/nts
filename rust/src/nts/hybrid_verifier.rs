@@ -27,7 +27,7 @@
 //! # `TrustMode` gating (4.0.0)
 //!
 //! Both per-chain fallback arms are gated by the [`KeTrustMode`]
-//! plumbed in at `HybridVerifier::new(trust_mode)`. In
+//! plumbed in at `HybridVerifier::new(trust_mode, crypto_provider)`. In
 //! [`KeTrustMode::PlatformWithFallback`] (the historic default) the
 //! safety net fires exactly as it did pre-4.0.0. In
 //! [`KeTrustMode::PlatformOnly`] both arms are suppressed and the
@@ -39,10 +39,10 @@
 //!
 //! # Defence-in-depth: native-verifier JNI failures
 //!
-//! `rustls-platform-verifier` 0.5.x maps every `JNIError` raised while
+//! `rustls-platform-verifier` 0.7.x maps every `JNIError` raised while
 //! invoking the Kotlin `CertificateVerifier` glue to
 //! `Error::General("failed to call native verifier: …")` (see
-//! `rustls-platform-verifier-0.5.3/src/verification/android.rs`). The
+//! `rustls-platform-verifier-0.7.0/src/verification/android.rs`). The
 //! most common cause in the wild is R8 / ProGuard dead-code-eliminating
 //! the AAR's `org.rustls.platformverifier.*` classes when the host app
 //! ships release builds without the keep rules contributed by the
@@ -86,8 +86,8 @@ const NATIVE_VERIFIER_JNI_MARKER: &str = "failed to call native verifier";
 /// whose only platform-side failure is a missing OCSP responder URL.
 ///
 /// Construction is cheap: the platform [`Verifier`][PlatformVerifier]
-/// resolves the `CryptoProvider` lazily on first use and the webpki-roots
-/// trust anchor set is parsed lazily on first fallback (see
+/// uses the provided `CryptoProvider` and the webpki-roots trust anchor
+/// set is parsed lazily on first fallback (see
 /// [`HybridVerifier::fallback`]). A fresh instance per `ClientConfig`
 /// build is fine.
 ///
@@ -124,6 +124,12 @@ pub struct HybridVerifier {
 }
 
 impl HybridVerifier {
+    /// Returns a new `HybridVerifier` gated by the provided `trust_mode`.
+    ///
+    /// Callers should typically obtain the `crypto_provider` from the
+    /// same [`rustls::ConfigBuilder`] used to construct the
+    /// `ClientConfig` (see `crate::nts::ke` for the Android and
+    /// non-Android assembly patterns).
     pub fn new(
         trust_mode: KeTrustMode,
         crypto_provider: Arc<CryptoProvider>,
@@ -452,7 +458,7 @@ mod tests {
     }
 
     /// Pin the marker substring against the exact format string upstream
-    /// emits in `rustls-platform-verifier-0.5.x`. If the upstream wording
+    /// emits in `rustls-platform-verifier-0.7.x`. If the upstream wording
     /// changes (e.g. on a major bump) this test fails loudly so the
     /// fallback can be re-pointed at the new variant rather than silently
     /// stop catching JNI failures.
@@ -460,7 +466,7 @@ mod tests {
     fn jni_marker_matches_upstream_format() {
         // Upstream synthesises:
         //   `Error::General(format!("failed to call native verifier: {e:?}"))`
-        // (see rustls-platform-verifier-0.5.3/src/verification/android.rs).
+        // (see rustls-platform-verifier-0.7.0/src/verification/android.rs).
         // We mirror the exact prefix; any `{e:?}` payload still satisfies
         // `contains`.
         let synthesised = format!("failed to call native verifier: {:?}", "Error");
