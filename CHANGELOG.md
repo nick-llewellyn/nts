@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Packaging
+
+- `.pubignore` now excludes the test-only Rust modules
+  (`rust/src/**/tests.rs` and `rust/src/**/test_helpers.rs`) that
+  surfaced in the 4.0.0 published archive after PRs #61, #63, and
+  #64 extracted them from inline `#[cfg(test)] mod tests { … }`
+  blocks into sibling files. The sibling files are referenced via
+  `#[cfg(test)] mod tests;` / `#[cfg(test)] pub(crate) mod test_helpers;`
+  in their parent modules, so the `#[cfg(test)]`
+  attribute removes the module reference before file lookup and
+  consumer-side `cargo build --release` driven by Native Assets
+  never compiles or even parses them. Inline `#[cfg(test)]`
+  blocks inside files like `rust/src/nts/cookies.rs` /
+  `dns.rs` / `aead.rs` stay in place because those parent files
+  are required by release builds; only the inner `tests` mod is
+  cfg-gated. Net effect on the published archive: ~243 KB
+  uncompressed / ~60 KB compressed shaved (~11 % of the 4.0.0
+  archive size), restoring the pre-extraction footprint. No
+  consumer-visible behaviour change; surfaces a post-4.0.0
+  archive-sanity-check observation.
+
 ## 4.0.0
 
 This major release consolidates the post-3.0 work that landed on
