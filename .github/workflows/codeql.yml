@@ -13,12 +13,14 @@ on:
     branches: [ "main" ]
     paths:
       - 'rust/**'
+      - '!rust/fuzz/**'
       - '.github/workflows/codeql.yml'
       - '.github/codeql/**'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'rust/**'
+      - '!rust/fuzz/**'
       - '.github/workflows/codeql.yml'
       - '.github/codeql/**'
   schedule:
@@ -51,8 +53,6 @@ jobs:
       # to ensure the CodeQL IR extraction matches our production build.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.92.0"
 
       # Reuse the same cache logic as `ci.yml` to minimize cold-build time.
       - name: Cache cargo registry + crate target
