@@ -374,7 +374,9 @@ fn decode_kind(record_type: u16, body: &[u8]) -> Result<RecordKind, CodecError> 
         record_type::NEXT_PROTOCOL => Ok(RecordKind::NextProtocol(decode_u16_array(body)?)),
         record_type::AEAD_ALGORITHM => Ok(RecordKind::AeadAlgorithm(decode_u16_array(body)?)),
         record_type::ERROR => Ok(RecordKind::Error(ErrorCode::from(decode_u16_scalar(body)?))),
-        record_type::WARNING => Ok(RecordKind::Warning(WarningCode::from(decode_u16_scalar(body)?))),
+        record_type::WARNING => Ok(RecordKind::Warning(WarningCode::from(decode_u16_scalar(
+            body,
+        )?))),
         record_type::NTPV4_PORT => Ok(RecordKind::Port(decode_u16_scalar(body)?)),
         record_type::NEW_COOKIE => Ok(RecordKind::NewCookie(body.to_vec())),
         record_type::NTPV4_SERVER => std::str::from_utf8(body)
@@ -423,7 +425,6 @@ const _ASSERT_HASH_DERIVES: fn() = || {
     requires_hash::<ErrorCode>();
     requires_hash::<WarningCode>();
 };
-
 
 #[cfg(test)]
 mod tests {

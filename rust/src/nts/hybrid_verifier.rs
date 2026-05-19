@@ -678,7 +678,10 @@ mod tests {
         );
         let (leaf, intermediates, server_name, now) = dummy_args();
         let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
-        assert!(result.is_ok(), "expected fallback to accept; got {result:?}");
+        assert!(
+            result.is_ok(),
+            "expected fallback to accept; got {result:?}"
+        );
         assert_eq!(platform.call_count.load(Ordering::Relaxed), 1);
         assert_eq!(fallback.call_count.load(Ordering::Relaxed), 1);
         assert_eq!(
@@ -717,7 +720,10 @@ mod tests {
         );
         let (leaf, intermediates, server_name, now) = dummy_args();
         let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
-        assert!(result.is_ok(), "expected fallback to accept; got {result:?}");
+        assert!(
+            result.is_ok(),
+            "expected fallback to accept; got {result:?}"
+        );
         assert_eq!(platform.call_count.load(Ordering::Relaxed), 1);
         assert_eq!(fallback.call_count.load(Ordering::Relaxed), 1);
         assert_eq!(
