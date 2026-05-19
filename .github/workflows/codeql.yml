@@ -78,13 +78,7 @@ jobs:
         with:
           languages: rust
           config-file: .github/codeql/codeql-config.yml
-          build-mode: manual
-
-      # Manual build step for Rust. CodeQL needs a build to extract the
-      # data flow graph.
-      - name: Build Rust crate
-        working-directory: rust
-        run: cargo build --locked
+          build-mode: none
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

@@ -23,6 +23,15 @@
   consumer-visible behaviour change; surfaces a post-4.0.0
   archive-sanity-check observation.
 
+### Security
+
+- Added **GitHub CodeQL** advanced workflow for static security
+  analysis of the Rust core. The workflow is synchronized with the
+  pinned toolchain in `rust/rust-toolchain.toml` and includes
+  mirrored exclusions for fuzzing targets in both the workflow
+  filters and the CodeQL configuration. Findings are surfaced
+  to the Security tab. (PR #87, bead `nts-wat`)
+
 ## 4.0.0
 
 This major release consolidates the post-3.0 work that landed on
