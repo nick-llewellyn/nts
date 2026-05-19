@@ -70,7 +70,7 @@ The file path is the one printed by `cargo metadata --format-version 1
 the lifetime of the resolved Cargo workspace; the rationale comment in
 `android/build.gradle.kts` documents the same constraint.
 
-Every platform additionally requires `await RustLib.init()` once
+Every platform additionally requires `await NtsRustLib.init()` once
 during application startup before the first `ntsQuery` /
 `ntsWarmCookies` call; see "Initialization has two layers" below
 for the rationale. Web and WebAssembly are unsupported: NTS-KE
@@ -89,7 +89,7 @@ Future<void> main() async {
   //    in this package. This loads the bundled Rust binary that does
   //    the actual NTS-KE handshake and AEAD-NTP exchange and wires
   //    the Dart-side dispatch table. Required on every platform.
-  await RustLib.init();
+  await NtsRustLib.init();
 
   // 2. Pick an RFC 8915 NTS-KE endpoint. Port 4460 is the IANA default.
   final spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
@@ -133,15 +133,15 @@ what your host code needs to do.
    can call `com.nllewellyn.nts.PlatformInit.init(context)` from
    Kotlin directly; see the KDoc on that class.
 
-2. **Dart/FRB initialization** (`await RustLib.init()`, every
+2. **Dart/FRB initialization** (`await NtsRustLib.init()`, every
    platform, manual). This loads the bundled Rust dylib through the
    Native Assets pipeline and wires the
    [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge)
    v2 dispatch table on the calling isolate. The Android plugin does
-   *not* subsume this step: `RustLib.init()` mutates Dart isolate
+   *not* subsume this step: `NtsRustLib.init()` mutates Dart isolate
    state, and the plugin runs on the Android platform thread before
    the Dart isolate exists. Calling `ntsQuery` or `ntsWarmCookies`
-   before `RustLib.init()` resolves raises an error. In a Flutter
+   before `NtsRustLib.init()` resolves raises an error. In a Flutter
    app, do it right after `WidgetsFlutterBinding.ensureInitialized()`
    in `main()`; subsequent invocations are no-ops, so it is safe to
    call from a shared bootstrap path.
@@ -271,7 +271,7 @@ gate is the caller's responsibility.
 ### Non-Flutter Dart callers must pass `externalLibrary` explicitly
 
 The FRB-generated default loader
-(`RustLib.kDefaultExternalLibraryLoaderConfig`) advertises
+(`NtsRustLib.kDefaultExternalLibraryLoaderConfig`) advertises
 `rust/target/release/` as the `ioDirectory` for the bundled dylib.
 Inside a Flutter host the Native Assets pipeline supplies a
 controlled absolute load path before that default ever runs, so the
@@ -281,13 +281,13 @@ else that imports `package:nts` directly — the relative directory
 *is* what the loader resolves against the current working
 directory.
 
-A non-Flutter call site that does `await RustLib.init()` (no
+A non-Flutter call site that does `await NtsRustLib.init()` (no
 `externalLibrary:` argument) while running from a working directory
 an attacker can influence is therefore a library-hijack surface:
 dropping a malicious `rust/target/release/libnts_rust.dylib` (or
 `.so` / `.dll`) into that directory yields arbitrary code execution
 under the calling process's privileges. The hijack is independent
-of NTS itself — `RustLib.init()` runs before any of this package's
+of NTS itself — `NtsRustLib.init()` runs before any of this package's
 TLS / NTS code is reached — but the package is the vehicle.
 
 The mitigation is the pattern the bundled
@@ -300,7 +300,7 @@ import 'package:nts/nts.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge.dart'
     show ExternalLibrary;
 
-await RustLib.init(
+await NtsRustLib.init(
   externalLibrary: ExternalLibrary.open('/absolute/path/to/libnts_rust.dylib'),
 );
 ```
@@ -309,14 +309,14 @@ The absolute path should come from a trusted source (a packaged
 install location, an environment variable owned by the deploying
 operator, etc.) — not from a relative lookup against the working
 directory. Flutter callers can keep using the bare
-`await RustLib.init()` form: Native Assets supplies the load path
+`await NtsRustLib.init()` form: Native Assets supplies the load path
 before the relative fallback can fire.
 
 ## API summary
 
 | Symbol | Purpose |
 |--------|---------|
-| `RustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
+| `NtsRustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
 | `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
 | `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | Force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |

@@ -96,7 +96,7 @@ Native Assets build hook (`../hook/build.dart`), which invokes `cargo
 build --release` for the active target via `native_toolchain_rust`.
 No manual `cargo build` is required when running through `flutter run`.
 
-Default boot is the **real bridge** — `RustLib.init()` resolves
+Default boot is the **real bridge** — `NtsRustLib.init()` resolves
 `libnts_rust` through the bundled native asset and the
 buttons drive the actual RFC 8915 client against the chosen NTS-KE
 server. Pass `-t lib/main.dart` so Flutter targets the GUI entry point
@@ -120,7 +120,7 @@ fake via the `NTS_BRIDGE` dart-define:
 fvm flutter run -d macos -t lib/main.dart --dart-define=NTS_BRIDGE=mock
 ```
 
-If `RustLib.init()` cannot locate the dylib (typically because the
+If `NtsRustLib.init()` cannot locate the dylib (typically because the
 build hook was skipped or the target isn't pinned), the app prints a
 banner explaining what went wrong and silently falls back to the mock
 so the rest of the UI stays usable.
@@ -274,7 +274,7 @@ internal errors) go to stderr.
 | `0`  | Bridge initialised; every host completed (success or failure)            |
 | `1`  | `--exit-on-error` was passed and at least one host produced warn / error |
 | `64` | Argument error (bad `--port`, `--timeout`, missing hosts)                |
-| `70` | Bridge load failure (no dylib found, `RustLib.init` threw)               |
+| `70` | Bridge load failure (no dylib found, `NtsRustLib.init` threw)               |
 
 By default the exit code does **not** reflect per-host failures — a
 run where every host produced a `WARN` still exits `0` provided the

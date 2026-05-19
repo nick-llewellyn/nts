@@ -60,7 +60,7 @@ class AppState {
   /// tell at a glance whether the bridge is real or mocked.
   final String bridgeMode;
 
-  /// Populated when `RustLib.init()` failed and we fell back to mock.
+  /// Populated when `NtsRustLib.init()` failed and we fell back to mock.
   /// Surfaced by the shell as a banner.
   final String? bridgeLoadError;
 

@@ -11,7 +11,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:nts/nts.dart' show RustLib, TrustMode;
+import 'package:nts/nts.dart' show NtsRustLib, TrustMode;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
 import 'package:nts_example/src/mock_api.dart';
@@ -56,7 +56,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUpAll(() {
-    RustLib.initMock(api: MockNtsApi());
+    NtsRustLib.initMock(api: MockNtsApi());
   });
 
   setUp(() {

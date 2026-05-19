@@ -26,7 +26,7 @@ Future<void> main() async {
   // through the stable Native Assets API and wires the FRB dispatch
   // table. Must be awaited exactly once before any nts* entry point;
   // subsequent calls are no-ops.
-  await RustLib.init();
+  await NtsRustLib.init();
 
   // RFC 8915 NTS-KE endpoint. Port 4460 is the IANA-assigned default;
   // any host listed at <https://github.com/jauderho/nts-servers> works.

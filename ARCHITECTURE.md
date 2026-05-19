@@ -494,7 +494,7 @@ decisions; reads are wait-free.
 
 `lib/nts.dart` is the package's stable public contract. It is a thin,
 hand-written file that re-exports a wrapper layer in
-`lib/src/api/nts.dart` plus the bridge bootstrap (`RustLib`). The
+`lib/src/api/nts.dart` plus the bridge bootstrap (`NtsRustLib`). The
 underlying FRB-generated bindings in `lib/src/ffi/` are an internal
 implementation detail.
 
@@ -563,7 +563,7 @@ release type.
 
 | Path | Role |
 |------|------|
-| `lib/nts.dart` | Public Dart API; explicit re-export of the stability-layer wrapper plus `RustLib`. |
+| `lib/nts.dart` | Public Dart API; explicit re-export of the stability-layer wrapper plus `NtsRustLib`. |
 | `lib/src/api/nts.dart` | Hand-written wrapper functions plus the FFI↔public conversion layer. Carries the consumer-facing dartdoc on the entry points. |
 | `lib/src/api/models.dart` | Hand-written public DTOs (`NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`, `NtsDnsPoolStats`, `PhaseTimings`). |
 | `lib/src/api/errors.dart` | Hand-written public `NtsError` sealed class plus `TimeoutPhase`; deprecated underscore-prefixed typedef aliases for the pre-3.0 variant names live at the bottom. |

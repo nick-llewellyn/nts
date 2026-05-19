@@ -12,15 +12,16 @@ import 'frb_generated.io.dart'
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Main entrypoint of the Rust API
-class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
+class NtsRustLib
+    extends BaseEntrypoint<NtsRustLibApi, NtsRustLibApiImpl, NtsRustLibWire> {
   @internal
-  static final instance = RustLib._();
+  static final instance = NtsRustLib._();
 
-  RustLib._();
+  NtsRustLib._();
 
   /// Initialize flutter_rust_bridge
   static Future<void> init({
-    RustLibApi? api,
+    NtsRustLibApi? api,
     BaseHandler? handler,
     ExternalLibrary? externalLibrary,
     bool forceSameCodegenVersion = true,
@@ -35,7 +36,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 
   /// Initialize flutter_rust_bridge in mock mode.
   /// No libraries for FFI are loaded.
-  static void initMock({required RustLibApi api}) {
+  static void initMock({required NtsRustLibApi api}) {
     instance.initMockImpl(api: api);
   }
 
@@ -46,12 +47,12 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   static void dispose() => instance.disposeImpl();
 
   @override
-  ApiImplConstructor<RustLibApiImpl, RustLibWire> get apiImplConstructor =>
-      RustLibApiImpl.new;
+  ApiImplConstructor<NtsRustLibApiImpl, NtsRustLibWire>
+  get apiImplConstructor => NtsRustLibApiImpl.new;
 
   @override
-  WireConstructor<RustLibWire> get wireConstructor =>
-      RustLibWire.fromExternalLibrary;
+  WireConstructor<NtsRustLibWire> get wireConstructor =>
+      NtsRustLibWire.fromExternalLibrary;
 
   @override
   Future<void> executeRustInitializers() async {
@@ -77,7 +78,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
       );
 }
 
-abstract class RustLibApi extends BaseApi {
+abstract class NtsRustLibApi extends BaseApi {
   void crateApiNtsNtsClientClear({required NtsClient that});
 
   bool crateApiNtsNtsClientInvalidate({
@@ -134,8 +135,9 @@ abstract class RustLibApi extends BaseApi {
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_NtsClientPtr;
 }
 
-class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
-  RustLibApiImpl({
+class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
+    implements NtsRustLibApi {
+  NtsRustLibApiImpl({
     required super.handler,
     required super.wire,
     required super.generalizedFrbRustBinding,
@@ -1416,11 +1418,11 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
 
   static final _kStaticData = RustArcStaticData(
     rustArcIncrementStrongCount:
-        RustLib.instance.api.rust_arc_increment_strong_count_NtsClient,
+        NtsRustLib.instance.api.rust_arc_increment_strong_count_NtsClient,
     rustArcDecrementStrongCount:
-        RustLib.instance.api.rust_arc_decrement_strong_count_NtsClient,
+        NtsRustLib.instance.api.rust_arc_decrement_strong_count_NtsClient,
     rustArcDecrementStrongCountPtr:
-        RustLib.instance.api.rust_arc_decrement_strong_count_NtsClientPtr,
+        NtsRustLib.instance.api.rust_arc_decrement_strong_count_NtsClientPtr,
   );
 
   /// Drop every cached session. Cheap; intended for test cleanup
@@ -1430,7 +1432,7 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
   /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
   /// reason as `invalidate`: one mutex acquisition and one
   /// `HashMap::clear`.
-  void clear() => RustLib.instance.api.crateApiNtsNtsClientClear(that: this);
+  void clear() => NtsRustLib.instance.api.crateApiNtsNtsClientClear(that: this);
 
   /// Drop the cached session for `spec`'s `host:port`, if any.
   /// Returns `true` if an entry was removed, `false` if no session
@@ -1445,7 +1447,7 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
   /// invalidation does not pay an isolate-hop round-trip; the
   /// underlying operation is one mutex acquisition and one
   /// `HashMap::remove`.
-  bool invalidate({required NtsServerSpec spec}) => RustLib.instance.api
+  bool invalidate({required NtsServerSpec spec}) => NtsRustLib.instance.api
       .crateApiNtsNtsClientInvalidate(that: this, spec: spec);
 
   /// Per-client equivalent of the top-level `nts_query`
@@ -1454,7 +1456,7 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
-  }) => RustLib.instance.api.crateApiNtsNtsClientQuery(
+  }) => NtsRustLib.instance.api.crateApiNtsNtsClientQuery(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
@@ -1466,7 +1468,7 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
   /// handle through their own configuration layer and need to
   /// re-derive the policy without keeping a parallel record.
   TrustMode trustMode() =>
-      RustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
+      NtsRustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
 
   /// Per-client equivalent of the top-level `nts_warm_cookies`
   /// (`ntsWarmCookies` on the Dart side).
@@ -1474,7 +1476,7 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
-  }) => RustLib.instance.api.crateApiNtsNtsClientWarmCookies(
+  }) => NtsRustLib.instance.api.crateApiNtsNtsClientWarmCookies(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,

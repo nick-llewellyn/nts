@@ -24,7 +24,7 @@ part 'nts.freezed.dart';
 /// the function is cheap enough to call from a UI poll loop without
 /// thinking about isolate hops.
 NtsDnsPoolStats ntsDnsPoolStats() =>
-    RustLib.instance.api.crateApiNtsNtsDnsPoolStats();
+    NtsRustLib.instance.api.crateApiNtsNtsDnsPoolStats();
 
 /// Snapshot the process-global trust-anchor diagnostic state.
 ///
@@ -76,7 +76,7 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 /// [`nts_dns_pool_stats`]: the underlying state read is cheap enough
 /// that paying isolate-hop overhead would dominate the call.
 NtsTrustStatus ntsTrustStatus() =>
-    RustLib.instance.api.crateApiNtsNtsTrustStatus();
+    NtsRustLib.instance.api.crateApiNtsNtsTrustStatus();
 
 /// Run a complete authenticated NTPv4 exchange against `spec`.
 ///
@@ -112,7 +112,7 @@ Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
-}) => RustLib.instance.api.crateApiNtsNtsQuery(
+}) => NtsRustLib.instance.api.crateApiNtsNtsQuery(
   spec: spec,
   timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
@@ -135,7 +135,7 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
-}) => RustLib.instance.api.crateApiNtsNtsWarmCookies(
+}) => NtsRustLib.instance.api.crateApiNtsNtsWarmCookies(
   spec: spec,
   timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
@@ -181,7 +181,7 @@ abstract class NtsClient implements RustOpaqueInterface {
   /// `webpki-roots` static bundle. The top-level convenience
   /// functions ([`nts_query`], [`nts_warm_cookies`]) always go
   /// through a default-mode singleton and are unaffected.
-  factory NtsClient() => RustLib.instance.api.crateApiNtsNtsClientNew();
+  factory NtsClient() => NtsRustLib.instance.api.crateApiNtsNtsClientNew();
 
   /// Per-client equivalent of the top-level `nts_query`
   /// (`ntsQuery` on the Dart side).
@@ -216,7 +216,7 @@ abstract class NtsClient implements RustOpaqueInterface {
   /// an `await` constructor — `NtsClient.withTrustMode(TrustMode...)`
   /// (the wrapper layer further smooths this into a named-parameter
   /// optional on the Dart `NtsClient` constructor).
-  static NtsClient withTrustMode({required TrustMode trustMode}) => RustLib
+  static NtsClient withTrustMode({required TrustMode trustMode}) => NtsRustLib
       .instance
       .api
       .crateApiNtsNtsClientWithTrustMode(trustMode: trustMode);
@@ -702,7 +702,7 @@ class PhaseTimings {
   });
 
   static Future<PhaseTimings> default_() =>
-      RustLib.instance.api.crateApiNtsPhaseTimingsDefault();
+      NtsRustLib.instance.api.crateApiNtsPhaseTimingsDefault();
 
   @override
   int get hashCode =>

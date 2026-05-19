@@ -1,10 +1,10 @@
-// The example needs to construct a `RustLibApi` instance to feed
-// `RustLib.initMock`, but `RustLibApi` is intentionally not part of the
+// The example needs to construct a `NtsRustLibApi` instance to feed
+// `NtsRustLib.initMock`, but `NtsRustLibApi` is intentionally not part of the
 // public barrel — it's an internal contract that exists only so unit
 // tests and showcase apps can stub the bridge without loading a dylib.
 // The same pattern is used in `test/ffi_smoke_test.dart`.
 //
-// Because `RustLibApi`'s overrides accept and return the FFI DTOs from
+// Because `NtsRustLibApi`'s overrides accept and return the FFI DTOs from
 // `lib/src/ffi/api/nts.dart` (with their `PlatformInt64` microsecond
 // fields and freezed-generated `NtsError`), this file imports those
 // types directly rather than the public `package:nts/nts.dart` shapes
@@ -28,9 +28,9 @@ import 'package:nts/src/ffi/api/nts.dart'
         PhaseTimings,
         TrustBackend,
         TrustMode;
-import 'package:nts/src/ffi/frb_generated.dart' show RustLib, RustLibApi;
+import 'package:nts/src/ffi/frb_generated.dart' show NtsRustLib, NtsRustLibApi;
 
-/// In-memory `RustLibApi` implementation used by the example app and the
+/// In-memory `NtsRustLibApi` implementation used by the example app and the
 /// widget smoke test as an explicit alternative to the bundled Rust dylib.
 ///
 /// Returns plausible-looking NTS samples so the UI is exercisable on any
@@ -45,7 +45,7 @@ import 'package:nts/src/ffi/frb_generated.dart' show RustLib, RustLibApi;
 /// the example's TrustMode toggle, TrustStatus panel, and
 /// per-handshake backend log lines work identically under the mock
 /// and the real bridge.
-class MockNtsApi implements RustLibApi {
+class MockNtsApi implements NtsRustLibApi {
   MockNtsApi({Random? random}) : _random = random ?? Random();
 
   final Random _random;
@@ -151,7 +151,7 @@ class MockNtsApi implements RustLibApi {
   // Mirrors the `_RecordingApi` / `_FakeFfiNtsClient` pair in
   // `test/api_smoke_test.dart`: minted clients are
   // `_FakeMockNtsClient` instances whose method bodies forward back
-  // through `RustLib.instance.api`, which dispatches to the stubs
+  // through `NtsRustLib.instance.api`, which dispatches to the stubs
   // below.
 
   @override
@@ -273,28 +273,28 @@ class MockNtsApi implements RustLibApi {
 }
 
 /// In-memory stand-in for the FFI-side `NtsClient` opaque handle.
-/// Each method forwards back through `RustLib.instance.api` so the
+/// Each method forwards back through `NtsRustLib.instance.api` so the
 /// active [MockNtsApi] observes the call exactly as the real
 /// `NtsClientImpl` would have routed it. `dispose` / `isDisposed`
 /// are stubbed because the mock has no `Arc` to release.
 class _FakeMockNtsClient implements NtsClient {
   @override
-  void clear() => RustLib.instance.api.crateApiNtsNtsClientClear(that: this);
+  void clear() => NtsRustLib.instance.api.crateApiNtsNtsClientClear(that: this);
 
   @override
-  bool invalidate({required NtsServerSpec spec}) => RustLib.instance.api
+  bool invalidate({required NtsServerSpec spec}) => NtsRustLib.instance.api
       .crateApiNtsNtsClientInvalidate(that: this, spec: spec);
 
   @override
   TrustMode trustMode() =>
-      RustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
+      NtsRustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
 
   @override
   Future<NtsTimeSample> query({
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
-  }) => RustLib.instance.api.crateApiNtsNtsClientQuery(
+  }) => NtsRustLib.instance.api.crateApiNtsNtsClientQuery(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
@@ -306,7 +306,7 @@ class _FakeMockNtsClient implements NtsClient {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
-  }) => RustLib.instance.api.crateApiNtsNtsClientWarmCookies(
+  }) => NtsRustLib.instance.api.crateApiNtsNtsClientWarmCookies(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
