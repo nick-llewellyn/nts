@@ -69,7 +69,7 @@ aes-siv = { version = "0.7", default-features = false, features = ["alloc"] }
 # Pinned to match the `flutter_rust_bridge` Dart dependency in pubspec.yaml.
 # Bumps must be coordinated across both sides (`cargo update` + `flutter pub upgrade`).
 flutter_rust_bridge = "=2.12.0"
-getrandom = { version = "0.2", default-features = false, features = ["std"] }
+getrandom = { version = "0.4", default-features = false, features = ["std"] }
 # `release_max_level_warn` is forwarded from the crate's own `log-strip`
 # feature (see `[features]` above) so the build hook can flip it via
 # the `verbose_logs` user-define. The `nts::hybrid_verifier` warn-level
@@ -94,7 +94,7 @@ rustls-platform-verifier = "0.7"
 # `tracing::Subscriber` (Android, macOS host, desktop) events are
 # silently dropped, so this dep adds no host-side noise.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 zeroize = { version = "1.8", default-features = false, features = ["alloc", "derive"] }
 
 # Android-only: JNI handles for bootstrapping `rustls-platform-verifier`'s

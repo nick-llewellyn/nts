@@ -2469,7 +2469,7 @@ pub fn nts_query(
 /// flow inline, which would let `nts_query_inner` drift to a
 /// different RNG without the test catching it).
 ///
-/// Both byte-buffers are filled from `getrandom::getrandom`, which
+/// Both byte-buffers are filled from `getrandom::fill`, which
 /// the `getrandom` crate maps to the OS CSPRNG (`getentropy(2)` on
 /// macOS/iOS, `getrandom(2)` on Linux/Android, `BCryptGenRandom` on
 /// Windows). RFC 8915 §5.6 requires the UID be unpredictable; a
@@ -2485,9 +2485,9 @@ pub fn nts_query(
 fn fresh_request_uid_and_nonce(nonce_len: usize) -> Result<([u8; UID_LEN], Vec<u8>), NtsError> {
     let mut uid = [0u8; UID_LEN];
     let mut nonce = vec![0u8; nonce_len];
-    getrandom::getrandom(&mut uid)
+    getrandom::fill(&mut uid)
         .map_err(|e| NtsError::Internal(format!("RNG failed for UID: {e}")))?;
-    getrandom::getrandom(&mut nonce)
+    getrandom::fill(&mut nonce)
         .map_err(|e| NtsError::Internal(format!("RNG failed for nonce: {e}")))?;
     Ok((uid, nonce))
 }
