@@ -726,4 +726,25 @@ mod tests {
              record_fallback() (before: {trust_state_before}, after: {trust_state_after})",
         );
     }
+
+    /// Exercises the production [`HybridVerifier::new`] constructor on
+    /// the host-platform CI runner. The Android-only
+    /// `build_with_native_verifier_android` call site in `ke.rs` is the
+    /// sole production caller, so without this test the constructor
+    /// body never executes outside Android and the patch-coverage
+    /// signal flags every line on every refactor that touches it (e.g.
+    /// the 0.5 → 0.7 `rustls-platform-verifier` bump that added the
+    /// `Arc<CryptoProvider>` parameter and `Result` return). The
+    /// `with_platform` test seam above intentionally bypasses
+    /// `PlatformVerifier::new` so the behavioural tests do not depend
+    /// on a real platform-verifier dependency; this test fills the
+    /// remaining gap by asserting the real constructor succeeds with
+    /// the ring provider used in production.
+    #[test]
+    fn new_constructs_with_ring_provider() {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = HybridVerifier::new(KeTrustMode::PlatformOnly, provider)
+            .expect("HybridVerifier::new must succeed with the ring CryptoProvider");
+        assert_eq!(verifier.fallback_count(), 0);
+    }
 }
