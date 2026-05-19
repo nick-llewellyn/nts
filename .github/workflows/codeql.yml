@@ -14,11 +14,13 @@ on:
     paths:
       - 'rust/**'
       - '.github/workflows/codeql.yml'
+      - '.github/codeql/**'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'rust/**'
       - '.github/workflows/codeql.yml'
+      - '.github/codeql/**'
   schedule:
     # Weekly on Sunday at 03:00 UTC
     - cron: '0 3 * * 0'
@@ -48,7 +50,7 @@ jobs:
       # Pin to the same toolchain as `ci.yml` and `rust/rust-toolchain.toml`
       # to ensure the CodeQL IR extraction matches our production build.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.92.0"
 
