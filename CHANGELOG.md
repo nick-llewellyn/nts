@@ -9,8 +9,8 @@
   surfaced in the 4.0.0 published archive after PRs #61, #63, and
   #64 extracted them from inline `#[cfg(test)] mod tests { … }`
   blocks into sibling files. The sibling files are referenced via
-  `#[cfg(test)] mod tests;` / `#[cfg(test)] pub(crate) mod
-  test_helpers;` in their parent modules, so the `#[cfg(test)]`
+  `#[cfg(test)] mod tests;` / `#[cfg(test)] pub(crate) mod test_helpers;`
+  in their parent modules, so the `#[cfg(test)]`
   attribute removes the module reference before file lookup and
   consumer-side `cargo build --release` driven by Native Assets
   never compiles or even parses them. Inline `#[cfg(test)]`
