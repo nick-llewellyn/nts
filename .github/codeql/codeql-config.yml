@@ -1,0 +1,8 @@
+name: "CodeQL config"
+
+paths-ignore:
+  - 'rust/fuzz/**'
+  - 'rust/target/**'
+  - 'example/**'
+  - 'lib/**'
+  - 'test/**'

@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/nick-llewellyn/nts/actions/workflows/ci.yml/badge.svg)](https://github.com/nick-llewellyn/nts/actions/workflows/ci.yml)
 [![Fuzzing Status](https://github.com/nick-llewellyn/nts/actions/workflows/fuzz.yml/badge.svg)](https://github.com/nick-llewellyn/nts/actions/workflows/fuzz.yml)
+[![CodeQL](https://github.com/nick-llewellyn/nts/actions/workflows/codeql.yml/badge.svg)](https://github.com/nick-llewellyn/nts/actions/workflows/codeql.yml)
 [![codecov](https://codecov.io/gh/nick-llewellyn/nts/graph/badge.svg)](https://codecov.io/gh/nick-llewellyn/nts)
 [![Pub Version](https://img.shields.io/pub/v/nts.svg)](https://pub.dev/packages/nts)
 [![MIT License](https://img.shields.io/badge/license-MIT-purple.svg)](https://opensource.org/licenses/MIT)
