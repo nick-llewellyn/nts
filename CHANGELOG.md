@@ -39,7 +39,6 @@
   `flutter_rust_bridge` from automated updates to maintain
   coordinated pinning across the Dart/Rust boundary. (bead `nts-tqp`)
 
-
 ## 4.0.0
 
 This major release consolidates the post-3.0 work that landed on
