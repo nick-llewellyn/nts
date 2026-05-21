@@ -47,6 +47,8 @@ leg fails only on the floor, that's a real signal, not a flake.
       `rust/src/api/**` or hand-edits under `lib/src/ffi/**`)
 - [ ] `(cd rust && cargo tarpaulin --lib --locked --skip-clean --out Lcov --output-dir coverage)`
       (mirrors CI; emits `rust/coverage/lcov.info`)
+- [ ] `(cd rust && cargo audit)` (any Rust/Cargo-touching changes;
+      mirrors CI)
 - [ ] `sh -n tool/hooks/pre-commit tool/hooks/pre-merge-commit tool/hooks/pre-push`
       (any change under `tool/hooks/**`; mirrors the
       `Hooks shell-syntax check` CI job)
