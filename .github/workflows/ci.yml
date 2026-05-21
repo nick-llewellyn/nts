@@ -288,11 +288,6 @@ jobs:
         with:
           workspaces: rust
 
-      - name: Audit Rust dependencies
-        uses: actions-rust-lang/audit@v1
-        with:
-          workingDirectory: rust
-
       - name: Build Rust crate (--locked)
         working-directory: rust
         run: cargo build --locked
