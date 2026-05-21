@@ -566,6 +566,9 @@ flutter test --coverage
 (cd rust && cargo tarpaulin --lib --locked --skip-clean \
             --out Lcov --output-dir coverage)
 
+# Rust dependency audit (any rust/Cargo.toml or rust/Cargo.lock change; mirrors CI)
+(cd rust && cargo audit)
+
 # FRB drift gate (any change to rust/src/api/** or lib/src/ffi/**)
 dart run tool/check_bindings.dart
 
@@ -573,6 +576,8 @@ dart run tool/check_bindings.dart
 sh -n tool/hooks/pre-commit tool/hooks/pre-merge-commit tool/hooks/pre-push
 sh tool/hooks/test_hooks.sh
 ```
+
+Note: The local `cargo audit` command requires the `cargo-audit` tool to be installed on your machine (`cargo install cargo-audit --locked`).
 
 The PR template (`.github/pull_request_template.md`) carries the
 canonical checklist; tick the boxes you actually ran rather than
