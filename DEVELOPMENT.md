@@ -565,6 +565,8 @@ flutter test --coverage
 (cd rust && cargo clippy --lib --tests --locked -- -D warnings)
 (cd rust && cargo tarpaulin --lib --locked --skip-clean \
             --out Lcov --output-dir coverage)
+
+# Rust dependency audit (any rust/Cargo.toml or rust/Cargo.lock change; mirrors CI)
 (cd rust && cargo audit)
 
 # FRB drift gate (any change to rust/src/api/** or lib/src/ffi/**)
