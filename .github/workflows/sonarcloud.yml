@@ -3,14 +3,29 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - 'analysis_options.yaml'
+      - 'sonar-project.properties'
+      - '.github/workflows/sonarcloud.yml'
   pull_request:
     branches:
       - main
     types: [opened, synchronize, reopened]
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - 'analysis_options.yaml'
+      - 'sonar-project.properties'
+      - '.github/workflows/sonarcloud.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   sonarcloud:
