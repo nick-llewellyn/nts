@@ -219,6 +219,7 @@ jobs:
             needs.changes.outputs.dart == 'true' ||
             needs.changes.outputs.ci == 'true'
           ) && (
+            github.event_name != 'pull_request' ||
             github.event.pull_request.head.repo.fork != true ||
             secrets.SONAR_TOKEN != ''
           )
