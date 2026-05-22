@@ -6,6 +6,8 @@
 [![Cargo Audit](https://github.com/nick-llewellyn/nts/actions/workflows/audit.yml/badge.svg)](https://github.com/nick-llewellyn/nts/actions/workflows/audit.yml)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-blue.svg?logo=dependabot&logoColor=white)](https://github.com/nick-llewellyn/nts/network/updates)
 [![codecov](https://codecov.io/gh/nick-llewellyn/nts/graph/badge.svg)](https://codecov.io/gh/nick-llewellyn/nts)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=nick-llewellyn_nts&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=nick-llewellyn_nts)
+[![Socket Badge](https://socket.dev/api/badge/github/nick-llewellyn/nts)](https://socket.dev/github/nick-llewellyn/nts)
 [![Pub Version](https://img.shields.io/pub/v/nts.svg)](https://pub.dev/packages/nts)
 [![MIT License](https://img.shields.io/badge/license-MIT-purple.svg)](https://opensource.org/licenses/MIT)
 
