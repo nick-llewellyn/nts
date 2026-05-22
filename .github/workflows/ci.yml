@@ -78,6 +78,7 @@ jobs:
               - 'test/**'
               - 'pubspec.yaml'
               - 'analysis_options.yaml'
+              - 'sonar-project.properties'
             ci:
               - '.github/workflows/**'
             docs:
@@ -120,6 +121,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix:
@@ -209,6 +211,21 @@ jobs:
           flags: dart
           use_oidc: true
           fail_ci_if_error: false
+
+      - name: SonarCloud Scan
+        if: |
+          matrix.flutter == 'stable' && (
+            github.event_name == 'workflow_dispatch' ||
+            needs.changes.outputs.dart == 'true' ||
+            needs.changes.outputs.ci == 'true'
+          ) && (
+            github.event.pull_request.head.repo.fork != true ||
+            secrets.SONAR_TOKEN != ''
+          )
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
       - name: Resolve example dependencies
         working-directory: example
