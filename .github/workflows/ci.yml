@@ -212,6 +212,18 @@ jobs:
           use_oidc: true
           fail_ci_if_error: false
 
+      - name: Check Sonar Token presence
+        if: matrix.flutter == 'stable'
+        id: sonar-check
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: SonarCloud Scan
         if: |
           matrix.flutter == 'stable' && (
@@ -220,7 +232,7 @@ jobs:
             needs.changes.outputs.ci == 'true'
           ) && (
             github.event_name == 'push' ||
-            secrets.SONAR_TOKEN != ''
+            steps.sonar-check.outputs.has_token == 'true'
           )
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
         env:
