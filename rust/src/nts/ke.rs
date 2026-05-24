@@ -981,8 +981,9 @@ pub(crate) struct TlsConfigBuild {
     pub(crate) hybrid: Option<Arc<crate::nts::hybrid_verifier::HybridVerifier>>,
 }
 
-/// Build a `ClientConfig` with the platform trust store, `ntske/1` ALPN,
-/// and TLS 1.3 as the only acceptable protocol version (RFC 8915 §3).
+/// Build a `ClientConfig` with the configured trust store (either platform or
+/// bundled webpki roots), `ntske/1` ALPN, and TLS 1.3 as the only acceptable
+/// protocol version (RFC 8915 §3).
 ///
 /// Idempotently installs `ring` as the default crypto provider; an error from
 /// `install_default()` after the first call is benign (provider already set).
@@ -1009,12 +1010,14 @@ pub(crate) struct TlsConfigBuild {
 ///   constructed directly rather than via `ConfigVerifierExt` because
 ///   that helper hard-codes `with_safe_default_protocol_versions()`
 ///   which would re-admit TLS 1.2 if the `tls12` feature is on.
-/// - **Hard fallback**: a static webpki-roots config. Used when
-///   `build_with_native_verifier` errors *and* `trust_mode ==
-///   PlatformWithFallback`. Under `PlatformOnly` the same
-///   construction failure surfaces as
-///   [`KeError::TrustBackendUnavailable`] so callers who pinned a
-///   corporate CA see a typed failure instead of a silent downgrade.
+/// - **BundledOnly**: routes directly to a static `webpki-roots` config,
+///   bypassing the platform verifier entirely.
+/// - **Fallback path**: a static `webpki-roots` config is also used as a
+///   fallback when platform verifier construction fails under
+///   `PlatformWithFallback`. Under `PlatformOnly`, this fallback path is
+///   disabled, and platform verifier construction failure surfaces as
+///   [`KeError::TrustBackendUnavailable`] so callers who pinned a corporate CA
+///   see a typed failure.
 ///
 /// `pub(crate)` because every caller — [`perform_handshake`] and the
 /// in-module test fixture — lives inside this module; the function
