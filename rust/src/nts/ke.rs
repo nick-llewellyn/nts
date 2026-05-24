@@ -998,14 +998,13 @@ pub(crate) struct TlsConfigBuild {
 /// pinning for any caller that re-enables that code by mistake.
 ///
 /// Verifier selection:
-/// - **Android**: `HybridVerifier` (platform verifier with a webpki-roots
-///   fallback that activates only on `CertificateError::Revoked` or the
-///   `rustls-platform-verifier` JNI-failure marker, to work around
-///   missing-OCSP-AIA chains such as Let's Encrypt R12 and R8-stripped
-///   AAR classes). Defined in the `crate::nts::hybrid_verifier` module
-///   (Android-only; gated by `#[cfg(target_os = "android")]` on its
-///   declaration in `nts/mod.rs`, so the rustdoc link is omitted to
-///   keep docs warning-free on non-Android targets).
+/// - **Android**: [`HybridVerifier`](crate::nts::hybrid_verifier::HybridVerifier)
+///   (platform verifier with a webpki-roots fallback that activates only on
+///   `CertificateError::Revoked` or the `rustls-platform-verifier` JNI-failure
+///   marker, to work around missing-OCSP-AIA chains such as Let's Encrypt R12 and
+///   R8-stripped AAR classes). Although the module is compiled unconditionally
+///   on all platforms to run contract tests in host CI, the verifier is only
+///   instantiated in production under Android targets.
 /// - **Other platforms**: bare `rustls_platform_verifier::Verifier`,
 ///   constructed directly rather than via `ConfigVerifierExt` because
 ///   that helper hard-codes `with_safe_default_protocol_versions()`
