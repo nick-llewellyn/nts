@@ -102,6 +102,7 @@ Future<void> main(List<String> args) async {
   // Apply lint-suppression patches that FRB does not emit on its own. Run
   // before `dart format` so the formatter sees the final content.
   _lintIgnorePatches.forEach(_addLintsToIgnoreForFile);
+  _patchFrbGeneratedUnimplementedMessages();
 
   // Format the regenerated Dart so the diff check below catches semantic
   // drift only -- not formatter noise that CI's `dart format` step would
@@ -325,5 +326,44 @@ void _addLintsToIgnoreForFile(String path, List<String> lintsToAdd) {
   file.writeAsStringSync(patched);
   stdout.writeln(
     'Patched $path: added ${missing.join(', ')} to ignore_for_file',
+  );
+}
+
+// Replace the `unimplemented!("")` arms FRB 2.12 emits as the defensive
+// catch-all for `#[non_exhaustive]` enum support in its generated SSE
+// encode/decode/`IntoDart` impls. The arms are unreachable for the
+// exhaustive enums in `crate::api::*`, but the empty message means a
+// future wire-format mismatch panics with no diagnostic context. Replace
+// the empty string with a fixed marker so any unexpected panic in
+// generated codec code is greppable back to its FRB origin without
+// changing the runtime semantics (still `unimplemented!`, still
+// unreachable in practice).
+//
+// Idempotent: the pattern only matches the FRB-emitted empty form, so
+// running the patcher twice in a row is a no-op on the second run.
+void _patchFrbGeneratedUnimplementedMessages() {
+  const path = 'rust/src/frb_generated.rs';
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln(
+      '$_errorPrefix expected generated file not found: $path '
+      '(post-codegen FRB-unimplemented patch cannot be applied)',
+    );
+    exit(1);
+  }
+  const needle = 'unimplemented!("");';
+  const replacement =
+      'unimplemented!("flutter_rust_bridge generated codec: '
+      'unexpected enum variant tag in SSE wire format");';
+  final original = file.readAsStringSync();
+  if (!original.contains(needle)) return;
+  final patched = original.replaceAll(needle, replacement);
+  final replaced =
+      needle.allMatches(original).length -
+      needle.allMatches(patched).length;
+  file.writeAsStringSync(patched);
+  stdout.writeln(
+    'Patched $path: replaced $replaced empty `unimplemented!("")` arm(s) '
+    'with diagnostic-bearing form',
   );
 }

@@ -1526,6 +1526,12 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
   /// for diagnostics and for callers that round-trip a client
   /// handle through their own configuration layer and need to
   /// re-derive the policy without keeping a parallel record.
+  ///
+  /// The returned [`TrustMode::Custom`] re-materializes the roots
+  /// bundle as a `Vec<u8>` for the FRB wire shape, so this call is
+  /// O(bundle size). It is intended for diagnostics only; the
+  /// per-handshake hot path stays on the internal [`KeTrustMode`]
+  /// and never reaches this getter.
   TrustMode trustMode() =>
       NtsRustLib.instance.api.crateApiNtsNtsClientTrustMode(that: this);
 

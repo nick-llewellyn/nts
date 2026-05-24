@@ -202,7 +202,14 @@ pub enum KeTrustMode {
     /// Webpki-roots static bundle only; no platform-store consultation at all.
     BundledOnly,
     /// Caller-supplied custom root certificates in PEM or DER format.
-    Custom(Vec<u8>),
+    /// Wrapped in `Arc<[u8]>` so the per-handshake and per-`query`
+    /// `.clone()` calls that flow `KeTrustMode` through
+    /// `NtsClient` → `nts_*_inner` → `SessionTable::checkout` →
+    /// `establish_session` → `KeRequest::trust_mode` stay O(1)
+    /// (atomic refcount bump) regardless of bundle size; the
+    /// `Vec<u8>` → `Arc<[u8]>` conversion happens once at the
+    /// `From<TrustMode>` boundary in `crate::api::nts`.
+    Custom(Arc<[u8]>),
 }
 
 /// Trust-anchor backend that authenticated this handshake's TLS chain.

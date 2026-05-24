@@ -2420,7 +2420,11 @@ fn trust_mode_and_backend_conversions_are_total() {
             (TrustMode::PlatformOnly, crate::nts::ke::KeTrustMode::PlatformOnly) => {}
             (TrustMode::BundledOnly, crate::nts::ke::KeTrustMode::BundledOnly) => {}
             (TrustMode::Custom(b1), crate::nts::ke::KeTrustMode::Custom(b2)) => {
-                assert_eq!(b1, b2);
+                // `b1: Vec<u8>` (public-wire shape), `b2: Arc<[u8]>`
+                // (internal cheap-clone shape). Compare via slice
+                // projection so the assertion stays meaningful across
+                // the conversion's Vec-to-Arc materialization.
+                assert_eq!(b1.as_slice(), b2.as_ref());
             }
             _ => panic!("TrustMode -> KeTrustMode mapping diverged"),
         }
@@ -2502,7 +2506,7 @@ fn checkout_cache_hit_preserves_session_trust_backend() {
             &spec,
             Duration::from_secs(5),
             4,
-            TrustMode::PlatformWithFallback,
+            crate::nts::ke::KeTrustMode::PlatformWithFallback,
         )
         .expect("cache hit");
     assert_eq!(ctx.trust_backend, TrustBackend::PlatformWithHybridFallback);
@@ -3223,7 +3227,7 @@ fn trust_mode_maps_to_ke_trust_mode() {
         (TrustMode::BundledOnly, KeTrustMode::BundledOnly),
         (
             TrustMode::Custom(b"foo".to_vec()),
-            KeTrustMode::Custom(b"foo".to_vec()),
+            KeTrustMode::Custom(std::sync::Arc::from(&b"foo"[..])),
         ),
     ] {
         let mapped: KeTrustMode = public_variant.clone().into();

@@ -45,7 +45,7 @@ use crate::nts::cookies::CookieJar;
 use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
 use crate::nts::ke::{
     perform_handshake, KeError, KeFailure, KeOutcome, KePhaseTimings, KeRequest, KeTimeoutPhase,
-    OFFERED_AEAD_IDS,
+    KeTrustMode, OFFERED_AEAD_IDS,
 };
 use crate::nts::ntp::{build_client_request, parse_server_response, ClientRequest, NtpError};
 
@@ -486,7 +486,30 @@ impl From<TrustMode> for crate::nts::ke::KeTrustMode {
             TrustMode::PlatformWithFallback => Self::PlatformWithFallback,
             TrustMode::PlatformOnly => Self::PlatformOnly,
             TrustMode::BundledOnly => Self::BundledOnly,
-            TrustMode::Custom(bytes) => Self::Custom(bytes),
+            // One-time `Vec<u8>` → `Arc<[u8]>` conversion at the public-
+            // API boundary. `into_boxed_slice` shrinks the buffer to
+            // exact length (no extra realloc when `len == cap`, which
+            // is the common case for FRB-marshaled `Vec<u8>` arriving
+            // from Dart), and `Arc::from(Box<[u8]>)` is a zero-copy
+            // wrap. All downstream `.clone()`s on the resulting
+            // `KeTrustMode` are O(1) atomic refcount bumps regardless
+            // of bundle size.
+            TrustMode::Custom(bytes) => Self::Custom(Arc::from(bytes.into_boxed_slice())),
+        }
+    }
+}
+
+impl From<crate::nts::ke::KeTrustMode> for TrustMode {
+    fn from(m: crate::nts::ke::KeTrustMode) -> Self {
+        match m {
+            crate::nts::ke::KeTrustMode::PlatformWithFallback => Self::PlatformWithFallback,
+            crate::nts::ke::KeTrustMode::PlatformOnly => Self::PlatformOnly,
+            crate::nts::ke::KeTrustMode::BundledOnly => Self::BundledOnly,
+            // `Arc<[u8]>` → `Vec<u8>` materialization for the public
+            // FRB-marshaled wire type. Only the `NtsClient::trust_mode`
+            // getter calls this; the per-`query`/per-handshake hot
+            // paths stay on `KeTrustMode` and never reach here.
+            crate::nts::ke::KeTrustMode::Custom(bytes) => Self::Custom(bytes.to_vec()),
         }
     }
 }
@@ -1239,7 +1262,19 @@ pub struct NtsClient {
     /// `query`/`warm_cookies` → `nts_*_inner` → `SessionTable::checkout`
     /// → `establish_session` → `KeRequest::trust_mode` →
     /// `build_tls_config`. New in 3.0.0.
-    trust_mode: TrustMode,
+    ///
+    /// Stored as the internal [`KeTrustMode`] (not the public
+    /// [`TrustMode`]) so the per-`query`/per-`warm_cookies` plumbing
+    /// clones a `KeTrustMode` — whose `Custom` variant holds the
+    /// roots bundle behind an `Arc<[u8]>` — instead of the public
+    /// `Vec<u8>` variant. Per-call cost is therefore O(1) atomic
+    /// refcount bump regardless of bundle size. The single
+    /// `Vec<u8>` → `Arc<[u8]>` materialization happens once, at
+    /// construction time, inside [`From<TrustMode> for KeTrustMode`].
+    /// The reverse conversion runs only when the public
+    /// [`NtsClient::trust_mode`] getter is called, which is a
+    /// diagnostics path rather than a hot loop.
+    trust_mode: KeTrustMode,
     /// `true` for the process-wide default singleton client returned
     /// by [`default_nts_client`]; `false` for every caller-minted
     /// client. Drives whether the post-handshake trust-backend value
@@ -1270,7 +1305,7 @@ impl NtsClient {
     pub fn new() -> Self {
         Self {
             table: SessionTable::new(),
-            trust_mode: TrustMode::PlatformWithFallback,
+            trust_mode: KeTrustMode::PlatformWithFallback,
             is_default: false,
         }
     }
@@ -1290,7 +1325,7 @@ impl NtsClient {
     pub fn with_trust_mode(trust_mode: TrustMode) -> Self {
         Self {
             table: SessionTable::new(),
-            trust_mode,
+            trust_mode: trust_mode.into(),
             is_default: false,
         }
     }
@@ -1299,9 +1334,15 @@ impl NtsClient {
     /// for diagnostics and for callers that round-trip a client
     /// handle through their own configuration layer and need to
     /// re-derive the policy without keeping a parallel record.
+    ///
+    /// The returned [`TrustMode::Custom`] re-materializes the roots
+    /// bundle as a `Vec<u8>` for the FRB wire shape, so this call is
+    /// O(bundle size). It is intended for diagnostics only; the
+    /// per-handshake hot path stays on the internal [`KeTrustMode`]
+    /// and never reaches this getter.
     #[flutter_rust_bridge::frb(sync)]
     pub fn trust_mode(&self) -> TrustMode {
-        self.trust_mode.clone()
+        self.trust_mode.clone().into()
     }
 
     /// Per-client equivalent of the top-level `nts_query`
@@ -1386,7 +1427,7 @@ fn default_nts_client() -> &'static NtsClient {
     static C: OnceLock<NtsClient> = OnceLock::new();
     C.get_or_init(|| NtsClient {
         table: SessionTable::new(),
-        trust_mode: TrustMode::PlatformWithFallback,
+        trust_mode: KeTrustMode::PlatformWithFallback,
         is_default: true,
     })
 }
@@ -1534,7 +1575,7 @@ fn establish_session(
     spec: &NtsServerSpec,
     timeout: Duration,
     dns_concurrency_cap: usize,
-    trust_mode: TrustMode,
+    trust_mode: KeTrustMode,
 ) -> Result<(Session, KePhaseTimings), NtsError> {
     let req = KeRequest {
         host: spec.host.clone(),
@@ -1542,7 +1583,7 @@ fn establish_session(
         aead_algorithms: OFFERED_AEAD_IDS.to_vec(),
         timeout: Some(timeout),
         dns_concurrency_cap,
-        trust_mode: trust_mode.into(),
+        trust_mode,
     };
     let outcome: KeOutcome = perform_handshake(&req)?;
     let trust_backend: TrustBackend = outcome.trust_backend.into();
@@ -1669,7 +1710,7 @@ impl SessionTable {
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
-        trust_mode: TrustMode,
+        trust_mode: KeTrustMode,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         self.checkout_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
             establish_session(s, t, c, trust_mode.clone())
@@ -2102,7 +2143,7 @@ impl SessionTable {
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
-        trust_mode: TrustMode,
+        trust_mode: KeTrustMode,
     ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
         self.warm_cookies_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
             establish_session(s, t, c, trust_mode.clone())
@@ -2520,7 +2561,7 @@ fn nts_query_inner(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
-    trust_mode: TrustMode,
+    trust_mode: KeTrustMode,
     is_default_client: bool,
 ) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
@@ -2726,7 +2767,7 @@ fn nts_warm_cookies_inner(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
-    trust_mode: TrustMode,
+    trust_mode: KeTrustMode,
     is_default_client: bool,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
     validate(&spec)?;

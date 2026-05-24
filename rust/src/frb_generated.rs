@@ -725,7 +725,7 @@ impl SseDecode for crate::api::nts::NtsError {
                 return crate::api::nts::NtsError::Internal(var_field0);
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }
@@ -878,7 +878,7 @@ impl SseDecode for crate::api::nts::TrustMode {
                 return crate::api::nts::TrustMode::Custom(var_field0);
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }
@@ -1064,7 +1064,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsError {
                 [8.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }
@@ -1255,7 +1255,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::TrustMode {
                 [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }
@@ -1394,7 +1394,7 @@ impl SseEncode for crate::api::nts::NtsError {
                 <String>::sse_encode(field0, serializer);
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }
@@ -1478,7 +1478,7 @@ impl SseEncode for crate::api::nts::TimeoutPhase {
                 crate::api::nts::TimeoutPhase::KeRecordIo => 4,
                 crate::api::nts::TimeoutPhase::Ntp => 5,
                 _ => {
-                    unimplemented!("");
+                    unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
                 }
             },
             serializer,
@@ -1496,7 +1496,7 @@ impl SseEncode for crate::api::nts::TrustBackend {
                 crate::api::nts::TrustBackend::WebpkiRoots => 2,
                 crate::api::nts::TrustBackend::Custom => 3,
                 _ => {
-                    unimplemented!("");
+                    unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
                 }
             },
             serializer,
@@ -1522,7 +1522,7 @@ impl SseEncode for crate::api::nts::TrustMode {
                 <Vec<u8>>::sse_encode(field0, serializer);
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }

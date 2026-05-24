@@ -11,6 +11,23 @@
 - Plumbed a fourth trust telemetry counter (`custom`) to trace custom-roots handshakes.
 - Validates constructor parameters of `NtsClient` synchronously.
 
+### Internal
+
+- Custom-roots bundle is now held behind `Arc<[u8]>` inside the internal
+  `KeTrustMode` and stored on `NtsClient` in that internal form, so the per-
+  `query` / per-`warmCookies` and per-handshake `.clone()` calls that thread
+  the trust-mode through the cookie-cache and KE-handshake layers are O(1)
+  atomic refcount bumps rather than full-bundle copies. The public
+  `TrustMode.custom(List<int>)` wire shape and the FRB-generated Dart
+  bindings are unchanged.
+- `tool/check_bindings.dart` now post-processes the FRB-generated
+  `rust/src/frb_generated.rs` to replace `unimplemented!("")` arms (FRB
+  2.12's defensive `#[non_exhaustive]` catch-all in SSE codec impls) with
+  a fixed diagnostic message, so any unexpected panic in generated codec
+  code is greppable back to its FRB origin without changing the runtime
+  semantics (still `unimplemented!`, still unreachable for exhaustive
+  enums in practice).
+
 ## 5.1.0
 
 ### Added

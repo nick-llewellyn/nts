@@ -163,7 +163,7 @@ q8P9uhno9+zDMKKpnQ==\n\
 
     #[test]
     fn build_tls_config_custom_pem_succeeds() {
-        let mode = KeTrustMode::Custom(TEST_CERT_PEM.as_bytes().to_vec());
+        let mode = KeTrustMode::Custom(std::sync::Arc::from(TEST_CERT_PEM.as_bytes()));
         let build = build_tls_config(mode).expect("custom PEM config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
@@ -171,7 +171,7 @@ q8P9uhno9+zDMKKpnQ==\n\
 
     #[test]
     fn build_tls_config_custom_der_succeeds() {
-        let mode = KeTrustMode::Custom(TEST_CERT_DER.to_vec());
+        let mode = KeTrustMode::Custom(std::sync::Arc::from(TEST_CERT_DER));
         let build = build_tls_config(mode).expect("custom DER config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
@@ -179,7 +179,7 @@ q8P9uhno9+zDMKKpnQ==\n\
 
     #[test]
     fn build_tls_config_custom_malformed_fails() {
-        let mode = KeTrustMode::Custom(b"not-a-valid-cert-bytes".to_vec());
+        let mode = KeTrustMode::Custom(std::sync::Arc::from(&b"not-a-valid-cert-bytes"[..]));
         let build = build_tls_config(mode);
         assert!(matches!(build, Err(KeError::TrustBackendUnavailable(_))));
     }
