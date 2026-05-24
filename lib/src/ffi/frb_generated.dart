@@ -991,7 +991,9 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
         final var_field0 = sse_decode_String(deserializer);
         return NtsError_Internal(var_field0);
       default:
-        throw UnimplementedError('');
+        throw UnimplementedError(
+          'flutter_rust_bridge generated codec: unexpected enum variant tag: $tag_',
+        );
     }
   }
 
@@ -1120,7 +1122,9 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
         final var_field0 = sse_decode_list_prim_u_8_strict(deserializer);
         return TrustMode_Custom(var_field0);
       default:
-        throw UnimplementedError('');
+        throw UnimplementedError(
+          'flutter_rust_bridge generated codec: unexpected enum variant tag: $tag_',
+        );
     }
   }
 

@@ -27,7 +27,11 @@ import 'package:nts/src/ffi/api/nts.dart'
         NtsWarmCookiesOutcome,
         PhaseTimings,
         TrustBackend,
-        TrustMode;
+        TrustMode,
+        TrustMode_BundledOnly,
+        TrustMode_Custom,
+        TrustMode_PlatformOnly,
+        TrustMode_PlatformWithFallback;
 import 'package:nts/src/ffi/frb_generated.dart' show NtsRustLib, NtsRustLibApi;
 
 /// In-memory `NtsRustLibApi` implementation used by the example app and the
@@ -230,19 +234,20 @@ class MockNtsApi implements NtsRustLibApi {
   /// rates so the dominant signal stays the happy-path
   /// [TrustBackend.platform] case.
   TrustBackend _resolveBackendForClient(NtsClient that) {
-    final mode = _clientTrustModes[that] ?? TrustMode.platformWithFallback;
-    if (mode == TrustMode.custom) {
+    final mode =
+        _clientTrustModes[that] ?? const TrustMode_PlatformWithFallback();
+    if (mode is TrustMode_Custom) {
       return TrustBackend.custom;
     }
-    if (mode == TrustMode.bundledOnly) {
+    if (mode is TrustMode_BundledOnly) {
       return TrustBackend.webpkiRoots;
     }
-    if (mode == TrustMode.platformOnly && _random.nextInt(10) == 0) {
+    if (mode is TrustMode_PlatformOnly && _random.nextInt(10) == 0) {
       throw const NtsError.trustBackendUnavailable(
         'mock: PlatformOnly refused fallback to webpki-roots bundle',
       );
     }
-    return mode == TrustMode.platformWithFallback && _random.nextInt(8) == 0
+    return mode is TrustMode_PlatformWithFallback && _random.nextInt(8) == 0
         ? TrustBackend.platformWithHybridFallback
         : TrustBackend.platform;
   }

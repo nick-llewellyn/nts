@@ -103,6 +103,7 @@ Future<void> main(List<String> args) async {
   // before `dart format` so the formatter sees the final content.
   _lintIgnorePatches.forEach(_addLintsToIgnoreForFile);
   _patchFrbGeneratedUnimplementedMessages();
+  _patchDartFrbGeneratedUnimplementedMessages();
 
   // Format the regenerated Dart so the diff check below catches semantic
   // drift only -- not formatter noise that CI's `dart format` step would
@@ -364,5 +365,41 @@ void _patchFrbGeneratedUnimplementedMessages() {
   stdout.writeln(
     'Patched $path: replaced $replaced empty `unimplemented!("")` arm(s) '
     'with diagnostic-bearing form',
+  );
+}
+
+// Patches the FRB-generated Dart file to include the unexpected enum variant
+// tag in the UnimplementedError message thrown by each SSE codec default arm.
+// FRB emits `throw UnimplementedError('');` for these arms; the patched form
+// includes `$tag_` (in scope at every default arm site) so callers can
+// diagnose which wire tag triggered the error.
+//
+// Idempotent: the pattern only matches the FRB-emitted empty-string form, so
+// running the patcher twice in a row is a no-op on the second run.
+void _patchDartFrbGeneratedUnimplementedMessages() {
+  const path = 'lib/src/ffi/frb_generated.dart';
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln(
+      '$_errorPrefix expected generated file not found: $path '
+      '(post-codegen Dart FRB-unimplemented patch cannot be applied)',
+    );
+    exit(1);
+  }
+  const needle = "throw UnimplementedError('');";
+  const replacement =
+      "throw UnimplementedError(\n"
+      "          'flutter_rust_bridge generated codec: "
+      "unexpected enum variant tag: \$tag_',\n"
+      "        );";
+  final original = file.readAsStringSync();
+  if (!original.contains(needle)) return;
+  final patched = original.replaceAll(needle, replacement);
+  final replaced =
+      needle.allMatches(original).length - needle.allMatches(patched).length;
+  file.writeAsStringSync(patched);
+  stdout.writeln(
+    "Patched $path: replaced $replaced empty UnimplementedError('') "
+    'arm(s) with diagnostic-bearing form',
   );
 }
