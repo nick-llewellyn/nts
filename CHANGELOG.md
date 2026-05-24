@@ -1,5 +1,14 @@
 # Changelog
 
+## 5.2.0
+
+### Added
+
+- `TrustMode.custom` alongside `customRoots` list of bytes (PEM or DER format)
+  to trust only caller-supplied custom root certificates.
+- Plumbed a fourth trust telemetry counter (`custom`) to trace custom-roots handshakes.
+- Validates constructor parameters of `NtsClient` synchronously.
+
 ## 5.1.0
 
 ### Added

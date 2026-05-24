@@ -817,4 +817,338 @@ as String,
 
 }
 
+/// @nodoc
+mixin _$TrustMode {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'TrustMode()';
+}
+
+
+}
+
+/// @nodoc
+class $TrustModeCopyWith<$Res>  {
+$TrustModeCopyWith(TrustMode _, $Res Function(TrustMode) __);
+}
+
+
+/// Adds pattern-matching-related methods to [TrustMode].
+extension TrustModePatterns on TrustMode {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( TrustMode_PlatformWithFallback value)?  platformWithFallback,TResult Function( TrustMode_PlatformOnly value)?  platformOnly,TResult Function( TrustMode_BundledOnly value)?  bundledOnly,TResult Function( TrustMode_Custom value)?  custom,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case TrustMode_PlatformWithFallback() when platformWithFallback != null:
+return platformWithFallback(_that);case TrustMode_PlatformOnly() when platformOnly != null:
+return platformOnly(_that);case TrustMode_BundledOnly() when bundledOnly != null:
+return bundledOnly(_that);case TrustMode_Custom() when custom != null:
+return custom(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( TrustMode_PlatformWithFallback value)  platformWithFallback,required TResult Function( TrustMode_PlatformOnly value)  platformOnly,required TResult Function( TrustMode_BundledOnly value)  bundledOnly,required TResult Function( TrustMode_Custom value)  custom,}){
+final _that = this;
+switch (_that) {
+case TrustMode_PlatformWithFallback():
+return platformWithFallback(_that);case TrustMode_PlatformOnly():
+return platformOnly(_that);case TrustMode_BundledOnly():
+return bundledOnly(_that);case TrustMode_Custom():
+return custom(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( TrustMode_PlatformWithFallback value)?  platformWithFallback,TResult? Function( TrustMode_PlatformOnly value)?  platformOnly,TResult? Function( TrustMode_BundledOnly value)?  bundledOnly,TResult? Function( TrustMode_Custom value)?  custom,}){
+final _that = this;
+switch (_that) {
+case TrustMode_PlatformWithFallback() when platformWithFallback != null:
+return platformWithFallback(_that);case TrustMode_PlatformOnly() when platformOnly != null:
+return platformOnly(_that);case TrustMode_BundledOnly() when bundledOnly != null:
+return bundledOnly(_that);case TrustMode_Custom() when custom != null:
+return custom(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  platformWithFallback,TResult Function()?  platformOnly,TResult Function()?  bundledOnly,TResult Function( Uint8List field0)?  custom,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case TrustMode_PlatformWithFallback() when platformWithFallback != null:
+return platformWithFallback();case TrustMode_PlatformOnly() when platformOnly != null:
+return platformOnly();case TrustMode_BundledOnly() when bundledOnly != null:
+return bundledOnly();case TrustMode_Custom() when custom != null:
+return custom(_that.field0);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  platformWithFallback,required TResult Function()  platformOnly,required TResult Function()  bundledOnly,required TResult Function( Uint8List field0)  custom,}) {final _that = this;
+switch (_that) {
+case TrustMode_PlatformWithFallback():
+return platformWithFallback();case TrustMode_PlatformOnly():
+return platformOnly();case TrustMode_BundledOnly():
+return bundledOnly();case TrustMode_Custom():
+return custom(_that.field0);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  platformWithFallback,TResult? Function()?  platformOnly,TResult? Function()?  bundledOnly,TResult? Function( Uint8List field0)?  custom,}) {final _that = this;
+switch (_that) {
+case TrustMode_PlatformWithFallback() when platformWithFallback != null:
+return platformWithFallback();case TrustMode_PlatformOnly() when platformOnly != null:
+return platformOnly();case TrustMode_BundledOnly() when bundledOnly != null:
+return bundledOnly();case TrustMode_Custom() when custom != null:
+return custom(_that.field0);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class TrustMode_PlatformWithFallback extends TrustMode {
+  const TrustMode_PlatformWithFallback(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_PlatformWithFallback);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'TrustMode.platformWithFallback()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class TrustMode_PlatformOnly extends TrustMode {
+  const TrustMode_PlatformOnly(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_PlatformOnly);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'TrustMode.platformOnly()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class TrustMode_BundledOnly extends TrustMode {
+  const TrustMode_BundledOnly(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_BundledOnly);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'TrustMode.bundledOnly()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class TrustMode_Custom extends TrustMode {
+  const TrustMode_Custom(this.field0): super._();
+  
+
+ final  Uint8List field0;
+
+/// Create a copy of TrustMode
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$TrustMode_CustomCopyWith<TrustMode_Custom> get copyWith => _$TrustMode_CustomCopyWithImpl<TrustMode_Custom>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_Custom&&const DeepCollectionEquality().equals(other.field0, field0));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(field0));
+
+@override
+String toString() {
+  return 'TrustMode.custom(field0: $field0)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $TrustMode_CustomCopyWith<$Res> implements $TrustModeCopyWith<$Res> {
+  factory $TrustMode_CustomCopyWith(TrustMode_Custom value, $Res Function(TrustMode_Custom) _then) = _$TrustMode_CustomCopyWithImpl;
+@useResult
+$Res call({
+ Uint8List field0
+});
+
+
+
+
+}
+/// @nodoc
+class _$TrustMode_CustomCopyWithImpl<$Res>
+    implements $TrustMode_CustomCopyWith<$Res> {
+  _$TrustMode_CustomCopyWithImpl(this._self, this._then);
+
+  final TrustMode_Custom _self;
+  final $Res Function(TrustMode_Custom) _then;
+
+/// Create a copy of TrustMode
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? field0 = null,}) {
+  return _then(TrustMode_Custom(
+null == field0 ? _self.field0 : field0 // ignore: cast_nullable_to_non_nullable
+as Uint8List,
+  ));
+}
+
+
+}
+
 // dart format on

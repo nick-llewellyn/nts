@@ -535,7 +535,7 @@ mod tests {
             let fake = FakePlatform::new(|| {
                 Err(Error::InvalidCertificate(CertificateError::UnknownIssuer))
             });
-            let verifier = HybridVerifier::with_platform(trust_mode, fake.clone());
+            let verifier = HybridVerifier::with_platform(trust_mode.clone(), fake.clone());
             let (leaf, intermediates, server_name, now) = dummy_args();
             let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
             assert!(

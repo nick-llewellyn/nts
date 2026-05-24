@@ -84,6 +84,7 @@ class MockNtsApi implements NtsRustLibApi {
   BigInt _singletonPlatformCount = BigInt.zero;
   BigInt _singletonHybridCount = BigInt.zero;
   BigInt _singletonWebpkiCount = BigInt.zero;
+  BigInt _singletonCustomCount = BigInt.zero;
 
   /// Single recording point for the singleton-path trust-state
   /// updates. Centralises the "overwrite the pointer + bump the
@@ -98,6 +99,8 @@ class MockNtsApi implements NtsRustLibApi {
         _singletonHybridCount += BigInt.one;
       case TrustBackend.webpkiRoots:
         _singletonWebpkiCount += BigInt.one;
+      case TrustBackend.custom:
+        _singletonCustomCount += BigInt.one;
     }
   }
 
@@ -157,7 +160,7 @@ class MockNtsApi implements NtsRustLibApi {
   @override
   NtsClient crateApiNtsNtsClientNew() {
     final fake = _FakeMockNtsClient();
-    _clientTrustModes[fake] = TrustMode.platformWithFallback;
+    _clientTrustModes[fake] = const TrustMode.platformWithFallback();
     return fake;
   }
 
@@ -170,7 +173,7 @@ class MockNtsApi implements NtsRustLibApi {
 
   @override
   TrustMode crateApiNtsNtsClientTrustMode({required NtsClient that}) =>
-      _clientTrustModes[that] ?? TrustMode.platformWithFallback;
+      _clientTrustModes[that] ?? const TrustMode.platformWithFallback();
 
   @override
   Future<NtsTimeSample> crateApiNtsNtsClientQuery({
@@ -212,6 +215,7 @@ class MockNtsApi implements NtsRustLibApi {
     defaultBackendPlatformCount: _singletonPlatformCount,
     defaultBackendHybridCount: _singletonHybridCount,
     defaultBackendWebpkiCount: _singletonWebpkiCount,
+    defaultBackendCustomCount: _singletonCustomCount,
     androidPlatformInitSucceeded: false,
     androidHybridFallbackCount: BigInt.zero,
   );
@@ -227,6 +231,12 @@ class MockNtsApi implements NtsRustLibApi {
   /// [TrustBackend.platform] case.
   TrustBackend _resolveBackendForClient(NtsClient that) {
     final mode = _clientTrustModes[that] ?? TrustMode.platformWithFallback;
+    if (mode == TrustMode.custom) {
+      return TrustBackend.custom;
+    }
+    if (mode == TrustMode.bundledOnly) {
+      return TrustBackend.webpkiRoots;
+    }
     if (mode == TrustMode.platformOnly && _random.nextInt(10) == 0) {
       throw const NtsError.trustBackendUnavailable(
         'mock: PlatformOnly refused fallback to webpki-roots bundle',

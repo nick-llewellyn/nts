@@ -344,7 +344,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_trust_mode(trustMode, serializer);
+          sse_encode_box_autoadd_trust_mode(trustMode, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 7)!;
         },
         codec: SseCodec(
@@ -595,6 +595,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  TrustMode dco_decode_box_autoadd_trust_mode(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_trust_mode(raw);
+  }
+
+  @protected
   int dco_decode_i_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -703,15 +709,16 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   NtsTrustStatus dco_decode_nts_trust_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 6)
-      throw Exception('unexpected arr length: expect 6 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return NtsTrustStatus(
       defaultClientBackend: dco_decode_opt_box_autoadd_trust_backend(arr[0]),
       defaultBackendPlatformCount: dco_decode_u_64(arr[1]),
       defaultBackendHybridCount: dco_decode_u_64(arr[2]),
       defaultBackendWebpkiCount: dco_decode_u_64(arr[3]),
-      androidPlatformInitSucceeded: dco_decode_bool(arr[4]),
-      androidHybridFallbackCount: dco_decode_u_64(arr[5]),
+      defaultBackendCustomCount: dco_decode_u_64(arr[4]),
+      androidPlatformInitSucceeded: dco_decode_bool(arr[5]),
+      androidHybridFallbackCount: dco_decode_u_64(arr[6]),
     );
   }
 
@@ -763,7 +770,18 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   @protected
   TrustMode dco_decode_trust_mode(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return TrustMode.values[raw as int];
+    switch (raw[0]) {
+      case 0:
+        return const TrustMode_PlatformWithFallback();
+      case 1:
+        return const TrustMode_PlatformOnly();
+      case 2:
+        return const TrustMode_BundledOnly();
+      case 3:
+        return TrustMode_Custom(dco_decode_list_prim_u_8_strict(raw[1]));
+      default:
+        throw Exception("unreachable");
+    }
   }
 
   @protected
@@ -865,6 +883,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_trust_backend(deserializer));
+  }
+
+  @protected
+  TrustMode sse_decode_box_autoadd_trust_mode(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_trust_mode(deserializer));
   }
 
   @protected
@@ -1009,6 +1033,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_defaultBackendPlatformCount = sse_decode_u_64(deserializer);
     final var_defaultBackendHybridCount = sse_decode_u_64(deserializer);
     final var_defaultBackendWebpkiCount = sse_decode_u_64(deserializer);
+    final var_defaultBackendCustomCount = sse_decode_u_64(deserializer);
     final var_androidPlatformInitSucceeded = sse_decode_bool(deserializer);
     final var_androidHybridFallbackCount = sse_decode_u_64(deserializer);
     return NtsTrustStatus(
@@ -1016,6 +1041,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       defaultBackendPlatformCount: var_defaultBackendPlatformCount,
       defaultBackendHybridCount: var_defaultBackendHybridCount,
       defaultBackendWebpkiCount: var_defaultBackendWebpkiCount,
+      defaultBackendCustomCount: var_defaultBackendCustomCount,
       androidPlatformInitSucceeded: var_androidPlatformInitSucceeded,
       androidHybridFallbackCount: var_androidHybridFallbackCount,
     );
@@ -1081,8 +1107,21 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   @protected
   TrustMode sse_decode_trust_mode(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    final inner = sse_decode_i_32(deserializer);
-    return TrustMode.values[inner];
+
+    final tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return const TrustMode_PlatformWithFallback();
+      case 1:
+        return const TrustMode_PlatformOnly();
+      case 2:
+        return const TrustMode_BundledOnly();
+      case 3:
+        final var_field0 = sse_decode_list_prim_u_8_strict(deserializer);
+        return TrustMode_Custom(var_field0);
+      default:
+        throw UnimplementedError('');
+    }
   }
 
   @protected
@@ -1187,6 +1226,15 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_trust_backend(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_trust_mode(
+    TrustMode self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_trust_mode(self, serializer);
   }
 
   @protected
@@ -1315,6 +1363,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     sse_encode_u_64(self.defaultBackendPlatformCount, serializer);
     sse_encode_u_64(self.defaultBackendHybridCount, serializer);
     sse_encode_u_64(self.defaultBackendWebpkiCount, serializer);
+    sse_encode_u_64(self.defaultBackendCustomCount, serializer);
     sse_encode_bool(self.androidPlatformInitSucceeded, serializer);
     sse_encode_u_64(self.androidHybridFallbackCount, serializer);
   }
@@ -1367,7 +1416,17 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   @protected
   void sse_encode_trust_mode(TrustMode self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.index, serializer);
+    switch (self) {
+      case TrustMode_PlatformWithFallback():
+        sse_encode_i_32(0, serializer);
+      case TrustMode_PlatformOnly():
+        sse_encode_i_32(1, serializer);
+      case TrustMode_BundledOnly():
+        sse_encode_i_32(2, serializer);
+      case TrustMode_Custom(field0: final field0):
+        sse_encode_i_32(3, serializer);
+        sse_encode_list_prim_u_8_strict(field0, serializer);
+    }
   }
 
   @protected

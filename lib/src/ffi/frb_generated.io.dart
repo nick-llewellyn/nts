@@ -53,6 +53,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   TrustBackend dco_decode_box_autoadd_trust_backend(dynamic raw);
 
   @protected
+  TrustMode dco_decode_box_autoadd_trust_mode(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -145,6 +148,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   TrustBackend sse_decode_box_autoadd_trust_backend(
     SseDeserializer deserializer,
   );
+
+  @protected
+  TrustMode sse_decode_box_autoadd_trust_mode(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -246,6 +252,12 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   @protected
   void sse_encode_box_autoadd_trust_backend(
     TrustBackend self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_trust_mode(
+    TrustMode self,
     SseSerializer serializer,
   );
 

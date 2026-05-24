@@ -554,6 +554,11 @@ class NtsTrustStatus {
   /// `default_backend_platform_count`.
   final BigInt defaultBackendWebpkiCount;
 
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [`TrustBackend::Custom`] since process start. Same monotonicity
+  /// contract as `default_backend_platform_count`.
+  final BigInt defaultBackendCustomCount;
+
   /// On Android: `true` iff
   /// `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
   /// invoked at least once and reported success. `false` on every
@@ -577,6 +582,7 @@ class NtsTrustStatus {
     required this.defaultBackendPlatformCount,
     required this.defaultBackendHybridCount,
     required this.defaultBackendWebpkiCount,
+    required this.defaultBackendCustomCount,
     required this.androidPlatformInitSucceeded,
     required this.androidHybridFallbackCount,
   });
@@ -587,6 +593,7 @@ class NtsTrustStatus {
       defaultBackendPlatformCount.hashCode ^
       defaultBackendHybridCount.hashCode ^
       defaultBackendWebpkiCount.hashCode ^
+      defaultBackendCustomCount.hashCode ^
       androidPlatformInitSucceeded.hashCode ^
       androidHybridFallbackCount.hashCode;
 
@@ -599,6 +606,7 @@ class NtsTrustStatus {
           defaultBackendPlatformCount == other.defaultBackendPlatformCount &&
           defaultBackendHybridCount == other.defaultBackendHybridCount &&
           defaultBackendWebpkiCount == other.defaultBackendWebpkiCount &&
+          defaultBackendCustomCount == other.defaultBackendCustomCount &&
           androidPlatformInitSucceeded == other.androidPlatformInitSucceeded &&
           androidHybridFallbackCount == other.androidHybridFallbackCount;
 }
@@ -802,23 +810,22 @@ enum TrustBackend {
   /// [`TrustMode::PlatformOnly`] for the opt-in that surfaces this
   /// path as [`NtsError::TrustBackendUnavailable`] instead.
   webpkiRoots,
+
+  /// Caller-supplied custom root certificates authenticated this chain.
+  custom,
 }
 
-/// Caller-selected policy for which trust-anchor backend [`NtsClient`]
-/// is willing to run against. Set immutably at client construction and
-/// applied to every handshake the client initiates.
-///
-/// The default singleton client used by the top-level convenience
-/// functions ([`nts_query`], [`nts_warm_cookies`]) is constructed with
-/// [`TrustMode::PlatformWithFallback`] and never changes, so existing
-/// callers see no behaviour change.
-enum TrustMode {
+@freezed
+sealed class TrustMode with _$TrustMode {
+  const TrustMode._();
+
   /// Platform store is the primary source of truth; on
   /// `build_with_native_verifier` failure the client silently
   /// downgrades to the `webpki-roots` static bundle. Default mode
   /// for the top-level convenience functions and for
   /// [`NtsClient::new`].
-  platformWithFallback,
+  const factory TrustMode.platformWithFallback() =
+      TrustMode_PlatformWithFallback;
 
   /// Refuses every silent fallback to the `webpki-roots` static
   /// bundle. Use when a pinned corporate CA or an MDM-installed
@@ -843,8 +850,11 @@ enum TrustMode {
   ///    is reachable only via [`TrustMode::PlatformWithFallback`]
   ///    (the historic default), where both fallback arms continue
   ///    to fire as in 3.0.x.
-  platformOnly,
+  const factory TrustMode.platformOnly() = TrustMode_PlatformOnly;
 
   /// Webpki-roots static bundle only; no platform-store consultation at all.
-  bundledOnly,
+  const factory TrustMode.bundledOnly() = TrustMode_BundledOnly;
+
+  /// Caller-supplied custom root certificates in PEM or DER format.
+  const factory TrustMode.custom(Uint8List field0) = TrustMode_Custom;
 }

@@ -189,7 +189,7 @@ fn phase_io_to_ke(e: std::io::Error, phase: KeTimeoutPhase) -> KeError {
 /// [`crate::api::nts::TrustMode`] across the protocol-layer boundary
 /// so the protocol module stays independent of the public-API enum
 /// definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KeTrustMode {
     /// Platform store first, `webpki-roots` static bundle on
     /// `build_with_native_verifier` failure. Default behaviour
@@ -201,6 +201,8 @@ pub enum KeTrustMode {
     PlatformOnly,
     /// Webpki-roots static bundle only; no platform-store consultation at all.
     BundledOnly,
+    /// Caller-supplied custom root certificates in PEM or DER format.
+    Custom(Vec<u8>),
 }
 
 /// Trust-anchor backend that authenticated this handshake's TLS chain.
@@ -213,6 +215,7 @@ pub enum KeTrustBackend {
     Platform,
     PlatformWithHybridFallback,
     WebpkiRoots,
+    Custom,
 }
 
 /// Inputs for a single NTS-KE handshake.
@@ -1035,6 +1038,13 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
             hybrid: None,
         });
     }
+    if let KeTrustMode::Custom(ref bytes) = trust_mode {
+        return Ok(TlsConfigBuild {
+            config: Arc::new(build_with_custom_roots(bytes)?),
+            initial_backend: KeTrustBackend::Custom,
+            hybrid: None,
+        });
+    }
     match build_with_native_verifier_android(trust_mode) {
         Ok((mut cfg, hybrid)) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
@@ -1044,17 +1054,17 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
                 hybrid: Some(hybrid),
             })
         }
-        Err(e) => match trust_mode {
-            KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
-            KeTrustMode::PlatformWithFallback => {
+        Err(e) => {
+            if trust_mode == KeTrustMode::PlatformOnly {
+                Err(KeError::TrustBackendUnavailable(e.to_string()))
+            } else {
                 Ok(TlsConfigBuild {
                     config: Arc::new(build_webpki_only_config()?),
                     initial_backend: KeTrustBackend::WebpkiRoots,
                     hybrid: None,
                 })
             }
-            KeTrustMode::BundledOnly => unreachable!(),
-        },
+        }
     }
 }
 
@@ -1066,6 +1076,12 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
             initial_backend: KeTrustBackend::WebpkiRoots,
         });
     }
+    if let KeTrustMode::Custom(ref bytes) = trust_mode {
+        return Ok(TlsConfigBuild {
+            config: Arc::new(build_with_custom_roots(bytes)?),
+            initial_backend: KeTrustBackend::Custom,
+        });
+    }
     match build_with_native_verifier() {
         Ok(mut cfg) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
@@ -1074,16 +1090,16 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
                 initial_backend: KeTrustBackend::Platform,
             })
         }
-        Err(e) => match trust_mode {
-            KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
-            KeTrustMode::PlatformWithFallback => {
+        Err(e) => {
+            if trust_mode == KeTrustMode::PlatformOnly {
+                Err(KeError::TrustBackendUnavailable(e.to_string()))
+            } else {
                 Ok(TlsConfigBuild {
                     config: Arc::new(build_webpki_only_config()?),
                     initial_backend: KeTrustBackend::WebpkiRoots,
                 })
             }
-            KeTrustMode::BundledOnly => unreachable!(),
-        },
+        }
     }
 }
 
@@ -1143,6 +1159,48 @@ fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {
     )
 }
 
+fn build_with_custom_roots(bytes: &[u8]) -> Result<ClientConfig, KeError> {
+    let mut roots = RootCertStore::empty();
+    let trimmed = match std::str::from_utf8(bytes) {
+        Ok(s) => s.trim_start(),
+        Err(_) => "",
+    };
+
+    let mut parsed_certs = Vec::new();
+    if trimmed.starts_with("-----BEGIN CERTIFICATE-----") {
+        let mut reader = std::io::Cursor::new(bytes);
+        for cert in rustls_pemfile::certs(&mut reader) {
+            let cert_der = cert.map_err(|e| {
+                KeError::TrustBackendUnavailable(format!("Failed to parse PEM certificate: {}", e))
+            })?;
+            parsed_certs.push(cert_der);
+        }
+    } else {
+        parsed_certs.push(rustls::pki_types::CertificateDer::from(bytes.to_vec()));
+    }
+
+    if parsed_certs.is_empty() {
+        return Err(KeError::TrustBackendUnavailable(
+            "No custom certificates found in input".to_string(),
+        ));
+    }
+
+    for cert in parsed_certs {
+        roots.add(cert).map_err(|e| {
+            KeError::TrustBackendUnavailable(format!(
+                "Failed to add custom root certificate: {}",
+                e
+            ))
+        })?;
+    }
+
+    let mut cfg = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+    Ok(cfg)
+}
+
 /// Drive a complete NTS-KE handshake against `req.host:req.port` and return
 /// the negotiated AEAD parameters, exporter-derived keys, and cookie pool.
 ///
@@ -1172,7 +1230,7 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     if req.aead_algorithms.is_empty() {
         return Err(KeError::MissingAead.into());
     }
-    let build = build_tls_config(req.trust_mode)?;
+    let build = build_tls_config(req.trust_mode.clone())?;
     // Snapshot the per-instance hybrid-fallback counter *before* the
     // handshake so we can detect a fallback firing on this specific
     // chain. Only meaningful on Android with the platform path; `None`

@@ -63,6 +63,7 @@ String formatTrustBackend(TrustBackend backend) => switch (backend) {
   // formatQuerySuccess / formatWarmSuccess helpers.
   TrustBackend.platformWithHybridFallback => 'webpki-fallback',
   TrustBackend.webpkiRoots => 'webpki-roots',
+  TrustBackend.custom => 'custom',
 };
 
 /// Human label for a [TrustMode] used in the toggle, status panel,
@@ -72,6 +73,7 @@ String formatTrustMode(TrustMode mode) => switch (mode) {
   TrustMode.platformWithFallback => 'platform-with-fallback',
   TrustMode.platformOnly => 'platform-only',
   TrustMode.bundledOnly => 'bundled-only',
+  TrustMode.custom => 'custom',
 };
 
 /// Two-line success rendering of an `ntsQuery` result.
