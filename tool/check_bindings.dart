@@ -359,8 +359,7 @@ void _patchFrbGeneratedUnimplementedMessages() {
   if (!original.contains(needle)) return;
   final patched = original.replaceAll(needle, replacement);
   final replaced =
-      needle.allMatches(original).length -
-      needle.allMatches(patched).length;
+      needle.allMatches(original).length - needle.allMatches(patched).length;
   file.writeAsStringSync(patched);
   stdout.writeln(
     'Patched $path: replaced $replaced empty `unimplemented!("")` arm(s) '
