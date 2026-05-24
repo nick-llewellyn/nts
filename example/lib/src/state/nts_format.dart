@@ -71,6 +71,7 @@ String formatTrustBackend(TrustBackend backend) => switch (backend) {
 String formatTrustMode(TrustMode mode) => switch (mode) {
   TrustMode.platformWithFallback => 'platform-with-fallback',
   TrustMode.platformOnly => 'platform-only',
+  TrustMode.bundledOnly => 'bundled-only',
 };
 
 /// Two-line success rendering of an `ntsQuery` result.

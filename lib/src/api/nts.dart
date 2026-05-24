@@ -648,11 +648,13 @@ TrustBackend _publicTrustBackend(ffi.TrustBackend b) => switch (b) {
 TrustMode _publicTrustMode(ffi.TrustMode m) => switch (m) {
   ffi.TrustMode.platformWithFallback => TrustMode.platformWithFallback,
   ffi.TrustMode.platformOnly => TrustMode.platformOnly,
+  ffi.TrustMode.bundledOnly => TrustMode.bundledOnly,
 };
 
 ffi.TrustMode _ffiTrustMode(TrustMode m) => switch (m) {
   TrustMode.platformWithFallback => ffi.TrustMode.platformWithFallback,
   TrustMode.platformOnly => ffi.TrustMode.platformOnly,
+  TrustMode.bundledOnly => ffi.TrustMode.bundledOnly,
 };
 
 NtsTrustStatus _publicTrustStatus(ffi.NtsTrustStatus s) => NtsTrustStatus(

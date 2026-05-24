@@ -72,6 +72,9 @@ void main() {
     test('platformOnly → short label', () {
       expect(formatTrustMode(TrustMode.platformOnly), 'platform-only');
     });
+    test('bundledOnly → short label', () {
+      expect(formatTrustMode(TrustMode.bundledOnly), 'bundled-only');
+    });
   });
 
   group('formatQuerySuccess', () {

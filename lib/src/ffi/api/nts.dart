@@ -844,4 +844,7 @@ enum TrustMode {
   ///    (the historic default), where both fallback arms continue
   ///    to fire as in 3.0.x.
   platformOnly,
+
+  /// Webpki-roots static bundle only; no platform-store consultation at all.
+  bundledOnly,
 }

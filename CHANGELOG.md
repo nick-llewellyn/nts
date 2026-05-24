@@ -1,5 +1,15 @@
 # Changelog
 
+## 5.1.0
+
+### Added
+
+- `TrustMode.bundledOnly` validates exclusively against the
+  bundled `webpki-roots` set. No platform-store consultation, no
+  silent fallback. Use when the consumer's authentication contract
+  requires a library-controlled trust anchor (see
+  `trusted_time-m8t` for the motivating consumer).
+
 ## 5.0.0
 
 ### Breaking changes

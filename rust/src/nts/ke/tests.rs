@@ -62,6 +62,22 @@ mod tls_config {
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Platform);
     }
+
+    #[test]
+    fn build_tls_config_bundled_only_succeeds() {
+        let build = build_tls_config(KeTrustMode::BundledOnly).expect("config builds");
+        assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
+        assert_eq!(build.initial_backend, KeTrustBackend::WebpkiRoots);
+    }
+
+    #[test]
+    fn build_tls_config_bundled_only_matches_webpki_only_protocol_options() {
+        let build_bundled = build_tls_config(KeTrustMode::BundledOnly).expect("config builds");
+        let expected_cfg = build_webpki_only_config().expect("webpki config builds");
+        assert_eq!(build_bundled.config.alpn_protocols, expected_cfg.alpn_protocols);
+        assert_eq!(build_bundled.config.enable_early_data, expected_cfg.enable_early_data);
+        assert_eq!(build_bundled.config.enable_sni, expected_cfg.enable_sni);
+    }
 }
 
 mod request_build {

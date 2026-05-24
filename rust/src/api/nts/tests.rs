@@ -2362,6 +2362,13 @@ fn nts_client_with_trust_mode_round_trips_strict() {
     assert!(!client.is_default);
 }
 
+#[test]
+fn nts_client_with_trust_mode_round_trips_bundled_only() {
+    let client = NtsClient::with_trust_mode(TrustMode::BundledOnly);
+    assert_eq!(client.trust_mode(), TrustMode::BundledOnly);
+    assert!(!client.is_default);
+}
+
 /// Pin the `KeError::TrustBackendUnavailable -> NtsError::TrustBackendUnavailable`
 /// mapping. The failure shape is the load-bearing observable for
 /// strict-mode callers — collapsing it onto `KeProtocol` would
@@ -2398,7 +2405,11 @@ fn ke_error_trust_backend_unavailable_maps_to_typed_nts_error() {
 )]
 fn trust_mode_and_backend_conversions_are_total() {
     // TrustMode -> KeTrustMode
-    for m in [TrustMode::PlatformWithFallback, TrustMode::PlatformOnly] {
+    for m in [
+        TrustMode::PlatformWithFallback,
+        TrustMode::PlatformOnly,
+        TrustMode::BundledOnly,
+    ] {
         let ke: crate::nts::ke::KeTrustMode = m.into();
         match (m, ke) {
             (
@@ -2406,6 +2417,7 @@ fn trust_mode_and_backend_conversions_are_total() {
                 crate::nts::ke::KeTrustMode::PlatformWithFallback,
             ) => {}
             (TrustMode::PlatformOnly, crate::nts::ke::KeTrustMode::PlatformOnly) => {}
+            (TrustMode::BundledOnly, crate::nts::ke::KeTrustMode::BundledOnly) => {}
             _ => panic!("TrustMode -> KeTrustMode mapping diverged"),
         }
     }
@@ -3199,6 +3211,7 @@ fn trust_mode_maps_to_ke_trust_mode() {
             KeTrustMode::PlatformWithFallback,
         ),
         (TrustMode::PlatformOnly, KeTrustMode::PlatformOnly),
+        (TrustMode::BundledOnly, KeTrustMode::BundledOnly),
     ] {
         let mapped: KeTrustMode = public_variant.into();
         assert_eq!(mapped, ke_variant, "{public_variant:?} did not map");
@@ -3274,6 +3287,10 @@ fn nts_client_trust_mode_round_trips_construction_choice() {
     assert_eq!(
         NtsClient::with_trust_mode(TrustMode::PlatformOnly).trust_mode(),
         TrustMode::PlatformOnly,
+    );
+    assert_eq!(
+        NtsClient::with_trust_mode(TrustMode::BundledOnly).trust_mode(),
+        TrustMode::BundledOnly,
     );
 }
 

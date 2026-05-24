@@ -863,6 +863,7 @@ impl SseDecode for crate::api::nts::TrustMode {
         return match inner {
             0 => crate::api::nts::TrustMode::PlatformWithFallback,
             1 => crate::api::nts::TrustMode::PlatformOnly,
+            2 => crate::api::nts::TrustMode::BundledOnly,
             _ => unreachable!("Invalid variant for TrustMode: {}", inner),
         };
     }
@@ -1230,6 +1231,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::TrustMode {
         match self {
             Self::PlatformWithFallback => 0.into_dart(),
             Self::PlatformOnly => 1.into_dart(),
+            Self::BundledOnly => 2.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -1483,6 +1485,7 @@ impl SseEncode for crate::api::nts::TrustMode {
             match self {
                 crate::api::nts::TrustMode::PlatformWithFallback => 0,
                 crate::api::nts::TrustMode::PlatformOnly => 1,
+                crate::api::nts::TrustMode::BundledOnly => 2,
                 _ => {
                     unimplemented!("");
                 }

@@ -199,6 +199,8 @@ pub enum KeTrustMode {
     /// surfaces as [`KeError::TrustBackendUnavailable`] rather than
     /// downgrading to the static bundle.
     PlatformOnly,
+    /// Webpki-roots static bundle only; no platform-store consultation at all.
+    BundledOnly,
 }
 
 /// Trust-anchor backend that authenticated this handshake's TLS chain.
@@ -979,8 +981,9 @@ pub(crate) struct TlsConfigBuild {
     pub(crate) hybrid: Option<Arc<crate::nts::hybrid_verifier::HybridVerifier>>,
 }
 
-/// Build a `ClientConfig` with the platform trust store, `ntske/1` ALPN,
-/// and TLS 1.3 as the only acceptable protocol version (RFC 8915 §3).
+/// Build a `ClientConfig` with the configured trust store (either platform or
+/// bundled webpki roots), `ntske/1` ALPN, and TLS 1.3 as the only acceptable
+/// protocol version (RFC 8915 §3).
 ///
 /// Idempotently installs `ring` as the default crypto provider; an error from
 /// `install_default()` after the first call is benign (provider already set).
@@ -995,24 +998,25 @@ pub(crate) struct TlsConfigBuild {
 /// pinning for any caller that re-enables that code by mistake.
 ///
 /// Verifier selection:
-/// - **Android**: `HybridVerifier` (platform verifier with a webpki-roots
-///   fallback that activates only on `CertificateError::Revoked` or the
-///   `rustls-platform-verifier` JNI-failure marker, to work around
-///   missing-OCSP-AIA chains such as Let's Encrypt R12 and R8-stripped
-///   AAR classes). Defined in the `crate::nts::hybrid_verifier` module
-///   (Android-only; gated by `#[cfg(target_os = "android")]` on its
-///   declaration in `nts/mod.rs`, so the rustdoc link is omitted to
-///   keep docs warning-free on non-Android targets).
+/// - **Android**: [`HybridVerifier`](crate::nts::hybrid_verifier::HybridVerifier)
+///   (platform verifier with a webpki-roots fallback that activates only on
+///   `CertificateError::Revoked` or the `rustls-platform-verifier` JNI-failure
+///   marker, to work around missing-OCSP-AIA chains such as Let's Encrypt R12 and
+///   R8-stripped AAR classes). Although the module is compiled unconditionally
+///   on all platforms to run contract tests in host CI, the verifier is only
+///   instantiated in production under Android targets.
 /// - **Other platforms**: bare `rustls_platform_verifier::Verifier`,
 ///   constructed directly rather than via `ConfigVerifierExt` because
 ///   that helper hard-codes `with_safe_default_protocol_versions()`
 ///   which would re-admit TLS 1.2 if the `tls12` feature is on.
-/// - **Hard fallback**: a static webpki-roots config. Used when
-///   `build_with_native_verifier` errors *and* `trust_mode ==
-///   PlatformWithFallback`. Under `PlatformOnly` the same
-///   construction failure surfaces as
-///   [`KeError::TrustBackendUnavailable`] so callers who pinned a
-///   corporate CA see a typed failure instead of a silent downgrade.
+/// - **BundledOnly**: routes directly to a static `webpki-roots` config,
+///   bypassing the platform verifier entirely.
+/// - **Fallback path**: a static `webpki-roots` config is also used as a
+///   fallback when platform verifier construction fails under
+///   `PlatformWithFallback`. Under `PlatformOnly`, this fallback path is
+///   disabled, and platform verifier construction failure surfaces as
+///   [`KeError::TrustBackendUnavailable`] so callers who pinned a corporate CA
+///   see a typed failure.
 ///
 /// `pub(crate)` because every caller — [`perform_handshake`] and the
 /// in-module test fixture — lives inside this module; the function
@@ -1024,6 +1028,13 @@ pub(crate) fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild
 
 #[cfg(target_os = "android")]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+    if trust_mode == KeTrustMode::BundledOnly {
+        return Ok(TlsConfigBuild {
+            config: Arc::new(build_webpki_only_config()?),
+            initial_backend: KeTrustBackend::WebpkiRoots,
+            hybrid: None,
+        });
+    }
     match build_with_native_verifier_android(trust_mode) {
         Ok((mut cfg, hybrid)) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
@@ -1036,20 +1047,25 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
         Err(e) => match trust_mode {
             KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
             KeTrustMode::PlatformWithFallback => {
-                let mut cfg = build_with_webpki_roots()?;
-                cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
                 Ok(TlsConfigBuild {
-                    config: Arc::new(cfg),
+                    config: Arc::new(build_webpki_only_config()?),
                     initial_backend: KeTrustBackend::WebpkiRoots,
                     hybrid: None,
                 })
             }
+            KeTrustMode::BundledOnly => unreachable!(),
         },
     }
 }
 
 #[cfg(not(target_os = "android"))]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+    if trust_mode == KeTrustMode::BundledOnly {
+        return Ok(TlsConfigBuild {
+            config: Arc::new(build_webpki_only_config()?),
+            initial_backend: KeTrustBackend::WebpkiRoots,
+        });
+    }
     match build_with_native_verifier() {
         Ok(mut cfg) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
@@ -1061,13 +1077,12 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
         Err(e) => match trust_mode {
             KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
             KeTrustMode::PlatformWithFallback => {
-                let mut cfg = build_with_webpki_roots()?;
-                cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
                 Ok(TlsConfigBuild {
-                    config: Arc::new(cfg),
+                    config: Arc::new(build_webpki_only_config()?),
                     initial_backend: KeTrustBackend::WebpkiRoots,
                 })
             }
+            KeTrustMode::BundledOnly => unreachable!(),
         },
     }
 }
@@ -1110,6 +1125,12 @@ fn build_with_native_verifier() -> Result<ClientConfig, rustls::Error> {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth())
+}
+
+fn build_webpki_only_config() -> Result<ClientConfig, KeError> {
+    let mut cfg = build_with_webpki_roots()?;
+    cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+    Ok(cfg)
 }
 
 fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {
