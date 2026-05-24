@@ -1045,10 +1045,8 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
         Err(e) => match trust_mode {
             KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
             KeTrustMode::PlatformWithFallback => {
-                let mut cfg = build_with_webpki_roots()?;
-                cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
                 Ok(TlsConfigBuild {
-                    config: Arc::new(cfg),
+                    config: Arc::new(build_webpki_only_config()?),
                     initial_backend: KeTrustBackend::WebpkiRoots,
                     hybrid: None,
                 })
@@ -1077,10 +1075,8 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
         Err(e) => match trust_mode {
             KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
             KeTrustMode::PlatformWithFallback => {
-                let mut cfg = build_with_webpki_roots()?;
-                cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
                 Ok(TlsConfigBuild {
-                    config: Arc::new(cfg),
+                    config: Arc::new(build_webpki_only_config()?),
                     initial_backend: KeTrustBackend::WebpkiRoots,
                 })
             }
@@ -1130,8 +1126,7 @@ fn build_with_native_verifier() -> Result<ClientConfig, rustls::Error> {
 }
 
 fn build_webpki_only_config() -> Result<ClientConfig, KeError> {
-    let mut cfg = build_with_webpki_roots()
-        .map_err(|e| KeError::TrustBackendUnavailable(e.to_string()))?;
+    let mut cfg = build_with_webpki_roots()?;
     cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
     Ok(cfg)
 }
