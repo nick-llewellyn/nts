@@ -346,8 +346,12 @@ class NtsClient {
   /// deployment's TLS-inspection posture. Pass [TrustMode.bundledOnly]
   /// to bypass the platform trust store entirely and only trust
   /// the bundled root certificates (`webpki-roots`). Pass [TrustMode.custom]
-  /// alongside a non-empty list of certificates in [customRoots] to trust
-  /// only those caller-supplied custom root certificates. The choice is
+  /// alongside a non-empty byte sequence in [customRoots] — either a
+  /// PEM-encoded certificate bundle (one or more
+  /// `-----BEGIN CERTIFICATE-----` blocks, optionally preceded by a
+  /// PKCS7-style "Bag Attributes" / "subject=" preamble) or a single
+  /// DER-encoded certificate's raw bytes — to trust only those
+  /// caller-supplied custom root certificates. The choice is
   /// immutable for the life of the client.
   ///
   /// Synchronous: dispatches through the FRB bridge to mint the

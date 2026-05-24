@@ -516,19 +516,23 @@ class NtsTimeSample {
 ///
 /// The fields combine one overwrite-on-store event marker (which
 /// backend the default singleton client *most recently* resolved
-/// to), three cumulative counters that partition the singleton's
-/// resolution history by backend, a static flag indicating whether
-/// the Android JNI bootstrap succeeded, and one Android-only
-/// fallback counter. Fields not relevant to the current platform
-/// are reported with the documented "n/a" sentinel rather than
-/// omitted, so the snapshot has the same shape on every host.
+/// to), four cumulative counters that partition the singleton's
+/// resolution history by backend
+/// (`default_backend_platform_count`,
+/// `default_backend_hybrid_count`, `default_backend_webpki_count`,
+/// `default_backend_custom_count`), a static flag indicating
+/// whether the Android JNI bootstrap succeeded, and one
+/// Android-only fallback counter. Fields not relevant to the
+/// current platform are reported with the documented "n/a"
+/// sentinel rather than omitted, so the snapshot has the same
+/// shape on every host.
 class NtsTrustStatus {
   /// Backend the default singleton client most recently resolved to
   /// at handshake time. `None` when no handshake has run yet
   /// against the singleton (e.g. process just started, or all
   /// queries so far went through caller-minted [`NtsClient`]
   /// instances). This is an overwrite-on-store event marker, not
-  /// a steady-state signal: prefer the three `default_backend_*_count`
+  /// a steady-state signal: prefer the four `default_backend_*_count`
   /// fields below for dashboard panels that need trend visibility
   /// across the singleton's resolution history. Custom-client
   /// callers should read the per-handshake `trust_backend` field

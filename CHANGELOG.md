@@ -28,6 +28,21 @@
   code is greppable back to its FRB origin without changing the runtime
   semantics (still `unimplemented!`, still unreachable for exhaustive
   enums in practice).
+- `build_with_custom_roots` now accepts PEM bundles whose first
+  `-----BEGIN CERTIFICATE-----` marker is preceded by an attribute
+  preamble (`Bag Attributes` / `subject=` / `issuer=` lines that
+  `openssl pkcs7 -print_certs` and PKCS12 exports routinely emit)
+  rather than misclassifying those buffers as DER. Detection now
+  fires when the UTF-8 view of the input contains the BEGIN marker
+  anywhere, not only at the first non-whitespace byte; raw DER
+  input continues to take the DER branch since it is not valid
+  UTF-8.
+- `build_tls_config_inner` (Android and non-Android) now `match`es
+  `KeTrustMode` exhaustively in the fallback branch instead of an
+  `if trust_mode == KeTrustMode::PlatformOnly { … } else { … }`
+  shape. Adding a future `KeTrustMode` variant will now force a
+  compile-time decision at this site rather than silently
+  inheriting the `PlatformWithFallback` arm.
 
 ## 5.1.0
 

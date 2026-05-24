@@ -1052,6 +1052,12 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
             hybrid: None,
         });
     }
+    // `build_with_native_verifier_android` consumes `trust_mode` (the
+    // hybrid verifier stores it for per-handshake fallback gating),
+    // so capture a cheap `Arc`-refcount clone here for the post-call
+    // exhaustive match below. The clone is O(1) regardless of
+    // payload size (see `KeTrustMode::Custom` rustdoc).
+    let mode_for_fallback = trust_mode.clone();
     match build_with_native_verifier_android(trust_mode) {
         Ok((mut cfg, hybrid)) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
@@ -1061,17 +1067,25 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
                 hybrid: Some(hybrid),
             })
         }
-        Err(e) => {
-            if trust_mode == KeTrustMode::PlatformOnly {
-                Err(KeError::TrustBackendUnavailable(e.to_string()))
-            } else {
-                Ok(TlsConfigBuild {
-                    config: Arc::new(build_webpki_only_config()?),
-                    initial_backend: KeTrustBackend::WebpkiRoots,
-                    hybrid: None,
-                })
-            }
-        }
+        // Exhaustive over `KeTrustMode` so any new variant forces a
+        // compile-time decision here rather than silently inheriting
+        // the `PlatformWithFallback` arm. `BundledOnly` / `Custom`
+        // are already short-circuited above before any call to
+        // `build_with_native_verifier_android`, so the corresponding
+        // arms are `unreachable!` rather than fabricating a behaviour.
+        Err(e) => match mode_for_fallback {
+            KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
+            KeTrustMode::PlatformWithFallback => Ok(TlsConfigBuild {
+                config: Arc::new(build_webpki_only_config()?),
+                initial_backend: KeTrustBackend::WebpkiRoots,
+                hybrid: None,
+            }),
+            KeTrustMode::BundledOnly | KeTrustMode::Custom(_) => unreachable!(
+                "BundledOnly and Custom are handled by early returns above; \
+                 build_with_native_verifier_android is only reached for \
+                 PlatformOnly and PlatformWithFallback"
+            ),
+        },
     }
 }
 
@@ -1097,16 +1111,24 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
                 initial_backend: KeTrustBackend::Platform,
             })
         }
-        Err(e) => {
-            if trust_mode == KeTrustMode::PlatformOnly {
-                Err(KeError::TrustBackendUnavailable(e.to_string()))
-            } else {
-                Ok(TlsConfigBuild {
-                    config: Arc::new(build_webpki_only_config()?),
-                    initial_backend: KeTrustBackend::WebpkiRoots,
-                })
-            }
-        }
+        // Exhaustive over `KeTrustMode` so any new variant forces a
+        // compile-time decision here rather than silently inheriting
+        // the `PlatformWithFallback` arm. `BundledOnly` / `Custom`
+        // are already short-circuited above before any call to
+        // `build_with_native_verifier`, so the corresponding arms
+        // are `unreachable!` rather than fabricating a behaviour.
+        Err(e) => match trust_mode {
+            KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
+            KeTrustMode::PlatformWithFallback => Ok(TlsConfigBuild {
+                config: Arc::new(build_webpki_only_config()?),
+                initial_backend: KeTrustBackend::WebpkiRoots,
+            }),
+            KeTrustMode::BundledOnly | KeTrustMode::Custom(_) => unreachable!(
+                "BundledOnly and Custom are handled by early returns above; \
+                 build_with_native_verifier is only reached for \
+                 PlatformOnly and PlatformWithFallback"
+            ),
+        },
     }
 }
 
@@ -1168,13 +1190,26 @@ fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {
 
 fn build_with_custom_roots(bytes: &[u8]) -> Result<ClientConfig, KeError> {
     let mut roots = RootCertStore::empty();
-    let trimmed = match std::str::from_utf8(bytes) {
-        Ok(s) => s.trim_start(),
-        Err(_) => "",
-    };
+
+    // PEM detection: treat the input as PEM whenever the UTF-8 view
+    // contains a `-----BEGIN CERTIFICATE-----` marker anywhere, not
+    // only at the very first non-whitespace byte. Real-world PEM
+    // bundles (e.g. PKCS7 dumps from `openssl pkcs7 -print_certs`,
+    // OpenSSL's "Bag Attributes" / "subject=" preambles, mail-quoted
+    // chains) routinely carry attribute lines before the first BEGIN
+    // marker; the previous `starts_with` check misclassified those as
+    // DER and rejected them with a parse failure. `rustls_pemfile`
+    // ignores any bytes between the start of input and the first
+    // recognised PEM section, so feeding the original buffer through
+    // when the marker is present anywhere is sufficient. Fall back to
+    // raw DER only when the input is not valid UTF-8, or is valid
+    // UTF-8 but carries no BEGIN-CERTIFICATE marker at all.
+    let is_pem = std::str::from_utf8(bytes)
+        .map(|s| s.contains("-----BEGIN CERTIFICATE-----"))
+        .unwrap_or(false);
 
     let mut parsed_certs = Vec::new();
-    if trimmed.starts_with("-----BEGIN CERTIFICATE-----") {
+    if is_pem {
         let mut reader = std::io::Cursor::new(bytes);
         for cert in rustls_pemfile::certs(&mut reader) {
             let cert_der = cert.map_err(|e| {

@@ -183,6 +183,37 @@ q8P9uhno9+zDMKKpnQ==\n\
         let build = build_tls_config(mode);
         assert!(matches!(build, Err(KeError::TrustBackendUnavailable(_))));
     }
+
+    #[test]
+    fn build_tls_config_custom_pem_with_pkcs7_preamble_succeeds() {
+        // PKCS7-style preamble as `openssl pkcs7 -print_certs` would
+        // emit it: attribute lines before the first BEGIN marker.
+        // `rustls_pemfile` ignores bytes before the first recognised
+        // PEM section, so detection only needs to notice the BEGIN
+        // marker is present anywhere in the input — not at the start.
+        let pem_with_preamble = format!(
+            "subject=CN = localhost\nissuer=CN = localhost\n{}",
+            TEST_CERT_PEM,
+        );
+        let mode = KeTrustMode::Custom(std::sync::Arc::from(pem_with_preamble.as_bytes()));
+        let build = build_tls_config(mode).expect("custom PEM-with-preamble config builds");
+        assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
+        assert_eq!(build.initial_backend, KeTrustBackend::Custom);
+    }
+
+    #[test]
+    fn build_tls_config_custom_pem_with_bag_attributes_preamble_succeeds() {
+        // OpenSSL-style "Bag Attributes" preamble (common in PKCS12
+        // exports), same shape as the PKCS7 case above.
+        let pem_with_preamble = format!(
+            "Bag Attributes\n    friendlyName: localhost\n    localKeyID: 01 02 03 04\n{}",
+            TEST_CERT_PEM,
+        );
+        let mode = KeTrustMode::Custom(std::sync::Arc::from(pem_with_preamble.as_bytes()));
+        let build = build_tls_config(mode).expect("custom PEM-with-bag-attrs config builds");
+        assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
+        assert_eq!(build.initial_backend, KeTrustBackend::Custom);
+    }
 }
 
 mod request_build {
