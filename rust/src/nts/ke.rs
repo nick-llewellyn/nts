@@ -199,6 +199,8 @@ pub enum KeTrustMode {
     /// surfaces as [`KeError::TrustBackendUnavailable`] rather than
     /// downgrading to the static bundle.
     PlatformOnly,
+    /// Webpki-roots static bundle only; no platform-store consultation at all.
+    BundledOnly,
 }
 
 /// Trust-anchor backend that authenticated this handshake's TLS chain.
@@ -1024,6 +1026,16 @@ pub(crate) fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild
 
 #[cfg(target_os = "android")]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+    if trust_mode == KeTrustMode::BundledOnly {
+        let mut cfg = build_with_webpki_roots()
+            .map_err(|e| KeError::TrustBackendUnavailable(e.to_string()))?;
+        cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+        return Ok(TlsConfigBuild {
+            config: Arc::new(cfg),
+            initial_backend: KeTrustBackend::WebpkiRoots,
+            hybrid: None,
+        });
+    }
     match build_with_native_verifier_android(trust_mode) {
         Ok((mut cfg, hybrid)) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
@@ -1044,12 +1056,22 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
                     hybrid: None,
                 })
             }
+            KeTrustMode::BundledOnly => unreachable!(),
         },
     }
 }
 
 #[cfg(not(target_os = "android"))]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+    if trust_mode == KeTrustMode::BundledOnly {
+        let mut cfg = build_with_webpki_roots()
+            .map_err(|e| KeError::TrustBackendUnavailable(e.to_string()))?;
+        cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+        return Ok(TlsConfigBuild {
+            config: Arc::new(cfg),
+            initial_backend: KeTrustBackend::WebpkiRoots,
+        });
+    }
     match build_with_native_verifier() {
         Ok(mut cfg) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
@@ -1068,6 +1090,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
                     initial_backend: KeTrustBackend::WebpkiRoots,
                 })
             }
+            KeTrustMode::BundledOnly => unreachable!(),
         },
     }
 }

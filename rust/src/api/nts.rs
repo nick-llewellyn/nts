@@ -471,6 +471,8 @@ pub enum TrustMode {
     ///    (the historic default), where both fallback arms continue
     ///    to fire as in 3.0.x.
     PlatformOnly,
+    /// Webpki-roots static bundle only; no platform-store consultation at all.
+    BundledOnly,
 }
 
 impl From<TrustMode> for crate::nts::ke::KeTrustMode {
@@ -478,6 +480,7 @@ impl From<TrustMode> for crate::nts::ke::KeTrustMode {
         match m {
             TrustMode::PlatformWithFallback => Self::PlatformWithFallback,
             TrustMode::PlatformOnly => Self::PlatformOnly,
+            TrustMode::BundledOnly => Self::BundledOnly,
         }
     }
 }

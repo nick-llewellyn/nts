@@ -1326,6 +1326,13 @@ void main() {
       },
     );
 
+    test('trustMode override routes through withTrustMode for bundledOnly', () {
+      NtsClient(trustMode: TrustMode.bundledOnly);
+      expect(api.clientNewCalls, 0);
+      expect(api.clientWithTrustModeCalls, 1);
+      expect(api.lastClientWithTrustModeMode, ffi.TrustMode.bundledOnly);
+    });
+
     test('trustMode override delegates to the default factory when '
         'platformWithFallback is requested', () {
       NtsClient(trustMode: TrustMode.platformWithFallback);
@@ -1338,8 +1345,10 @@ void main() {
     test('client.trustMode getter round-trips the construction choice', () {
       final c1 = NtsClient();
       final c2 = NtsClient(trustMode: TrustMode.platformOnly);
+      final c3 = NtsClient(trustMode: TrustMode.bundledOnly);
       expect(c1.trustMode, TrustMode.platformWithFallback);
       expect(c2.trustMode, TrustMode.platformOnly);
+      expect(c3.trustMode, TrustMode.bundledOnly);
     });
   });
 
