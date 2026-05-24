@@ -5,7 +5,9 @@
 ### Added
 
 - `TrustMode.custom` alongside `customRoots` list of bytes (PEM or DER format)
-  to trust only caller-supplied custom root certificates.
+  to trust only caller-supplied custom root certificates. This allows consumers to
+  authenticate TLS connections in private environments or using custom/enterprise CAs
+  without relying on the global platform store or other clients.
 - Plumbed a fourth trust telemetry counter (`custom`) to trace custom-roots handshakes.
 - Validates constructor parameters of `NtsClient` synchronously.
 
@@ -15,9 +17,9 @@
 
 - `TrustMode.bundledOnly` validates exclusively against the
   bundled `webpki-roots` set. No platform-store consultation, no
-  silent fallback. Use when the consumer's authentication contract
-  requires a library-controlled trust anchor (see
-  `trusted_time-m8t` for the motivating consumer).
+  silent fallback. This allows consumers to enforce strict validation against the
+  library's static bundle, preventing platform-level CA compromises or middlebox/decryption
+  proxies from intercepting the exchange.
 
 ## 5.0.0
 
