@@ -1027,11 +1027,8 @@ pub(crate) fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild
 #[cfg(target_os = "android")]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
     if trust_mode == KeTrustMode::BundledOnly {
-        let mut cfg = build_with_webpki_roots()
-            .map_err(|e| KeError::TrustBackendUnavailable(e.to_string()))?;
-        cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
         return Ok(TlsConfigBuild {
-            config: Arc::new(cfg),
+            config: Arc::new(build_webpki_only_config()?),
             initial_backend: KeTrustBackend::WebpkiRoots,
             hybrid: None,
         });
@@ -1064,11 +1061,8 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
 #[cfg(not(target_os = "android"))]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
     if trust_mode == KeTrustMode::BundledOnly {
-        let mut cfg = build_with_webpki_roots()
-            .map_err(|e| KeError::TrustBackendUnavailable(e.to_string()))?;
-        cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
         return Ok(TlsConfigBuild {
-            config: Arc::new(cfg),
+            config: Arc::new(build_webpki_only_config()?),
             initial_backend: KeTrustBackend::WebpkiRoots,
         });
     }
@@ -1133,6 +1127,13 @@ fn build_with_native_verifier() -> Result<ClientConfig, rustls::Error> {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth())
+}
+
+fn build_webpki_only_config() -> Result<ClientConfig, KeError> {
+    let mut cfg = build_with_webpki_roots()
+        .map_err(|e| KeError::TrustBackendUnavailable(e.to_string()))?;
+    cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+    Ok(cfg)
 }
 
 fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {

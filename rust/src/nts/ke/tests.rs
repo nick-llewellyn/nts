@@ -71,11 +71,12 @@ mod tls_config {
     }
 
     #[test]
-    fn build_tls_config_bundled_only_matches_webpki_fallback() {
+    fn build_tls_config_bundled_only_matches_webpki_only_protocol_options() {
         let build_bundled = build_tls_config(KeTrustMode::BundledOnly).expect("config builds");
-        let mut expected_cfg = build_with_webpki_roots().expect("webpki config builds");
-        expected_cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
+        let expected_cfg = build_webpki_only_config().expect("webpki config builds");
         assert_eq!(build_bundled.config.alpn_protocols, expected_cfg.alpn_protocols);
+        assert_eq!(build_bundled.config.enable_early_data, expected_cfg.enable_early_data);
+        assert_eq!(build_bundled.config.enable_sni, expected_cfg.enable_sni);
     }
 }
 
