@@ -8,7 +8,7 @@ DoltHub (`nick-llewellyn/nts` on dolthub.com) is the **authoritative** store
 for Beads issues. The `bd dolt push` step in the auto-generated "Session
 Completion" block below is a no-op without a configured remote — this section
 replaces that shorthand with the full ordering required now that the remote
-exists. `.beads/issues.jsonl` remains tracked in git as a secondary mirror.
+exists.
 
 Fresh-clone prerequisite (one-time per clone, not committed):
 ```bash
@@ -25,12 +25,9 @@ bd init   # automatically configures the DoltHub remote via sync.git-remote
    with `bd dolt status` before proceeding.
 3. `bd dolt push --remote origin` — **blocking requirement**. Work is not
    complete until this succeeds. A failed push means the session's issue
-   changes are not on DoltHub; the JSONL mirror in the upcoming PR would then
-   be the only durable record, violating the "DoltHub is authoritative"
-   invariant. Fix auth / connectivity and retry until it succeeds.
-4. Commit and push the code branch (including the `.beads/issues.jsonl` diff)
-   via the standard Pull Request workflow. The JSONL mirror still bundles with
-   every code PR — do NOT open a `.beads/`-only PR.
+   changes are not on DoltHub; fix auth / connectivity and retry until it
+   succeeds.
+4. Commit and push the code branch via the standard Pull Request workflow.
 
 ```bash
 # Full push sequence
