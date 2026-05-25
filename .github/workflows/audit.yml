@@ -64,7 +64,7 @@ jobs:
             echo "<details><summary>Raw output</summary>" >> audit-summary.md
             echo "" >> audit-summary.md
             echo "\`\`\`" >> audit-summary.md
-            cat audit.json 2>/dev/null || echo "(no output)" >> audit-summary.md
+            { cat audit.json 2>/dev/null || echo "(no output)"; } >> audit-summary.md
             echo "\`\`\`" >> audit-summary.md
             echo "</details>" >> audit-summary.md
           else
