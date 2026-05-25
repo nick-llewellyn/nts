@@ -429,7 +429,6 @@ git pull --rebase
 bd dolt pull
 # resolve any bd dolt status conflicts here
 bd dolt push --remote origin          # MUST succeed before opening the PR
-bd dolt push                          # alias kept for muscle memory; same target
 git push -u origin HEAD
 gh pr create --fill
 git status  # MUST show "up to date with origin"

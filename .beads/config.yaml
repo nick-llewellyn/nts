@@ -48,13 +48,12 @@ backup:
                     # rule in AGENTS.md. DoltHub is the authoritative issue store.
 
 # DoltHub remote (nick-llewellyn/nts)
-# Auth:        Dolt Credentials (key-based). Use `dolt login` or add your
-#              public key at https://www.dolthub.com/settings/credentials
-# This remote is automatically configured on `bd init` via `sync.git-remote`.
+# This setting allows `bd init` to automatically configure the remote on fresh clones.
+# Auth: Dolt Credentials (key-based).
 sync:
   git-remote: "https://doltremoteapi.dolthub.com/nick-llewellyn/nts"
 
-# Integration settings (access with 'bd config get/set')
+# External Integration Settings (access with 'bd config get/set')
 # These are stored in the database, not in this file:
 # - jira.url
 # - jira.project

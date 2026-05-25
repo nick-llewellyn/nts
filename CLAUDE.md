@@ -30,8 +30,7 @@ bd init   # automatically configures the DoltHub remote via sync.git-remote
    invariant. Fix auth / connectivity and retry until it succeeds.
 4. Commit and push the code branch (including the `.beads/issues.jsonl` diff)
    via the standard Pull Request workflow. The JSONL mirror still bundles with
-   every code PR per the "Beads metadata sync" rule below — do NOT open a
-   `.beads/`-only PR.
+   every code PR — do NOT open a `.beads/`-only PR.
 
 ```bash
 # Full push sequence
