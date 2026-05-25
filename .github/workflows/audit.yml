@@ -52,24 +52,41 @@ jobs:
           echo "### 🦀 Cargo Audit Report" > audit-summary.md
           echo "" >> audit-summary.md
 
-          VULN_COUNT=$(jq '.vulnerabilities.count' audit.json)
-          if [ "$VULN_COUNT" -eq "0" ]; then
-            echo "✅ No vulnerabilities found." >> audit-summary.md
-          else
-            echo "⚠️ Found $VULN_COUNT vulnerability/vulnerabilities." >> audit-summary.md
+          # Guard against an empty or malformed audit.json (e.g. advisory DB
+          # fetch failure, I/O error).  jq will exit non-zero if the file is
+          # not valid JSON, and bash -e would abort the step, preventing the
+          # sticky comment from being posted.
+          if ! jq empty audit.json 2>/dev/null; then
+            echo "⚠️ Could not parse audit output — \`cargo audit\` may have" >> audit-summary.md
+            echo "failed for a reason unrelated to vulnerabilities (e.g. advisory" >> audit-summary.md
+            echo "DB fetch error). Raw output:" >> audit-summary.md
             echo "" >> audit-summary.md
-            echo "| Package | Version | Advisory | Title |" >> audit-summary.md
-            echo "| --- | --- | --- | --- |" >> audit-summary.md
-            jq -r '.vulnerabilities.list[] | "| \(.package.name) | \(.package.version) | [\(.advisory.id)](\(.advisory.url)) | \(.advisory.title) |"' audit.json >> audit-summary.md
-          fi
+            echo "<details><summary>Raw output</summary>" >> audit-summary.md
+            echo "" >> audit-summary.md
+            echo "\`\`\`" >> audit-summary.md
+            cat audit.json 2>/dev/null || echo "(no output)" >> audit-summary.md
+            echo "\`\`\`" >> audit-summary.md
+            echo "</details>" >> audit-summary.md
+          else
+            VULN_COUNT=$(jq '.vulnerabilities.count' audit.json)
+            if [ "$VULN_COUNT" -eq "0" ]; then
+              echo "✅ No vulnerabilities found." >> audit-summary.md
+            else
+              echo "⚠️ Found $VULN_COUNT vulnerability/vulnerabilities." >> audit-summary.md
+              echo "" >> audit-summary.md
+              echo "| Package | Version | Advisory | Title |" >> audit-summary.md
+              echo "| --- | --- | --- | --- |" >> audit-summary.md
+              jq -r '.vulnerabilities.list[] | "| \(.package.name) | \(.package.version) | [\(.advisory.id)](\(.advisory.url)) | \(.advisory.title) |"' audit.json >> audit-summary.md
+            fi
 
-          echo "" >> audit-summary.md
-          echo "<details><summary>Full JSON Output</summary>" >> audit-summary.md
-          echo "" >> audit-summary.md
-          echo "\`\`\`json" >> audit-summary.md
-          cat audit.json >> audit-summary.md
-          echo "\`\`\`" >> audit-summary.md
-          echo "</details>" >> audit-summary.md
+            echo "" >> audit-summary.md
+            echo "<details><summary>Full JSON Output</summary>" >> audit-summary.md
+            echo "" >> audit-summary.md
+            echo "\`\`\`json" >> audit-summary.md
+            cat audit.json >> audit-summary.md
+            echo "\`\`\`" >> audit-summary.md
+            echo "</details>" >> audit-summary.md
+          fi
         working-directory: rust
 
       - name: Sticky Comment
