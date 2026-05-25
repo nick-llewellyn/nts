@@ -104,6 +104,7 @@ Future<void> main(List<String> args) async {
   _lintIgnorePatches.forEach(_addLintsToIgnoreForFile);
   _patchFrbGeneratedUnimplementedMessages();
   _patchDartFrbGeneratedUnimplementedMessages();
+  _patchDartFrbGeneratedDcoUnreachableMessages();
 
   // Format the regenerated Dart so the diff check below catches semantic
   // drift only -- not formatter noise that CI's `dart format` step would
@@ -401,5 +402,43 @@ void _patchDartFrbGeneratedUnimplementedMessages() {
   stdout.writeln(
     "Patched $path: replaced $replaced empty UnimplementedError('') "
     'arm(s) with diagnostic-bearing form',
+  );
+}
+
+// Patches the FRB-generated Dart file to include the unexpected enum variant
+// tag in the `Exception("unreachable")` thrown by each DCO codec default arm.
+// FRB emits `throw Exception("unreachable");` for these arms; the patched form
+// includes `${raw[0]}` (the tag local in scope at every DCO default arm site
+// for tagged-variant decoders) so callers can diagnose which wire tag
+// triggered the error. Symmetric to the SSE-codec patcher above, but matches
+// the DCO codec's exception type and tag-access shape.
+//
+// Idempotent: the pattern only matches the FRB-emitted bare-"unreachable" form,
+// so running the patcher twice in a row is a no-op on the second run.
+void _patchDartFrbGeneratedDcoUnreachableMessages() {
+  const path = 'lib/src/ffi/frb_generated.dart';
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln(
+      '$_errorPrefix expected generated file not found: $path '
+      '(post-codegen Dart FRB-DCO-unreachable patch cannot be applied)',
+    );
+    exit(1);
+  }
+  const needle = 'throw Exception("unreachable");';
+  const replacement =
+      'throw Exception(\n'
+      "          'flutter_rust_bridge generated codec: "
+      "unexpected enum variant tag in DCO wire format: \${raw[0]}',\n"
+      '        );';
+  final original = file.readAsStringSync();
+  if (!original.contains(needle)) return;
+  final patched = original.replaceAll(needle, replacement);
+  final replaced =
+      needle.allMatches(original).length - needle.allMatches(patched).length;
+  file.writeAsStringSync(patched);
+  stdout.writeln(
+    'Patched $path: replaced $replaced `Exception("unreachable")` '
+    'DCO arm(s) with diagnostic-bearing form',
   );
 }

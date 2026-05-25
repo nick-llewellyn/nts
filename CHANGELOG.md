@@ -23,12 +23,16 @@
   decode the `Custom` variant's payload (`Uint8List field0`) via the
   SSE codec.
 - `tool/check_bindings.dart` now post-processes the FRB-generated
-  `rust/src/frb_generated.rs` to replace `unimplemented!("")` arms (FRB
-  2.12's defensive `#[non_exhaustive]` catch-all in SSE codec impls) with
-  a fixed diagnostic message, so any unexpected panic in generated codec
-  code is greppable back to its FRB origin without changing the runtime
-  semantics (still `unimplemented!`, still unreachable for exhaustive
-  enums in practice).
+  `rust/src/frb_generated.rs` and `lib/src/ffi/frb_generated.dart` to
+  replace the empty diagnostic arms FRB 2.12 emits as the defensive
+  `#[non_exhaustive]` catch-all in its generated codec impls
+  (`unimplemented!("")` in the Rust SSE codec, `UnimplementedError('')`
+  in the Dart SSE codec, `Exception("unreachable")` in the Dart DCO
+  codec) with diagnostic-bearing forms that include the unexpected
+  wire-format tag value. Runtime semantics are unchanged (the arms
+  remain unreachable for exhaustive enums in practice), but any
+  unexpected panic in generated codec code is now greppable back to its
+  FRB origin and identifies which tag triggered it.
 - `build_with_custom_roots` now accepts PEM bundles whose first
   `-----BEGIN CERTIFICATE-----` marker is preceded by an attribute
   preamble (`Bag Attributes` / `subject=` / `issuer=` lines that

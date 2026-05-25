@@ -13,17 +13,17 @@
 //!    overwrite-on-store event marker, not a steady-state signal: a
 //!    failed `build_with_native_verifier` later in the process latches
 //!    `WebpkiRoots` permanently until the next `Platform` success, so
-//!    consumers that want trend visibility should read the three
+//!    consumers that want trend visibility should read the four
 //!    cumulative counters in (2) rather than this field.
 //!
-//! 2. Three cumulative counters — one per [`InternalTrustBackend`]
+//! 2. Four cumulative counters — one per [`InternalTrustBackend`]
 //!    variant — bumped on every `record_default_backend` call. A
-//!    dashboard can render `"P platform / H hybrid / W webpki of
-//!    P+H+W total singleton handshakes"` without losing history when
-//!    one backend transiently overrides another. The per-counter
-//!    monotonicity contract matches the hybrid-fallback counter in
-//!    (5); the three counters never decrease and never reset within
-//!    a process lifetime.
+//!    dashboard can render `"P platform / H hybrid / W webpki / C
+//!    custom of P+H+W+C total singleton handshakes"` without losing
+//!    history when one backend transiently overrides another. The
+//!    per-counter monotonicity contract matches the hybrid-fallback
+//!    counter in (5); the four counters never decrease and never reset
+//!    within a process lifetime.
 //!
 //! 3. Whether `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
 //!    invoked at least once and reported success on Android. The flag
@@ -50,7 +50,7 @@
 //! cross-counter invariants within a single snapshot do not — e.g.
 //! the snapshot can observe a hybrid-fallback bump that happened
 //! slightly after the default-backend store the same handshake
-//! produced, or one of the three per-backend counters can be observed
+//! produced, or one of the four per-backend counters can be observed
 //! to have bumped while `default_backend` still reads its prior value.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -252,9 +252,9 @@ mod tests {
 
     /// Each call to `record_default_backend` bumps exactly the counter
     /// matching the variant being stored, and never any of the other
-    /// two. This is the trend-visibility guarantee documented on
+    /// three. This is the trend-visibility guarantee documented on
     /// `NtsTrustStatus::default_backend_*_count`: a dashboard reading
-    /// the three numbers can attribute every singleton handshake to
+    /// the four numbers can attribute every singleton handshake to
     /// the backend that resolved it, even after subsequent handshakes
     /// overwrite the `default_backend` pointer.
     #[test]
@@ -289,7 +289,7 @@ mod tests {
 
     /// The per-backend counters are cumulative and monotonic: repeated
     /// stores of the same variant keep incrementing, and switching
-    /// variants does not reset any counter. The sum across the three
+    /// variants does not reset any counter. The sum across the four
     /// equals the total number of `record_default_backend` calls.
     #[test]
     fn record_default_backend_counters_are_cumulative_and_monotonic() {

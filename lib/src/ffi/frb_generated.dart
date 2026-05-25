@@ -672,7 +672,9 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       case 8:
         return NtsError_Internal(dco_decode_String(raw[1]));
       default:
-        throw Exception("unreachable");
+        throw Exception(
+          'flutter_rust_bridge generated codec: unexpected enum variant tag in DCO wire format: ${raw[0]}',
+        );
     }
   }
 
@@ -780,7 +782,9 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       case 3:
         return TrustMode_Custom(dco_decode_list_prim_u_8_strict(raw[1]));
       default:
-        throw Exception("unreachable");
+        throw Exception(
+          'flutter_rust_bridge generated codec: unexpected enum variant tag in DCO wire format: ${raw[0]}',
+        );
     }
   }
 
