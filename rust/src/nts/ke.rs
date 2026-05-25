@@ -1210,7 +1210,7 @@ fn build_with_custom_roots(bytes: &[u8]) -> Result<ClientConfig, KeError> {
 
     let mut parsed_certs = Vec::new();
     if is_pem {
-        let mut reader = std::io::Cursor::new(bytes);
+        let mut reader = std::io::BufReader::new(bytes);
         for cert in rustls_pemfile::certs(&mut reader) {
             let cert_der = cert.map_err(|e| {
                 KeError::TrustBackendUnavailable(format!("Failed to parse PEM certificate: {}", e))
