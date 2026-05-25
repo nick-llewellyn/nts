@@ -186,7 +186,15 @@ String _readRustPinnedFrbVersion() {
     exit(1);
   }
   // Match `flutter_rust_bridge = "=2.12.0"` or `flutter_rust_bridge = "2.12.0"`.
-  // Intentionally strict on the package name and spacing.
+  // Strict on the dependency key/value shape (anchored to a line that starts
+  // with the bare `flutter_rust_bridge` key, a single `=` separator, and a
+  // double-quoted version literal with an optional leading `=` cargo-pin
+  // marker); whitespace around the `=` is intentionally flexible because
+  // `cargo add` / `cargo edit` and various TOML formatters disagree on
+  // whether to surround the assignment with a single space. The version
+  // literal itself is digits-and-dots only, so SemVer pre-release / build
+  // metadata suffixes would not match and would fail loudly here rather
+  // than slip past as a partial match.
   final pattern = RegExp(
     r'^flutter_rust_bridge\s*=\s*"=?([\d.]+)"',
     multiLine: true,
