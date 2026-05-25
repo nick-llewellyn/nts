@@ -27,7 +27,14 @@ String get _errorPrefix => Platform.environment.containsKey('GITHUB_ACTIONS')
     : 'error: ';
 
 Future<void> main(List<String> args) async {
+  // Enforce running from the repo root so we find the docs.
+  if (!File('pubspec.yaml').existsSync()) {
+    stderr.writeln('${_errorPrefix}Script must be run from the repository root.');
+    exit(1);
+  }
+
   var totalErrors = 0;
+  var filesFound = 0;
   final dir = Directory(_snippetDir);
   if (dir.existsSync()) {
     dir.deleteSync(recursive: true);
@@ -41,11 +48,13 @@ Future<void> main(List<String> args) async {
         stdout.writeln('Skipping missing file: $fileName');
         continue;
       }
+      filesFound++;
 
       // Normalize CRLF so the regex matches on Windows checkouts too.
       final content = file.readAsStringSync().replaceAll('\r\n', '\n');
-      final dartBlocks =
-          RegExp(r'```dart\s*\n(.*?)\n```', dotAll: true).allMatches(content);
+      final dartBlocks = RegExp(r'```dart\s*\n(.*?)\n```', dotAll: true)
+          .allMatches(content)
+          .toList();
 
       if (dartBlocks.isEmpty) {
         stdout.writeln('No Dart snippets found in $fileName');
@@ -102,6 +111,11 @@ Future<void> main(List<String> args) async {
     } else {
       stdout.writeln('Temp files preserved at ${dir.path} for debugging.');
     }
+  }
+
+  if (filesFound == 0) {
+    stderr.writeln('${_errorPrefix}No documentation files found to scan.');
+    exit(1);
   }
 
   if (totalErrors > 0) {
