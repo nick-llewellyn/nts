@@ -19,12 +19,17 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   audit:
     name: Audit Rust dependencies
     runs-on: ubuntu-latest
+    # pull-requests: write is scoped to this job (not the whole workflow)
+    # because only the sticky-comment step needs it; push events and
+    # scheduled runs don't post comments at all.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -39,7 +44,10 @@ jobs:
         run: |
           # The audit action installs cargo-audit, so it's available here.
           # We run it again with --json to capture the full report for the comment.
-          cargo audit --json > audit.json
+          # `|| true` prevents bash -e from aborting this step on a non-zero exit
+          # (cargo-audit exits 1 when vulnerabilities are found), so the summary
+          # is always generated and the sticky comment is always posted.
+          cargo audit --json > audit.json || true
 
           echo "### 🦀 Cargo Audit Report" > audit-summary.md
           echo "" >> audit-summary.md
