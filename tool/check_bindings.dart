@@ -160,8 +160,12 @@ String _readPinnedFrbVersion() {
     exit(1);
   }
   // Match `  flutter_rust_bridge: 2.12.0` (indented under `dependencies:`,
-  // no version range, no quotes). Intentionally strict to fail loudly if the
-  // pin format ever changes.
+  // no version range, no quotes). Strict on the key name and line-anchored
+  // indentation; whitespace after the colon is intentionally flexible to
+  // tolerate `pub add` / YAML-formatter disagreement on the single-space
+  // convention. The version literal is digits-and-dots only, so any complex
+  // range or suffix would fail loudly here rather than slip past as a
+  // partial match.
   final pattern = RegExp(
     r'^\s+flutter_rust_bridge:\s*([\d.]+)\s*$',
     multiLine: true,
