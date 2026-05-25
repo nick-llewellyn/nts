@@ -1,15 +1,31 @@
 # Changelog
 
-## 5.2.0
+## 5.1.0
 
 ### Added
 
+- `TrustMode.bundledOnly` validates exclusively against the
+  bundled `webpki-roots` set. No platform-store consultation, no
+  silent fallback. This allows consumers to enforce strict validation against the
+  library's static bundle, preventing platform-level CA compromises or middlebox/decryption
+  proxies from intercepting the exchange.
 - `TrustMode.custom` alongside `customRoots` list of bytes (PEM or DER format)
   to trust only caller-supplied custom root certificates. This allows consumers to
   authenticate TLS connections in private environments or using custom/enterprise CAs
   without relying on the global platform store or other clients.
 - Plumbed a fourth trust telemetry counter (`custom`) to trace custom-roots handshakes.
 - Validates constructor parameters of `NtsClient` synchronously.
+
+### Documentation
+
+- Expanded `TrustMode` API documentation to detail the security trade-offs of
+  each variant — in particular the exposure of `platformWithFallback` to
+  TLS-inspection appliances that inject a corporate CA into the platform store,
+  which can undermine the AEAD-integrity guarantee NTS derives from TLS keying
+  material. High-security callers are now guided toward
+  `NtsClient(trustMode: TrustMode.bundledOnly)` in the API doc, `README.md`
+  Security Considerations section, and the `ARCHITECTURE.md` trust-anchor
+  reference.
 
 ### Internal
 
@@ -48,16 +64,6 @@
   shape. Adding a future `KeTrustMode` variant will now force a
   compile-time decision at this site rather than silently
   inheriting the `PlatformWithFallback` arm.
-
-## 5.1.0
-
-### Added
-
-- `TrustMode.bundledOnly` validates exclusively against the
-  bundled `webpki-roots` set. No platform-store consultation, no
-  silent fallback. This allows consumers to enforce strict validation against the
-  library's static bundle, preventing platform-level CA compromises or middlebox/decryption
-  proxies from intercepting the exchange.
 
 ## 5.0.0
 

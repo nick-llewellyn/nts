@@ -435,14 +435,19 @@ The three resolutions (`TrustBackend`):
   roots; works against the major public NTS providers but not
   against corporate TLS-inspection appliances.
 
-The two trust-mode policies (`TrustMode`, set at `NtsClient`
+The four trust-mode policies (`TrustMode`, set at `NtsClient`
 construction):
 
 - **`platformWithFallback`** (default) — pre-3.0 behaviour. If
   `build_with_native_verifier` fails at TLS-config construction,
   fall back silently to the `webpki-roots` static bundle and
   surface the resolution as `TrustBackend::webpkiRoots` on the
-  next handshake. No new error variant is reachable.
+  next handshake. No new error variant is reachable. Appropriate
+  for the broadest connectivity, including corporate/MDM networks
+  where the platform store contains privately-installed roots.
+  **Security note:** the platform store is also the vector through
+  which TLS-inspection appliances present intercepting
+  certificates; see the trust-anchor selection guidance below.
 - **`platformOnly`** — refuses the silent fallback. If
   `build_with_native_verifier` fails at TLS-config construction,
   the handshake is aborted with `NtsError::TrustBackendUnavailable`
@@ -452,7 +457,33 @@ construction):
   would defeat the deployment intent. The Android hybrid-fallback
   path inside `HybridVerifier` is **not** affected by `TrustMode`:
   it is a per-chain, per-failure-shape decision made after the
-  platform verifier returns, not a build-time fallback.
+  platform verifier returns, not a build-time fallback. Like
+  `platformWithFallback`, this mode consults the platform store
+  and is therefore exposed to TLS-inspection CAs.
+- **`bundledOnly`** — bypasses the platform store entirely. TLS
+  chain validation runs exclusively against the `webpki-roots`
+  static bundle compiled into the library. No platform-store
+  consultation and no silent fallback. Because the anchor set is
+  fixed at library build time and does not include any CA an MDM
+  profile or policy may have installed, a TLS-inspection appliance
+  cannot present a certificate this client will accept. Use this
+  mode when end-to-end NTS-KE integrity against middlebox
+  inspection is a hard requirement. The trade-off is that
+  `bundledOnly` will reject certificates from private or enterprise
+  CAs; use `custom` for those deployments.
+- **`custom`** — validates exclusively against a caller-supplied
+  root bundle (PEM or DER bytes passed as `customRoots` on the
+  `NtsClient` constructor). No platform-store or bundled-roots
+  consultation. Appropriate for on-premise or private-CA
+  deployments. Like `bundledOnly`, the anchor set is fully
+  caller-controlled, so a TLS-inspection appliance without the
+  matching private key cannot intercept the exchange.
+
+**Trust-anchor selection guidance:** prefer `platformWithFallback`
+for general-purpose use; switch to `bundledOnly` when the threat
+model requires protection against TLS-inspection middleboxes; use
+`custom` when the NTS server presents a certificate from a private
+CA that is not in `webpki-roots`.
 
 Per-handshake reporting:
 

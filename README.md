@@ -271,6 +271,45 @@ section) bounds the *amplification* exposure of a saturated
 hostname-resolution path, but does not gate *destinations* — that
 gate is the caller's responsibility.
 
+### Trust-anchor selection
+
+The default `TrustMode.platformWithFallback` consults the platform
+trust store, which is the right choice for the broadest
+connectivity: it honours corporate CAs, MDM-installed roots, and
+user-added certificates, so the client works out of the box on
+managed devices and private networks.
+
+The security trade-off is that platform-managed stores on corporate
+or MDM-managed devices often include an inspection CA installed by
+policy. An appliance holding a certificate signed by that CA can
+complete a man-in-the-middle NTS-KE handshake and derive the same
+AEAD keying material the client derives. Because NTS authenticates
+time responses using those keys, a middlebox with a platform-trusted
+cert can forge NTPv4 replies that the client accepts as authentic.
+
+If your threat model requires end-to-end integrity against TLS
+inspection, construct the client explicitly with
+`TrustMode.bundledOnly`:
+
+```dart
+final client = NtsClient(
+  server: NtsServer.fromHostPort('time.cloudflare.com'),
+  trustMode: TrustMode.bundledOnly,
+);
+```
+
+`bundledOnly` limits trust anchors to the library's static
+`webpki-roots` bundle. An inspection appliance cannot present a
+certificate this client will accept, because the bundle contains
+only public CAs and no CA injected via MDM or policy. The
+trade-off is that `bundledOnly` will reject certificates from
+private or enterprise CAs, so it is unsuitable for NTS servers
+that present private-CA-issued certificates. For those deployments,
+use `TrustMode.custom` with the relevant root bundle supplied via
+`customRoots`. See the `TrustMode` API documentation and
+[ARCHITECTURE.md](ARCHITECTURE.md#trust-anchor-diagnostics) for the
+full decision matrix.
+
 ### Non-Flutter Dart callers must pass `externalLibrary` explicitly
 
 The FRB-generated default loader
