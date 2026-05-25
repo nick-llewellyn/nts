@@ -28,7 +28,7 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 
 /// Snapshot the process-global trust-anchor diagnostic state.
 ///
-/// Returns six observables that callers cannot recover from a
+/// Returns seven observables that callers cannot recover from a
 /// per-query [`NtsTimeSample`] alone:
 ///
 /// 1. `default_client_backend` — backend the *default singleton*
@@ -38,7 +38,7 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 ///    started, or all queries so far went through caller-minted
 ///    clients). This is an overwrite-on-store event marker, not a
 ///    steady-state signal: callers that want trend visibility
-///    should read the three counters in (2)–(4) instead, since a
+///    should read the four counters in (2)–(5) instead, since a
 ///    transient `WebpkiRoots`-resolving handshake will latch this
 ///    field permanently until the next `Platform`-resolving one.
 ///    Custom-client callers should read the per-handshake
@@ -53,22 +53,24 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 ///    non-Android platforms (the fallback path only exists on Android).
 /// 4. `default_backend_webpki_count` — cumulative count of
 ///    singleton handshakes that resolved to [`TrustBackend::WebpkiRoots`].
-/// 5. `android_platform_init_succeeded` — `true` iff
+/// 5. `default_backend_custom_count` — cumulative count of
+///    singleton handshakes that resolved to [`TrustBackend::Custom`].
+/// 6. `android_platform_init_succeeded` — `true` iff
 ///    `com.nllewellyn.nts.PlatformInit.nativeInit` reported success
 ///    at least once. `false` on every other platform. A `false` value
 ///    on Android implies subsequent handshakes will run against the
 ///    `webpki-roots` static bundle regardless of [`TrustMode`].
-/// 6. `android_hybrid_fallback_count` — cumulative count of TLS
+/// 7. `android_hybrid_fallback_count` — cumulative count of TLS
 ///    chains the Android `HybridVerifier` has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
 ///    platforms. The curated fallback-eligible failure shapes are
 ///    documented on the `HybridVerifier` Rust source.
 ///
-/// Reads six atomics with `Relaxed` ordering. The snapshot is
+/// Reads seven atomics with `Relaxed` ordering. The snapshot is
 /// intended for human / dashboard consumption, not for cross-thread
 /// synchronisation; per-counter monotonicity holds, but cross-counter
 /// invariants within a single snapshot do not — e.g. the sum of the
-/// three `default_backend_*_count` fields can be observed to lag the
+/// four `default_backend_*_count` fields can be observed to lag the
 /// `default_client_backend` pointer by a single store-pair across
 /// concurrent snapshots.
 ///
@@ -196,11 +198,12 @@ abstract class NtsClient implements RustOpaqueInterface {
   /// handle through their own configuration layer and need to
   /// re-derive the policy without keeping a parallel record.
   ///
-  /// The returned [`TrustMode::Custom`] re-materializes the roots
-  /// bundle as a `Vec<u8>` for the FRB wire shape, so this call is
-  /// O(bundle size). It is intended for diagnostics only; the
-  /// per-handshake hot path stays on the internal [`KeTrustMode`]
-  /// and never reaches this getter.
+  /// The returned `TrustMode::Custom` (`TrustMode.custom` on Dart)
+  /// re-materializes the roots bundle as a `Vec<u8>` for the FRB
+  /// wire shape, so this call is O(bundle size). It is intended
+  /// for diagnostics only; the per-handshake hot path stays on
+  /// the internal `KeTrustMode` (crate-internal) and never reaches
+  /// this getter.
   TrustMode trustMode();
 
   /// Per-client equivalent of the top-level `nts_warm_cookies`

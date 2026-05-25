@@ -340,7 +340,7 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
 
 /// Snapshot the process-global trust-anchor diagnostic state.
 ///
-/// Returns six observables that callers cannot recover from a
+/// Returns seven observables that callers cannot recover from a
 /// per-query [`NtsTimeSample`] alone:
 ///
 /// 1. `default_client_backend` — backend the *default singleton*
@@ -350,7 +350,7 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
 ///    started, or all queries so far went through caller-minted
 ///    clients). This is an overwrite-on-store event marker, not a
 ///    steady-state signal: callers that want trend visibility
-///    should read the three counters in (2)–(4) instead, since a
+///    should read the four counters in (2)–(5) instead, since a
 ///    transient `WebpkiRoots`-resolving handshake will latch this
 ///    field permanently until the next `Platform`-resolving one.
 ///    Custom-client callers should read the per-handshake
@@ -365,22 +365,24 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
 ///    non-Android platforms (the fallback path only exists on Android).
 /// 4. `default_backend_webpki_count` — cumulative count of
 ///    singleton handshakes that resolved to [`TrustBackend::WebpkiRoots`].
-/// 5. `android_platform_init_succeeded` — `true` iff
+/// 5. `default_backend_custom_count` — cumulative count of
+///    singleton handshakes that resolved to [`TrustBackend::Custom`].
+/// 6. `android_platform_init_succeeded` — `true` iff
 ///    `com.nllewellyn.nts.PlatformInit.nativeInit` reported success
 ///    at least once. `false` on every other platform. A `false` value
 ///    on Android implies subsequent handshakes will run against the
 ///    `webpki-roots` static bundle regardless of [`TrustMode`].
-/// 6. `android_hybrid_fallback_count` — cumulative count of TLS
+/// 7. `android_hybrid_fallback_count` — cumulative count of TLS
 ///    chains the Android `HybridVerifier` has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
 ///    platforms. The curated fallback-eligible failure shapes are
 ///    documented on the `HybridVerifier` Rust source.
 ///
-/// Reads six atomics with `Relaxed` ordering. The snapshot is
+/// Reads seven atomics with `Relaxed` ordering. The snapshot is
 /// intended for human / dashboard consumption, not for cross-thread
 /// synchronisation; per-counter monotonicity holds, but cross-counter
 /// invariants within a single snapshot do not — e.g. the sum of the
-/// three `default_backend_*_count` fields can be observed to lag the
+/// four `default_backend_*_count` fields can be observed to lag the
 /// `default_client_backend` pointer by a single store-pair across
 /// concurrent snapshots.
 ///
@@ -1267,16 +1269,18 @@ pub struct NtsClient {
     /// → `establish_session` → `KeRequest::trust_mode` →
     /// `build_tls_config`. New in 3.0.0.
     ///
-    /// Stored as the internal [`KeTrustMode`] (not the public
-    /// [`TrustMode`]) so the per-`query`/per-`warm_cookies` plumbing
-    /// clones a `KeTrustMode` — whose `Custom` variant holds the
-    /// roots bundle behind an `Arc<[u8]>` — instead of the public
-    /// `Vec<u8>` variant. Per-call cost is therefore O(1) atomic
-    /// refcount bump regardless of bundle size. The single
-    /// `Vec<u8>` → `Arc<[u8]>` materialization happens once, at
-    /// construction time, inside [`From<TrustMode> for KeTrustMode`].
-    /// The reverse conversion runs only when the public
-    /// [`NtsClient::trust_mode`] getter is called, which is a
+    /// Stored as the internal `KeTrustMode` (a crate-internal type
+    /// with no Dart-side counterpart, distinct from the public
+    /// `TrustMode` which is the wire-facing enum) so the per-`query`
+    /// / per-`warm_cookies` plumbing clones a `KeTrustMode`
+    /// — whose `Custom` variant holds the roots bundle behind an
+    /// `Arc<[u8]>` — instead of the public `Vec<u8>` variant.
+    /// Per-call cost is therefore O(1) atomic refcount bump
+    /// regardless of bundle size. The single `Vec<u8>` → `Arc<[u8]>`
+    /// materialization happens once, at construction time, inside
+    /// the `From<TrustMode> for KeTrustMode` impl. The reverse
+    /// conversion runs only when the public [`NtsClient::trust_mode`]
+    /// getter (`NtsClient.trustMode` on Dart) is called, which is a
     /// diagnostics path rather than a hot loop.
     trust_mode: KeTrustMode,
     /// `true` for the process-wide default singleton client returned
@@ -1339,11 +1343,12 @@ impl NtsClient {
     /// handle through their own configuration layer and need to
     /// re-derive the policy without keeping a parallel record.
     ///
-    /// The returned [`TrustMode::Custom`] re-materializes the roots
-    /// bundle as a `Vec<u8>` for the FRB wire shape, so this call is
-    /// O(bundle size). It is intended for diagnostics only; the
-    /// per-handshake hot path stays on the internal [`KeTrustMode`]
-    /// and never reaches this getter.
+    /// The returned `TrustMode::Custom` (`TrustMode.custom` on Dart)
+    /// re-materializes the roots bundle as a `Vec<u8>` for the FRB
+    /// wire shape, so this call is O(bundle size). It is intended
+    /// for diagnostics only; the per-handshake hot path stays on
+    /// the internal `KeTrustMode` (crate-internal) and never reaches
+    /// this getter.
     #[flutter_rust_bridge::frb(sync)]
     pub fn trust_mode(&self) -> TrustMode {
         self.trust_mode.clone().into()
