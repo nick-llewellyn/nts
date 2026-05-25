@@ -3276,12 +3276,107 @@ fn nts_trust_status_reads_singleton_and_converts_shape() {
         snap.default_backend_webpki_count,
     );
     assert_eq!(
+        status.default_backend_custom_count,
+        snap.default_backend_custom_count,
+    );
+    assert_eq!(
         status.android_platform_init_succeeded,
         snap.android_platform_init_succeeded,
     );
     assert_eq!(
         status.android_hybrid_fallback_count,
         snap.android_hybrid_fallback_count,
+    );
+}
+
+/// `nts_query_inner` (the backend for `nts_query` / `NtsClient::query`)
+/// increments `default_backend_custom_count` when the resolved trust
+/// backend is `Custom` and `is_default_client` is true.
+///
+/// Exercises the integration between the cache-layer result and the
+/// process-global telemetry counters. Pre-installs a session with
+/// `TrustBackend::Custom` so the `checkout` phase returns a cache hit,
+/// bypassing the network-leg `establish_session` while still
+/// triggering the counter bump.
+///
+/// Pins acceptance criterion for issue nts-7kv.
+#[test]
+fn nts_query_inner_increments_custom_counter_for_default_client() {
+    let table = SessionTable::new();
+    let host = "custom-counter-bump.invalid";
+    let spec = NtsServerSpec {
+        host: host.to_owned(),
+        port: 4460,
+    };
+
+    // Pre-install a session with one cookie so the checkout phase
+    // returns a cache hit and bypasses establish_session (no network).
+    let mut session = make_test_session_with_cookies(
+        host,
+        4460,
+        next_session_generation(),
+        1,
+    );
+    session.trust_backend = TrustBackend::Custom;
+    table.install(&spec, session);
+
+    let initial = nts_trust_status();
+
+    // Call nts_query_inner as if it were the default client.
+    // `trust_mode` (BundledOnly) is ignored because it's a cache hit.
+    // `is_default_client = true` triggers the `record_default_backend` call.
+    //
+    // The call will fail on the NTP UDP leg (ntp_query) since the host
+    // is non-resolvable, but the counter bump happens immediately after
+    // `checkout` returns `Ok(ctx)`, before the NTP attempt. A 1 ms
+    // timeout keeps the test fast without affecting correctness.
+    let _ = super::nts_query_inner(
+        &table,
+        spec,
+        1,
+        1,
+        KeTrustMode::BundledOnly,
+        true,
+    );
+
+    let final_status = nts_trust_status();
+    assert!(
+        final_status.default_backend_custom_count > initial.default_backend_custom_count,
+        "default_backend_custom_count must increment; initial {}, final {}",
+        initial.default_backend_custom_count,
+        final_status.default_backend_custom_count
+    );
+    // We intentionally do not assert on `default_client_backend` here
+    // because that pointer is shared global state and may have been
+    // overwritten by a concurrent test (e.g. a live cloudflare probe
+    // resolving to `Platform`) between the `record_default_backend`
+    // call and this snapshot. The cumulative partitioned counters
+    // are the stable signal.
+
+    // Verify that is_default_client = false DOES NOT increment.
+    let host2 = "custom-counter-no-bump.invalid";
+    let spec2 = NtsServerSpec {
+        host: host2.to_owned(),
+        port: 4460,
+    };
+    let mut session2 = make_test_session_with_cookies(host2, 4460, next_session_generation(), 1);
+    session2.trust_backend = TrustBackend::Custom;
+    table.install(&spec2, session2);
+
+    let before_custom_client = nts_trust_status();
+    let _ = super::nts_query_inner(
+        &table,
+        spec2,
+        1,
+        1,
+        KeTrustMode::BundledOnly,
+        false,
+    );
+    let after_custom_client = nts_trust_status();
+    assert_eq!(
+        after_custom_client.default_backend_custom_count,
+        before_custom_client.default_backend_custom_count,
+        "custom-client handshake must not touch the default counter"
     );
 }
 
