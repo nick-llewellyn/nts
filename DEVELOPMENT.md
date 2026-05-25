@@ -425,7 +425,7 @@ Primary maintainer: Nicholas Llewellyn (`nllewelln@gmail.com`).
 **Maintainer-only**: when the primary maintainer authors commits or
 files Beads issues from this repo, the local `git config user.email`
 should be `nllewelln@gmail.com` (matching the global default) so
-`.beads/issues.jsonl` `owner` fields stay consistent across new
+Beads issue `owner` fields stay consistent across new
 issues. This is solo-maintainer hygiene, not a contributor policy
 — third-party contributors should commit under their own identity;
 attribution is not rewritten on merge.
