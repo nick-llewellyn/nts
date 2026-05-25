@@ -2,8 +2,9 @@
 //
 // Extracts Dart code blocks from README.md, CHANGELOG.md, ARCHITECTURE.md,
 // and example/example.md, wraps them in a minimal harness when they lack a
-// top-level declaration, and runs `dart analyze` to catch type errors, missing
-// imports, and other static-analysis issues before they reach users.
+// main function or class-like declaration, and runs `dart analyze` to catch
+// type errors, missing imports, and other static-analysis issues before they
+// reach users.
 //
 // Usage:
 //

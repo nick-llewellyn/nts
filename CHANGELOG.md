@@ -24,8 +24,8 @@
   that verifies `pubspec.yaml` and `rust/Cargo.toml` move in lockstep
   (nts-6e0).
 - Added `tool/check_doc_snippets.dart` which extracts and validates Dart code
-  blocks in `README.md`, `CHANGELOG.md`, and `ARCHITECTURE.md` using
-  `dart analyze`. (nts-a23)
+  blocks in `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, and
+  `example/example.md` using `dart analyze`. (nts-a23)
 
 
 ## 5.1.0

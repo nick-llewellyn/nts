@@ -83,6 +83,7 @@ jobs:
               - '.github/workflows/**'
             docs:
               - '**.md'
+              - 'tool/check_doc_snippets.dart'
             hooks:
               - 'tool/hooks/**'
 
