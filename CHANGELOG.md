@@ -16,6 +16,13 @@
 - Pinned specific error-message substrings in `build_with_custom_roots`
   ("PEM certificate", "custom root certificate", "No custom certificates")
   via new regression tests to prevent diagnostic drift (nts-o88).
+- Hardened `tool/check_bindings.dart` with a mandatory DCO unreachable
+  patcher match check and a `dart analyze` validation step. Ensures that
+  FRB-codegen changes do not silently break the `${raw[0]}` assumption
+  in the diagnostic-bearing codec patches (nts-6e0).
+- Added an FRB version consistency check to `tool/check_bindings.dart`
+  that verifies `pubspec.yaml` and `rust/Cargo.toml` move in lockstep
+  (nts-6e0).
 
 ## 5.1.0
 
