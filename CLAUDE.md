@@ -12,8 +12,9 @@ exists. `.beads/issues.jsonl` remains tracked in git as a secondary mirror.
 
 Fresh-clone prerequisite (one-time per clone, not committed):
 ```bash
-bd dolt remote add origin https://doltremoteapi.dolthub.com/nick-llewellyn/nts
-# Requires DOLT_REMOTE_USER and DOLT_REMOTE_PASSWORD in the environment.
+bd init   # automatically configures the DoltHub remote via sync.git-remote
+# Requires Dolt Credentials (key-based). Use `dolt login` or add your
+# public key at https://www.dolthub.com/settings/credentials
 ```
 
 **Mandatory session-close order:**
