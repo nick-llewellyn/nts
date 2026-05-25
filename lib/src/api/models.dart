@@ -285,10 +285,65 @@ enum TrustBackend {
 /// functions ([ntsQuery], [ntsWarmCookies]) is constructed with
 /// [TrustMode.platformWithFallback] and never changes, so existing
 /// callers see no behaviour change.
+///
+/// ## Security trade-offs
+///
+/// NTS derives its per-session AEAD integrity from TLS
+/// keying-material exporters: the NTS-KE handshake exports session
+/// keys that are used to authenticate every NTPv4 cookie and time
+/// response. Those keys are only as strong as the TLS session that
+/// produced them.
+///
+/// In environments that perform TLS inspection — corporate
+/// middleboxes or MDM-managed devices that inject a CA into the
+/// platform trust store — an inspection appliance holding a cert
+/// signed by that injected root can complete a man-in-the-middle
+/// TLS handshake and export the same keying material. The client
+/// then accepts forged NTP responses as authenticated.
+/// [TrustMode.platformOnly] always consults the platform store and
+/// is therefore exposed to this threat whenever the handshake runs.
+/// [TrustMode.platformWithFallback] is exposed only when the
+/// platform backend is successfully constructed (the resolved
+/// [TrustBackend] for that handshake is [TrustBackend.platform]); if
+/// `build_with_native_verifier` fails at TLS-config construction
+/// and the client falls back to the bundled `webpki-roots` set, the
+/// platform store is not consulted on that handshake and the
+/// inspection-CA exposure does not apply.
+///
+/// High-security callers who must preserve end-to-end integrity
+/// against TLS inspection should use [TrustMode.bundledOnly], which
+/// limits trust anchors to the library's static `webpki-roots`
+/// bundle and refuses any certificate signed by a root outside
+/// that set:
+///
+/// ```dart
+/// Future<void> main() async {
+///   await NtsRustLib.init(); // must complete before using NtsClient
+///   final client = NtsClient(trustMode: TrustMode.bundledOnly);
+///   final sample = await client.query(
+///     spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),
+///   );
+/// }
+/// ```
+///
+/// The trade-off is connectivity: `bundledOnly` does not honour
+/// pinned corporate CAs or MDM-installed roots, so it will fail
+/// against NTS servers that present certificates from a private or
+/// enterprise CA. For those deployments use [TrustMode.custom]
+/// with the relevant PEM or DER root bundle instead.
 enum TrustMode {
-  /// Platform store first, `webpki-roots` static bundle on
-  /// `build_with_native_verifier` failure. Default behaviour
-  /// preserved across all releases prior to 3.0.0.
+  /// Consults the platform trust store first; if
+  /// `build_with_native_verifier` fails at TLS-config construction,
+  /// silently falls back to the bundled `webpki-roots` static set.
+  /// Default behaviour preserved across all releases prior to 3.0.0.
+  ///
+  /// **Security note:** Platform-managed trust stores on corporate
+  /// or MDM-managed devices routinely include inspection CA
+  /// certificates. If one is present, a TLS-inspection appliance
+  /// can complete a man-in-the-middle NTS-KE handshake and produce
+  /// forged NTPv4 replies that this client will accept as
+  /// authenticated. Use [TrustMode.bundledOnly] to eliminate this
+  /// exposure when end-to-end integrity is a hard requirement.
   platformWithFallback,
 
   /// Refuses every silent fallback to the `webpki-roots` static
@@ -314,12 +369,45 @@ enum TrustMode {
   ///    backend is reachable only via [TrustMode.platformWithFallback]
   ///    (the historic default), where both fallback arms continue
   ///    to fire as in 3.0.x.
+  ///
+  /// **Security note:** `platformOnly` still consults the platform
+  /// trust store and is therefore exposed to TLS-inspection
+  /// appliances in the same way as [TrustMode.platformWithFallback].
+  /// The distinction is operational — it prevents a silent
+  /// downgrade to bundled roots — not a defence against inspection.
+  /// Use [TrustMode.bundledOnly] if the goal is to eliminate
+  /// platform-store exposure entirely.
   platformOnly,
 
-  /// Webpki-roots static bundle only; no platform-store consultation at all.
+  /// Validates exclusively against the bundled `webpki-roots`
+  /// static set. No platform-store consultation and no silent
+  /// fallback.
+  ///
+  /// Because the anchor set is fixed at library build time and
+  /// does not include any CA the platform or an MDM profile may
+  /// have installed, a TLS-inspection appliance cannot present a
+  /// certificate this client will accept. The AEAD keying material
+  /// is therefore derived from a TLS session that only a server
+  /// holding a `webpki-roots`-chained private key can participate
+  /// in, preserving end-to-end integrity against middlebox
+  /// inspection.
+  ///
+  /// The trade-off is that `bundledOnly` rejects certificates from
+  /// private or enterprise CAs, including those used by on-premise
+  /// NTS servers. For those deployments use [TrustMode.custom].
   bundledOnly,
 
-  /// Caller-supplied custom root certificates in PEM or DER format.
+  /// Validates exclusively against caller-supplied root
+  /// certificates (PEM or DER), passed as `customRoots` on the
+  /// [NtsClient] constructor. No platform-store or bundled-roots
+  /// consultation.
+  ///
+  /// Appropriate for on-premise or private-CA deployments where
+  /// neither the platform store nor `webpki-roots` contains the
+  /// issuing root. Like [TrustMode.bundledOnly], the anchor set is
+  /// fully caller-controlled, so a TLS-inspection appliance
+  /// without the matching private key cannot intercept the
+  /// exchange.
   custom,
 }
 
