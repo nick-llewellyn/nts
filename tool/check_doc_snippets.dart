@@ -196,13 +196,19 @@ String _prepareSnippet(String snippet) {
   }
 
   if (needsHarness) {
+    // Declare common typed locals via a generic stub so fragments that
+    // reference these types resolve under static analysis. We deliberately
+    // route through `_snippetStub<T>()` (return type `T`, not `Never`) so
+    // the initializers stay statically reachable -- a bare
+    // `throw UnimplementedError()` evaluates to `Never` and would make the
+    // analyzer treat the entire snippet body as unreachable, silently
+    // masking real issues.
+    sb.writeln('T _snippetStub<T>() => throw UnimplementedError();');
     sb.writeln('Future<void> main() async {');
-    // Define common variables to avoid "undefined name" / "definitely
-    // unassigned" errors for code fragments that reference these types.
-    sb.writeln('  final NtsError err = throw UnimplementedError();');
-    sb.writeln('  final NtsServerSpec spec = throw UnimplementedError();');
-    sb.writeln('  final NtsTimeSample sample = throw UnimplementedError();');
-    sb.writeln('  final NtsClient client = throw UnimplementedError();');
+    sb.writeln('  final NtsError err = _snippetStub<NtsError>();');
+    sb.writeln('  final NtsServerSpec spec = _snippetStub<NtsServerSpec>();');
+    sb.writeln('  final NtsTimeSample sample = _snippetStub<NtsTimeSample>();');
+    sb.writeln('  final NtsClient client = _snippetStub<NtsClient>();');
     sb.writeln(body);
     sb.writeln('}');
   } else {
