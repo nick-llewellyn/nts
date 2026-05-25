@@ -300,9 +300,15 @@ enum TrustBackend {
 /// signed by that injected root can complete a man-in-the-middle
 /// TLS handshake and export the same keying material. The client
 /// then accepts forged NTP responses as authenticated.
-/// [TrustMode.platformWithFallback] and [TrustMode.platformOnly]
-/// both consult the platform store and are therefore exposed to
-/// this threat.
+/// [TrustMode.platformOnly] always consults the platform store and
+/// is therefore exposed to this threat whenever the handshake runs.
+/// [TrustMode.platformWithFallback] is exposed only when the
+/// platform backend is successfully constructed (the resolved
+/// [TrustBackend] for that handshake is [TrustBackend.platform]); if
+/// `build_with_native_verifier` fails at TLS-config construction
+/// and the client falls back to the bundled `webpki-roots` set, the
+/// platform store is not consulted on that handshake and the
+/// inspection-CA exposure does not apply.
 ///
 /// High-security callers who must preserve end-to-end integrity
 /// against TLS inspection should use [TrustMode.bundledOnly], which
