@@ -95,6 +95,19 @@ String get _errorPrefix => Platform.environment.containsKey('GITHUB_ACTIONS')
 
 Future<void> main(List<String> args) async {
   final pinnedVersion = _readPinnedFrbVersion();
+  final rustPinnedVersion = _readRustPinnedFrbVersion();
+
+  if (pinnedVersion != rustPinnedVersion) {
+    stderr.writeln(
+      '${_errorPrefix}flutter_rust_bridge version mismatch between '
+      'pubspec.yaml and rust/Cargo.toml.\n'
+      '       Dart: $pinnedVersion\n'
+      '       Rust: $rustPinnedVersion\n'
+      '       Coordination is required; update both sides to match.',
+    );
+    exit(1);
+  }
+
   _ensureCodegenAvailable(pinnedVersion);
 
   await _run('flutter_rust_bridge_codegen', const ['generate']);
@@ -104,7 +117,19 @@ Future<void> main(List<String> args) async {
   _lintIgnorePatches.forEach(_addLintsToIgnoreForFile);
   _patchFrbGeneratedUnimplementedMessages();
   _patchDartFrbGeneratedUnimplementedMessages();
-  _patchDartFrbGeneratedDcoUnreachableMessages();
+  final dcoPatched = _patchDartFrbGeneratedDcoUnreachableMessages();
+  if (dcoPatched == 0) {
+    stderr.writeln(
+      '${_errorPrefix}DCO unreachable patcher found zero matches. '
+      'FRB output format may have changed, breaking the \${raw[0]} assumption.',
+    );
+    exit(1);
+  }
+
+  // Validate the patched Dart bindings before formatting. This catches
+  // patcher-induced syntax errors (e.g. if `${raw[0]}` is no longer in scope)
+  // before they reach the drift check.
+  await _validateGeneratedDart();
 
   // Format the regenerated Dart so the diff check below catches semantic
   // drift only -- not formatter noise that CI's `dart format` step would
@@ -135,8 +160,12 @@ String _readPinnedFrbVersion() {
     exit(1);
   }
   // Match `  flutter_rust_bridge: 2.12.0` (indented under `dependencies:`,
-  // no version range, no quotes). Intentionally strict to fail loudly if the
-  // pin format ever changes.
+  // no version range, no quotes). Strict on the key name and line-anchored
+  // indentation; whitespace after the colon is intentionally flexible to
+  // tolerate `pub add` / YAML-formatter disagreement on the single-space
+  // convention. The version literal is digits-and-dots only, so any complex
+  // range or suffix would fail loudly here rather than slip past as a
+  // partial match.
   final pattern = RegExp(
     r'^\s+flutter_rust_bridge:\s*([\d.]+)\s*$',
     multiLine: true,
@@ -146,6 +175,39 @@ String _readPinnedFrbVersion() {
     stderr.writeln(
       '${_errorPrefix}could not find pinned `flutter_rust_bridge:` '
       'version in pubspec.yaml',
+    );
+    exit(1);
+  }
+  return match.group(1)!;
+}
+
+String _readRustPinnedFrbVersion() {
+  final cargoToml = File('rust/Cargo.toml');
+  if (!cargoToml.existsSync()) {
+    stderr.writeln(
+      '${_errorPrefix}rust/Cargo.toml not found (run from repo root)',
+    );
+    exit(1);
+  }
+  // Match `flutter_rust_bridge = "=2.12.0"` or `flutter_rust_bridge = "2.12.0"`.
+  // Strict on the dependency key/value shape (anchored to a line that starts
+  // with the bare `flutter_rust_bridge` key, a single `=` separator, and a
+  // double-quoted version literal with an optional leading `=` cargo-pin
+  // marker); whitespace around the `=` is intentionally flexible because
+  // `cargo add` / `cargo edit` and various TOML formatters disagree on
+  // whether to surround the assignment with a single space. The version
+  // literal itself is digits-and-dots only, so SemVer pre-release / build
+  // metadata suffixes would not match and would fail loudly here rather
+  // than slip past as a partial match.
+  final pattern = RegExp(
+    r'^flutter_rust_bridge\s*=\s*"=?([\d.]+)"',
+    multiLine: true,
+  );
+  final match = pattern.firstMatch(cargoToml.readAsStringSync());
+  if (match == null) {
+    stderr.writeln(
+      '${_errorPrefix}could not find pinned `flutter_rust_bridge` '
+      'version in rust/Cargo.toml',
     );
     exit(1);
   }
@@ -343,7 +405,7 @@ void _addLintsToIgnoreForFile(String path, List<String> lintsToAdd) {
 //
 // Idempotent: the pattern only matches the FRB-emitted empty form, so
 // running the patcher twice in a row is a no-op on the second run.
-void _patchFrbGeneratedUnimplementedMessages() {
+int _patchFrbGeneratedUnimplementedMessages() {
   const path = 'rust/src/frb_generated.rs';
   final file = File(path);
   if (!file.existsSync()) {
@@ -358,7 +420,7 @@ void _patchFrbGeneratedUnimplementedMessages() {
       'unimplemented!("flutter_rust_bridge generated codec: '
       'unexpected enum variant tag in SSE wire format");';
   final original = file.readAsStringSync();
-  if (!original.contains(needle)) return;
+  if (!original.contains(needle)) return 0;
   final patched = original.replaceAll(needle, replacement);
   final replaced =
       needle.allMatches(original).length - needle.allMatches(patched).length;
@@ -367,6 +429,7 @@ void _patchFrbGeneratedUnimplementedMessages() {
     'Patched $path: replaced $replaced empty `unimplemented!("")` arm(s) '
     'with diagnostic-bearing form',
   );
+  return replaced;
 }
 
 // Patches the FRB-generated Dart file to include the unexpected enum variant
@@ -377,7 +440,7 @@ void _patchFrbGeneratedUnimplementedMessages() {
 //
 // Idempotent: the pattern only matches the FRB-emitted empty-string form, so
 // running the patcher twice in a row is a no-op on the second run.
-void _patchDartFrbGeneratedUnimplementedMessages() {
+int _patchDartFrbGeneratedUnimplementedMessages() {
   const path = 'lib/src/ffi/frb_generated.dart';
   final file = File(path);
   if (!file.existsSync()) {
@@ -394,7 +457,7 @@ void _patchDartFrbGeneratedUnimplementedMessages() {
       "unexpected enum variant tag: \$tag_',\n"
       "        );";
   final original = file.readAsStringSync();
-  if (!original.contains(needle)) return;
+  if (!original.contains(needle)) return 0;
   final patched = original.replaceAll(needle, replacement);
   final replaced =
       needle.allMatches(original).length - needle.allMatches(patched).length;
@@ -403,6 +466,7 @@ void _patchDartFrbGeneratedUnimplementedMessages() {
     "Patched $path: replaced $replaced empty UnimplementedError('') "
     'arm(s) with diagnostic-bearing form',
   );
+  return replaced;
 }
 
 // Patches the FRB-generated Dart file to include the unexpected enum variant
@@ -415,7 +479,7 @@ void _patchDartFrbGeneratedUnimplementedMessages() {
 //
 // Idempotent: the pattern only matches the FRB-emitted bare-"unreachable" form,
 // so running the patcher twice in a row is a no-op on the second run.
-void _patchDartFrbGeneratedDcoUnreachableMessages() {
+int _patchDartFrbGeneratedDcoUnreachableMessages() {
   const path = 'lib/src/ffi/frb_generated.dart';
   final file = File(path);
   if (!file.existsSync()) {
@@ -432,7 +496,7 @@ void _patchDartFrbGeneratedDcoUnreachableMessages() {
       "unexpected enum variant tag in DCO wire format: \${raw[0]}',\n"
       '        );';
   final original = file.readAsStringSync();
-  if (!original.contains(needle)) return;
+  if (!original.contains(needle)) return 0;
   final patched = original.replaceAll(needle, replacement);
   final replaced =
       needle.allMatches(original).length - needle.allMatches(patched).length;
@@ -441,4 +505,13 @@ void _patchDartFrbGeneratedDcoUnreachableMessages() {
     'Patched $path: replaced $replaced `Exception("unreachable")` '
     'DCO arm(s) with diagnostic-bearing form',
   );
+  return replaced;
+}
+
+/// Runs `dart analyze` on the primary generated Dart binding. This ensures
+/// that codegen-induced changes or patcher-applied logic (notably the
+/// `${raw[0]}` DCO-tag access) do not introduce syntax or static errors.
+Future<void> _validateGeneratedDart() async {
+  stdout.writeln('Validating patched Dart bindings...');
+  await _run('dart', const ['analyze', _frbGeneratedDispatcher]);
 }
