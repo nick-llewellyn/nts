@@ -38,7 +38,8 @@ coverage/
 .dolt/
 *.db
 .beads-credential-key
-.beads/issues.jsonl
+# .beads/issues.jsonl is tracked as a mirror of DoltHub state.
+!.beads/issues.jsonl
 
 # IDE — JetBrains (machine-specific; matches Flutter's default template)
 .idea/
