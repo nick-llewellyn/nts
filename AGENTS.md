@@ -392,6 +392,51 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
+## DoltHub Session Completion (overrides the auto-generated block below)
+
+DoltHub (`nick-llewellyn/nts` on dolthub.com) is the **authoritative** store
+for Beads issues. The `bd dolt push` step in the auto-generated "Session
+Completion" block below is a no-op without a configured remote — this section
+replaces that shorthand with the full ordering required now that the remote
+exists. `.beads/issues.jsonl` remains tracked in git as a secondary mirror.
+
+Fresh-clone prerequisite (one-time per clone, not committed):
+```bash
+bd init   # automatically configures the DoltHub remote via sync.git-remote
+# Requires Dolt Credentials (key-based). Use `dolt login` or add your
+# public key at https://www.dolthub.com/settings/credentials
+```
+
+**Mandatory session-close order:**
+
+1. `git pull --rebase` — catch up code changes from `origin/main`.
+2. `bd dolt pull` — pull Beads commits from DoltHub **before** pushing local
+   changes. Surfaces merge conflicts here, not on push. Resolve any conflicts
+   with `bd dolt status` before proceeding.
+3. `bd dolt push --remote origin` — **blocking requirement**. Work is not
+   complete until this succeeds. A failed push means the session's issue
+   changes are not on DoltHub; the JSONL mirror in the upcoming PR would then
+   be the only durable record, violating the "DoltHub is authoritative"
+   invariant. Fix auth / connectivity and retry until it succeeds.
+4. Commit and push the code branch (including the `.beads/issues.jsonl` diff)
+   via the standard [Pull Request Workflow](#pull-request-workflow-mandatory).
+   The JSONL mirror still bundles with every code PR per the "Beads metadata
+   sync" rule below — do NOT open a `.beads/`-only PR.
+
+```bash
+# Full push sequence
+git pull --rebase
+bd dolt pull
+# resolve any bd dolt status conflicts here
+bd dolt push --remote origin          # MUST succeed before opening the PR
+git push -u origin HEAD
+gh pr create --fill
+git status  # MUST show "up to date with origin"
+```
+
+**CRITICAL:** `bd dolt push --remote origin` failing is a blocking error.
+Do not open the PR, do not stop the session — fix the push first.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
