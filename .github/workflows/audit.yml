@@ -24,11 +24,92 @@ jobs:
   audit:
     name: Audit Rust dependencies
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Audit Rust dependencies
+        id: run_audit
         uses: actions-rust-lang/audit@v1
         with:
           workingDirectory: rust
+
+      - name: Generate Audit JSON
+        # Run even if the audit action failed (vulnerabilities found).
+        # Skip if the job was cancelled or if not on a PR from same repo.
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.run_audit.outcome != 'cancelled'
+        run: |
+          cargo audit --json > audit.json || true
+        working-directory: rust
+
+      - name: Upload Audit JSON
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.run_audit.outcome != 'cancelled'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-results
+          path: rust/audit.json
+          retention-days: 1
+
+  post-audit:
+    name: Post Audit Comment
+    runs-on: ubuntu-latest
+    needs: audit
+    # Only run on same-repo PRs. always() ensures it runs even if audit failed.
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.audit.result != 'cancelled'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Download Audit JSON
+        uses: actions/download-artifact@v4
+        with:
+          name: audit-results
+          path: .
+
+      - name: Generate Summary
+        run: |
+          echo "### 🦀 Cargo Audit Report" > audit-summary.md
+          echo "" >> audit-summary.md
+
+          # Guard against an empty or malformed audit.json (e.g. advisory DB
+          # fetch failure, I/O error). jq will exit non-zero if the file is
+          # not valid JSON.
+          if ! jq empty audit.json 2>/dev/null; then
+            echo "⚠️ Could not parse audit output — \`cargo audit\` may have" >> audit-summary.md
+            echo "failed for a reason unrelated to vulnerabilities (e.g. advisory" >> audit-summary.md
+            echo "DB fetch error). Raw output:" >> audit-summary.md
+            echo "" >> audit-summary.md
+            echo "<details><summary>Raw output</summary>" >> audit-summary.md
+            echo "" >> audit-summary.md
+            echo "\`\`\`" >> audit-summary.md
+            { cat audit.json 2>/dev/null || echo "(no output)"; } >> audit-summary.md
+            echo "\`\`\`" >> audit-summary.md
+            echo "</details>" >> audit-summary.md
+          else
+            VULN_COUNT=$(jq '.vulnerabilities.count' audit.json)
+            if [ "$VULN_COUNT" -eq "0" ]; then
+              echo "✅ No vulnerabilities found." >> audit-summary.md
+            else
+              echo "⚠️ Found $VULN_COUNT vulnerability/vulnerabilities." >> audit-summary.md
+              echo "" >> audit-summary.md
+              echo "| Package | Version | Advisory | Title |" >> audit-summary.md
+              echo "| --- | --- | --- | --- |" >> audit-summary.md
+              jq -r '.vulnerabilities.list[] | "| \(.package.name) | \(.package.version) | [\(.advisory.id)](\(.advisory.url)) | \(.advisory.title) |"' audit.json >> audit-summary.md
+            fi
+
+            echo "" >> audit-summary.md
+            echo "<details><summary>Full JSON Output</summary>" >> audit-summary.md
+            echo "" >> audit-summary.md
+            echo "\`\`\`json" >> audit-summary.md
+            cat audit.json >> audit-summary.md
+            echo "\`\`\`" >> audit-summary.md
+            echo "</details>" >> audit-summary.md
+          fi
+
+      - name: Sticky Comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: cargo-audit
+          path: audit-summary.md

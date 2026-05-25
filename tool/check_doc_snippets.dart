@@ -2,9 +2,9 @@
 //
 // Extracts Dart code blocks from README.md, CHANGELOG.md, ARCHITECTURE.md,
 // and example/example.md, wraps them in a minimal harness when they lack a
-// main function or class-like declaration, and runs `dart analyze` to catch
-// type errors, missing imports, and other static-analysis issues before they
-// reach users.
+// main function or top-level declaration (class, enum, extension, mixin, or
+// typedef), and runs `dart analyze` to catch type errors, missing imports,
+// and other static-analysis issues before they reach users.
 //
 // Usage:
 //
@@ -239,11 +239,15 @@ String _prepareSnippet(String snippet) {
     multiLine: true,
   );
   final hasMain = mainPattern.hasMatch(snippet);
-  final hasClass =
-      snippet.contains('class ') ||
-      snippet.contains('enum ') ||
-      snippet.contains('extension ');
-  final needsHarness = !hasMain && !hasClass;
+
+  // Detect other top-level declarations that cannot be wrapped in a main()
+  // function body (class, enum, extension, mixin, typedef).
+  final topLevelPattern = RegExp(
+    r'^\s*(?:class|enum|extension|mixin|typedef)\s+',
+    multiLine: true,
+  );
+  final hasTopLevel = topLevelPattern.hasMatch(snippet);
+  final needsHarness = !hasMain && !hasTopLevel;
 
   final sb = StringBuffer();
   // Suppress common lints that snippets intentionally trip (e.g. print for demos).
