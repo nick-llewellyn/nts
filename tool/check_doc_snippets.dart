@@ -40,7 +40,8 @@ Future<void> main(List<String> args) async {
         continue;
       }
 
-      final content = file.readAsStringSync();
+      // Normalize CRLF so the regex matches on Windows checkouts too.
+      final content = file.readAsStringSync().replaceAll('\r\n', '\n');
       final dartBlocks =
           RegExp(r'```dart\s*\n(.*?)\n```', dotAll: true).allMatches(content);
 
@@ -64,8 +65,15 @@ Future<void> main(List<String> args) async {
           continue;
         }
 
-        final snippetFile = File(
-            '${dir.path}/${fileName.replaceAll(Platform.pathSeparator, '_').replaceAll('.', '_')}_$snippetIndex.dart');
+        // Sanitize both '/' and '\' so paths like 'example/example.md'
+        // produce a flat filename on all platforms.
+        final safeFileName = fileName
+            .replaceAll('/', '_')
+            .replaceAll('\\', '_')
+            .replaceAll('.', '_');
+        final snippetFile =
+            File('${dir.path}/${safeFileName}_$snippetIndex.dart');
+        snippetFile.parent.createSync(recursive: true);
 
         final wrappedContent = _prepareSnippet(snippet);
         snippetFile.writeAsStringSync(wrappedContent);
