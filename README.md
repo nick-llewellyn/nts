@@ -292,6 +292,8 @@ inspection, construct the client explicitly with
 `TrustMode.bundledOnly`:
 
 ```dart
+import 'package:nts/nts.dart';
+
 Future<void> main() async {
   await NtsRustLib.init(); // must complete before using NtsClient
   final client = NtsClient(trustMode: TrustMode.bundledOnly);
