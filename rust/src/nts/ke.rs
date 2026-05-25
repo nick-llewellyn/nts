@@ -630,7 +630,7 @@ impl std::fmt::Display for KeError {
                  (next read would have produced {received} bytes)",
             ),
             Self::TrustBackendUnavailable(m) => {
-                write!(f, "trust backend unavailable (PlatformOnly mode): {m}")
+                write!(f, "trust backend unavailable: {m}")
             }
             Self::AlpnMismatch { negotiated: None } => f.write_str(
                 "TLS handshake completed without negotiating any ALPN \
@@ -1036,6 +1036,15 @@ pub(crate) fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild
     build_tls_config_inner(trust_mode)
 }
 
+/// Constructs a [`KeError::TrustBackendUnavailable`] for the `PlatformOnly`
+/// failure path, embedding a `"PlatformOnly mode: "` tag so callers can
+/// distinguish it from `Custom`-roots failures without inspecting variant
+/// internals. Extracted so the tag format is unit-testable without triggering
+/// a real platform-verifier failure.
+fn platform_only_unavailable(e: impl std::fmt::Display) -> KeError {
+    KeError::TrustBackendUnavailable(format!("PlatformOnly mode: {e}"))
+}
+
 #[cfg(target_os = "android")]
 fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
     if trust_mode == KeTrustMode::BundledOnly {
@@ -1074,7 +1083,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
         // `build_with_native_verifier_android`, so the corresponding
         // arms are `unreachable!` rather than fabricating a behaviour.
         Err(e) => match mode_for_fallback {
-            KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
+            KeTrustMode::PlatformOnly => Err(platform_only_unavailable(e)),
             KeTrustMode::PlatformWithFallback => Ok(TlsConfigBuild {
                 config: Arc::new(build_webpki_only_config()?),
                 initial_backend: KeTrustBackend::WebpkiRoots,
@@ -1118,7 +1127,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
         // `build_with_native_verifier`, so the corresponding arms
         // are `unreachable!` rather than fabricating a behaviour.
         Err(e) => match trust_mode {
-            KeTrustMode::PlatformOnly => Err(KeError::TrustBackendUnavailable(e.to_string())),
+            KeTrustMode::PlatformOnly => Err(platform_only_unavailable(e)),
             KeTrustMode::PlatformWithFallback => Ok(TlsConfigBuild {
                 config: Arc::new(build_webpki_only_config()?),
                 initial_backend: KeTrustBackend::WebpkiRoots,

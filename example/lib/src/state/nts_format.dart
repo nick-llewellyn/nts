@@ -162,7 +162,7 @@ String describeError(NtsError err) => switch (err) {
   NtsErrorNoCookies() =>
     'NoCookies (server completed KE but issued zero cookies)',
   NtsErrorTrustBackendUnavailable(:final message) =>
-    'TrustBackendUnavailable (PlatformOnly mode rejected fallback): $message',
+    'TrustBackendUnavailable: $message',
   NtsErrorInternal(:final message) => 'Internal: $message',
 };
 

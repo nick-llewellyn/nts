@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Removed misleading `(PlatformOnly mode)` prefix from the
+  `KeError::TrustBackendUnavailable` `Display` implementation. The
+  variant is shared between platform-verifier failures and
+  custom-roots failures, so the prefix was inaccurate for the latter.
+  `PlatformOnly`-specific context is now embedded inside the message
+  string at the two call sites that produce it (nts-o88).
+
+### Internal
+
+- Pinned specific error-message substrings in `build_with_custom_roots`
+  ("PEM certificate", "custom root certificate", "No custom certificates")
+  via new regression tests to prevent diagnostic drift (nts-o88).
+
 ## 5.1.0
 
 ### Added

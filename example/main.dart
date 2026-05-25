@@ -104,7 +104,7 @@ Future<void> main() async {
       NtsErrorTimeout(:final phase) => 'timeout in phase ${phase.name}',
       NtsErrorNoCookies() => 'no cookies returned',
       NtsErrorTrustBackendUnavailable(:final message) =>
-        'trust backend unavailable (PlatformOnly mode): $message',
+        'trust backend unavailable: $message',
       NtsErrorInternal(:final message) => 'internal: $message',
     };
     print('nts call failed: $detail');
