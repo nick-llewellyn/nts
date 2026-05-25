@@ -18,9 +18,10 @@
   `query` / per-`warmCookies` and per-handshake `.clone()` calls that thread
   the trust-mode through the cookie-cache and KE-handshake layers are O(1)
   atomic refcount bumps rather than full-bundle copies. The public
-  `TrustMode.custom(List<int>)` consumer API is unchanged; the internal
-  FRB-generated Dart bindings were updated to decode the `Custom` variant's
-  payload (`Uint8List field0`) via the SSE codec.
+  `TrustMode.custom` + `customRoots: List<int>?` consumer API is
+  unchanged; the internal FRB-generated Dart bindings were updated to
+  decode the `Custom` variant's payload (`Uint8List field0`) via the
+  SSE codec.
 - `tool/check_bindings.dart` now post-processes the FRB-generated
   `rust/src/frb_generated.rs` to replace `unimplemented!("")` arms (FRB
   2.12's defensive `#[non_exhaustive]` catch-all in SSE codec impls) with
