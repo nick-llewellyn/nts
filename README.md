@@ -344,7 +344,7 @@ on the command line) and pass it through explicitly:
 
 ```dart
 import 'package:nts/nts.dart';
-import 'package:flutter_rust_bridge/flutter_rust_bridge.dart'
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show ExternalLibrary;
 
 await NtsRustLib.init(

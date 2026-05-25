@@ -16,6 +16,8 @@ Three tools, distinct roles.
 | `flutter_rust_bridge_codegen` | Regenerate Dart bindings | After any change to `rust/src/api/*.rs` |
 | `tool/check_bindings.dart` | Verify committed bindings match the generator | Before pushing changes that touch `rust/src/api/*.rs` |
 | `hook/build.dart` (Native Assets) | Compile + bundle the dylib for Flutter | Automatically on `flutter build` |
+| `tool/check_doc_snippets.dart` | Validate Dart code snippets in documentation | Before pushing changes that touch docs or public API |
+
 
 ### Regenerate bindings
 
@@ -571,6 +573,9 @@ flutter test --coverage
 
 # FRB drift gate (any change to rust/src/api/** or lib/src/ffi/**)
 dart run tool/check_bindings.dart
+
+# Documentation snippet validation
+dart run tool/check_doc_snippets.dart
 
 # Hooks side (any change to tool/hooks/**); mirrors CI exactly
 sh -n tool/hooks/pre-commit tool/hooks/pre-merge-commit tool/hooks/pre-push

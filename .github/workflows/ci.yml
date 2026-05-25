@@ -418,13 +418,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     # Drift check only matters when Rust source, the generated bindings,
-    # or the workflow itself moved. Bindings-only edits (someone hand-
-    # editing lib/src/ffi/) still trigger this so the regenerator catches
-    # the drift.
+    # the documentation, or the workflow itself moved. Bindings-only edits
+    # (someone hand-editing lib/src/ffi/) still trigger this so the
+    # regenerator catches the drift.
     if: |
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.rust == 'true' ||
       needs.changes.outputs.bindings == 'true' ||
+      needs.changes.outputs.docs == 'true' ||
       needs.changes.outputs.ci == 'true'
     steps:
       - name: Checkout code
@@ -475,6 +476,10 @@ jobs:
         # Single source of truth for drift detection; the same script runs
         # locally via `dart run tool/check_bindings.dart`.
         run: dart run tool/check_bindings.dart
+
+      - name: Verify documentation snippets
+        # Ensure Dart snippets in Markdown files stay valid.
+        run: dart run tool/check_doc_snippets.dart
 
       # Run clippy against the freshly-regenerated `frb_generated.rs` so
       # any new lint shape the codegen starts emitting (one the
