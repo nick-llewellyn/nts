@@ -40,7 +40,7 @@ jobs:
           workingDirectory: rust
 
       - name: Post Audit Comment
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         run: |
           # The audit action installs cargo-audit, so it's available here.
           # We run it again with --json to capture the full report for the comment.
@@ -90,7 +90,7 @@ jobs:
         working-directory: rust
 
       - name: Sticky Comment
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: cargo-audit
