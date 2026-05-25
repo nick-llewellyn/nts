@@ -409,11 +409,11 @@ deadline elapses.
 
 ## Trust-anchor diagnostics
 
-TLS chain validation runs against one of three anchor sources, and
+TLS chain validation runs against one of four anchor sources, and
 the resolution is reported on two axes: per-handshake on the public
 DTOs, and process-globally via a snapshot accessor.
 
-The three resolutions (`TrustBackend`):
+The four resolutions (`TrustBackend`):
 
 - **`platform`** — `rustls-platform-verifier` ran against the OS
   trust store (system roots plus user / MDM-installed roots). The
@@ -434,6 +434,10 @@ The three resolutions (`TrustBackend`):
   the chain end-to-end. Loses visibility into MDM / user-installed
   roots; works against the major public NTS providers but not
   against corporate TLS-inspection appliances.
+- **`custom`** — the chain was authenticated end-to-end against a
+  caller-supplied root bundle passed as `customRoots` on the
+  `NtsClient` constructor. The anchor set is fully caller-controlled;
+  no platform-store or `webpki-roots` consultation occurs.
 
 The four trust-mode policies (`TrustMode`, set at `NtsClient`
 construction):
