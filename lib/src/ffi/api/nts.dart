@@ -10,7 +10,7 @@ part 'nts.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `lock_recover`, `new`, `new`, `new`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`, `wait_until`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
 /// with `Relaxed` ordering; the snapshot is intended for
@@ -28,7 +28,7 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 
 /// Snapshot the process-global trust-anchor diagnostic state.
 ///
-/// Returns six observables that callers cannot recover from a
+/// Returns seven observables that callers cannot recover from a
 /// per-query [`NtsTimeSample`] alone:
 ///
 /// 1. `default_client_backend` — backend the *default singleton*
@@ -38,7 +38,7 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 ///    started, or all queries so far went through caller-minted
 ///    clients). This is an overwrite-on-store event marker, not a
 ///    steady-state signal: callers that want trend visibility
-///    should read the three counters in (2)–(4) instead, since a
+///    should read the four counters in (2)–(5) instead, since a
 ///    transient `WebpkiRoots`-resolving handshake will latch this
 ///    field permanently until the next `Platform`-resolving one.
 ///    Custom-client callers should read the per-handshake
@@ -53,22 +53,24 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 ///    non-Android platforms (the fallback path only exists on Android).
 /// 4. `default_backend_webpki_count` — cumulative count of
 ///    singleton handshakes that resolved to [`TrustBackend::WebpkiRoots`].
-/// 5. `android_platform_init_succeeded` — `true` iff
+/// 5. `default_backend_custom_count` — cumulative count of
+///    singleton handshakes that resolved to [`TrustBackend::Custom`].
+/// 6. `android_platform_init_succeeded` — `true` iff
 ///    `com.nllewellyn.nts.PlatformInit.nativeInit` reported success
 ///    at least once. `false` on every other platform. A `false` value
 ///    on Android implies subsequent handshakes will run against the
 ///    `webpki-roots` static bundle regardless of [`TrustMode`].
-/// 6. `android_hybrid_fallback_count` — cumulative count of TLS
+/// 7. `android_hybrid_fallback_count` — cumulative count of TLS
 ///    chains the Android `HybridVerifier` has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
 ///    platforms. The curated fallback-eligible failure shapes are
 ///    documented on the `HybridVerifier` Rust source.
 ///
-/// Reads six atomics with `Relaxed` ordering. The snapshot is
+/// Reads seven atomics with `Relaxed` ordering. The snapshot is
 /// intended for human / dashboard consumption, not for cross-thread
 /// synchronisation; per-counter monotonicity holds, but cross-counter
 /// invariants within a single snapshot do not — e.g. the sum of the
-/// three `default_backend_*_count` fields can be observed to lag the
+/// four `default_backend_*_count` fields can be observed to lag the
 /// `default_client_backend` pointer by a single store-pair across
 /// concurrent snapshots.
 ///
@@ -195,6 +197,13 @@ abstract class NtsClient implements RustOpaqueInterface {
   /// for diagnostics and for callers that round-trip a client
   /// handle through their own configuration layer and need to
   /// re-derive the policy without keeping a parallel record.
+  ///
+  /// The returned `TrustMode::Custom` (`TrustMode.custom` on Dart)
+  /// re-materializes the roots bundle as a `Vec<u8>` for the FRB
+  /// wire shape, so this call is O(bundle size). It is intended
+  /// for diagnostics only; the per-handshake hot path stays on
+  /// the internal `KeTrustMode` (crate-internal) and never reaches
+  /// this getter.
   TrustMode trustMode();
 
   /// Per-client equivalent of the top-level `nts_warm_cookies`
@@ -510,19 +519,23 @@ class NtsTimeSample {
 ///
 /// The fields combine one overwrite-on-store event marker (which
 /// backend the default singleton client *most recently* resolved
-/// to), three cumulative counters that partition the singleton's
-/// resolution history by backend, a static flag indicating whether
-/// the Android JNI bootstrap succeeded, and one Android-only
-/// fallback counter. Fields not relevant to the current platform
-/// are reported with the documented "n/a" sentinel rather than
-/// omitted, so the snapshot has the same shape on every host.
+/// to), four cumulative counters that partition the singleton's
+/// resolution history by backend
+/// (`default_backend_platform_count`,
+/// `default_backend_hybrid_count`, `default_backend_webpki_count`,
+/// `default_backend_custom_count`), a static flag indicating
+/// whether the Android JNI bootstrap succeeded, and one
+/// Android-only fallback counter. Fields not relevant to the
+/// current platform are reported with the documented "n/a"
+/// sentinel rather than omitted, so the snapshot has the same
+/// shape on every host.
 class NtsTrustStatus {
   /// Backend the default singleton client most recently resolved to
   /// at handshake time. `None` when no handshake has run yet
   /// against the singleton (e.g. process just started, or all
   /// queries so far went through caller-minted [`NtsClient`]
   /// instances). This is an overwrite-on-store event marker, not
-  /// a steady-state signal: prefer the three `default_backend_*_count`
+  /// a steady-state signal: prefer the four `default_backend_*_count`
   /// fields below for dashboard panels that need trend visibility
   /// across the singleton's resolution history. Custom-client
   /// callers should read the per-handshake `trust_backend` field
@@ -554,6 +567,11 @@ class NtsTrustStatus {
   /// `default_backend_platform_count`.
   final BigInt defaultBackendWebpkiCount;
 
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [`TrustBackend::Custom`] since process start. Same monotonicity
+  /// contract as `default_backend_platform_count`.
+  final BigInt defaultBackendCustomCount;
+
   /// On Android: `true` iff
   /// `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
   /// invoked at least once and reported success. `false` on every
@@ -577,6 +595,7 @@ class NtsTrustStatus {
     required this.defaultBackendPlatformCount,
     required this.defaultBackendHybridCount,
     required this.defaultBackendWebpkiCount,
+    required this.defaultBackendCustomCount,
     required this.androidPlatformInitSucceeded,
     required this.androidHybridFallbackCount,
   });
@@ -587,6 +606,7 @@ class NtsTrustStatus {
       defaultBackendPlatformCount.hashCode ^
       defaultBackendHybridCount.hashCode ^
       defaultBackendWebpkiCount.hashCode ^
+      defaultBackendCustomCount.hashCode ^
       androidPlatformInitSucceeded.hashCode ^
       androidHybridFallbackCount.hashCode;
 
@@ -599,6 +619,7 @@ class NtsTrustStatus {
           defaultBackendPlatformCount == other.defaultBackendPlatformCount &&
           defaultBackendHybridCount == other.defaultBackendHybridCount &&
           defaultBackendWebpkiCount == other.defaultBackendWebpkiCount &&
+          defaultBackendCustomCount == other.defaultBackendCustomCount &&
           androidPlatformInitSucceeded == other.androidPlatformInitSucceeded &&
           androidHybridFallbackCount == other.androidHybridFallbackCount;
 }
@@ -802,23 +823,22 @@ enum TrustBackend {
   /// [`TrustMode::PlatformOnly`] for the opt-in that surfaces this
   /// path as [`NtsError::TrustBackendUnavailable`] instead.
   webpkiRoots,
+
+  /// Caller-supplied custom root certificates authenticated this chain.
+  custom,
 }
 
-/// Caller-selected policy for which trust-anchor backend [`NtsClient`]
-/// is willing to run against. Set immutably at client construction and
-/// applied to every handshake the client initiates.
-///
-/// The default singleton client used by the top-level convenience
-/// functions ([`nts_query`], [`nts_warm_cookies`]) is constructed with
-/// [`TrustMode::PlatformWithFallback`] and never changes, so existing
-/// callers see no behaviour change.
-enum TrustMode {
+@freezed
+sealed class TrustMode with _$TrustMode {
+  const TrustMode._();
+
   /// Platform store is the primary source of truth; on
   /// `build_with_native_verifier` failure the client silently
   /// downgrades to the `webpki-roots` static bundle. Default mode
   /// for the top-level convenience functions and for
   /// [`NtsClient::new`].
-  platformWithFallback,
+  const factory TrustMode.platformWithFallback() =
+      TrustMode_PlatformWithFallback;
 
   /// Refuses every silent fallback to the `webpki-roots` static
   /// bundle. Use when a pinned corporate CA or an MDM-installed
@@ -843,8 +863,11 @@ enum TrustMode {
   ///    is reachable only via [`TrustMode::PlatformWithFallback`]
   ///    (the historic default), where both fallback arms continue
   ///    to fire as in 3.0.x.
-  platformOnly,
+  const factory TrustMode.platformOnly() = TrustMode_PlatformOnly;
 
   /// Webpki-roots static bundle only; no platform-store consultation at all.
-  bundledOnly,
+  const factory TrustMode.bundledOnly() = TrustMode_BundledOnly;
+
+  /// Caller-supplied custom root certificates in PEM or DER format.
+  const factory TrustMode.custom(Uint8List field0) = TrustMode_Custom;
 }

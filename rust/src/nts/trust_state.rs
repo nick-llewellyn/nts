@@ -13,17 +13,17 @@
 //!    overwrite-on-store event marker, not a steady-state signal: a
 //!    failed `build_with_native_verifier` later in the process latches
 //!    `WebpkiRoots` permanently until the next `Platform` success, so
-//!    consumers that want trend visibility should read the three
+//!    consumers that want trend visibility should read the four
 //!    cumulative counters in (2) rather than this field.
 //!
-//! 2. Three cumulative counters — one per [`InternalTrustBackend`]
+//! 2. Four cumulative counters — one per [`InternalTrustBackend`]
 //!    variant — bumped on every `record_default_backend` call. A
-//!    dashboard can render `"P platform / H hybrid / W webpki of
-//!    P+H+W total singleton handshakes"` without losing history when
-//!    one backend transiently overrides another. The per-counter
-//!    monotonicity contract matches the hybrid-fallback counter in
-//!    (5); the three counters never decrease and never reset within
-//!    a process lifetime.
+//!    dashboard can render `"P platform / H hybrid / W webpki / C
+//!    custom of P+H+W+C total singleton handshakes"` without losing
+//!    history when one backend transiently overrides another. The
+//!    per-counter monotonicity contract matches the hybrid-fallback
+//!    counter in (5); the four counters never decrease and never reset
+//!    within a process lifetime.
 //!
 //! 3. Whether `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
 //!    invoked at least once and reported success on Android. The flag
@@ -50,7 +50,7 @@
 //! cross-counter invariants within a single snapshot do not — e.g.
 //! the snapshot can observe a hybrid-fallback bump that happened
 //! slightly after the default-backend store the same handshake
-//! produced, or one of the three per-backend counters can be observed
+//! produced, or one of the four per-backend counters can be observed
 //! to have bumped while `default_backend` still reads its prior value.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -59,6 +59,7 @@ const BACKEND_UNSET: u8 = 0;
 const BACKEND_PLATFORM: u8 = 1;
 const BACKEND_PLATFORM_WITH_HYBRID_FALLBACK: u8 = 2;
 const BACKEND_WEBPKI_ROOTS: u8 = 3;
+const BACKEND_CUSTOM: u8 = 4;
 
 /// Local mirror of [`crate::api::nts::TrustBackend`] used only as the
 /// argument to [`ProcessTrustState::record_default_backend`]. The
@@ -71,6 +72,7 @@ pub(crate) enum InternalTrustBackend {
     Platform,
     PlatformWithHybridFallback,
     WebpkiRoots,
+    Custom,
 }
 
 /// Snapshot returned by [`ProcessTrustState::snapshot`]. Mapped into
@@ -82,6 +84,7 @@ pub(crate) struct TrustStateSnapshot {
     pub(crate) default_backend_platform_count: u64,
     pub(crate) default_backend_hybrid_count: u64,
     pub(crate) default_backend_webpki_count: u64,
+    pub(crate) default_backend_custom_count: u64,
     pub(crate) android_platform_init_succeeded: bool,
     pub(crate) android_hybrid_fallback_count: u64,
 }
@@ -91,6 +94,7 @@ pub(crate) struct ProcessTrustState {
     default_backend_platform_count: AtomicU64,
     default_backend_hybrid_count: AtomicU64,
     default_backend_webpki_count: AtomicU64,
+    default_backend_custom_count: AtomicU64,
     android_platform_init_succeeded: AtomicBool,
     android_hybrid_fallback_count: AtomicU64,
 }
@@ -102,6 +106,7 @@ impl ProcessTrustState {
             default_backend_platform_count: AtomicU64::new(0),
             default_backend_hybrid_count: AtomicU64::new(0),
             default_backend_webpki_count: AtomicU64::new(0),
+            default_backend_custom_count: AtomicU64::new(0),
             android_platform_init_succeeded: AtomicBool::new(false),
             android_hybrid_fallback_count: AtomicU64::new(0),
         }
@@ -140,6 +145,7 @@ impl ProcessTrustState {
             InternalTrustBackend::WebpkiRoots => {
                 (BACKEND_WEBPKI_ROOTS, &self.default_backend_webpki_count)
             }
+            InternalTrustBackend::Custom => (BACKEND_CUSTOM, &self.default_backend_custom_count),
         };
         self.default_backend.store(v, Ordering::Relaxed);
         counter.fetch_add(1, Ordering::Relaxed);
@@ -171,6 +177,7 @@ impl ProcessTrustState {
                 Some(InternalTrustBackend::PlatformWithHybridFallback)
             }
             BACKEND_WEBPKI_ROOTS => Some(InternalTrustBackend::WebpkiRoots),
+            BACKEND_CUSTOM => Some(InternalTrustBackend::Custom),
             _ => None,
         };
         TrustStateSnapshot {
@@ -180,6 +187,7 @@ impl ProcessTrustState {
                 .load(Ordering::Relaxed),
             default_backend_hybrid_count: self.default_backend_hybrid_count.load(Ordering::Relaxed),
             default_backend_webpki_count: self.default_backend_webpki_count.load(Ordering::Relaxed),
+            default_backend_custom_count: self.default_backend_custom_count.load(Ordering::Relaxed),
             android_platform_init_succeeded: self
                 .android_platform_init_succeeded
                 .load(Ordering::Relaxed),
@@ -211,6 +219,7 @@ mod tests {
         assert_eq!(snap.default_backend_platform_count, 0);
         assert_eq!(snap.default_backend_hybrid_count, 0);
         assert_eq!(snap.default_backend_webpki_count, 0);
+        assert_eq!(snap.default_backend_custom_count, 0);
         assert!(!snap.android_platform_init_succeeded);
         assert_eq!(snap.android_hybrid_fallback_count, 0);
     }
@@ -221,6 +230,7 @@ mod tests {
             InternalTrustBackend::Platform,
             InternalTrustBackend::PlatformWithHybridFallback,
             InternalTrustBackend::WebpkiRoots,
+            InternalTrustBackend::Custom,
         ] {
             let state = ProcessTrustState::new();
             state.record_default_backend(variant);
@@ -242,17 +252,18 @@ mod tests {
 
     /// Each call to `record_default_backend` bumps exactly the counter
     /// matching the variant being stored, and never any of the other
-    /// two. This is the trend-visibility guarantee documented on
+    /// three. This is the trend-visibility guarantee documented on
     /// `NtsTrustStatus::default_backend_*_count`: a dashboard reading
-    /// the three numbers can attribute every singleton handshake to
+    /// the four numbers can attribute every singleton handshake to
     /// the backend that resolved it, even after subsequent handshakes
     /// overwrite the `default_backend` pointer.
     #[test]
     fn record_default_backend_bumps_only_the_matching_counter() {
-        for (variant, expected_platform, expected_hybrid, expected_webpki) in [
-            (InternalTrustBackend::Platform, 1u64, 0u64, 0u64),
-            (InternalTrustBackend::PlatformWithHybridFallback, 0, 1, 0),
-            (InternalTrustBackend::WebpkiRoots, 0, 0, 1),
+        for (variant, expected_platform, expected_hybrid, expected_webpki, expected_custom) in [
+            (InternalTrustBackend::Platform, 1u64, 0u64, 0u64, 0u64),
+            (InternalTrustBackend::PlatformWithHybridFallback, 0, 1, 0, 0),
+            (InternalTrustBackend::WebpkiRoots, 0, 0, 1, 0),
+            (InternalTrustBackend::Custom, 0, 0, 0, 1),
         ] {
             let state = ProcessTrustState::new();
             state.record_default_backend(variant);
@@ -269,12 +280,16 @@ mod tests {
                 snap.default_backend_webpki_count, expected_webpki,
                 "webpki counter after recording {variant:?}"
             );
+            assert_eq!(
+                snap.default_backend_custom_count, expected_custom,
+                "custom counter after recording {variant:?}"
+            );
         }
     }
 
     /// The per-backend counters are cumulative and monotonic: repeated
     /// stores of the same variant keep incrementing, and switching
-    /// variants does not reset any counter. The sum across the three
+    /// variants does not reset any counter. The sum across the four
     /// equals the total number of `record_default_backend` calls.
     #[test]
     fn record_default_backend_counters_are_cumulative_and_monotonic() {
@@ -285,24 +300,25 @@ mod tests {
         state.record_default_backend(InternalTrustBackend::PlatformWithHybridFallback);
         state.record_default_backend(InternalTrustBackend::WebpkiRoots);
         state.record_default_backend(InternalTrustBackend::WebpkiRoots);
+        state.record_default_backend(InternalTrustBackend::Custom);
+        state.record_default_backend(InternalTrustBackend::Custom);
         let snap = state.snapshot();
         assert_eq!(snap.default_backend_platform_count, 2);
         assert_eq!(snap.default_backend_hybrid_count, 1);
         assert_eq!(snap.default_backend_webpki_count, 3);
+        assert_eq!(snap.default_backend_custom_count, 2);
         assert_eq!(
             snap.default_backend_platform_count
                 + snap.default_backend_hybrid_count
-                + snap.default_backend_webpki_count,
-            6,
-            "the three counters partition every record_default_backend call"
+                + snap.default_backend_webpki_count
+                + snap.default_backend_custom_count,
+            8,
+            "the four counters partition every record_default_backend call"
         );
         // The overwrite-on-store pointer reflects only the most
         // recent store, regardless of how the counters partition the
         // history that preceded it.
-        assert_eq!(
-            snap.default_backend,
-            Some(InternalTrustBackend::WebpkiRoots),
-        );
+        assert_eq!(snap.default_backend, Some(InternalTrustBackend::Custom),);
     }
 
     #[test]
@@ -353,6 +369,7 @@ mod tests {
         assert_eq!(snap.default_backend_platform_count, 0);
         assert_eq!(snap.default_backend_hybrid_count, 1);
         assert_eq!(snap.default_backend_webpki_count, 0);
+        assert_eq!(snap.default_backend_custom_count, 0);
         assert!(snap.android_platform_init_succeeded);
         assert_eq!(snap.android_hybrid_fallback_count, 2);
     }

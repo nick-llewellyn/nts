@@ -1,14 +1,63 @@
 # Changelog
 
+## 5.2.0
+
+### Added
+
+- `TrustMode.custom` alongside `customRoots` list of bytes (PEM or DER format)
+  to trust only caller-supplied custom root certificates. This allows consumers to
+  authenticate TLS connections in private environments or using custom/enterprise CAs
+  without relying on the global platform store or other clients.
+- Plumbed a fourth trust telemetry counter (`custom`) to trace custom-roots handshakes.
+- Validates constructor parameters of `NtsClient` synchronously.
+
+### Internal
+
+- Custom-roots bundle is now held behind `Arc<[u8]>` inside the internal
+  `KeTrustMode` and stored on `NtsClient` in that internal form, so the per-
+  `query` / per-`warmCookies` and per-handshake `.clone()` calls that thread
+  the trust-mode through the cookie-cache and KE-handshake layers are O(1)
+  atomic refcount bumps rather than full-bundle copies. The public
+  `TrustMode.custom` + `customRoots: List<int>?` consumer API is
+  unchanged; the internal FRB-generated Dart bindings were updated to
+  decode the `Custom` variant's payload (`Uint8List field0`) via the
+  SSE codec.
+- `tool/check_bindings.dart` now post-processes the FRB-generated
+  `rust/src/frb_generated.rs` and `lib/src/ffi/frb_generated.dart` to
+  replace the empty diagnostic arms FRB 2.12 emits as the defensive
+  `#[non_exhaustive]` catch-all in its generated codec impls
+  (`unimplemented!("")` in the Rust SSE codec, `UnimplementedError('')`
+  in the Dart SSE codec, `Exception("unreachable")` in the Dart DCO
+  codec) with diagnostic-bearing forms that include the unexpected
+  wire-format tag value. Runtime semantics are unchanged (the arms
+  remain unreachable for exhaustive enums in practice), but any
+  unexpected panic in generated codec code is now greppable back to its
+  FRB origin and identifies which tag triggered it.
+- `build_with_custom_roots` now accepts PEM bundles whose first
+  `-----BEGIN CERTIFICATE-----` marker is preceded by an attribute
+  preamble (`Bag Attributes` / `subject=` / `issuer=` lines that
+  `openssl pkcs7 -print_certs` and PKCS12 exports routinely emit)
+  rather than misclassifying those buffers as DER. Detection now
+  fires when the UTF-8 view of the input contains the BEGIN marker
+  anywhere, not only at the first non-whitespace byte; raw DER
+  input continues to take the DER branch since it is not valid
+  UTF-8.
+- `build_tls_config_inner` (Android and non-Android) now `match`es
+  `KeTrustMode` exhaustively in the fallback branch instead of an
+  `if trust_mode == KeTrustMode::PlatformOnly { … } else { … }`
+  shape. Adding a future `KeTrustMode` variant will now force a
+  compile-time decision at this site rather than silently
+  inheriting the `PlatformWithFallback` arm.
+
 ## 5.1.0
 
 ### Added
 
 - `TrustMode.bundledOnly` validates exclusively against the
   bundled `webpki-roots` set. No platform-store consultation, no
-  silent fallback. Use when the consumer's authentication contract
-  requires a library-controlled trust anchor (see
-  `trusted_time-m8t` for the motivating consumer).
+  silent fallback. This allows consumers to enforce strict validation against the
+  library's static bundle, preventing platform-level CA compromises or middlebox/decryption
+  proxies from intercepting the exchange.
 
 ## 5.0.0
 

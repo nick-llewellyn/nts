@@ -45,7 +45,7 @@ use crate::nts::cookies::CookieJar;
 use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
 use crate::nts::ke::{
     perform_handshake, KeError, KeFailure, KeOutcome, KePhaseTimings, KeRequest, KeTimeoutPhase,
-    OFFERED_AEAD_IDS,
+    KeTrustMode, OFFERED_AEAD_IDS,
 };
 use crate::nts::ntp::{build_client_request, parse_server_response, ClientRequest, NtpError};
 
@@ -340,7 +340,7 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
 
 /// Snapshot the process-global trust-anchor diagnostic state.
 ///
-/// Returns six observables that callers cannot recover from a
+/// Returns seven observables that callers cannot recover from a
 /// per-query [`NtsTimeSample`] alone:
 ///
 /// 1. `default_client_backend` — backend the *default singleton*
@@ -350,7 +350,7 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
 ///    started, or all queries so far went through caller-minted
 ///    clients). This is an overwrite-on-store event marker, not a
 ///    steady-state signal: callers that want trend visibility
-///    should read the three counters in (2)–(4) instead, since a
+///    should read the four counters in (2)–(5) instead, since a
 ///    transient `WebpkiRoots`-resolving handshake will latch this
 ///    field permanently until the next `Platform`-resolving one.
 ///    Custom-client callers should read the per-handshake
@@ -365,22 +365,24 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
 ///    non-Android platforms (the fallback path only exists on Android).
 /// 4. `default_backend_webpki_count` — cumulative count of
 ///    singleton handshakes that resolved to [`TrustBackend::WebpkiRoots`].
-/// 5. `android_platform_init_succeeded` — `true` iff
+/// 5. `default_backend_custom_count` — cumulative count of
+///    singleton handshakes that resolved to [`TrustBackend::Custom`].
+/// 6. `android_platform_init_succeeded` — `true` iff
 ///    `com.nllewellyn.nts.PlatformInit.nativeInit` reported success
 ///    at least once. `false` on every other platform. A `false` value
 ///    on Android implies subsequent handshakes will run against the
 ///    `webpki-roots` static bundle regardless of [`TrustMode`].
-/// 6. `android_hybrid_fallback_count` — cumulative count of TLS
+/// 7. `android_hybrid_fallback_count` — cumulative count of TLS
 ///    chains the Android `HybridVerifier` has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
 ///    platforms. The curated fallback-eligible failure shapes are
 ///    documented on the `HybridVerifier` Rust source.
 ///
-/// Reads six atomics with `Relaxed` ordering. The snapshot is
+/// Reads seven atomics with `Relaxed` ordering. The snapshot is
 /// intended for human / dashboard consumption, not for cross-thread
 /// synchronisation; per-counter monotonicity holds, but cross-counter
 /// invariants within a single snapshot do not — e.g. the sum of the
-/// three `default_backend_*_count` fields can be observed to lag the
+/// four `default_backend_*_count` fields can be observed to lag the
 /// `default_client_backend` pointer by a single store-pair across
 /// concurrent snapshots.
 ///
@@ -395,6 +397,7 @@ pub fn nts_trust_status() -> NtsTrustStatus {
         default_backend_platform_count: snap.default_backend_platform_count,
         default_backend_hybrid_count: snap.default_backend_hybrid_count,
         default_backend_webpki_count: snap.default_backend_webpki_count,
+        default_backend_custom_count: snap.default_backend_custom_count,
         android_platform_init_succeeded: snap.android_platform_init_succeeded,
         android_hybrid_fallback_count: snap.android_hybrid_fallback_count,
     }
@@ -429,6 +432,8 @@ pub enum TrustBackend {
     /// [`TrustMode::PlatformOnly`] for the opt-in that surfaces this
     /// path as [`NtsError::TrustBackendUnavailable`] instead.
     WebpkiRoots,
+    /// Caller-supplied custom root certificates authenticated this chain.
+    Custom,
 }
 
 /// Caller-selected policy for which trust-anchor backend [`NtsClient`]
@@ -439,7 +444,7 @@ pub enum TrustBackend {
 /// functions ([`nts_query`], [`nts_warm_cookies`]) is constructed with
 /// [`TrustMode::PlatformWithFallback`] and never changes, so existing
 /// callers see no behaviour change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TrustMode {
     /// Platform store is the primary source of truth; on
     /// `build_with_native_verifier` failure the client silently
@@ -473,6 +478,8 @@ pub enum TrustMode {
     PlatformOnly,
     /// Webpki-roots static bundle only; no platform-store consultation at all.
     BundledOnly,
+    /// Caller-supplied custom root certificates in PEM or DER format.
+    Custom(Vec<u8>),
 }
 
 impl From<TrustMode> for crate::nts::ke::KeTrustMode {
@@ -481,6 +488,30 @@ impl From<TrustMode> for crate::nts::ke::KeTrustMode {
             TrustMode::PlatformWithFallback => Self::PlatformWithFallback,
             TrustMode::PlatformOnly => Self::PlatformOnly,
             TrustMode::BundledOnly => Self::BundledOnly,
+            // One-time `Vec<u8>` → `Arc<[u8]>` conversion at the public-
+            // API boundary. `into_boxed_slice` shrinks the buffer to
+            // exact length (no extra realloc when `len == cap`, which
+            // is the common case for FRB-marshaled `Vec<u8>` arriving
+            // from Dart), and `Arc::from(Box<[u8]>)` is a zero-copy
+            // wrap. All downstream `.clone()`s on the resulting
+            // `KeTrustMode` are O(1) atomic refcount bumps regardless
+            // of bundle size.
+            TrustMode::Custom(bytes) => Self::Custom(Arc::from(bytes.into_boxed_slice())),
+        }
+    }
+}
+
+impl From<crate::nts::ke::KeTrustMode> for TrustMode {
+    fn from(m: crate::nts::ke::KeTrustMode) -> Self {
+        match m {
+            crate::nts::ke::KeTrustMode::PlatformWithFallback => Self::PlatformWithFallback,
+            crate::nts::ke::KeTrustMode::PlatformOnly => Self::PlatformOnly,
+            crate::nts::ke::KeTrustMode::BundledOnly => Self::BundledOnly,
+            // `Arc<[u8]>` → `Vec<u8>` materialization for the public
+            // FRB-marshaled wire type. Only the `NtsClient::trust_mode`
+            // getter calls this; the per-`query`/per-handshake hot
+            // paths stay on `KeTrustMode` and never reach here.
+            crate::nts::ke::KeTrustMode::Custom(bytes) => Self::Custom(bytes.to_vec()),
         }
     }
 }
@@ -493,6 +524,7 @@ impl From<crate::nts::ke::KeTrustBackend> for TrustBackend {
                 Self::PlatformWithHybridFallback
             }
             crate::nts::ke::KeTrustBackend::WebpkiRoots => Self::WebpkiRoots,
+            crate::nts::ke::KeTrustBackend::Custom => Self::Custom,
         }
     }
 }
@@ -503,6 +535,7 @@ impl From<TrustBackend> for crate::nts::trust_state::InternalTrustBackend {
             TrustBackend::Platform => Self::Platform,
             TrustBackend::PlatformWithHybridFallback => Self::PlatformWithHybridFallback,
             TrustBackend::WebpkiRoots => Self::WebpkiRoots,
+            TrustBackend::Custom => Self::Custom,
         }
     }
 }
@@ -515,6 +548,7 @@ impl From<crate::nts::trust_state::InternalTrustBackend> for TrustBackend {
                 Self::PlatformWithHybridFallback
             }
             crate::nts::trust_state::InternalTrustBackend::WebpkiRoots => Self::WebpkiRoots,
+            crate::nts::trust_state::InternalTrustBackend::Custom => Self::Custom,
         }
     }
 }
@@ -524,12 +558,16 @@ impl From<crate::nts::trust_state::InternalTrustBackend> for TrustBackend {
 ///
 /// The fields combine one overwrite-on-store event marker (which
 /// backend the default singleton client *most recently* resolved
-/// to), three cumulative counters that partition the singleton's
-/// resolution history by backend, a static flag indicating whether
-/// the Android JNI bootstrap succeeded, and one Android-only
-/// fallback counter. Fields not relevant to the current platform
-/// are reported with the documented "n/a" sentinel rather than
-/// omitted, so the snapshot has the same shape on every host.
+/// to), four cumulative counters that partition the singleton's
+/// resolution history by backend
+/// (`default_backend_platform_count`,
+/// `default_backend_hybrid_count`, `default_backend_webpki_count`,
+/// `default_backend_custom_count`), a static flag indicating
+/// whether the Android JNI bootstrap succeeded, and one
+/// Android-only fallback counter. Fields not relevant to the
+/// current platform are reported with the documented "n/a"
+/// sentinel rather than omitted, so the snapshot has the same
+/// shape on every host.
 #[derive(Debug, Clone)]
 pub struct NtsTrustStatus {
     /// Backend the default singleton client most recently resolved to
@@ -537,7 +575,7 @@ pub struct NtsTrustStatus {
     /// against the singleton (e.g. process just started, or all
     /// queries so far went through caller-minted [`NtsClient`]
     /// instances). This is an overwrite-on-store event marker, not
-    /// a steady-state signal: prefer the three `default_backend_*_count`
+    /// a steady-state signal: prefer the four `default_backend_*_count`
     /// fields below for dashboard panels that need trend visibility
     /// across the singleton's resolution history. Custom-client
     /// callers should read the per-handshake `trust_backend` field
@@ -565,6 +603,10 @@ pub struct NtsTrustStatus {
     /// singleton. Same monotonicity contract as
     /// `default_backend_platform_count`.
     pub default_backend_webpki_count: u64,
+    /// Cumulative count of default-singleton handshakes that resolved
+    /// to [`TrustBackend::Custom`] since process start. Same monotonicity
+    /// contract as `default_backend_platform_count`.
+    pub default_backend_custom_count: u64,
     /// On Android: `true` iff
     /// `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
     /// invoked at least once and reported success. `false` on every
@@ -790,6 +832,7 @@ impl From<KeFailure> for NtsError {
                 TrustBackend::PlatformWithHybridFallback
             }
             crate::nts::ke::KeTrustBackend::WebpkiRoots => TrustBackend::WebpkiRoots,
+            crate::nts::ke::KeTrustBackend::Custom => TrustBackend::Custom,
         });
         Self::from(f.error).with_trust_backend(public_backend)
     }
@@ -1225,7 +1268,21 @@ pub struct NtsClient {
     /// `query`/`warm_cookies` → `nts_*_inner` → `SessionTable::checkout`
     /// → `establish_session` → `KeRequest::trust_mode` →
     /// `build_tls_config`. New in 3.0.0.
-    trust_mode: TrustMode,
+    ///
+    /// Stored as the internal `KeTrustMode` (a crate-internal type
+    /// with no Dart-side counterpart, distinct from the public
+    /// `TrustMode` which is the wire-facing enum) so the per-`query`
+    /// / per-`warm_cookies` plumbing clones a `KeTrustMode`
+    /// — whose `Custom` variant holds the roots bundle behind an
+    /// `Arc<[u8]>` — instead of the public `Vec<u8>` variant.
+    /// Per-call cost is therefore O(1) atomic refcount bump
+    /// regardless of bundle size. The single `Vec<u8>` → `Arc<[u8]>`
+    /// materialization happens once, at construction time, inside
+    /// the `From<TrustMode> for KeTrustMode` impl. The reverse
+    /// conversion runs only when the public [`NtsClient::trust_mode`]
+    /// getter (`NtsClient.trustMode` on Dart) is called, which is a
+    /// diagnostics path rather than a hot loop.
+    trust_mode: KeTrustMode,
     /// `true` for the process-wide default singleton client returned
     /// by [`default_nts_client`]; `false` for every caller-minted
     /// client. Drives whether the post-handshake trust-backend value
@@ -1256,7 +1313,7 @@ impl NtsClient {
     pub fn new() -> Self {
         Self {
             table: SessionTable::new(),
-            trust_mode: TrustMode::PlatformWithFallback,
+            trust_mode: KeTrustMode::PlatformWithFallback,
             is_default: false,
         }
     }
@@ -1276,7 +1333,7 @@ impl NtsClient {
     pub fn with_trust_mode(trust_mode: TrustMode) -> Self {
         Self {
             table: SessionTable::new(),
-            trust_mode,
+            trust_mode: trust_mode.into(),
             is_default: false,
         }
     }
@@ -1285,9 +1342,16 @@ impl NtsClient {
     /// for diagnostics and for callers that round-trip a client
     /// handle through their own configuration layer and need to
     /// re-derive the policy without keeping a parallel record.
+    ///
+    /// The returned `TrustMode::Custom` (`TrustMode.custom` on Dart)
+    /// re-materializes the roots bundle as a `Vec<u8>` for the FRB
+    /// wire shape, so this call is O(bundle size). It is intended
+    /// for diagnostics only; the per-handshake hot path stays on
+    /// the internal `KeTrustMode` (crate-internal) and never reaches
+    /// this getter.
     #[flutter_rust_bridge::frb(sync)]
     pub fn trust_mode(&self) -> TrustMode {
-        self.trust_mode
+        self.trust_mode.clone().into()
     }
 
     /// Per-client equivalent of the top-level `nts_query`
@@ -1303,7 +1367,7 @@ impl NtsClient {
             spec,
             timeout_ms,
             dns_concurrency_cap,
-            self.trust_mode,
+            self.trust_mode.clone(),
             self.is_default,
         )
     }
@@ -1321,7 +1385,7 @@ impl NtsClient {
             spec,
             timeout_ms,
             dns_concurrency_cap,
-            self.trust_mode,
+            self.trust_mode.clone(),
             self.is_default,
         )
     }
@@ -1372,7 +1436,7 @@ fn default_nts_client() -> &'static NtsClient {
     static C: OnceLock<NtsClient> = OnceLock::new();
     C.get_or_init(|| NtsClient {
         table: SessionTable::new(),
-        trust_mode: TrustMode::PlatformWithFallback,
+        trust_mode: KeTrustMode::PlatformWithFallback,
         is_default: true,
     })
 }
@@ -1520,7 +1584,7 @@ fn establish_session(
     spec: &NtsServerSpec,
     timeout: Duration,
     dns_concurrency_cap: usize,
-    trust_mode: TrustMode,
+    trust_mode: KeTrustMode,
 ) -> Result<(Session, KePhaseTimings), NtsError> {
     let req = KeRequest {
         host: spec.host.clone(),
@@ -1528,7 +1592,7 @@ fn establish_session(
         aead_algorithms: OFFERED_AEAD_IDS.to_vec(),
         timeout: Some(timeout),
         dns_concurrency_cap,
-        trust_mode: trust_mode.into(),
+        trust_mode,
     };
     let outcome: KeOutcome = perform_handshake(&req)?;
     let trust_backend: TrustBackend = outcome.trust_backend.into();
@@ -1655,10 +1719,10 @@ impl SessionTable {
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
-        trust_mode: TrustMode,
+        trust_mode: KeTrustMode,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         self.checkout_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
-            establish_session(s, t, c, trust_mode)
+            establish_session(s, t, c, trust_mode.clone())
         })
     }
 
@@ -2088,10 +2152,10 @@ impl SessionTable {
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
-        trust_mode: TrustMode,
+        trust_mode: KeTrustMode,
     ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
         self.warm_cookies_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
-            establish_session(s, t, c, trust_mode)
+            establish_session(s, t, c, trust_mode.clone())
         })
     }
 
@@ -2506,7 +2570,7 @@ fn nts_query_inner(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
-    trust_mode: TrustMode,
+    trust_mode: KeTrustMode,
     is_default_client: bool,
 ) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
@@ -2712,7 +2776,7 @@ fn nts_warm_cookies_inner(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
-    trust_mode: TrustMode,
+    trust_mode: KeTrustMode,
     is_default_client: bool,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
     validate(&spec)?;

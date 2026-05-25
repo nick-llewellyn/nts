@@ -102,6 +102,9 @@ Future<void> main(List<String> args) async {
   // Apply lint-suppression patches that FRB does not emit on its own. Run
   // before `dart format` so the formatter sees the final content.
   _lintIgnorePatches.forEach(_addLintsToIgnoreForFile);
+  _patchFrbGeneratedUnimplementedMessages();
+  _patchDartFrbGeneratedUnimplementedMessages();
+  _patchDartFrbGeneratedDcoUnreachableMessages();
 
   // Format the regenerated Dart so the diff check below catches semantic
   // drift only -- not formatter noise that CI's `dart format` step would
@@ -325,5 +328,117 @@ void _addLintsToIgnoreForFile(String path, List<String> lintsToAdd) {
   file.writeAsStringSync(patched);
   stdout.writeln(
     'Patched $path: added ${missing.join(', ')} to ignore_for_file',
+  );
+}
+
+// Replace the `unimplemented!("")` arms FRB 2.12 emits as the defensive
+// catch-all for `#[non_exhaustive]` enum support in its generated SSE
+// encode/decode/`IntoDart` impls. The arms are unreachable for the
+// exhaustive enums in `crate::api::*`, but the empty message means a
+// future wire-format mismatch panics with no diagnostic context. Replace
+// the empty string with a fixed marker so any unexpected panic in
+// generated codec code is greppable back to its FRB origin without
+// changing the runtime semantics (still `unimplemented!`, still
+// unreachable in practice).
+//
+// Idempotent: the pattern only matches the FRB-emitted empty form, so
+// running the patcher twice in a row is a no-op on the second run.
+void _patchFrbGeneratedUnimplementedMessages() {
+  const path = 'rust/src/frb_generated.rs';
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln(
+      '$_errorPrefix expected generated file not found: $path '
+      '(post-codegen FRB-unimplemented patch cannot be applied)',
+    );
+    exit(1);
+  }
+  const needle = 'unimplemented!("");';
+  const replacement =
+      'unimplemented!("flutter_rust_bridge generated codec: '
+      'unexpected enum variant tag in SSE wire format");';
+  final original = file.readAsStringSync();
+  if (!original.contains(needle)) return;
+  final patched = original.replaceAll(needle, replacement);
+  final replaced =
+      needle.allMatches(original).length - needle.allMatches(patched).length;
+  file.writeAsStringSync(patched);
+  stdout.writeln(
+    'Patched $path: replaced $replaced empty `unimplemented!("")` arm(s) '
+    'with diagnostic-bearing form',
+  );
+}
+
+// Patches the FRB-generated Dart file to include the unexpected enum variant
+// tag in the UnimplementedError message thrown by each SSE codec default arm.
+// FRB emits `throw UnimplementedError('');` for these arms; the patched form
+// includes `$tag_` (in scope at every default arm site) so callers can
+// diagnose which wire tag triggered the error.
+//
+// Idempotent: the pattern only matches the FRB-emitted empty-string form, so
+// running the patcher twice in a row is a no-op on the second run.
+void _patchDartFrbGeneratedUnimplementedMessages() {
+  const path = 'lib/src/ffi/frb_generated.dart';
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln(
+      '$_errorPrefix expected generated file not found: $path '
+      '(post-codegen Dart FRB-unimplemented patch cannot be applied)',
+    );
+    exit(1);
+  }
+  const needle = "throw UnimplementedError('');";
+  const replacement =
+      "throw UnimplementedError(\n"
+      "          'flutter_rust_bridge generated codec: "
+      "unexpected enum variant tag: \$tag_',\n"
+      "        );";
+  final original = file.readAsStringSync();
+  if (!original.contains(needle)) return;
+  final patched = original.replaceAll(needle, replacement);
+  final replaced =
+      needle.allMatches(original).length - needle.allMatches(patched).length;
+  file.writeAsStringSync(patched);
+  stdout.writeln(
+    "Patched $path: replaced $replaced empty UnimplementedError('') "
+    'arm(s) with diagnostic-bearing form',
+  );
+}
+
+// Patches the FRB-generated Dart file to include the unexpected enum variant
+// tag in the `Exception("unreachable")` thrown by each DCO codec default arm.
+// FRB emits `throw Exception("unreachable");` for these arms; the patched form
+// includes `${raw[0]}` (the tag local in scope at every DCO default arm site
+// for tagged-variant decoders) so callers can diagnose which wire tag
+// triggered the error. Symmetric to the SSE-codec patcher above, but matches
+// the DCO codec's exception type and tag-access shape.
+//
+// Idempotent: the pattern only matches the FRB-emitted bare-"unreachable" form,
+// so running the patcher twice in a row is a no-op on the second run.
+void _patchDartFrbGeneratedDcoUnreachableMessages() {
+  const path = 'lib/src/ffi/frb_generated.dart';
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln(
+      '$_errorPrefix expected generated file not found: $path '
+      '(post-codegen Dart FRB-DCO-unreachable patch cannot be applied)',
+    );
+    exit(1);
+  }
+  const needle = 'throw Exception("unreachable");';
+  const replacement =
+      'throw Exception(\n'
+      "          'flutter_rust_bridge generated codec: "
+      "unexpected enum variant tag in DCO wire format: \${raw[0]}',\n"
+      '        );';
+  final original = file.readAsStringSync();
+  if (!original.contains(needle)) return;
+  final patched = original.replaceAll(needle, replacement);
+  final replaced =
+      needle.allMatches(original).length - needle.allMatches(patched).length;
+  file.writeAsStringSync(patched);
+  stdout.writeln(
+    'Patched $path: replaced $replaced `Exception("unreachable")` '
+    'DCO arm(s) with diagnostic-bearing form',
   );
 }

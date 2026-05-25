@@ -2409,8 +2409,9 @@ fn trust_mode_and_backend_conversions_are_total() {
         TrustMode::PlatformWithFallback,
         TrustMode::PlatformOnly,
         TrustMode::BundledOnly,
+        TrustMode::Custom(b"foo".to_vec()),
     ] {
-        let ke: crate::nts::ke::KeTrustMode = m.into();
+        let ke: crate::nts::ke::KeTrustMode = m.clone().into();
         match (m, ke) {
             (
                 TrustMode::PlatformWithFallback,
@@ -2418,6 +2419,13 @@ fn trust_mode_and_backend_conversions_are_total() {
             ) => {}
             (TrustMode::PlatformOnly, crate::nts::ke::KeTrustMode::PlatformOnly) => {}
             (TrustMode::BundledOnly, crate::nts::ke::KeTrustMode::BundledOnly) => {}
+            (TrustMode::Custom(b1), crate::nts::ke::KeTrustMode::Custom(b2)) => {
+                // `b1: Vec<u8>` (public-wire shape), `b2: Arc<[u8]>`
+                // (internal cheap-clone shape). Compare via slice
+                // projection so the assertion stays meaningful across
+                // the conversion's Vec-to-Arc materialization.
+                assert_eq!(b1.as_slice(), b2.as_ref());
+            }
             _ => panic!("TrustMode -> KeTrustMode mapping diverged"),
         }
     }
@@ -2426,6 +2434,7 @@ fn trust_mode_and_backend_conversions_are_total() {
         crate::nts::ke::KeTrustBackend::Platform,
         crate::nts::ke::KeTrustBackend::PlatformWithHybridFallback,
         crate::nts::ke::KeTrustBackend::WebpkiRoots,
+        crate::nts::ke::KeTrustBackend::Custom,
     ] {
         let public: TrustBackend = b.into();
         match (b, public) {
@@ -2435,6 +2444,7 @@ fn trust_mode_and_backend_conversions_are_total() {
                 TrustBackend::PlatformWithHybridFallback,
             ) => {}
             (crate::nts::ke::KeTrustBackend::WebpkiRoots, TrustBackend::WebpkiRoots) => {}
+            (crate::nts::ke::KeTrustBackend::Custom, TrustBackend::Custom) => {}
             _ => panic!("KeTrustBackend -> TrustBackend mapping diverged"),
         }
     }
@@ -2462,6 +2472,7 @@ fn nts_trust_status_snapshot_is_safe_with_no_handshake() {
     assert!(second.default_backend_platform_count >= status.default_backend_platform_count);
     assert!(second.default_backend_hybrid_count >= status.default_backend_hybrid_count);
     assert!(second.default_backend_webpki_count >= status.default_backend_webpki_count);
+    assert!(second.default_backend_custom_count >= status.default_backend_custom_count);
 }
 
 /// Cached-session checkouts must surface the original handshake's
@@ -2495,7 +2506,7 @@ fn checkout_cache_hit_preserves_session_trust_backend() {
             &spec,
             Duration::from_secs(5),
             4,
-            TrustMode::PlatformWithFallback,
+            crate::nts::ke::KeTrustMode::PlatformWithFallback,
         )
         .expect("cache hit");
     assert_eq!(ctx.trust_backend, TrustBackend::PlatformWithHybridFallback);
@@ -3170,6 +3181,7 @@ fn trust_backend_round_trips_through_internal() {
         TrustBackend::Platform,
         TrustBackend::PlatformWithHybridFallback,
         TrustBackend::WebpkiRoots,
+        TrustBackend::Custom,
     ] {
         let internal: crate::nts::trust_state::InternalTrustBackend = variant.into();
         let back: TrustBackend = internal.into();
@@ -3192,6 +3204,7 @@ fn ke_trust_backend_maps_to_public_trust_backend() {
             TrustBackend::PlatformWithHybridFallback,
         ),
         (KeTrustBackend::WebpkiRoots, TrustBackend::WebpkiRoots),
+        (KeTrustBackend::Custom, TrustBackend::Custom),
     ] {
         let mapped: TrustBackend = ke_variant.into();
         assert_eq!(mapped, public_variant, "{ke_variant:?} did not map");
@@ -3212,8 +3225,12 @@ fn trust_mode_maps_to_ke_trust_mode() {
         ),
         (TrustMode::PlatformOnly, KeTrustMode::PlatformOnly),
         (TrustMode::BundledOnly, KeTrustMode::BundledOnly),
+        (
+            TrustMode::Custom(b"foo".to_vec()),
+            KeTrustMode::Custom(std::sync::Arc::from(&b"foo"[..])),
+        ),
     ] {
-        let mapped: KeTrustMode = public_variant.into();
+        let mapped: KeTrustMode = public_variant.clone().into();
         assert_eq!(mapped, ke_variant, "{public_variant:?} did not map");
     }
 }

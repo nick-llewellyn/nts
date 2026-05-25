@@ -23,6 +23,7 @@
 // See `ARCHITECTURE.md`'s "Public API stability layer" section for
 // the full rationale.
 
+import 'dart:typed_data';
 import '../ffi/api/nts.dart' as ffi;
 import 'errors.dart';
 import 'models.dart';
@@ -342,8 +343,16 @@ class NtsClient {
   /// cannot be constructed; appropriate when a pinned corporate CA
   /// or MDM-installed root is the load-bearing trust anchor and a
   /// silent fallback to the static bundle would defeat the
-  /// deployment's TLS-inspection posture. The choice is immutable
-  /// for the life of the client.
+  /// deployment's TLS-inspection posture. Pass [TrustMode.bundledOnly]
+  /// to bypass the platform trust store entirely and only trust
+  /// the bundled root certificates (`webpki-roots`). Pass [TrustMode.custom]
+  /// alongside a non-empty byte sequence in [customRoots] — either a
+  /// PEM-encoded certificate bundle (one or more
+  /// `-----BEGIN CERTIFICATE-----` blocks, optionally preceded by a
+  /// PKCS7-style "Bag Attributes" / "subject=" preamble) or a single
+  /// DER-encoded certificate's raw bytes — to trust only those
+  /// caller-supplied custom root certificates. The choice is
+  /// immutable for the life of the client.
   ///
   /// Synchronous: dispatches through the FRB bridge to mint the
   /// underlying Rust handle in-line. `await NtsRustLib.init()` must
@@ -352,10 +361,26 @@ class NtsClient {
   /// Apps that mint a long-lived [NtsClient] during startup should
   /// do so after the same `await NtsRustLib.init()` they would do
   /// before calling [ntsQuery].
-  factory NtsClient({TrustMode trustMode = TrustMode.platformWithFallback}) {
+  factory NtsClient({
+    TrustMode trustMode = TrustMode.platformWithFallback,
+    List<int>? customRoots,
+  }) {
+    if (customRoots != null && trustMode != TrustMode.custom) {
+      throw ArgumentError(
+        'customRoots can only be set when trustMode is TrustMode.custom',
+      );
+    }
+    if (trustMode == TrustMode.custom &&
+        (customRoots == null || customRoots.isEmpty)) {
+      throw ArgumentError(
+        'customRoots must be provided and non-empty when trustMode is TrustMode.custom',
+      );
+    }
     final inner = trustMode == TrustMode.platformWithFallback
         ? ffi.NtsClient()
-        : ffi.NtsClient.withTrustMode(trustMode: _ffiTrustMode(trustMode));
+        : ffi.NtsClient.withTrustMode(
+            trustMode: _ffiTrustMode(trustMode, customRoots),
+          );
     return NtsClient._(inner);
   }
 
@@ -643,18 +668,24 @@ TrustBackend _publicTrustBackend(ffi.TrustBackend b) => switch (b) {
   ffi.TrustBackend.platformWithHybridFallback =>
     TrustBackend.platformWithHybridFallback,
   ffi.TrustBackend.webpkiRoots => TrustBackend.webpkiRoots,
+  ffi.TrustBackend.custom => TrustBackend.custom,
 };
 
 TrustMode _publicTrustMode(ffi.TrustMode m) => switch (m) {
-  ffi.TrustMode.platformWithFallback => TrustMode.platformWithFallback,
-  ffi.TrustMode.platformOnly => TrustMode.platformOnly,
-  ffi.TrustMode.bundledOnly => TrustMode.bundledOnly,
+  ffi.TrustMode_PlatformWithFallback() => TrustMode.platformWithFallback,
+  ffi.TrustMode_PlatformOnly() => TrustMode.platformOnly,
+  ffi.TrustMode_BundledOnly() => TrustMode.bundledOnly,
+  ffi.TrustMode_Custom() => TrustMode.custom,
 };
 
-ffi.TrustMode _ffiTrustMode(TrustMode m) => switch (m) {
-  TrustMode.platformWithFallback => ffi.TrustMode.platformWithFallback,
-  TrustMode.platformOnly => ffi.TrustMode.platformOnly,
-  TrustMode.bundledOnly => ffi.TrustMode.bundledOnly,
+ffi.TrustMode _ffiTrustMode(
+  TrustMode m, [
+  List<int>? customRoots,
+]) => switch (m) {
+  TrustMode.platformWithFallback => const ffi.TrustMode.platformWithFallback(),
+  TrustMode.platformOnly => const ffi.TrustMode.platformOnly(),
+  TrustMode.bundledOnly => const ffi.TrustMode.bundledOnly(),
+  TrustMode.custom => ffi.TrustMode.custom(Uint8List.fromList(customRoots!)),
 };
 
 NtsTrustStatus _publicTrustStatus(ffi.NtsTrustStatus s) => NtsTrustStatus(
@@ -664,6 +695,7 @@ NtsTrustStatus _publicTrustStatus(ffi.NtsTrustStatus s) => NtsTrustStatus(
   defaultBackendPlatformCount: s.defaultBackendPlatformCount,
   defaultBackendHybridCount: s.defaultBackendHybridCount,
   defaultBackendWebpkiCount: s.defaultBackendWebpkiCount,
+  defaultBackendCustomCount: s.defaultBackendCustomCount,
   androidPlatformInitSucceeded: s.androidPlatformInitSucceeded,
   androidHybridFallbackCount: s.androidHybridFallbackCount,
 );

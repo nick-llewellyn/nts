@@ -725,7 +725,7 @@ impl SseDecode for crate::api::nts::NtsError {
                 return crate::api::nts::NtsError::Internal(var_field0);
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }
@@ -773,6 +773,7 @@ impl SseDecode for crate::api::nts::NtsTrustStatus {
         let mut var_defaultBackendPlatformCount = <u64>::sse_decode(deserializer);
         let mut var_defaultBackendHybridCount = <u64>::sse_decode(deserializer);
         let mut var_defaultBackendWebpkiCount = <u64>::sse_decode(deserializer);
+        let mut var_defaultBackendCustomCount = <u64>::sse_decode(deserializer);
         let mut var_androidPlatformInitSucceeded = <bool>::sse_decode(deserializer);
         let mut var_androidHybridFallbackCount = <u64>::sse_decode(deserializer);
         return crate::api::nts::NtsTrustStatus {
@@ -780,6 +781,7 @@ impl SseDecode for crate::api::nts::NtsTrustStatus {
             default_backend_platform_count: var_defaultBackendPlatformCount,
             default_backend_hybrid_count: var_defaultBackendHybridCount,
             default_backend_webpki_count: var_defaultBackendWebpkiCount,
+            default_backend_custom_count: var_defaultBackendCustomCount,
             android_platform_init_succeeded: var_androidPlatformInitSucceeded,
             android_hybrid_fallback_count: var_androidHybridFallbackCount,
         };
@@ -851,6 +853,7 @@ impl SseDecode for crate::api::nts::TrustBackend {
             0 => crate::api::nts::TrustBackend::Platform,
             1 => crate::api::nts::TrustBackend::PlatformWithHybridFallback,
             2 => crate::api::nts::TrustBackend::WebpkiRoots,
+            3 => crate::api::nts::TrustBackend::Custom,
             _ => unreachable!("Invalid variant for TrustBackend: {}", inner),
         };
     }
@@ -859,13 +862,25 @@ impl SseDecode for crate::api::nts::TrustBackend {
 impl SseDecode for crate::api::nts::TrustMode {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <i32>::sse_decode(deserializer);
-        return match inner {
-            0 => crate::api::nts::TrustMode::PlatformWithFallback,
-            1 => crate::api::nts::TrustMode::PlatformOnly,
-            2 => crate::api::nts::TrustMode::BundledOnly,
-            _ => unreachable!("Invalid variant for TrustMode: {}", inner),
-        };
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                return crate::api::nts::TrustMode::PlatformWithFallback;
+            }
+            1 => {
+                return crate::api::nts::TrustMode::PlatformOnly;
+            }
+            2 => {
+                return crate::api::nts::TrustMode::BundledOnly;
+            }
+            3 => {
+                let mut var_field0 = <Vec<u8>>::sse_decode(deserializer);
+                return crate::api::nts::TrustMode::Custom(var_field0);
+            }
+            _ => {
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+            }
+        }
     }
 }
 
@@ -1049,7 +1064,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsError {
                 [8.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }
@@ -1119,6 +1134,9 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTrustStatus {
                 .into_into_dart()
                 .into_dart(),
             self.default_backend_webpki_count
+                .into_into_dart()
+                .into_dart(),
+            self.default_backend_custom_count
                 .into_into_dart()
                 .into_dart(),
             self.android_platform_init_succeeded
@@ -1213,6 +1231,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::TrustBackend {
             Self::Platform => 0.into_dart(),
             Self::PlatformWithHybridFallback => 1.into_dart(),
             Self::WebpkiRoots => 2.into_dart(),
+            Self::Custom => 3.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -1229,10 +1248,15 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::TrustBackend>
 impl flutter_rust_bridge::IntoDart for crate::api::nts::TrustMode {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
-            Self::PlatformWithFallback => 0.into_dart(),
-            Self::PlatformOnly => 1.into_dart(),
-            Self::BundledOnly => 2.into_dart(),
-            _ => unreachable!(),
+            crate::api::nts::TrustMode::PlatformWithFallback => [0.into_dart()].into_dart(),
+            crate::api::nts::TrustMode::PlatformOnly => [1.into_dart()].into_dart(),
+            crate::api::nts::TrustMode::BundledOnly => [2.into_dart()].into_dart(),
+            crate::api::nts::TrustMode::Custom(field0) => {
+                [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+            }
+            _ => {
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+            }
         }
     }
 }
@@ -1370,7 +1394,7 @@ impl SseEncode for crate::api::nts::NtsError {
                 <String>::sse_encode(field0, serializer);
             }
             _ => {
-                unimplemented!("");
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
         }
     }
@@ -1407,6 +1431,7 @@ impl SseEncode for crate::api::nts::NtsTrustStatus {
         <u64>::sse_encode(self.default_backend_platform_count, serializer);
         <u64>::sse_encode(self.default_backend_hybrid_count, serializer);
         <u64>::sse_encode(self.default_backend_webpki_count, serializer);
+        <u64>::sse_encode(self.default_backend_custom_count, serializer);
         <bool>::sse_encode(self.android_platform_init_succeeded, serializer);
         <u64>::sse_encode(self.android_hybrid_fallback_count, serializer);
     }
@@ -1453,7 +1478,7 @@ impl SseEncode for crate::api::nts::TimeoutPhase {
                 crate::api::nts::TimeoutPhase::KeRecordIo => 4,
                 crate::api::nts::TimeoutPhase::Ntp => 5,
                 _ => {
-                    unimplemented!("");
+                    unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
                 }
             },
             serializer,
@@ -1469,8 +1494,9 @@ impl SseEncode for crate::api::nts::TrustBackend {
                 crate::api::nts::TrustBackend::Platform => 0,
                 crate::api::nts::TrustBackend::PlatformWithHybridFallback => 1,
                 crate::api::nts::TrustBackend::WebpkiRoots => 2,
+                crate::api::nts::TrustBackend::Custom => 3,
                 _ => {
-                    unimplemented!("");
+                    unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
                 }
             },
             serializer,
@@ -1481,17 +1507,24 @@ impl SseEncode for crate::api::nts::TrustBackend {
 impl SseEncode for crate::api::nts::TrustMode {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <i32>::sse_encode(
-            match self {
-                crate::api::nts::TrustMode::PlatformWithFallback => 0,
-                crate::api::nts::TrustMode::PlatformOnly => 1,
-                crate::api::nts::TrustMode::BundledOnly => 2,
-                _ => {
-                    unimplemented!("");
-                }
-            },
-            serializer,
-        );
+        match self {
+            crate::api::nts::TrustMode::PlatformWithFallback => {
+                <i32>::sse_encode(0, serializer);
+            }
+            crate::api::nts::TrustMode::PlatformOnly => {
+                <i32>::sse_encode(1, serializer);
+            }
+            crate::api::nts::TrustMode::BundledOnly => {
+                <i32>::sse_encode(2, serializer);
+            }
+            crate::api::nts::TrustMode::Custom(field0) => {
+                <i32>::sse_encode(3, serializer);
+                <Vec<u8>>::sse_encode(field0, serializer);
+            }
+            _ => {
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+            }
+        }
     }
 }
 

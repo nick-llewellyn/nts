@@ -272,6 +272,9 @@ enum TrustBackend {
   /// [TrustMode.platformOnly] for the opt-in that surfaces this
   /// path as `NtsErrorTrustBackendUnavailable` instead.
   webpkiRoots,
+
+  /// Caller-supplied custom root certificates authenticated this chain.
+  custom,
 }
 
 /// Caller-selected policy for which trust-anchor backend an
@@ -315,6 +318,9 @@ enum TrustMode {
 
   /// Webpki-roots static bundle only; no platform-store consultation at all.
   bundledOnly,
+
+  /// Caller-supplied custom root certificates in PEM or DER format.
+  custom,
 }
 
 /// Process-global trust-anchor diagnostic snapshot returned by
@@ -366,6 +372,11 @@ class NtsTrustStatus {
   /// contract as [defaultBackendPlatformCount].
   final BigInt defaultBackendWebpkiCount;
 
+  /// Cumulative count of default-singleton handshakes that resolved
+  /// to [TrustBackend.custom] since process start. Same monotonicity
+  /// contract as [defaultBackendPlatformCount].
+  final BigInt defaultBackendCustomCount;
+
   /// On Android: `true` iff the JNI bootstrap has reported success
   /// at least once. `false` on every other platform (no JNI
   /// bootstrap step exists). A `false` value on Android implies the
@@ -389,6 +400,7 @@ class NtsTrustStatus {
     required this.defaultBackendPlatformCount,
     required this.defaultBackendHybridCount,
     required this.defaultBackendWebpkiCount,
+    required this.defaultBackendCustomCount,
     required this.androidPlatformInitSucceeded,
     required this.androidHybridFallbackCount,
   });
@@ -399,6 +411,7 @@ class NtsTrustStatus {
     defaultBackendPlatformCount,
     defaultBackendHybridCount,
     defaultBackendWebpkiCount,
+    defaultBackendCustomCount,
     androidPlatformInitSucceeded,
     androidHybridFallbackCount,
   );
@@ -411,6 +424,7 @@ class NtsTrustStatus {
           defaultBackendPlatformCount == other.defaultBackendPlatformCount &&
           defaultBackendHybridCount == other.defaultBackendHybridCount &&
           defaultBackendWebpkiCount == other.defaultBackendWebpkiCount &&
+          defaultBackendCustomCount == other.defaultBackendCustomCount &&
           androidPlatformInitSucceeded == other.androidPlatformInitSucceeded &&
           androidHybridFallbackCount == other.androidHybridFallbackCount);
 
@@ -421,6 +435,7 @@ class NtsTrustStatus {
       'defaultBackendPlatformCount: $defaultBackendPlatformCount, '
       'defaultBackendHybridCount: $defaultBackendHybridCount, '
       'defaultBackendWebpkiCount: $defaultBackendWebpkiCount, '
+      'defaultBackendCustomCount: $defaultBackendCustomCount, '
       'androidPlatformInitSucceeded: $androidPlatformInitSucceeded, '
       'androidHybridFallbackCount: $androidHybridFallbackCount)';
 }

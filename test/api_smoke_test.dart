@@ -19,6 +19,8 @@
 //
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
+import 'dart:typed_data';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
 import 'package:flutter_test/flutter_test.dart';
@@ -163,7 +165,7 @@ class _RecordingApi implements NtsRustLibApi {
     // the Rust side; pin the same view here so a subsequent
     // `client.trustMode` getter forwards through and reads back the
     // documented default rather than tripping the noSuchMethod guard.
-    clientTrustModes[fake] = ffi.TrustMode.platformWithFallback;
+    clientTrustModes[fake] = const ffi.TrustMode.platformWithFallback();
     return fake;
   }
 
@@ -180,7 +182,7 @@ class _RecordingApi implements NtsRustLibApi {
 
   @override
   ffi.TrustMode crateApiNtsNtsClientTrustMode({required ffi.NtsClient that}) =>
-      clientTrustModes[that] ?? ffi.TrustMode.platformWithFallback;
+      clientTrustModes[that] ?? const ffi.TrustMode.platformWithFallback();
 
   @override
   ffi.NtsTrustStatus crateApiNtsNtsTrustStatus() {
@@ -340,6 +342,7 @@ ffi.NtsTrustStatus _zeroFfiTrustStatus() => ffi.NtsTrustStatus(
   defaultBackendPlatformCount: BigInt.zero,
   defaultBackendHybridCount: BigInt.zero,
   defaultBackendWebpkiCount: BigInt.zero,
+  defaultBackendCustomCount: BigInt.zero,
   androidPlatformInitSucceeded: false,
   androidHybridFallbackCount: BigInt.zero,
 );
@@ -1322,7 +1325,10 @@ void main() {
         // the Rust side observes the policy at construction time.
         expect(api.clientNewCalls, 0);
         expect(api.clientWithTrustModeCalls, 1);
-        expect(api.lastClientWithTrustModeMode, ffi.TrustMode.platformOnly);
+        expect(
+          api.lastClientWithTrustModeMode,
+          const ffi.TrustMode.platformOnly(),
+        );
       },
     );
 
@@ -1330,8 +1336,43 @@ void main() {
       NtsClient(trustMode: TrustMode.bundledOnly);
       expect(api.clientNewCalls, 0);
       expect(api.clientWithTrustModeCalls, 1);
-      expect(api.lastClientWithTrustModeMode, ffi.TrustMode.bundledOnly);
+      expect(
+        api.lastClientWithTrustModeMode,
+        const ffi.TrustMode.bundledOnly(),
+      );
     });
+
+    test('trustMode override routes through withTrustMode for custom', () {
+      final roots = [1, 2, 3];
+      NtsClient(trustMode: TrustMode.custom, customRoots: roots);
+      expect(api.clientNewCalls, 0);
+      expect(api.clientWithTrustModeCalls, 1);
+      expect(
+        api.lastClientWithTrustModeMode,
+        ffi.TrustMode.custom(Uint8List.fromList(roots)),
+      );
+    });
+
+    test(
+      'trustMode validation throws ArgumentError on mismatched arguments',
+      () {
+        expect(
+          () => NtsClient(
+            trustMode: TrustMode.platformOnly,
+            customRoots: [1, 2, 3],
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => NtsClient(trustMode: TrustMode.custom, customRoots: null),
+          throwsArgumentError,
+        );
+        expect(
+          () => NtsClient(trustMode: TrustMode.custom, customRoots: []),
+          throwsArgumentError,
+        );
+      },
+    );
 
     test('trustMode override delegates to the default factory when '
         'platformWithFallback is requested', () {
@@ -1346,9 +1387,11 @@ void main() {
       final c1 = NtsClient();
       final c2 = NtsClient(trustMode: TrustMode.platformOnly);
       final c3 = NtsClient(trustMode: TrustMode.bundledOnly);
+      final c4 = NtsClient(trustMode: TrustMode.custom, customRoots: [1, 2, 3]);
       expect(c1.trustMode, TrustMode.platformWithFallback);
       expect(c2.trustMode, TrustMode.platformOnly);
       expect(c3.trustMode, TrustMode.bundledOnly);
+      expect(c4.trustMode, TrustMode.custom);
     });
   });
 
@@ -1359,6 +1402,7 @@ void main() {
         defaultBackendPlatformCount: BigInt.from(11),
         defaultBackendHybridCount: BigInt.from(2),
         defaultBackendWebpkiCount: BigInt.from(5),
+        defaultBackendCustomCount: BigInt.from(9),
         androidPlatformInitSucceeded: true,
         androidHybridFallbackCount: BigInt.from(7),
       );
@@ -1368,6 +1412,7 @@ void main() {
       expect(status.defaultBackendPlatformCount, BigInt.from(11));
       expect(status.defaultBackendHybridCount, BigInt.from(2));
       expect(status.defaultBackendWebpkiCount, BigInt.from(5));
+      expect(status.defaultBackendCustomCount, BigInt.from(9));
       expect(status.androidPlatformInitSucceeded, isTrue);
       expect(status.androidHybridFallbackCount, BigInt.from(7));
     });
@@ -1377,6 +1422,7 @@ void main() {
         defaultBackendPlatformCount: BigInt.zero,
         defaultBackendHybridCount: BigInt.zero,
         defaultBackendWebpkiCount: BigInt.zero,
+        defaultBackendCustomCount: BigInt.zero,
         androidPlatformInitSucceeded: false,
         androidHybridFallbackCount: BigInt.zero,
       );
@@ -1385,6 +1431,7 @@ void main() {
       expect(status.defaultBackendPlatformCount, BigInt.zero);
       expect(status.defaultBackendHybridCount, BigInt.zero);
       expect(status.defaultBackendWebpkiCount, BigInt.zero);
+      expect(status.defaultBackendCustomCount, BigInt.zero);
       expect(status.androidPlatformInitSucceeded, isFalse);
       expect(status.androidHybridFallbackCount, BigInt.zero);
     });
@@ -1399,12 +1446,14 @@ void main() {
             TrustBackend.platformWithHybridFallback,
           ),
           (ffi.TrustBackend.webpkiRoots, TrustBackend.webpkiRoots),
+          (ffi.TrustBackend.custom, TrustBackend.custom),
         ]) {
           api.nextTrustStatus = ffi.NtsTrustStatus(
             defaultClientBackend: variant.$1,
             defaultBackendPlatformCount: BigInt.zero,
             defaultBackendHybridCount: BigInt.zero,
             defaultBackendWebpkiCount: BigInt.zero,
+            defaultBackendCustomCount: BigInt.zero,
             androidPlatformInitSucceeded: false,
             androidHybridFallbackCount: BigInt.zero,
           );
@@ -1423,6 +1472,7 @@ void main() {
         defaultBackendPlatformCount: BigInt.from(13),
         defaultBackendHybridCount: BigInt.from(17),
         defaultBackendWebpkiCount: BigInt.from(19),
+        defaultBackendCustomCount: BigInt.from(29),
         androidPlatformInitSucceeded: true,
         androidHybridFallbackCount: BigInt.from(23),
       );
@@ -1430,6 +1480,7 @@ void main() {
       expect(status.defaultBackendPlatformCount, BigInt.from(13));
       expect(status.defaultBackendHybridCount, BigInt.from(17));
       expect(status.defaultBackendWebpkiCount, BigInt.from(19));
+      expect(status.defaultBackendCustomCount, BigInt.from(29));
     });
   });
 
@@ -1440,6 +1491,7 @@ void main() {
         defaultBackendPlatformCount: BigInt.from(11),
         defaultBackendHybridCount: BigInt.from(2),
         defaultBackendWebpkiCount: BigInt.from(5),
+        defaultBackendCustomCount: BigInt.from(9),
         androidPlatformInitSucceeded: true,
         androidHybridFallbackCount: BigInt.from(3),
       );
@@ -1448,6 +1500,7 @@ void main() {
         defaultBackendPlatformCount: BigInt.from(11),
         defaultBackendHybridCount: BigInt.from(2),
         defaultBackendWebpkiCount: BigInt.from(5),
+        defaultBackendCustomCount: BigInt.from(9),
         androidPlatformInitSucceeded: true,
         androidHybridFallbackCount: BigInt.from(3),
       );
@@ -1464,6 +1517,7 @@ void main() {
           defaultBackendPlatformCount: BigInt.from(11),
           defaultBackendHybridCount: BigInt.from(2),
           defaultBackendWebpkiCount: BigInt.from(5),
+          defaultBackendCustomCount: BigInt.from(9),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(3),
         ),
@@ -1472,6 +1526,7 @@ void main() {
           defaultBackendPlatformCount: BigInt.from(12),
           defaultBackendHybridCount: BigInt.from(2),
           defaultBackendWebpkiCount: BigInt.from(5),
+          defaultBackendCustomCount: BigInt.from(9),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(3),
         ),
@@ -1480,6 +1535,7 @@ void main() {
           defaultBackendPlatformCount: BigInt.from(11),
           defaultBackendHybridCount: BigInt.from(3),
           defaultBackendWebpkiCount: BigInt.from(5),
+          defaultBackendCustomCount: BigInt.from(9),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(3),
         ),
@@ -1488,6 +1544,7 @@ void main() {
           defaultBackendPlatformCount: BigInt.from(11),
           defaultBackendHybridCount: BigInt.from(2),
           defaultBackendWebpkiCount: BigInt.from(6),
+          defaultBackendCustomCount: BigInt.from(9),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(3),
         ),
@@ -1496,6 +1553,16 @@ void main() {
           defaultBackendPlatformCount: BigInt.from(11),
           defaultBackendHybridCount: BigInt.from(2),
           defaultBackendWebpkiCount: BigInt.from(5),
+          defaultBackendCustomCount: BigInt.from(10),
+          androidPlatformInitSucceeded: true,
+          androidHybridFallbackCount: BigInt.from(3),
+        ),
+        NtsTrustStatus(
+          defaultClientBackend: TrustBackend.platform,
+          defaultBackendPlatformCount: BigInt.from(11),
+          defaultBackendHybridCount: BigInt.from(2),
+          defaultBackendWebpkiCount: BigInt.from(5),
+          defaultBackendCustomCount: BigInt.from(9),
           androidPlatformInitSucceeded: false,
           androidHybridFallbackCount: BigInt.from(3),
         ),
@@ -1504,6 +1571,7 @@ void main() {
           defaultBackendPlatformCount: BigInt.from(11),
           defaultBackendHybridCount: BigInt.from(2),
           defaultBackendWebpkiCount: BigInt.from(5),
+          defaultBackendCustomCount: BigInt.from(9),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(4),
         ),
@@ -1512,6 +1580,7 @@ void main() {
           defaultBackendPlatformCount: BigInt.from(11),
           defaultBackendHybridCount: BigInt.from(2),
           defaultBackendWebpkiCount: BigInt.from(5),
+          defaultBackendCustomCount: BigInt.from(9),
           androidPlatformInitSucceeded: true,
           androidHybridFallbackCount: BigInt.from(3),
         ),
@@ -1529,6 +1598,7 @@ void main() {
         'defaultBackendPlatformCount: 11, '
         'defaultBackendHybridCount: 2, '
         'defaultBackendWebpkiCount: 5, '
+        'defaultBackendCustomCount: 9, '
         'androidPlatformInitSucceeded: true, '
         'androidHybridFallbackCount: 3)',
       );
@@ -1542,6 +1612,7 @@ void main() {
           defaultBackendPlatformCount: BigInt.zero,
           defaultBackendHybridCount: BigInt.zero,
           defaultBackendWebpkiCount: BigInt.zero,
+          defaultBackendCustomCount: BigInt.zero,
           androidPlatformInitSucceeded: false,
           androidHybridFallbackCount: BigInt.zero,
         );
@@ -1551,6 +1622,7 @@ void main() {
           'defaultBackendPlatformCount: 0, '
           'defaultBackendHybridCount: 0, '
           'defaultBackendWebpkiCount: 0, '
+          'defaultBackendCustomCount: 0, '
           'androidPlatformInitSucceeded: false, '
           'androidHybridFallbackCount: 0)',
         );
