@@ -311,10 +311,13 @@ enum TrustBackend {
 /// that set:
 ///
 /// ```dart
-/// final client = NtsClient(trustMode: TrustMode.bundledOnly);
-/// final sample = await client.query(
-///   spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),
-/// );
+/// Future<void> main() async {
+///   await NtsRustLib.init(); // must complete before using NtsClient
+///   final client = NtsClient(trustMode: TrustMode.bundledOnly);
+///   final sample = await client.query(
+///     spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),
+///   );
+/// }
 /// ```
 ///
 /// The trade-off is connectivity: `bundledOnly` does not honour
