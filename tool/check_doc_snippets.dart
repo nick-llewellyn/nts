@@ -49,6 +49,11 @@ Future<void> main(List<String> args) async {
   }
   dir.createSync(recursive: true);
 
+  // Collect snippet metadata so we can attribute analyzer output back to
+  // (docFile, snippetIndex) after the single batched `dart analyze` run.
+  final snippetMeta =
+      <String, ({String fileName, int index, String wrapped})>{};
+
   try {
     for (final fileName in _docFiles) {
       final file = File(fileName);
@@ -71,7 +76,7 @@ Future<void> main(List<String> args) async {
       }
 
       stdout.writeln(
-        'Checking ${dartBlocks.length} snippet(s) in $fileName...',
+        'Extracting ${dartBlocks.length} snippet(s) from $fileName...',
       );
 
       var snippetIndex = 0;
@@ -100,21 +105,54 @@ Future<void> main(List<String> args) async {
 
         final wrappedContent = _prepareSnippet(snippet);
         snippetFile.writeAsStringSync(wrappedContent);
+        snippetMeta[snippetFile.path] = (
+          fileName: fileName,
+          index: snippetIndex,
+          wrapped: wrappedContent,
+        );
+      }
+    }
 
-        final result = await Process.run('dart', ['analyze', snippetFile.path]);
-        if (result.exitCode != 0) {
-          totalErrors++;
+    // Run `dart analyze` once over the entire snippet directory rather than
+    // once per snippet.  Spawning a fresh analyzer per snippet repeats
+    // package resolution and analyzer warm-up for every block, which scales
+    // badly as documentation grows.
+    if (snippetMeta.isNotEmpty) {
+      stdout.writeln(
+        '\nAnalyzing ${snippetMeta.length} snippet(s) with '
+        '`dart analyze ${dir.path}`...',
+      );
+      final result = await Process.run('dart', ['analyze', dir.path]);
+      if (result.exitCode != 0) {
+        // Attribute failures by matching snippet file paths in stdout.
+        final stdoutStr = result.stdout.toString();
+        final failed = <String>{};
+        for (final path in snippetMeta.keys) {
+          if (stdoutStr.contains(path)) {
+            failed.add(path);
+          }
+        }
+        // If we cannot attribute (unexpected output shape) treat the whole
+        // batch as one failure so we still exit non-zero.
+        totalErrors = failed.isEmpty ? 1 : failed.length;
+        for (final path in failed) {
+          final m = snippetMeta[path]!;
           stderr.writeln(
-            '${_errorPrefix}Snippet $snippetIndex in $fileName failed analysis:',
+            '${_errorPrefix}Snippet ${m.index} in ${m.fileName} '
+            'failed analysis ($path).',
           );
-          stderr.writeln(result.stdout);
-          stderr.writeln(result.stderr);
-          // Print the wrapped content for debugging if it failed
-          stderr.writeln('--- Wrapped snippet content ---');
-          stderr.writeln(wrappedContent);
-          stderr.writeln('--- End wrapped snippet content ---');
-        } else {
-          stdout.writeln('  Snippet $snippetIndex: OK');
+        }
+        stderr.writeln('--- dart analyze output ---');
+        stderr.writeln(stdoutStr);
+        stderr.writeln(result.stderr);
+        for (final path in failed) {
+          final m = snippetMeta[path]!;
+          stderr.writeln('--- Wrapped snippet ${m.index} of ${m.fileName} ---');
+          stderr.writeln(m.wrapped);
+        }
+      } else {
+        for (final m in snippetMeta.values) {
+          stdout.writeln('  Snippet ${m.index} of ${m.fileName}: OK');
         }
       }
     }
@@ -155,9 +193,14 @@ bool _isHistoricalSnippet(String snippet) {
 
 String _prepareSnippet(String snippet) {
   // Extract imports using a regex that handles multi-line imports.
-  // Matches from 'import ' at start of line until the next ';'.
+  // Matches from 'import ' at the start of a (possibly indented) line until
+  // the next ';'.  The leading `\s*` is required because fenced code blocks
+  // inside nested Markdown lists are indented; without it, valid `import`
+  // lines slip past the extractor and end up inside the generated `main()`
+  // body, which then fails analysis with a spurious "directive must appear
+  // before any declarations" error.
   final importPattern = RegExp(
-    r'^import\s+.*?;',
+    r'^\s*import\s+.*?;',
     multiLine: true,
     dotAll: true,
   );
@@ -186,7 +229,16 @@ String _prepareSnippet(String snippet) {
     }
   }
 
-  final hasMain = snippet.contains('void main') || snippet.contains('main()');
+  // Detect a top-level `main` declaration without matching call-sites like
+  // `foo.main()` or the literal text `main()` inside a `// ...` comment.
+  // The regex anchors on (optionally indented) start-of-line and accepts
+  // the common Dart return-type prefixes (`void`, `Future<void>`,
+  // `FutureOr<void>`) or no prefix at all.
+  final mainPattern = RegExp(
+    r'^\s*(?:void\s+|Future\s*<[^>]*>\s+|FutureOr\s*<[^>]*>\s+)?main\s*\(',
+    multiLine: true,
+  );
+  final hasMain = mainPattern.hasMatch(snippet);
   final hasClass =
       snippet.contains('class ') ||
       snippet.contains('enum ') ||
