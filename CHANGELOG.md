@@ -15,7 +15,8 @@
   Allows consumers to authenticate TLS connections in private
   environments or using custom/enterprise CAs without relying on
   the global platform store or other clients.
-- Plumbed a fourth trust telemetry counter (`custom`) to trace custom-roots handshakes.
+- Plumbed a fourth trust telemetry counter (`custom`) to trace
+  custom-roots handshakes.
 - Validates constructor parameters of `NtsClient` synchronously.
 
 ### Documentation
