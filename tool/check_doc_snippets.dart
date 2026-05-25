@@ -17,7 +17,7 @@ const _docFiles = [
   'README.md',
   'CHANGELOG.md',
   'ARCHITECTURE.md',
-  'example/example.md'
+  'example/example.md',
 ];
 const _snippetDir = 'tool/.snippets';
 
@@ -35,8 +35,9 @@ Future<void> main(List<String> args) async {
   if (!File('pubspec.yaml').existsSync() ||
       !File('rust/Cargo.toml').existsSync()) {
     stderr.writeln(
-        '${_errorPrefix}Script must be run from the repository root '
-        '(expected both pubspec.yaml and rust/Cargo.toml).');
+      '${_errorPrefix}Script must be run from the repository root '
+      '(expected both pubspec.yaml and rust/Cargo.toml).',
+    );
     exit(1);
   }
 
@@ -59,16 +60,19 @@ Future<void> main(List<String> args) async {
 
       // Normalize CRLF so the regex matches on Windows checkouts too.
       final content = file.readAsStringSync().replaceAll('\r\n', '\n');
-      final dartBlocks = RegExp(r'```dart\s*\n(.*?)\n```', dotAll: true)
-          .allMatches(content)
-          .toList();
+      final dartBlocks = RegExp(
+        r'```dart\s*\n(.*?)\n```',
+        dotAll: true,
+      ).allMatches(content).toList();
 
       if (dartBlocks.isEmpty) {
         stdout.writeln('No Dart snippets found in $fileName');
         continue;
       }
 
-      stdout.writeln('Checking ${dartBlocks.length} snippet(s) in $fileName...');
+      stdout.writeln(
+        'Checking ${dartBlocks.length} snippet(s) in $fileName...',
+      );
 
       var snippetIndex = 0;
       for (final match in dartBlocks) {
@@ -89,8 +93,9 @@ Future<void> main(List<String> args) async {
             .replaceAll('/', '_')
             .replaceAll('\\', '_')
             .replaceAll('.', '_');
-        final snippetFile =
-            File('${dir.path}/${safeFileName}_$snippetIndex.dart');
+        final snippetFile = File(
+          '${dir.path}/${safeFileName}_$snippetIndex.dart',
+        );
         snippetFile.parent.createSync(recursive: true);
 
         final wrappedContent = _prepareSnippet(snippet);
@@ -100,7 +105,8 @@ Future<void> main(List<String> args) async {
         if (result.exitCode != 0) {
           totalErrors++;
           stderr.writeln(
-              '${_errorPrefix}Snippet $snippetIndex in $fileName failed analysis:');
+            '${_errorPrefix}Snippet $snippetIndex in $fileName failed analysis:',
+          );
           stderr.writeln(result.stdout);
           stderr.writeln(result.stderr);
           // Print the wrapped content for debugging if it failed
@@ -150,7 +156,11 @@ bool _isHistoricalSnippet(String snippet) {
 String _prepareSnippet(String snippet) {
   // Extract imports using a regex that handles multi-line imports.
   // Matches from 'import ' at start of line until the next ';'.
-  final importPattern = RegExp(r'^import\s+.*?;', multiLine: true, dotAll: true);
+  final importPattern = RegExp(
+    r'^import\s+.*?;',
+    multiLine: true,
+    dotAll: true,
+  );
   final importMatches = importPattern.allMatches(snippet).toList();
 
   final imports = <String>[];
@@ -166,16 +176,19 @@ String _prepareSnippet(String snippet) {
   // try to make it exhaustive to satisfy the analyzer.
   if (body.contains('switch (') && body.contains('// ...')) {
     if (body.endsWith('};')) {
-      body = body.substring(0, body.length - 2) +
+      body =
+          '${body.substring(0, body.length - 2)}'
           '  _ => throw UnimplementedError(),\n};';
     } else if (body.endsWith('}')) {
-      body = body.substring(0, body.length - 1) +
+      body =
+          '${body.substring(0, body.length - 1)}'
           '  _ => throw UnimplementedError(),\n}';
     }
   }
 
   final hasMain = snippet.contains('void main') || snippet.contains('main()');
-  final hasClass = snippet.contains('class ') ||
+  final hasClass =
+      snippet.contains('class ') ||
       snippet.contains('enum ') ||
       snippet.contains('extension ');
   final needsHarness = !hasMain && !hasClass;
@@ -183,7 +196,8 @@ String _prepareSnippet(String snippet) {
   final sb = StringBuffer();
   // Suppress common lints that snippets intentionally trip (e.g. print for demos).
   sb.writeln(
-      '// ignore_for_file: avoid_print, unused_local_variable, dead_code, deprecated_member_use');
+    '// ignore_for_file: avoid_print, unused_local_variable, dead_code, deprecated_member_use',
+  );
 
   // Always inject package:nts/nts.dart when the harness is used: the harness
   // emits NtsError/NtsServerSpec/NtsTimeSample/NtsClient typed locals, so the
