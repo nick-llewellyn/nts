@@ -49,5 +49,7 @@ coverage/
 # FVM Version Cache
 .fvm/
 
+tool/.snippets/
+
 # macOS Finder metadata
 .DS_Store
