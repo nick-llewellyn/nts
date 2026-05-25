@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   audit:
@@ -32,3 +33,40 @@ jobs:
         uses: actions-rust-lang/audit@v1
         with:
           workingDirectory: rust
+
+      - name: Post Audit Comment
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          # The audit action installs cargo-audit, so it's available here.
+          # We run it again with --json to capture the full report for the comment.
+          cargo audit --json > audit.json
+
+          echo "### 🦀 Cargo Audit Report" > audit-summary.md
+          echo "" >> audit-summary.md
+
+          VULN_COUNT=$(jq '.vulnerabilities.count' audit.json)
+          if [ "$VULN_COUNT" -eq "0" ]; then
+            echo "✅ No vulnerabilities found." >> audit-summary.md
+          else
+            echo "⚠️ Found $VULN_COUNT vulnerability/vulnerabilities." >> audit-summary.md
+            echo "" >> audit-summary.md
+            echo "| Package | Version | Advisory | Title |" >> audit-summary.md
+            echo "| --- | --- | --- | --- |" >> audit-summary.md
+            jq -r '.vulnerabilities.list[] | "| \(.package.name) | \(.package.version) | [\(.advisory.id)](\(.advisory.url)) | \(.advisory.title) |"' audit.json >> audit-summary.md
+          fi
+
+          echo "" >> audit-summary.md
+          echo "<details><summary>Full JSON Output</summary>" >> audit-summary.md
+          echo "" >> audit-summary.md
+          echo "\`\`\`json" >> audit-summary.md
+          cat audit.json >> audit-summary.md
+          echo "\`\`\`" >> audit-summary.md
+          echo "</details>" >> audit-summary.md
+        working-directory: rust
+
+      - name: Sticky Comment
+        if: always() && github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: cargo-audit
+          path: rust/audit-summary.md

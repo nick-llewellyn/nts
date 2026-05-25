@@ -26,6 +26,8 @@
 - Added `tool/check_doc_snippets.dart` which extracts and validates Dart code
   blocks in `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, and
   `example/example.md` using `dart analyze`. (nts-a23)
+- Updated `audit.yml` CI workflow to post `cargo audit` results as sticky PR
+  comments, including a vulnerability summary table and full JSON output. (nts-eju)
 
 
 ## 5.1.0
