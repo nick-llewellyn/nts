@@ -441,7 +441,7 @@ construction):
 - **`platformWithFallback`** (default) — pre-3.0 behaviour. If
   `build_with_native_verifier` fails at TLS-config construction,
   fall back silently to the `webpki-roots` static bundle and
-  surface the resolution as `TrustBackend::webpkiRoots` on the
+  surface the resolution as `TrustBackend.webpkiRoots` on the
   next handshake. No new error variant is reachable. Appropriate
   for the broadest connectivity, including corporate/MDM networks
   where the platform store contains privately-installed roots.

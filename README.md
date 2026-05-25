@@ -292,9 +292,9 @@ inspection, construct the client explicitly with
 `TrustMode.bundledOnly`:
 
 ```dart
-final client = NtsClient(
-  server: NtsServer.fromHostPort('time.cloudflare.com'),
-  trustMode: TrustMode.bundledOnly,
+final client = NtsClient(trustMode: TrustMode.bundledOnly);
+final sample = await client.query(
+  spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),
 );
 ```
 
