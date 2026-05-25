@@ -1,8 +1,9 @@
 // Script to extract and validate Dart code snippets in documentation.
 //
-// Extracts Dart code blocks from README.md, CHANGELOG.md, and ARCHITECTURE.md,
-// wraps them in a basic harness if necessary, and runs `dart analyze` to
-// ensure they remain syntactically valid as the API evolves.
+// Extracts Dart code blocks from README.md, CHANGELOG.md, ARCHITECTURE.md,
+// and example/example.md, wraps them in a minimal harness when they lack a
+// top-level declaration, and runs `dart analyze` to catch type errors, missing
+// imports, and other static-analysis issues before they reach users.
 //
 // Usage:
 //
@@ -151,14 +152,25 @@ String _prepareSnippet(String snippet) {
     }
   }
 
+  final hasMain = snippet.contains('void main') || snippet.contains('main()');
+  final hasClass = snippet.contains('class ') ||
+      snippet.contains('enum ') ||
+      snippet.contains('extension ');
+  final needsHarness = !hasMain && !hasClass;
+
   final sb = StringBuffer();
   // Suppress common lints that snippets intentionally trip (e.g. print for demos).
   sb.writeln(
       '// ignore_for_file: avoid_print, unused_local_variable, dead_code, deprecated_member_use');
 
-  // Ensure basic package import is present if needed.
+  // Always inject package:nts/nts.dart when the harness is used: the harness
+  // emits NtsError/NtsServerSpec/NtsTimeSample/NtsClient typed locals, so the
+  // import is required regardless of whether the snippet itself mentions those
+  // symbols.  Also inject it for snippets with a top-level declaration that
+  // explicitly reference nts symbols.
   if (!snippet.contains("package:nts/nts.dart") &&
-      (snippet.contains('Nts') ||
+      (needsHarness ||
+          snippet.contains('Nts') ||
           snippet.contains('ntsQuery') ||
           snippet.contains('ntsWarmCookies'))) {
     sb.writeln("import 'package:nts/nts.dart';");
@@ -168,15 +180,10 @@ String _prepareSnippet(String snippet) {
     sb.writeln(imp);
   }
 
-  final hasMain = snippet.contains('void main') || snippet.contains('main()');
-  final hasClass = snippet.contains('class ') ||
-      snippet.contains('enum ') ||
-      snippet.contains('extension ');
-
-  if (!hasMain && !hasClass) {
+  if (needsHarness) {
     sb.writeln('Future<void> main() async {');
-    // Define common missing variables to avoid "undefined name" or
-    // "definitely unassigned" errors for fragments.
+    // Define common variables to avoid "undefined name" / "definitely
+    // unassigned" errors for code fragments that reference these types.
     sb.writeln('  final NtsError err = throw UnimplementedError();');
     sb.writeln('  final NtsServerSpec spec = throw UnimplementedError();');
     sb.writeln('  final NtsTimeSample sample = throw UnimplementedError();');
