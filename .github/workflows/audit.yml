@@ -24,38 +24,58 @@ jobs:
   audit:
     name: Audit Rust dependencies
     runs-on: ubuntu-latest
-    # pull-requests: write is scoped to this job (not the whole workflow)
-    # because only the sticky-comment step needs it; push events and
-    # scheduled runs don't post comments at all.
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Audit Rust dependencies
+        id: run_audit
         uses: actions-rust-lang/audit@v1
         with:
           workingDirectory: rust
 
-      - name: Post Audit Comment
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      - name: Generate Audit JSON
+        # Run even if the audit action failed (vulnerabilities found).
+        # Skip if the job was cancelled or if not on a PR from same repo.
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.run_audit.outcome != 'cancelled'
         run: |
-          # The audit action installs cargo-audit, so it's available here.
-          # We run it again with --json to capture the full report for the comment.
-          # `|| true` prevents bash -e from aborting this step on a non-zero exit
-          # (cargo-audit exits 1 when vulnerabilities are found), so the summary
-          # is always generated and the sticky comment is always posted.
           cargo audit --json > audit.json || true
+        working-directory: rust
 
+      - name: Upload Audit JSON
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.run_audit.outcome != 'cancelled'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-results
+          path: rust/audit.json
+          retention-days: 1
+
+  post-audit:
+    name: Post Audit Comment
+    runs-on: ubuntu-latest
+    needs: audit
+    # Only run on same-repo PRs. always() ensures it runs even if audit failed.
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.audit.result != 'cancelled'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Download Audit JSON
+        uses: actions/download-artifact@v4
+        with:
+          name: audit-results
+          path: .
+
+      - name: Generate Summary
+        run: |
           echo "### 🦀 Cargo Audit Report" > audit-summary.md
           echo "" >> audit-summary.md
 
           # Guard against an empty or malformed audit.json (e.g. advisory DB
-          # fetch failure, I/O error).  jq will exit non-zero if the file is
-          # not valid JSON, and bash -e would abort the step, preventing the
-          # sticky comment from being posted.
+          # fetch failure, I/O error). jq will exit non-zero if the file is
+          # not valid JSON.
           if ! jq empty audit.json 2>/dev/null; then
             echo "⚠️ Could not parse audit output — \`cargo audit\` may have" >> audit-summary.md
             echo "failed for a reason unrelated to vulnerabilities (e.g. advisory" >> audit-summary.md
@@ -87,11 +107,9 @@ jobs:
             echo "\`\`\`" >> audit-summary.md
             echo "</details>" >> audit-summary.md
           fi
-        working-directory: rust
 
       - name: Sticky Comment
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: cargo-audit
-          path: rust/audit-summary.md
+          path: audit-summary.md
