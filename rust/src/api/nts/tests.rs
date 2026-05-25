@@ -3311,6 +3311,70 @@ fn nts_client_trust_mode_round_trips_construction_choice() {
     );
 }
 
+/// `TrustMode::Custom(bytes)` round-trips byte-for-byte through
+/// `NtsClient`. The companion test above covers the three
+/// payload-less variants; this one closes the residual gap on
+/// the `Custom` arm, where the construction path materialises
+/// `Vec<u8>` → `Box<[u8]>` → `Arc<[u8]>` (in
+/// `From<TrustMode> for KeTrustMode`) and the `trust_mode()`
+/// getter materialises it back via `Arc<[u8]>` → `Vec<u8>` (in
+/// `From<KeTrustMode> for TrustMode`). A truncation, length
+/// confusion, or byte-swap on either leg would silently corrupt
+/// the caller's PEM/DER bundle and surface only as a downstream
+/// TLS-verification failure with no attribution back to the
+/// FRB boundary.
+///
+/// Covers three payload shapes:
+///
+/// 1. **Distinctive small pattern** — every byte is distinct so a
+///    pairwise swap or off-by-one slice would fail the equality
+///    rather than masquerading as a length match.
+/// 2. **Empty payload** — exercises the `Vec::into_boxed_slice`
+///    on a zero-capacity vector and the `Arc::from(Box<[u8]>)`
+///    on a zero-length slice; both are corner cases that an
+///    `unwrap_or_default` slip on the conversion arm would
+///    happily turn into a non-empty bundle.
+/// 3. **Realistic-sized payload** — 4 KiB filled with a
+///    structured pseudo-random pattern, comparable in size to a
+///    real PEM bundle containing a handful of root certificates.
+///    Catches any length-prefix truncation or buffer-reuse bug
+///    that would only manifest above small-allocation thresholds.
+///
+/// Round-trip closes the gap identified during the review of
+/// PR #115 (issue nts-iao).
+#[test]
+fn nts_client_trust_mode_round_trips_custom_payload_byte_for_byte() {
+    let distinctive: Vec<u8> = (0u8..=255u8).collect();
+    let empty: Vec<u8> = Vec::new();
+    let realistic: Vec<u8> = (0..4096).map(|i| ((i * 31) ^ 0x5A) as u8).collect();
+
+    for original in [distinctive, empty, realistic] {
+        let client = NtsClient::with_trust_mode(TrustMode::Custom(original.clone()));
+        match client.trust_mode() {
+            TrustMode::Custom(recovered) => {
+                assert_eq!(
+                    recovered.len(),
+                    original.len(),
+                    "Custom payload length changed across round-trip: \
+                     original {} bytes, recovered {} bytes",
+                    original.len(),
+                    recovered.len(),
+                );
+                assert_eq!(
+                    recovered, original,
+                    "Custom payload bytes diverged across round-trip; \
+                     first difference at byte {:?}",
+                    recovered
+                        .iter()
+                        .zip(original.iter())
+                        .position(|(a, b)| a != b),
+                );
+            }
+            other => panic!("expected TrustMode::Custom across round-trip, got {other:?}"),
+        }
+    }
+}
+
 /// Pins the RFC 8915 §5.6 unpredictability property at the
 /// *production* UID-generation site by driving the same module-
 /// scope helper [`super::fresh_request_uid_and_nonce`] that
