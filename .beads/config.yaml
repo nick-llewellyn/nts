@@ -41,8 +41,18 @@
 # backup:
 #   enabled: false     # Disable auto-backup entirely
 #   interval: 15m      # Minimum time between auto-exports
-#   git-push: false    # Disable git push (export locally only)
 #   git-repo: ""       # Separate git repo for backups (default: project repo)
+backup:
+  git-push: false   # Branch protection forbids direct pushes; .beads/issues.jsonl
+                    # rides to GitHub inside code PRs per the Beads metadata sync
+                    # rule in AGENTS.md. DoltHub is the authoritative issue store.
+
+# DoltHub remote (nick-llewellyn/nts)
+# Added with: bd dolt remote add origin https://doltremoteapi.dolthub.com/nick-llewellyn/nts
+# Auth:        export DOLT_REMOTE_USER=<dolthub-username>
+#              export DOLT_REMOTE_PASSWORD=<dolthub-credential>
+# The remote is stored in Dolt's own state (not this file) and must be re-added
+# on each fresh clone: `bd dolt remote add origin <url>` (see AGENTS.md override).
 
 # Integration settings (access with 'bd config get/set')
 # These are stored in the database, not in this file:
@@ -52,3 +62,5 @@
 # - linear.api-key
 # - github.org
 # - github.repo
+
+sync.remote: "https://doltremoteapi.dolthub.com/nick-llewellyn/nts"
