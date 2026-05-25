@@ -21,14 +21,15 @@
 
 ### Documentation
 
-- Expanded `TrustMode` API documentation to detail the security trade-offs of
-  each variant — in particular the exposure of `platformWithFallback` to
-  TLS-inspection appliances that inject a corporate CA into the platform store,
-  which can undermine the AEAD-integrity guarantee NTS derives from TLS keying
-  material. High-security callers are now guided toward
-  `NtsClient(trustMode: TrustMode.bundledOnly)` in the API doc, `README.md`
-  Security Considerations section, and the `ARCHITECTURE.md` trust-anchor
-  reference.
+- Expanded `TrustMode` API documentation to detail the security
+  trade-offs of each variant — in particular the exposure of
+  `platformWithFallback` to TLS-inspection appliances that
+  inject a corporate CA into the platform store, which can
+  undermine the AEAD-integrity guarantee NTS derives from TLS
+  keying material. High-security callers are now guided toward
+  `NtsClient(trustMode: TrustMode.bundledOnly)` in the API doc,
+  `README.md` Security Considerations section, and the
+  `ARCHITECTURE.md` trust-anchor reference.
 
 ### Internal
 
