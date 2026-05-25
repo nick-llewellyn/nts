@@ -27,9 +27,16 @@ String get _errorPrefix => Platform.environment.containsKey('GITHUB_ACTIONS')
     : 'error: ';
 
 Future<void> main(List<String> args) async {
-  // Enforce running from the repo root so we find the docs.
-  if (!File('pubspec.yaml').existsSync()) {
-    stderr.writeln('${_errorPrefix}Script must be run from the repository root.');
+  // Enforce running from the repo root so we find the docs.  Both
+  // `pubspec.yaml` and `rust/Cargo.toml` must be present together --
+  // `pubspec.yaml` alone is not enough because `example/pubspec.yaml`
+  // also exists, so running from `example/` would otherwise slip past
+  // this guard and surface as a confusing "no docs found" failure later.
+  if (!File('pubspec.yaml').existsSync() ||
+      !File('rust/Cargo.toml').existsSync()) {
+    stderr.writeln(
+        '${_errorPrefix}Script must be run from the repository root '
+        '(expected both pubspec.yaml and rust/Cargo.toml).');
     exit(1);
   }
 
