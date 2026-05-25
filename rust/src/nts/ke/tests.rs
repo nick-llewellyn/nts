@@ -178,10 +178,60 @@ q8P9uhno9+zDMKKpnQ==\n\
     }
 
     #[test]
-    fn build_tls_config_custom_malformed_fails() {
+    fn build_tls_config_custom_malformed_pem_surfaces_diagnostic_substring() {
+        let malformed_pem = "-----BEGIN CERTIFICATE-----\nnot-base64\n-----END CERTIFICATE-----";
+        let mode = KeTrustMode::Custom(std::sync::Arc::from(malformed_pem.as_bytes()));
+        let build = build_tls_config(mode);
+        // Manual error extraction because TlsConfigBuild is not Debug
+        let err = match build {
+            Err(e) => e,
+            Ok(_) => panic!("malformed PEM must fail"),
+        };
+        let msg = format!("{}", err);
+        // Pin the stable substring required by nts-o88
+        assert!(
+            msg.contains("PEM certificate"),
+            "expected 'PEM certificate' in error, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn build_tls_config_custom_malformed_der_surfaces_diagnostic_substring() {
+        // Not a PEM, so it falls through to DER parsing which fails in `roots.add(cert)`
         let mode = KeTrustMode::Custom(std::sync::Arc::from(&b"not-a-valid-cert-bytes"[..]));
         let build = build_tls_config(mode);
-        assert!(matches!(build, Err(KeError::TrustBackendUnavailable(_))));
+        let err = match build {
+            Err(e) => e,
+            Ok(_) => panic!("malformed DER must fail"),
+        };
+        let msg = format!("{}", err);
+        // Pin the stable substring required by nts-o88
+        assert!(
+            msg.contains("custom root certificate"),
+            "expected 'custom root certificate' in error, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn build_tls_config_custom_empty_pem_surfaces_diagnostic_substring() {
+        // Contains the marker so `is_pem` is true, but `rustls_pemfile` will
+        // find no valid certificate blocks.
+        let empty_pem = "text that contains -----BEGIN CERTIFICATE----- but no actual cert";
+        let mode = KeTrustMode::Custom(std::sync::Arc::from(empty_pem.as_bytes()));
+        let build = build_tls_config(mode);
+        let err = match build {
+            Err(e) => e,
+            Ok(_) => panic!("empty PEM must fail"),
+        };
+        let msg = format!("{}", err);
+        // Pin the stable substring required by nts-o88
+        assert!(
+            msg.contains("No custom certificates"),
+            "expected 'No custom certificates' in error, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1155,6 +1205,61 @@ mod error_translation {
                  expected to contain {tag:?}",
             );
         }
+    }
+
+    /// `Display for KeError::TrustBackendUnavailable` must render as
+    /// `"trust backend unavailable: {m}"` with no `(PlatformOnly mode)`
+    /// prefix. The variant is shared between platform-verifier failures
+    /// and custom-roots failures, so the prefix was inaccurate for the
+    /// latter; `PlatformOnly`-specific context is now embedded inside
+    /// the inner message by the two call sites in
+    /// `build_tls_config_inner`. Pins the user-facing diagnostic
+    /// contract for nts-o88.
+    #[test]
+    fn ke_error_display_trust_backend_unavailable_omits_platform_only_prefix() {
+        let rendered = format!(
+            "{}",
+            KeError::TrustBackendUnavailable("inner message".to_string()),
+        );
+        assert_eq!(rendered, "trust backend unavailable: inner message");
+        assert!(
+            !rendered.contains("(PlatformOnly mode)"),
+            "Display must not embed the legacy `(PlatformOnly mode)` \
+             prefix; got {rendered:?}",
+        );
+
+        let with_tag = format!(
+            "{}",
+            KeError::TrustBackendUnavailable("PlatformOnly mode: boom".to_string()),
+        );
+        assert_eq!(
+            with_tag,
+            "trust backend unavailable: PlatformOnly mode: boom",
+        );
+    }
+
+    /// `platform_only_unavailable` must embed the `"PlatformOnly mode: "`
+    /// tag inside the inner message so the variant's `Display` surfaces it
+    /// verbatim. Calling the helper directly gives the `PlatformOnly` error
+    /// path a unit-testable entry point that does not require triggering a
+    /// real platform-verifier failure on CI.
+    #[test]
+    fn platform_only_unavailable_embeds_tag_and_inner_error() {
+        let err = platform_only_unavailable("synthetic verifier error");
+        let rendered = format!("{err}");
+        assert!(
+            rendered.contains("PlatformOnly mode:"),
+            "expected `PlatformOnly mode:` tag in rendered error; got {rendered:?}",
+        );
+        assert!(
+            rendered.contains("synthetic verifier error"),
+            "expected inner error text in rendered error; got {rendered:?}",
+        );
+        // Confirm the variant identity is correct.
+        assert!(
+            matches!(err, KeError::TrustBackendUnavailable(_)),
+            "expected TrustBackendUnavailable variant; got {err:?}",
+        );
     }
 }
 
