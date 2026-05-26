@@ -64,26 +64,21 @@ Future<void> main(List<String> args) async {
       }
       filesFound++;
 
-      // Normalize CRLF so the regex matches on Windows checkouts too.
-      final content = file.readAsStringSync().replaceAll('\r\n', '\n');
-      final dartBlocks = RegExp(
-        r'```dart\s*\n(.*?)\n```',
-        dotAll: true,
-      ).allMatches(content).toList();
+      final content = file.readAsStringSync();
+      final snippets = extractDartSnippets(content);
 
-      if (dartBlocks.isEmpty) {
+      if (snippets.isEmpty) {
         stdout.writeln('No Dart snippets found in $fileName');
         continue;
       }
 
       stdout.writeln(
-        'Extracting ${dartBlocks.length} snippet(s) from $fileName...',
+        'Extracting ${snippets.length} snippet(s) from $fileName...',
       );
 
       var snippetIndex = 0;
-      for (final match in dartBlocks) {
+      for (final snippet in snippets) {
         snippetIndex++;
-        final snippet = match.group(1)!;
 
         // Skip snippets with historical markers if they are in CHANGELOG.md.
         // Changelog migration examples often show old code that is no longer
@@ -231,8 +226,7 @@ void _assertSnippetDirSafe(Directory dir) {
   final sep = Platform.pathSeparator;
   // Normalize repoRoot so we don't build a double-separator prefix when
   // repoRoot is itself a filesystem root (e.g. POSIX '/' or Windows 'C:\').
-  final repoRootPrefix =
-      repoRoot.endsWith(sep) ? repoRoot : '$repoRoot$sep';
+  final repoRootPrefix = repoRoot.endsWith(sep) ? repoRoot : '$repoRoot$sep';
   if (canonical != repoRoot && !canonical.startsWith(repoRootPrefix)) {
     stderr.writeln(
       '${_errorPrefix}Refusing to delete ${dir.path}: '
@@ -241,6 +235,52 @@ void _assertSnippetDirSafe(Directory dir) {
     exit(1);
   }
 }
+
+/// Extracts the body of every fenced ` ```dart ` code block in [content].
+///
+/// CommonMark §4.5 permits an opening or closing fence to be indented by up
+/// to three spaces; fences indented four or more spaces are interpreted as
+/// indented code blocks (§4.4) instead. Both fences are therefore anchored
+/// to the start of a line with ` {0,3}` so that blocks nested inside list
+/// items are picked up rather than silently skipped, while genuinely
+/// over-indented blocks remain ignored.
+///
+/// Tab indentation is deliberately not matched: §2.2 expands a leading tab
+/// to the next multiple of four columns, so a tab-prefixed fence is always
+/// at or beyond column 4 and is therefore an indented code block, not a
+/// fenced one. Blockquote (`>`) and admonition prefixes are likewise out of
+/// scope -- the validator does not currently strip them, so fences inside
+/// blockquotes are skipped. Add explicit handling here if a use case
+/// appears.
+///
+/// Only three-backtick `dart`-tagged fences are recognised because this repo
+/// neither uses four-plus-backtick fences nor tilde fences (see NTS-24 "Out
+/// of scope").
+///
+/// CRLF line endings are normalised so Windows checkouts behave identically
+/// to POSIX ones. The captured body is returned verbatim, including any
+/// leading indentation -- Dart is whitespace-insensitive at the statement
+/// level, so the downstream wrapper in [_prepareSnippet] does not need a
+/// dedent pass.
+List<String> extractDartSnippets(String content) {
+  final normalized = content.replaceAll('\r\n', '\n');
+  return _snippetRegex
+      .allMatches(normalized)
+      .map((match) => match.group(1)!)
+      .toList(growable: false);
+}
+
+// Multi-line + dot-all so `.` spans newlines inside the lazy body capture
+// while `^`/`$` continue to anchor on line boundaries for the surrounding
+// fences. The lazy `(.*?)` prevents the body from greedily swallowing
+// subsequent fences when a document contains several snippets. Indentation
+// is spaces-only per CommonMark §2.2 tab-expansion semantics; see the
+// `extractDartSnippets` docstring.
+final RegExp _snippetRegex = RegExp(
+  r'^ {0,3}```dart[ \t]*\n(.*?)\n^ {0,3}```[ \t]*$',
+  multiLine: true,
+  dotAll: true,
+);
 
 bool _isHistoricalSnippet(String snippet) {
   // Common markers for old versions in changelog examples.
