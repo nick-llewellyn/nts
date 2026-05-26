@@ -54,5 +54,11 @@ coverage/
 
 tool/.snippets/
 
+# Agent / human scratch space. Used for transient working files
+# (e.g. test fixtures captured while validating a workflow change,
+# bd issue-body drafts) whose persistent record lives elsewhere
+# (Dolt / Linear / the actual workflow comment). Never committed.
+tmp/
+
 # macOS Finder metadata
 .DS_Store

@@ -432,6 +432,35 @@ bd linear sync --pull          # import from Linear first
 bd linear sync --push          # then export local changes
 ```
 
+### Closing an issue
+
+`bd close` writes only to the local Dolt database. It does **not** notify
+Linear. Running `bd dolt push` afterwards persists the `CLOSED` state to
+DoltHub but still does not touch Linear. A subsequent `bd linear sync --pull`
+will then overwrite the local `CLOSED` back to whatever Linear currently shows
+(Gotcha #2), erasing the closure.
+
+The correct sequence for completing an issue is:
+
+```bash
+# 1. Push current state to Linear while the issue is still open/in-progress,
+#    so Linear has a record of the linked issue before closure.
+bd linear sync --push --issues <id>
+
+# 2. Close locally and persist to DoltHub.
+bd close <id>
+bd dolt push --remote origin
+
+# 3. Transition Linear to Done (NOT via --push, which would send Canceled).
+#    Use the save_issue_linear tool or the Linear UI:
+#      save_issue_linear id="<LINEAR-ID>" state="Done"
+```
+
+Do **not** run a blind `bd linear sync --push` after step 2 — it will push
+`CLOSED` → Canceled and overwrite the Done status set in step 3 (Gotcha #1 +
+Gotcha #2 combined). Use `--issues` with only open/in-progress issues if a
+broader sync is needed after closing.
+
 ### Known Gotchas (read before every sync)
 
 #### 1. Status Mapping: CLOSED → Canceled
@@ -533,11 +562,18 @@ To ensure the human developer can easily map local activity to the Linear projec
 ## Issue State Synchronization
 
 Local state changes (claiming, closing, re-prioritizing) do not propagate to Linear automatically.
-1. **Sync on Claim.** Immediately after running `bd update <id> --claim`, the agent must run:
+
+1. **Sync on Claim.** Immediately after running `bd update <id> --claim`, push
+   the updated state so Linear reflects "In Progress":
    ```bash
    bd linear sync --push --issues <id>
    ```
-2. **Sync on Close.** Immediately after `bd close <id>`, run the same targeted push sync.
+
+2. **Sync on Close.** `bd close` alone does not update Linear. Follow the
+   sequence in [Closing an issue](#closing-an-issue) above: push while still
+   open → close locally → push to DoltHub → set Linear to Done via
+   `save_issue_linear`. Do **not** use `bd linear sync --push` after closing,
+   as it maps `CLOSED` → Canceled and will clobber a Done status.
 
 ## Versioning & Release Policy
 

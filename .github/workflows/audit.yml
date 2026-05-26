@@ -96,7 +96,29 @@ jobs:
               echo "" >> audit-summary.md
               echo "| Package | Version | Advisory | Title |" >> audit-summary.md
               echo "| --- | --- | --- | --- |" >> audit-summary.md
-              jq -r '.vulnerabilities.list[] | "| \(.package.name) | \(.package.version) | [\(.advisory.id)](\(.advisory.url)) | \(.advisory.title) |"' audit.json >> audit-summary.md
+              # mdcell: sanitise upstream RustSec advisory fields before
+              # interpolating them into a GitHub-flavoured markdown table.
+              # Without this, a stray `|` in an advisory title would split
+              # the cell and a `\n` would terminate the row; in the worst
+              # case a crafted advisory record could inject confusing
+              # formatting into the reviewer-facing comment. We escape
+              # `|` -> `\|` (the table-cell escape) and collapse
+              # CR/LF/Tab to a single space so each advisory stays on one
+              # row. Applied to every field that originates from
+              # `cargo audit --json`, including the URL: the issue is
+              # table-layout safety, not URL validation (out of scope per
+              # nts-mat).
+              #
+              # Worked example: an advisory with name="evil|pkg" and
+              # title="Foo | bar\n[click me](...)" renders as
+              #   | evil\|pkg | ... | Foo \| bar [click me](...) |
+              # in a single row, instead of splitting across cells and
+              # rows as it would unescaped.
+              jq -r '
+                def mdcell: tostring | gsub("\\|"; "\\|") | gsub("[\r\n\t]"; " ");
+                .vulnerabilities.list[]
+                | "| \(.package.name | mdcell) | \(.package.version | mdcell) | [\(.advisory.id | mdcell)](\(.advisory.url | mdcell)) | \(.advisory.title | mdcell) |"
+              ' audit.json >> audit-summary.md
             fi
 
             echo "" >> audit-summary.md
