@@ -435,7 +435,7 @@ bd linear sync --push          # then export local changes
 ### Closing an issue
 
 `bd close` writes only to the local Dolt database. It does **not** notify
-Linear. Running `bd dolt push` afterwards persists the `CLOSED` state to
+Linear. Running `bd dolt push --remote origin` afterwards persists the `CLOSED` state to
 DoltHub but still does not touch Linear. A subsequent `bd linear sync --pull`
 will then overwrite the local `CLOSED` back to whatever Linear currently shows
 (Gotcha #2), erasing the closure.
