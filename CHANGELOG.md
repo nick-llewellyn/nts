@@ -16,6 +16,15 @@
 - Implemented manual `Debug` for `TrustMode` and internal
   `CustomRootsBytes` to redact sensitive certificate bytes from logs,
   rendering as `<REDACTED: N bytes>`. (nts-8wp)
+- Escaped upstream RustSec advisory fields before interpolating them
+  into the `cargo audit` sticky PR comment table. A stray `|` in an
+  advisory title would have broken the table layout; in the worst
+  case a crafted advisory record could inject formatting that
+  confused reviewers. The jq script now escapes `|` to `\|` and
+  collapses CR/LF/Tab to a single space for every field that
+  originates from `cargo audit --json` (package name, version,
+  advisory id, URL, title). URL validation is out of scope; the
+  RustSec database is treated as trusted upstream. (nts-mat)
 
 ### Fixed
 
