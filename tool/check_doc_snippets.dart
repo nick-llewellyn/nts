@@ -212,6 +212,16 @@ void _assertSnippetDirSafe(Directory dir) {
     // Nothing to delete; createSync() will make it fresh.
     return;
   }
+  if (type != FileSystemEntityType.directory) {
+    // FIFO, socket, or other special file type — refuse rather than
+    // attempting resolveSymbolicLinksSync() which may throw or mislead.
+    stderr.writeln(
+      '${_errorPrefix}Refusing to delete ${dir.path}: '
+      'unexpected file system entity type ($type). '
+      'Remove it manually if safe.',
+    );
+    exit(1);
+  }
 
   // type == FileSystemEntityType.directory — verify the canonical path sits
   // inside the repository root so intermediate symlinks in parent directories
@@ -219,7 +229,11 @@ void _assertSnippetDirSafe(Directory dir) {
   final repoRoot = Directory.current.resolveSymbolicLinksSync();
   final canonical = dir.resolveSymbolicLinksSync();
   final sep = Platform.pathSeparator;
-  if (canonical != repoRoot && !canonical.startsWith('$repoRoot$sep')) {
+  // Normalize repoRoot so we don't build a double-separator prefix when
+  // repoRoot is itself a filesystem root (e.g. POSIX '/' or Windows 'C:\').
+  final repoRootPrefix =
+      repoRoot.endsWith(sep) ? repoRoot : '$repoRoot$sep';
+  if (canonical != repoRoot && !canonical.startsWith(repoRootPrefix)) {
     stderr.writeln(
       '${_errorPrefix}Refusing to delete ${dir.path}: '
       'canonical path $canonical is outside the repository root $repoRoot.',
