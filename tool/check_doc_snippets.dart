@@ -44,6 +44,7 @@ Future<void> main(List<String> args) async {
   var totalErrors = 0;
   var filesFound = 0;
   final dir = Directory(_snippetDir);
+  _assertSnippetDirSafe(dir);
   if (dir.existsSync()) {
     dir.deleteSync(recursive: true);
   }
@@ -158,6 +159,7 @@ Future<void> main(List<String> args) async {
     }
   } finally {
     if (totalErrors == 0) {
+      _assertSnippetDirSafe(dir);
       dir.deleteSync(recursive: true);
     } else {
       stdout.writeln('Temp files preserved at ${dir.path} for debugging.');
@@ -174,6 +176,69 @@ Future<void> main(List<String> args) async {
     exit(1);
   } else {
     stdout.writeln('\nAll documentation snippets passed analysis.');
+  }
+}
+
+/// Guards both deletion sites against the snippet directory being replaced by
+/// a symlink (or a plain file) that could redirect a recursive delete outside
+/// the repository.
+///
+/// Checks (without following the final path component):
+///
+/// 1. The entity at [dir.path] is a plain [Directory] or absent.
+///    A symlink or regular file causes an immediate non-zero exit.
+/// 2. When the entity is a directory its canonical path (all symlinks
+///    resolved) must start with the canonical repository root, so a path
+///    containing ".." components cannot escape the workspace.
+void _assertSnippetDirSafe(Directory dir) {
+  final type = FileSystemEntity.typeSync(dir.path, followLinks: false);
+
+  if (type == FileSystemEntityType.link) {
+    stderr.writeln(
+      '${_errorPrefix}Refusing to delete ${dir.path}: '
+      'path is a symlink. Remove it manually if safe.',
+    );
+    exit(1);
+  }
+  if (type == FileSystemEntityType.file) {
+    stderr.writeln(
+      '${_errorPrefix}Refusing to delete ${dir.path}: '
+      'expected a directory but found a plain file. '
+      'Remove it manually if safe.',
+    );
+    exit(1);
+  }
+  if (type == FileSystemEntityType.notFound) {
+    // Nothing to delete; createSync() will make it fresh.
+    return;
+  }
+  if (type != FileSystemEntityType.directory) {
+    // FIFO, socket, or other special file type — refuse rather than
+    // attempting resolveSymbolicLinksSync() which may throw or mislead.
+    stderr.writeln(
+      '${_errorPrefix}Refusing to delete ${dir.path}: '
+      'unexpected file system entity type ($type). '
+      'Remove it manually if safe.',
+    );
+    exit(1);
+  }
+
+  // type == FileSystemEntityType.directory — verify the canonical path sits
+  // inside the repository root so intermediate symlinks in parent directories
+  // cannot redirect the delete outside the workspace.
+  final repoRoot = Directory.current.resolveSymbolicLinksSync();
+  final canonical = dir.resolveSymbolicLinksSync();
+  final sep = Platform.pathSeparator;
+  // Normalize repoRoot so we don't build a double-separator prefix when
+  // repoRoot is itself a filesystem root (e.g. POSIX '/' or Windows 'C:\').
+  final repoRootPrefix =
+      repoRoot.endsWith(sep) ? repoRoot : '$repoRoot$sep';
+  if (canonical != repoRoot && !canonical.startsWith(repoRootPrefix)) {
+    stderr.writeln(
+      '${_errorPrefix}Refusing to delete ${dir.path}: '
+      'canonical path $canonical is outside the repository root $repoRoot.',
+    );
+    exit(1);
   }
 }
 
