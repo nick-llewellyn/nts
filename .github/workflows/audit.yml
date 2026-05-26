@@ -115,7 +115,7 @@ jobs:
               # in a single row, instead of splitting across cells and
               # rows as it would unescaped.
               jq -r '
-                def mdcell: tostring | gsub("\\|"; "\\|") | gsub("[\r\n\t]"; " ");
+                def mdcell: tostring | gsub("\\|"; "\\|") | gsub("[\r\n\t]+"; " ");
                 .vulnerabilities.list[]
                 | "| \(.package.name | mdcell) | \(.package.version | mdcell) | [\(.advisory.id | mdcell)](\(.advisory.url | mdcell)) | \(.advisory.title | mdcell) |"
               ' audit.json >> audit-summary.md
