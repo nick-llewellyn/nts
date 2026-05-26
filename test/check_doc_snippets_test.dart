@@ -3,10 +3,12 @@
 // fenced ` ```dart ` blocks and feeds the bodies through `dart analyze`, so
 // any fence it fails to recognise is a snippet that ships untested. Bug
 // NTS-24 surfaced that the previous regex required the closing fence to sit
-// in column 0, which silently dropped blocks nested in list items,
-// blockquotes, or admonitions. These tests pin down the post-fix behaviour
-// against CommonMark §4.5 -- 0-3 spaces of indentation accepted on either
-// fence, 4+ spaces treated as an indented code block and skipped.
+// in column 0, which silently dropped blocks nested in list items. These
+// tests pin down the post-fix behaviour against CommonMark §4.5 -- 0-3
+// spaces of indentation accepted on either fence, 4+ spaces treated as an
+// indented code block and skipped. Tab indentation is also skipped because
+// §2.2 expands a leading tab to column 4, putting it outside fenced-code
+// territory. Blockquote (`>`) and admonition prefixes are out of scope.
 //
 // `@TestOn('vm')` matches the tool itself, which uses `dart:io` and is never
 // intended to run in a browser.
@@ -116,15 +118,13 @@ fn main() {}
       expect(extractDartSnippets(markdown), isEmpty);
     });
 
-    test('matches a tab-indented opening fence', () {
-      // CommonMark counts a tab as four spaces for indentation, but the
-      // regex literal `[ \t]{0,3}` matches up to three tabs as well. This
-      // is a deliberate over-acceptance to keep the pattern simple; the
-      // downstream analyzer still validates the captured body.
+    test('skips a tab-indented opening fence (CommonMark §2.2)', () {
+      // §2.2 expands a leading tab to the next multiple of four columns,
+      // so a tab-prefixed fence sits at column 4 -- indented-code-block
+      // territory, not a fenced block. The regex therefore restricts
+      // indentation to ` {0,3}` rather than `[ \t]{0,3}`.
       const markdown = '\t```dart\n\tfinal t = 6;\n\t```\n';
-      final snippets = extractDartSnippets(markdown);
-      expect(snippets, hasLength(1));
-      expect(snippets.single, '\tfinal t = 6;');
+      expect(extractDartSnippets(markdown), isEmpty);
     });
   });
 }

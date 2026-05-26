@@ -239,12 +239,19 @@ void _assertSnippetDirSafe(Directory dir) {
 /// Extracts the body of every fenced ` ```dart ` code block in [content].
 ///
 /// CommonMark §4.5 permits an opening or closing fence to be indented by up
-/// to three spaces (using either spaces or tabs); fences indented four or
-/// more spaces are interpreted as indented code blocks instead. Both fences
-/// are therefore anchored to the start of a line with `[ \t]{0,3}` so that
-/// blocks nested inside list items, blockquotes, or admonitions are picked
-/// up rather than silently skipped, while genuinely over-indented blocks
-/// remain ignored.
+/// to three spaces; fences indented four or more spaces are interpreted as
+/// indented code blocks (§4.4) instead. Both fences are therefore anchored
+/// to the start of a line with ` {0,3}` so that blocks nested inside list
+/// items are picked up rather than silently skipped, while genuinely
+/// over-indented blocks remain ignored.
+///
+/// Tab indentation is deliberately not matched: §2.2 expands a leading tab
+/// to the next multiple of four columns, so a tab-prefixed fence is always
+/// at or beyond column 4 and is therefore an indented code block, not a
+/// fenced one. Blockquote (`>`) and admonition prefixes are likewise out of
+/// scope -- the validator does not currently strip them, so fences inside
+/// blockquotes are skipped. Add explicit handling here if a use case
+/// appears.
 ///
 /// Only three-backtick `dart`-tagged fences are recognised because this repo
 /// neither uses four-plus-backtick fences nor tilde fences (see NTS-24 "Out
@@ -266,9 +273,11 @@ List<String> extractDartSnippets(String content) {
 // Multi-line + dot-all so `.` spans newlines inside the lazy body capture
 // while `^`/`$` continue to anchor on line boundaries for the surrounding
 // fences. The lazy `(.*?)` prevents the body from greedily swallowing
-// subsequent fences when a document contains several snippets.
+// subsequent fences when a document contains several snippets. Indentation
+// is spaces-only per CommonMark §2.2 tab-expansion semantics; see the
+// `extractDartSnippets` docstring.
 final RegExp _snippetRegex = RegExp(
-  r'^[ \t]{0,3}```dart[ \t]*\n(.*?)\n^[ \t]{0,3}```[ \t]*$',
+  r'^ {0,3}```dart[ \t]*\n(.*?)\n^ {0,3}```[ \t]*$',
   multiLine: true,
   dotAll: true,
 );
