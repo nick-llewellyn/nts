@@ -185,6 +185,69 @@ fn phase_io_to_ke(e: std::io::Error, phase: KeTimeoutPhase) -> KeError {
     }
 }
 
+/// Opaque wrapper for caller-supplied root certificates.
+///
+/// Stored as `Arc<Zeroizing<Vec<u8>>>`:
+/// 1. `Zeroizing` wipes the certificate bytes from RAM when the
+///    backing `Vec<u8>` is dropped. `zeroize` ≥ 1.8's
+///    `impl Zeroize for Vec<u8>` wipes both the initialised length
+///    *and* the spare capacity (`spare_capacity_mut().zeroize()`),
+///    so the wrapper does not need to call `Vec::shrink_to_fit` to
+///    be safe at drop time — see `AGENTS.md` ("Security:
+///    Zeroization") for the dependency-version contract.
+/// 2. `Arc` keeps cloning `KeTrustMode` (and therefore every
+///    `nts_query` that captures it) O(1). The bytes are zeroised
+///    on the **final** `Arc` drop — i.e. when the last clone goes
+///    out of scope; an intermediate clone going out of scope does
+///    not wipe the backing allocation. Within this codebase the
+///    clone chain is internal to the KE / query pipeline and
+///    terminates with the owning [`KeTrustMode`] field, so the
+///    bytes are wiped as soon as that field is dropped.
+/// 3. `Debug` is manually implemented to redact the bytes — see
+///    the `impl std::fmt::Debug` below.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CustomRootsBytes(Arc<Zeroizing<Vec<u8>>>);
+
+impl CustomRootsBytes {
+    /// Wrap raw certificate bytes.
+    ///
+    /// Does not call `Vec::shrink_to_fit` on the input. `zeroize`
+    /// ≥ 1.8 already wipes the full capacity of the backing
+    /// `Vec<u8>` on drop, so the extra step is not load-bearing
+    /// — and per the standard-library contract `shrink_to_fit`
+    /// may itself reallocate and free a non-zeroised intermediate
+    /// buffer, which would *introduce* the residual-memory
+    /// surface it was meant to remove. The construction chain
+    /// that feeds this function (`Vec::to_vec` from the FRB
+    /// bridge, then move into `Self`) never grows the vector, so
+    /// there is no reallocation history to scrub either. See
+    /// `AGENTS.md` ("Security: Zeroization") for the convention.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(Arc::new(Zeroizing::new(bytes)))
+    }
+
+    /// Access the underlying bytes as a slice.
+    ///
+    /// Explicitly projects through `Arc<Zeroizing<Vec<u8>>>` → `Vec<u8>` →
+    /// `&[u8]` via `Vec::as_slice` so the intent does not rely on
+    /// return-type-driven deref coercion.
+    pub fn as_slice(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl std::fmt::Debug for CustomRootsBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<REDACTED: {} bytes>", self.0.len())
+    }
+}
+
+impl std::hash::Hash for CustomRootsBytes {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state);
+    }
+}
+
 /// Trust-anchor policy for [`KeRequest`]. Mirrors
 /// [`crate::api::nts::TrustMode`] across the protocol-layer boundary
 /// so the protocol module stays independent of the public-API enum
@@ -202,14 +265,14 @@ pub enum KeTrustMode {
     /// Webpki-roots static bundle only; no platform-store consultation at all.
     BundledOnly,
     /// Caller-supplied custom root certificates in PEM or DER format.
-    /// Wrapped in `Arc<[u8]>` so the per-handshake and per-`query`
-    /// `.clone()` calls that flow `KeTrustMode` through
+    /// Wrapped in [`CustomRootsBytes`] so the per-handshake and
+    /// per-`query` `.clone()` calls that flow `KeTrustMode` through
     /// `NtsClient` → `nts_*_inner` → `SessionTable::checkout` →
     /// `establish_session` → `KeRequest::trust_mode` stay O(1)
     /// (atomic refcount bump) regardless of bundle size; the
-    /// `Vec<u8>` → `Arc<[u8]>` conversion happens once at the
+    /// `Vec<u8>` → `CustomRootsBytes` conversion happens once at the
     /// `From<TrustMode>` boundary in `crate::api::nts`.
-    Custom(Arc<[u8]>),
+    Custom(CustomRootsBytes),
 }
 
 /// Trust-anchor backend that authenticated this handshake's TLS chain.
@@ -1056,7 +1119,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
     }
     if let KeTrustMode::Custom(ref bytes) = trust_mode {
         return Ok(TlsConfigBuild {
-            config: Arc::new(build_with_custom_roots(bytes)?),
+            config: Arc::new(build_with_custom_roots(bytes.as_slice())?),
             initial_backend: KeTrustBackend::Custom,
             hybrid: None,
         });
@@ -1108,7 +1171,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
     }
     if let KeTrustMode::Custom(ref bytes) = trust_mode {
         return Ok(TlsConfigBuild {
-            config: Arc::new(build_with_custom_roots(bytes)?),
+            config: Arc::new(build_with_custom_roots(bytes.as_slice())?),
             initial_backend: KeTrustBackend::Custom,
         });
     }

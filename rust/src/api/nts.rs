@@ -444,7 +444,7 @@ pub enum TrustBackend {
 /// functions ([`nts_query`], [`nts_warm_cookies`]) is constructed with
 /// [`TrustMode::PlatformWithFallback`] and never changes, so existing
 /// callers see no behaviour change.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum TrustMode {
     /// Platform store is the primary source of truth; on
     /// `build_with_native_verifier` failure the client silently
@@ -482,21 +482,29 @@ pub enum TrustMode {
     Custom(Vec<u8>),
 }
 
+impl std::fmt::Debug for TrustMode {
+    /// Manual `Debug` that redacts the `Custom` root bytes.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PlatformWithFallback => f.write_str("PlatformWithFallback"),
+            Self::PlatformOnly => f.write_str("PlatformOnly"),
+            Self::BundledOnly => f.write_str("BundledOnly"),
+            Self::Custom(bytes) => {
+                write!(f, "Custom(<REDACTED: {} bytes>)", bytes.len())
+            }
+        }
+    }
+}
+
 impl From<TrustMode> for crate::nts::ke::KeTrustMode {
     fn from(m: TrustMode) -> Self {
         match m {
             TrustMode::PlatformWithFallback => Self::PlatformWithFallback,
             TrustMode::PlatformOnly => Self::PlatformOnly,
             TrustMode::BundledOnly => Self::BundledOnly,
-            // One-time `Vec<u8>` → `Arc<[u8]>` conversion at the public-
-            // API boundary. `into_boxed_slice` shrinks the buffer to
-            // exact length (no extra realloc when `len == cap`, which
-            // is the common case for FRB-marshaled `Vec<u8>` arriving
-            // from Dart), and `Arc::from(Box<[u8]>)` is a zero-copy
-            // wrap. All downstream `.clone()`s on the resulting
-            // `KeTrustMode` are O(1) atomic refcount bumps regardless
-            // of bundle size.
-            TrustMode::Custom(bytes) => Self::Custom(Arc::from(bytes.into_boxed_slice())),
+            // One-time `Vec<u8>` → `CustomRootsBytes` conversion at the
+            // public-API boundary.
+            TrustMode::Custom(bytes) => Self::Custom(crate::nts::ke::CustomRootsBytes::new(bytes)),
         }
     }
 }
@@ -507,11 +515,11 @@ impl From<crate::nts::ke::KeTrustMode> for TrustMode {
             crate::nts::ke::KeTrustMode::PlatformWithFallback => Self::PlatformWithFallback,
             crate::nts::ke::KeTrustMode::PlatformOnly => Self::PlatformOnly,
             crate::nts::ke::KeTrustMode::BundledOnly => Self::BundledOnly,
-            // `Arc<[u8]>` → `Vec<u8>` materialization for the public
+            // `CustomRootsBytes` → `Vec<u8>` materialization for the public
             // FRB-marshaled wire type. Only the `NtsClient::trust_mode`
             // getter calls this; the per-`query`/per-handshake hot
             // paths stay on `KeTrustMode` and never reach here.
-            crate::nts::ke::KeTrustMode::Custom(bytes) => Self::Custom(bytes.to_vec()),
+            crate::nts::ke::KeTrustMode::Custom(bytes) => Self::Custom(bytes.as_slice().to_vec()),
         }
     }
 }

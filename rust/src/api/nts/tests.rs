@@ -45,6 +45,16 @@ fn effective_timeout_substitutes_default_when_zero() {
     assert_eq!(effective_timeout(1234), Duration::from_millis(1234));
 }
 
+#[test]
+fn test_trust_mode_redaction() {
+    let bytes = b"secret-custom-roots".to_vec();
+    let expected_len = bytes.len();
+    let mode = TrustMode::Custom(bytes);
+    let debug = format!("{:?}", mode);
+    assert!(debug.contains(&format!("Custom(<REDACTED: {expected_len} bytes>)")));
+    assert!(!debug.contains("secret-custom-roots"));
+}
+
 /// Pins the cross-layer contract between the Rust-side defaults
 /// (`DEFAULT_TIMEOUT_MS` here, `DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS` in
 /// `rust/src/nts/dns.rs`) and the Dart wrapper constants that expose
@@ -2420,11 +2430,11 @@ fn trust_mode_and_backend_conversions_are_total() {
             (TrustMode::PlatformOnly, crate::nts::ke::KeTrustMode::PlatformOnly) => {}
             (TrustMode::BundledOnly, crate::nts::ke::KeTrustMode::BundledOnly) => {}
             (TrustMode::Custom(b1), crate::nts::ke::KeTrustMode::Custom(b2)) => {
-                // `b1: Vec<u8>` (public-wire shape), `b2: Arc<[u8]>`
+                // `b1: Vec<u8>` (public-wire shape), `b2: CustomRootsBytes`
                 // (internal cheap-clone shape). Compare via slice
                 // projection so the assertion stays meaningful across
-                // the conversion's Vec-to-Arc materialization.
-                assert_eq!(b1.as_slice(), b2.as_ref());
+                // the conversion's materialization.
+                assert_eq!(b1.as_slice(), b2.as_slice());
             }
             _ => panic!("TrustMode -> KeTrustMode mapping diverged"),
         }
@@ -3227,7 +3237,7 @@ fn trust_mode_maps_to_ke_trust_mode() {
         (TrustMode::BundledOnly, KeTrustMode::BundledOnly),
         (
             TrustMode::Custom(b"foo".to_vec()),
-            KeTrustMode::Custom(std::sync::Arc::from(&b"foo"[..])),
+            KeTrustMode::Custom(crate::nts::ke::CustomRootsBytes::new(b"foo".to_vec())),
         ),
     ] {
         let mapped: KeTrustMode = public_variant.clone().into();
@@ -3311,12 +3321,7 @@ fn nts_query_inner_increments_custom_counter_for_default_client() {
 
     // Pre-install a session with one cookie so the checkout phase
     // returns a cache hit and bypasses establish_session (no network).
-    let mut session = make_test_session_with_cookies(
-        host,
-        4460,
-        next_session_generation(),
-        1,
-    );
+    let mut session = make_test_session_with_cookies(host, 4460, next_session_generation(), 1);
     session.trust_backend = TrustBackend::Custom;
     table.install(&spec, session);
 
@@ -3330,14 +3335,7 @@ fn nts_query_inner_increments_custom_counter_for_default_client() {
     // is non-resolvable, but the counter bump happens immediately after
     // `checkout` returns `Ok(ctx)`, before the NTP attempt. A 1 ms
     // timeout keeps the test fast without affecting correctness.
-    let _ = super::nts_query_inner(
-        &table,
-        spec,
-        1,
-        1,
-        KeTrustMode::BundledOnly,
-        true,
-    );
+    let _ = super::nts_query_inner(&table, spec, 1, 1, KeTrustMode::BundledOnly, true);
 
     let final_status = nts_trust_status();
     assert!(
@@ -3364,14 +3362,7 @@ fn nts_query_inner_increments_custom_counter_for_default_client() {
     table.install(&spec2, session2);
 
     let before_custom_client = nts_trust_status();
-    let _ = super::nts_query_inner(
-        &table,
-        spec2,
-        1,
-        1,
-        KeTrustMode::BundledOnly,
-        false,
-    );
+    let _ = super::nts_query_inner(&table, spec2, 1, 1, KeTrustMode::BundledOnly, false);
     let after_custom_client = nts_trust_status();
     assert_eq!(
         after_custom_client.default_backend_custom_count,
@@ -3456,7 +3447,8 @@ fn nts_client_trust_mode_round_trips_custom_payload_byte_for_byte() {
                     recovered.len(),
                 );
                 assert_eq!(
-                    recovered, original,
+                    recovered,
+                    original,
                     "Custom payload bytes diverged across round-trip; \
                      first difference at byte {:?}",
                     recovered
