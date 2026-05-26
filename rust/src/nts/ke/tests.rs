@@ -163,7 +163,7 @@ q8P9uhno9+zDMKKpnQ==\n\
 
     #[test]
     fn build_tls_config_custom_pem_succeeds() {
-        let mode = KeTrustMode::Custom(std::sync::Arc::from(TEST_CERT_PEM.as_bytes()));
+        let mode = KeTrustMode::Custom(CustomRootsBytes::new(TEST_CERT_PEM.as_bytes().to_vec()));
         let build = build_tls_config(mode).expect("custom PEM config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
@@ -171,7 +171,7 @@ q8P9uhno9+zDMKKpnQ==\n\
 
     #[test]
     fn build_tls_config_custom_der_succeeds() {
-        let mode = KeTrustMode::Custom(std::sync::Arc::from(TEST_CERT_DER));
+        let mode = KeTrustMode::Custom(CustomRootsBytes::new(TEST_CERT_DER.to_vec()));
         let build = build_tls_config(mode).expect("custom DER config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
@@ -180,7 +180,7 @@ q8P9uhno9+zDMKKpnQ==\n\
     #[test]
     fn build_tls_config_custom_malformed_pem_surfaces_diagnostic_substring() {
         let malformed_pem = "-----BEGIN CERTIFICATE-----\nnot-base64\n-----END CERTIFICATE-----";
-        let mode = KeTrustMode::Custom(std::sync::Arc::from(malformed_pem.as_bytes()));
+        let mode = KeTrustMode::Custom(CustomRootsBytes::new(malformed_pem.as_bytes().to_vec()));
         let build = build_tls_config(mode);
         // Manual error extraction because TlsConfigBuild is not Debug
         let err = match build {
@@ -199,7 +199,7 @@ q8P9uhno9+zDMKKpnQ==\n\
     #[test]
     fn build_tls_config_custom_malformed_der_surfaces_diagnostic_substring() {
         // Not a PEM, so it falls through to DER parsing which fails in `roots.add(cert)`
-        let mode = KeTrustMode::Custom(std::sync::Arc::from(&b"not-a-valid-cert-bytes"[..]));
+        let mode = KeTrustMode::Custom(CustomRootsBytes::new(b"not-a-valid-cert-bytes".to_vec()));
         let build = build_tls_config(mode);
         let err = match build {
             Err(e) => e,
@@ -219,7 +219,7 @@ q8P9uhno9+zDMKKpnQ==\n\
         // Contains the marker so `is_pem` is true, but `rustls_pemfile` will
         // find no valid certificate blocks.
         let empty_pem = "text that contains -----BEGIN CERTIFICATE----- but no actual cert";
-        let mode = KeTrustMode::Custom(std::sync::Arc::from(empty_pem.as_bytes()));
+        let mode = KeTrustMode::Custom(CustomRootsBytes::new(empty_pem.as_bytes().to_vec()));
         let build = build_tls_config(mode);
         let err = match build {
             Err(e) => e,
@@ -245,7 +245,8 @@ q8P9uhno9+zDMKKpnQ==\n\
             "subject=CN = localhost\nissuer=CN = localhost\n{}",
             TEST_CERT_PEM,
         );
-        let mode = KeTrustMode::Custom(std::sync::Arc::from(pem_with_preamble.as_bytes()));
+        let mode =
+            KeTrustMode::Custom(CustomRootsBytes::new(pem_with_preamble.as_bytes().to_vec()));
         let build = build_tls_config(mode).expect("custom PEM-with-preamble config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
@@ -259,10 +260,28 @@ q8P9uhno9+zDMKKpnQ==\n\
             "Bag Attributes\n    friendlyName: localhost\n    localKeyID: 01 02 03 04\n{}",
             TEST_CERT_PEM,
         );
-        let mode = KeTrustMode::Custom(std::sync::Arc::from(pem_with_preamble.as_bytes()));
+        let mode =
+            KeTrustMode::Custom(CustomRootsBytes::new(pem_with_preamble.as_bytes().to_vec()));
         let build = build_tls_config(mode).expect("custom PEM-with-bag-attrs config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
+    }
+
+    #[test]
+    fn test_custom_roots_bytes_redaction() {
+        let bytes = b"secret-certificate-data".to_vec();
+        let len = bytes.len();
+        let custom = CustomRootsBytes::new(bytes);
+        let debug = format!("{:?}", custom);
+        assert!(debug.contains(&format!("<REDACTED: {} bytes>", len)));
+        assert!(!debug.contains("secret-certificate-data"));
+    }
+
+    #[test]
+    fn test_custom_roots_bytes_as_slice() {
+        let bytes = b"cert-data".to_vec();
+        let custom = CustomRootsBytes::new(bytes.clone());
+        assert_eq!(custom.as_slice(), bytes.as_slice());
     }
 }
 

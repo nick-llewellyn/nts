@@ -400,3 +400,259 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+## Linear Sync Configuration
+
+This project syncs `bd` issues to **Linear** (workspace `nick-llewellyn`, team `nts`).
+
+### Workspace Identifiers
+
+| Field | Value |
+|---|---|
+| Team | `nts` |
+| Team ID | `331d8088-688e-4385-84ab-aa9642909146` |
+| Project | `nts` |
+| Project ID | `6cde53e1-e9e3-423b-a8a4-478bdf116d7f` |
+
+### Initial Setup (per clone)
+
+```bash
+bd config set linear.team_id "331d8088-688e-4385-84ab-aa9642909146"
+bd config set linear.project_id "6cde53e1-e9e3-423b-a8a4-478bdf116d7f"
+```
+
+The `LINEAR_API_KEY` is stored in the macOS Keychain and exported lazily via `~/.zshrc`. To verify it is set without revealing the value, run `[ -n "$LINEAR_API_KEY" ] && echo "set" || echo "not set"` before syncing.
+
+### Sync Workflow
+
+Always pull before pushing to avoid creating duplicates and to surface conflicts locally:
+
+```bash
+bd linear sync --pull          # import from Linear first
+bd linear sync --push          # then export local changes
+```
+
+### Known Gotchas (read before every sync)
+
+#### 1. Status Mapping: CLOSED → Canceled
+
+`bd` maps its local `CLOSED` state to Linear's **Canceled** status. There is no built-in distinction between "completed" and "abandoned" in the mapping.
+
+**Consequence:** Completed issues pushed to Linear will appear as **Canceled**, not **Done**.
+
+**Workaround:** After any push that includes closed issues, manually transition the completed ones to **Done** in Linear (via the Linear UI or `save_issue_linear` tool with `state: "Done"`).
+
+**Tracking fix:** NTS-8 covers improving this mapping in `bd`.
+
+#### 2. State Clobbering: Manual Linear Edits Are Overwritten
+
+Running `bd linear sync --push` re-pushes local state and **overwrites any manual status changes made directly in Linear**. For example, if you manually set an issue to **Done** in Linear, a subsequent `--push` will revert it to **Canceled** if the local `bd` state is `CLOSED`.
+
+**Rule:** After manually correcting statuses in Linear, do **not** run a blind `bd linear sync --push` for issues that are locally `CLOSED`. Use `--issues` to target only the specific issues you intend to push.
+
+#### 3. Implicit Filtering: New Issues May Be Silently Skipped
+
+`bd linear sync --push` (without `--issues`) only updates issues that already have an `external_ref` (i.e., a Linear ID). Locally open issues that have never been pushed are silently skipped. The warning message `"Linear data has never been pulled"` is the signal that this is happening.
+
+**Workaround:** To push unlinked issues, first run `bd linear sync --pull`, then explicitly name the issue IDs:
+
+```bash
+bd linear sync --pull
+bd linear sync --push --issues nts-abc,nts-def,nts-xyz
+```
+
+### Troubleshooting
+
+#### GraphQL Argument Validation Error
+
+If `bd linear sync` fails with a "GraphQL Argument Validation" error, the stored sync timestamp is stale (usually from a different workspace). Reset it:
+
+```bash
+bd config set linear.last_sync "0001-01-01T00:00:00Z"
+```
+
+Then retry the sync.
+
+## Assignee Convention
+
+This is a single-developer repository. Every issue — whether created locally
+with `bd` or imported from Linear — must have an owner set to
+`nllewelln@gmail.com` (the email auto-derived from `git config user.email`,
+already used by every issue in the database). The string is also what
+Linear recognises for this workspace, so assignments round-trip across
+`bd linear sync` without a separate user-mapping table.
+
+`bd` does not expose a `default.assignee` config key, so the rule is
+agent-enforced rather than tool-enforced. The agent operating this repo
+must apply it on every relevant command:
+
+1. **Local creation.** Always pass `-a nllewelln@gmail.com` (or
+   `--assignee nllewelln@gmail.com`) to `bd create`:
+
+   ```bash
+   bd create "Title" -a nllewelln@gmail.com -t task -p 2
+   ```
+
+2. **Linear pull.** `bd linear sync --pull` does not honour any default
+   assignee — issues whose Linear assignee is unset land in the local
+   database with an empty owner. Immediately after every pull, backfill:
+
+   ```bash
+   bd linear sync --pull
+   bd list --json \
+     | python3 -c 'import json,sys;[print(i["id"]) for i in json.load(sys.stdin) if not i.get("owner")]' \
+     | xargs -I{} bd assign {} nllewelln@gmail.com
+   ```
+
+3. **Audit on every session.** Before claiming new work, run the same
+   one-liner to catch anything that slipped through (manual `bd create`
+   calls without the flag, third-party imports, schema migrations):
+
+   ```bash
+   bd list --json \
+     | python3 -c 'import json,sys;[print(i["id"]) for i in json.load(sys.stdin) if not i.get("owner")]' \
+     | xargs -I{} bd assign {} nllewelln@gmail.com
+   ```
+
+   A silent run means zero unassigned issues. As of the audit that
+   accompanied filing this section, all 9 open issues already carry the
+   correct owner; the audit step is a guard against future drift, not a
+   currently-needed cleanup.
+
+`bd` filters owner strings by exact match, so any divergence (e.g.
+`Nicholas Llewellyn`, `nick.l`, capitalisation drift) will silently
+fragment the database. Stick to the canonical `nllewelln@gmail.com`.
+
+
+## Communication & Reference Convention
+
+To ensure the human developer can easily map local activity to the Linear project:
+1. **Always use Dual-IDs.** Every mention of an issue in chat or PR descriptions must use the format `bd-id (Linear-id)`. Example: `nts-8wp (NTS-9)`.
+2. **Retrieving Mappings.** If the Linear ID is unknown, run `bd show <id>` and look for the `external_ref` field.
+
+## Issue State Synchronization
+
+Local state changes (claiming, closing, re-prioritizing) do not propagate to Linear automatically.
+1. **Sync on Claim.** Immediately after running `bd update <id> --claim`, the agent must run:
+   ```bash
+   bd linear sync --push --issues <id>
+   ```
+2. **Sync on Close.** Immediately after `bd close <id>`, run the same targeted push sync.
+
+## Versioning & Release Policy
+
+This project follows a **release-only bumping** policy: metadata version
+fields are not touched during ordinary feature work. Bumps land in a
+dedicated release commit so that feature branches stay clean and the
+version number on `main` always reflects the most recently *released*
+artefact, not work-in-progress.
+
+### Rules
+
+1. **Metadata files stay at the current stable version during
+   development.** Do not edit the `version:` field in `pubspec.yaml` or
+   the `version = ` field in `rust/Cargo.toml` as part of a feature,
+   fix, or refactor PR. They must remain pinned to the last released
+   version (e.g. `5.1.0` / `0.5.0`) until the release commit lands.
+
+2. **Document ongoing work under the next intended release header in
+   `CHANGELOG.md`.** Do **not** use an `## Unreleased` section — file
+   entries directly under the target version header (e.g. `## 5.1`,
+   `## 5.2`). This makes the intended landing place explicit and
+   avoids a separate "move entries from Unreleased → version" step at
+   release time. The header may be a two-component version (`## 5.1`)
+   while patch-level work is still accumulating; promote it to a full
+   three-component header (`## 5.1.0`) only when the release commit
+   itself lands.
+
+3. **Bumps land in a dedicated release commit.** When preparing to cut
+   a release, a single commit must:
+   - increment `pubspec.yaml` and `rust/Cargo.toml` to the new
+     version,
+   - finalise the `CHANGELOG.md` header for that release (e.g.
+     `## 5.1` → `## 5.1.0`, or add the patch component for a point
+     release),
+   - contain no other functional changes.
+
+4. **Compatibility exception.** If a Rust crate version increment is
+   strictly required mid-feature for technical compatibility (e.g. a
+   dependency-resolution constraint that cannot be expressed any other
+   way), the bump may land in the feature PR. Document the reason in
+   the PR description. The default action is to revert.
+
+### Rationale
+
+Version drift across feature branches (each branch carrying its own
+speculative `+1` bump) produces noisy diffs at merge time and makes
+the version field on `main` an unreliable indicator of what was
+actually shipped. Concentrating bumps in a release commit also gives
+the release a single, greppable handle for revert/cherry-pick
+purposes.
+
+## Security: Zeroization
+
+This project treats specific byte sequences as secrets that must not
+linger in freed allocations: AEAD key material
+(`rust/src/nts/aead.rs`), NTS cookies (`rust/src/nts/cookies.rs`,
+`rust/src/nts/ntp.rs`, `rust/src/api/nts.rs`), the TLS exporter
+outputs that derive the C2S / S2C keys (`rust/src/nts/ke.rs`), and
+user-supplied root certificate bytes (`CustomRootsBytes` in
+`rust/src/nts/ke.rs`). The conventions below apply uniformly to all
+of these.
+
+### Conventions
+
+1. **Wrap heap-allocated secret bytes in `Zeroizing<Vec<u8>>` (or
+   `Zeroizing<Box<[u8]>>`).** The `zeroize` crate's `Drop` impl wipes
+   the backing allocation before it is returned to the allocator.
+
+2. **Pin `zeroize ≥ 1.8`.** Its `impl Zeroize for Vec<T>` wipes the
+   full capacity (`self.spare_capacity_mut().zeroize()`, added in
+   1.8), so secrets stored in a `Vec<u8>` cannot leak via spare
+   capacity at drop time. The lower bound is documented in
+   `rust/Cargo.toml` next to the dep. Downgrading silently
+   re-introduces the capacity-leak surface.
+
+3. **Construct secret-bearing vectors without growth.** Use
+   `slice.to_vec()`, `existing.clone()`, or `vec![0u8; N]` — never
+   `push` / `extend` / `reserve` on a vector that will become a
+   secret. Reallocation during growth leaves intermediate copies in
+   the allocator that `Zeroize` cannot reach. The `zeroize` crate's
+   own docstring flags this: *"Cannot ensure that previous
+   reallocations did not leave values on the heap."*
+
+4. **Prefer fixed-size arrays when the length is known statically.**
+   `SivKey`, `SivKey512`, and `Aes128GcmSivKey` in `nts/aead.rs` wrap
+   `[u8; N]` rather than `Vec<u8>`. Arrays have no spare capacity and
+   no reallocation history by construction.
+
+5. **Do not call `Vec::shrink_to_fit` on a secret-bearing vector
+   immediately before wrapping in `Zeroizing` purely for
+   capacity-leak reasons.** It is redundant with the `zeroize ≥ 1.8`
+   `Vec` impl, and per the standard-library contract `shrink_to_fit`
+   may itself reallocate and free a non-zeroised intermediate buffer,
+   re-introducing the residual-memory surface it was meant to remove.
+   The growth-free construction discipline in rule 3 is what
+   actually closes the surface.
+
+6. **Redact secret-bearing types in `Debug`.** Manual `impl
+   std::fmt::Debug` implementations for `CustomRootsBytes`,
+   `TrustMode`, `CookieJar`, `SivKey`, `SivKey512`, and
+   `Aes128GcmSivKey` render placeholders (`<REDACTED: N bytes>`,
+   count-only summaries) so accidental `{:?}` formatting in logs,
+   panic messages, or diagnostic output cannot leak bytes.
+
+### Known residual exposure
+
+Between the records parser (`rust/src/nts/records.rs`,
+`RecordKind::NewCookie(Vec<u8>)`) and the cookie jar
+(`rust/src/nts/cookies.rs`), cookie bytes traverse intermediate
+`Vec<u8>` values that are not wrapped in `Zeroizing`. A panic between
+parse and jar-insertion would drop those vectors without wiping.
+This is a *liveness* exposure (an intermediate window), not a
+*capacity* exposure, and is tracked separately as `nts-8ey` rather
+than blocking the current PR. The dominant mitigation today is the
+growth-free construction discipline above: the affected vectors are
+`body.to_vec()` outputs that have no spare capacity and no
+reallocation history, so the residual surface is the initialised
+bytes themselves, not allocator detritus.

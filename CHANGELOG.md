@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 5.1
+
+### Security
+
+- Hardened `TrustMode::Custom` roots handling: caller-supplied root
+  certificate bytes are now stored as `Arc<Zeroizing<Vec<u8>>>`. The
+  bytes are wiped from RAM when the final `Arc` clone is dropped (the
+  clone chain is internal to the KE / query pipeline; see the
+  `CustomRootsBytes` rustdoc). The `zeroize` ≥ 1.8 `Vec` impl wipes
+  both the initialised length and the spare capacity at drop, so the
+  wrapper is capacity-leak free without a manual `shrink_to_fit`. See
+  `AGENTS.md` → "Security: Zeroization" for the project-wide
+  convention.
+- Implemented manual `Debug` for `TrustMode` and internal
+  `CustomRootsBytes` to redact sensitive certificate bytes from logs,
+  rendering as `<REDACTED: N bytes>`. (nts-8wp)
 
 ### Fixed
 

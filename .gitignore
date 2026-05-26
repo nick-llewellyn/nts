@@ -39,6 +39,9 @@ coverage/
 *.db
 .beads-credential-key
 .beads/issues.jsonl
+.beads/last_pull
+.linear.toml
+
 
 # IDE — JetBrains (machine-specific; matches Flutter's default template)
 .idea/

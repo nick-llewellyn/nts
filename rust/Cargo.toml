@@ -96,6 +96,16 @@ rustls-platform-verifier = "0.7"
 # silently dropped, so this dep adds no host-side noise.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 webpki-roots = "1.0"
+# `zeroize` ≥ 1.8 is load-bearing for the security posture of the
+# `Zeroizing<Vec<u8>>` wrappers in `src/nts/{ke,cookies,ntp}.rs`
+# and `src/api/nts.rs`. Starting in 1.8 the `impl Zeroize for
+# Vec<T>` wipes both the initialised length *and* the spare
+# capacity (`self.spare_capacity_mut().zeroize()`), closing the
+# spare-capacity leak that earlier versions left exposed.
+# Downgrading the minimum would silently re-introduce that
+# surface. See `AGENTS.md` ("Security: Zeroization") for the
+# project-wide convention and the residual reallocation-history
+# caveat the crate's own docstring flags.
 zeroize = { version = "1.8", default-features = false, features = ["alloc", "derive"] }
 
 # Android-only: JNI handles for bootstrapping `rustls-platform-verifier`'s
