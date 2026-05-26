@@ -432,6 +432,31 @@ bd linear sync --pull          # import from Linear first
 bd linear sync --push          # then export local changes
 ```
 
+### Claiming an issue
+
+`bd update <id> --claim` (and `bd update <id> --status in_progress`) write only
+to the local Dolt database. They do **not** notify Linear. Until an explicit push
+is performed, Linear still shows the issue as "Todo" or whatever state it was in
+before the claim — which means anyone checking Linear sees no work in progress,
+and a subsequent `bd linear sync --pull` can overwrite the local `IN_PROGRESS`
+state back to whatever Linear currently holds (Gotcha #2).
+
+The correct sequence for claiming an issue is:
+
+```bash
+# 1. Claim locally.
+bd update <id> --claim          # or: bd update <id> --status in_progress
+
+# 2. Immediately push the updated state to Linear.
+bd linear sync --push --issues <id>
+
+# 3. Persist to DoltHub.
+bd dolt push --remote origin
+```
+
+Do this **before** opening a branch or writing any code, so Linear reflects
+"In Progress" for the full duration of the work.
+
 ### Closing an issue
 
 `bd close` writes only to the local Dolt database. It does **not** notify
@@ -563,11 +588,11 @@ To ensure the human developer can easily map local activity to the Linear projec
 
 Local state changes (claiming, closing, re-prioritizing) do not propagate to Linear automatically.
 
-1. **Sync on Claim.** Immediately after running `bd update <id> --claim`, push
-   the updated state so Linear reflects "In Progress":
-   ```bash
-   bd linear sync --push --issues <id>
-   ```
+1. **Sync on Claim.** `bd update <id> --claim` only updates the local database.
+   Linear still shows the issue as "Todo" until an explicit push is performed.
+   Follow the sequence in [Claiming an issue](#claiming-an-issue) above: claim
+   locally → push to Linear → push to DoltHub. Do this before opening a branch
+   so Linear reflects "In Progress" for the full duration of the work.
 
 2. **Sync on Close.** `bd close` alone does not update Linear. Follow the
    sequence in [Closing an issue](#closing-an-issue) above: push while still
