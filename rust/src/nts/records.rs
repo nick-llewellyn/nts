@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use zeroize::Zeroizing;
+
 /// Hard cap on a single NTS-KE message we'll accept on the wire.
 ///
 /// RFC 8915 does not specify a numeric limit; 64 KiB is generous for the
@@ -45,17 +47,65 @@ pub struct Record {
     pub kind: RecordKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum RecordKind {
     EndOfMessage,
     NextProtocol(Vec<u16>),
     Error(ErrorCode),
     Warning(WarningCode),
     AeadAlgorithm(Vec<u16>),
-    NewCookie(Vec<u8>),
+    /// Server-issued NTS cookie (RFC 8915 §4.1.6). Wrapped in
+    /// [`Zeroizing`] so the bytes are wiped from RAM when the record
+    /// drops — closing the liveness exposure between the parser and
+    /// the [`crate::nts::cookies::CookieJar`] (bd nts-8ey). A
+    /// recovered cookie lets an attacker impersonate the original
+    /// client to the NTS server for the lifetime of the cookie's
+    /// server-side AEAD key, so the wrap matches the
+    /// `ZeroizeOnDrop` discipline the jar already applies to its
+    /// stored cookies.
+    NewCookie(Zeroizing<Vec<u8>>),
     Server(String),
     Port(u16),
-    Unknown { record_type: u16, body: Vec<u8> },
+    Unknown {
+        record_type: u16,
+        body: Vec<u8>,
+    },
+}
+
+/// Manual `Debug` that redacts the [`RecordKind::NewCookie`] payload.
+/// The other variants pass through to their natural rendering. The
+/// cookie body is RFC 8915 §6 authentication material — a recovered
+/// cookie lets an attacker impersonate the original client to the NTS
+/// server for the lifetime of the cookie's server-side AEAD key — and
+/// must not leak via accidental `{:?}` in logs, panic messages, or
+/// diagnostic output. The `Zeroizing<Vec<u8>>` wrapper closes the
+/// freed-allocation surface; this `Debug` impl closes the formatting
+/// surface (`Zeroizing<Vec<u8>>`'s derived `Debug` would otherwise
+/// delegate to the inner `Vec<u8>::Debug` and emit the bytes
+/// verbatim). Mirrors the redaction on
+/// [`crate::nts::ke::KeOutcome`] and
+/// [`crate::nts::cookies::CookieJar`].
+impl fmt::Debug for RecordKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EndOfMessage => f.write_str("EndOfMessage"),
+            Self::NextProtocol(v) => f.debug_tuple("NextProtocol").field(v).finish(),
+            Self::Error(c) => f.debug_tuple("Error").field(c).finish(),
+            Self::Warning(c) => f.debug_tuple("Warning").field(c).finish(),
+            Self::AeadAlgorithm(v) => f.debug_tuple("AeadAlgorithm").field(v).finish(),
+            Self::NewCookie(b) => f
+                .debug_tuple("NewCookie")
+                .field(&format_args!("<redacted; {} bytes>", b.len()))
+                .finish(),
+            Self::Server(s) => f.debug_tuple("Server").field(s).finish(),
+            Self::Port(p) => f.debug_tuple("Port").field(p).finish(),
+            Self::Unknown { record_type, body } => f
+                .debug_struct("Unknown")
+                .field("record_type", record_type)
+                .field("body", body)
+                .finish(),
+        }
+    }
 }
 
 /// Typed wrapper over the u16 payload of an NTS-KE Error record
@@ -273,9 +323,19 @@ impl Record {
             RecordKind::Error(code) => out.extend_from_slice(&code.as_u16().to_be_bytes()),
             RecordKind::Warning(code) => out.extend_from_slice(&code.as_u16().to_be_bytes()),
             RecordKind::Port(p) => out.extend_from_slice(&p.to_be_bytes()),
-            RecordKind::NewCookie(b) | RecordKind::Unknown { body: b, .. } => {
-                out.extend_from_slice(b);
-            }
+            // `NewCookie` and `Unknown` carry their bodies in
+            // different byte containers — `NewCookie` wraps the bytes
+            // in `Zeroizing<Vec<u8>>` so the cookie material wipes on
+            // drop (bd nts-8ey), while `Unknown` keeps a plain
+            // `Vec<u8>` because non-cookie record bodies have no
+            // confidentiality requirement. The two arms cannot share
+            // a single binder under a `|` pattern (the binder would
+            // need a single type), so they fan out into separate
+            // arms; both fall through to `extend_from_slice` via the
+            // standard `&[u8]` coercion (`Zeroizing<Vec<u8>>` derefs
+            // to `Vec<u8>` derefs to `[u8]`).
+            RecordKind::NewCookie(b) => out.extend_from_slice(b),
+            RecordKind::Unknown { body, .. } => out.extend_from_slice(body),
             RecordKind::Server(s) => out.extend_from_slice(s.as_bytes()),
         }
     }
@@ -378,7 +438,16 @@ fn decode_kind(record_type: u16, body: &[u8]) -> Result<RecordKind, CodecError> 
             body,
         )?))),
         record_type::NTPV4_PORT => Ok(RecordKind::Port(decode_u16_scalar(body)?)),
-        record_type::NEW_COOKIE => Ok(RecordKind::NewCookie(body.to_vec())),
+        // Wrap at the allocation site so the cookie bytes are
+        // covered by `Zeroizing`'s wipe-on-drop from the moment they
+        // leave the wire buffer. The growth-free construction
+        // discipline (`body.to_vec()` allocates exactly `body.len()`
+        // bytes with no reallocation history) is preserved — the
+        // wrapper only adds a `Drop` impl, not any allocator
+        // intermediates that could leave residual copies. See bd
+        // nts-8ey and the `AGENTS.md` "Security: Zeroization"
+        // conventions.
+        record_type::NEW_COOKIE => Ok(RecordKind::NewCookie(Zeroizing::new(body.to_vec()))),
         record_type::NTPV4_SERVER => std::str::from_utf8(body)
             .map(|s| RecordKind::Server(s.to_owned()))
             .map_err(|_| CodecError::InvalidUtf8),
@@ -419,9 +488,17 @@ fn decode_u16_scalar(body: &[u8]) -> Result<u16, CodecError> {
 // has no runtime cost (bd nts-b6m sub-item A). The leading `_` on
 // the const name is the standard Rust opt-out from `dead_code`, so
 // no lint suppression is needed here.
+//
+// `RecordKind` is intentionally NOT in this list: the `NewCookie`
+// variant now carries `Zeroizing<Vec<u8>>` (bd nts-8ey), and
+// `Zeroizing<Z>` does not implement `Hash`. `RecordKind`'s use sites
+// (parser-driven enumeration in `validate_response`, equality checks
+// in tests) do not need `Hash`, and a `HashMap<RecordKind, _>` keyed
+// on a multi-hundred-byte cookie body would be a misuse anyway; the
+// payload-bearing variants (`NewCookie`, `Unknown`) are unsuitable
+// hash keys regardless of the wrapper.
 const _ASSERT_HASH_DERIVES: fn() = || {
     fn requires_hash<T: std::hash::Hash>() {}
-    requires_hash::<RecordKind>();
     requires_hash::<ErrorCode>();
     requires_hash::<WarningCode>();
 };
@@ -439,7 +516,10 @@ mod tests {
                 true,
                 RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
             ),
-            rec(false, RecordKind::NewCookie(vec![0xAA; 100])),
+            rec(
+                false,
+                RecordKind::NewCookie(Zeroizing::new(vec![0xAA; 100])),
+            ),
             rec(false, RecordKind::Server("time.example.com".to_owned())),
             rec(false, RecordKind::Port(123)),
             rec(false, RecordKind::Warning(WarningCode::Unknown(0x1234))),
@@ -807,7 +887,7 @@ mod tests {
             RecordKind::Error(ErrorCode::InternalServerError),
             RecordKind::Warning(WarningCode::Unknown(0)),
             RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
-            RecordKind::NewCookie(vec![0xAB; 4]),
+            RecordKind::NewCookie(Zeroizing::new(vec![0xAB; 4])),
             RecordKind::Server("h".to_owned()),
             RecordKind::Port(123),
         ];
@@ -940,6 +1020,58 @@ mod tests {
             let parsed = parse_message(&bytes)
                 .unwrap_or_else(|e| panic!("code={code:?}: parse failed with {e:?}"));
             assert_eq!(parsed[0].kind, RecordKind::Error(code));
+        }
+    }
+
+    /// Pins the [`RecordKind::NewCookie`] redacted `Debug` (bd
+    /// nts-8ey). Cookies are RFC 8915 §6 authentication material;
+    /// any `{:?}` site that touches a `Record` (assertion-failure
+    /// messages, panic payloads, accidental log lines) must not emit
+    /// the byte sequence. A regression that reverted to
+    /// `#[derive(Debug)]` would delegate through
+    /// `Zeroizing<Vec<u8>>::Debug` → `Vec<u8>::Debug` and leak the
+    /// bytes as `[222, 173, ...]`. The negative assertion against
+    /// the exact `Vec<u8>::Debug` rendering of the sentinel is the
+    /// load-bearing shape — mirrors
+    /// [`crate::nts::cookies::CookieJar`]'s
+    /// `debug_impl_renders_counts_only_and_does_not_leak_cookie_bytes`.
+    #[test]
+    fn new_cookie_debug_redacts_payload() {
+        let sentinel = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
+        let kind = RecordKind::NewCookie(Zeroizing::new(sentinel.clone()));
+        let rendered = format!("{kind:?}");
+        let leaked_form = format!("{sentinel:?}");
+        assert!(
+            !rendered.contains(&leaked_form),
+            "RecordKind::NewCookie Debug must not contain a Vec<u8>::Debug \
+             rendering of the cookie ({leaked_form:?}); full output: {rendered}",
+        );
+        assert!(
+            rendered.contains("NewCookie") && rendered.contains("<redacted"),
+            "RecordKind::NewCookie Debug must carry the variant name and a \
+             redaction marker (full output: {rendered})",
+        );
+        assert!(
+            rendered.contains("8 bytes"),
+            "RecordKind::NewCookie Debug must surface the byte count for \
+             diagnostics (full output: {rendered})",
+        );
+    }
+
+    /// Compile-time pin that [`RecordKind::NewCookie`] carries
+    /// `Zeroizing<Vec<u8>>` (bd nts-8ey). A regression that reverted
+    /// the variant payload to bare `Vec<u8>` would re-open the
+    /// freed-allocation surface the wrapper closes; the
+    /// `assert_zeroizing_vec` helper only accepts `&Zeroizing<Vec<u8>>`
+    /// so the test fails at compile time on that regression. Mirrors
+    /// the analogous pin in `cookies::tests::take_returns_zeroizing_wrapped_cookie`.
+    #[test]
+    fn new_cookie_payload_is_zeroizing_wrapped() {
+        fn assert_zeroizing_vec(_: &Zeroizing<Vec<u8>>) {}
+        let kind = RecordKind::NewCookie(Zeroizing::new(vec![0xAB; 32]));
+        match &kind {
+            RecordKind::NewCookie(b) => assert_zeroizing_vec(b),
+            other => panic!("expected NewCookie, got {other:?}"),
         }
     }
 }

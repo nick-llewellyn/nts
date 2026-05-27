@@ -497,10 +497,13 @@ mod validate_response {
                 true,
                 RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
             ),
-            rec(false, RecordKind::NewCookie(vec![1, 2, 3, 4, 5, 6, 7, 8])),
             rec(
                 false,
-                RecordKind::NewCookie(vec![9, 10, 11, 12, 13, 14, 15, 16]),
+                RecordKind::NewCookie(Zeroizing::new(vec![1, 2, 3, 4, 5, 6, 7, 8])),
+            ),
+            rec(
+                false,
+                RecordKind::NewCookie(Zeroizing::new(vec![9, 10, 11, 12, 13, 14, 15, 16])),
             ),
             rec(true, RecordKind::EndOfMessage),
         ]
@@ -570,7 +573,7 @@ mod validate_response {
                 true,
                 RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
             ),
-            rec(false, RecordKind::NewCookie(vec![0; 8])),
+            rec(false, RecordKind::NewCookie(Zeroizing::new(vec![0; 8]))),
             rec(true, RecordKind::EndOfMessage),
         ];
         match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
@@ -584,7 +587,7 @@ mod validate_response {
         let records = vec![
             rec(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4])),
             rec(true, RecordKind::AeadAlgorithm(vec![999])),
-            rec(false, RecordKind::NewCookie(vec![0; 8])),
+            rec(false, RecordKind::NewCookie(Zeroizing::new(vec![0; 8]))),
             rec(true, RecordKind::EndOfMessage),
         ];
         match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
@@ -1562,7 +1565,7 @@ mod ke_outcome {
             aead_id: 15,
             c2s_key: Zeroizing::new(vec![0x55u8; 32]),
             s2c_key: Zeroizing::new(vec![0x77u8; 32]),
-            cookies: vec![vec![0x99u8; 64]; 3],
+            cookies: vec![Zeroizing::new(vec![0x99u8; 64]); 3],
             warnings: Vec::new(),
             phase_timings: KePhaseTimings {
                 dns_micros: 0,
@@ -1623,7 +1626,7 @@ mod ke_outcome_partial {
             ntpv4_host: "ntp.example.test".to_owned(),
             ntpv4_port: 4123,
             aead_id: 15,
-            cookies: vec![vec![0xBBu8; 64]; 3],
+            cookies: vec![Zeroizing::new(vec![0xBBu8; 64]); 3],
             warnings: Vec::new(),
         };
         let rendered = format!("{partial:?}");

@@ -429,7 +429,16 @@ pub struct KeOutcome {
     /// Same [`Zeroizing`] wrapper and rationale as `c2s_key`.
     pub s2c_key: Zeroizing<Vec<u8>>,
     /// Initial cookie pool delivered with the response.
-    pub cookies: Vec<Vec<u8>>,
+    ///
+    /// Each cookie is wrapped in [`Zeroizing`] so the bytes are
+    /// wiped from RAM when the outcome (or the moved-out collection)
+    /// drops. This closes the liveness exposure that previously
+    /// existed between the [`crate::nts::records`] parser and the
+    /// [`crate::nts::cookies::CookieJar`] (bd nts-8ey): a panic in
+    /// the intermediate window — `RecordKind::NewCookie` → this
+    /// collection → `jar.put_many` — would otherwise drop one or
+    /// more `Vec<u8>` allocations with the cookie bytes intact.
+    pub cookies: Vec<Zeroizing<Vec<u8>>>,
     /// Non-fatal warning codes (RFC 8915 §4.1.4 record type 3).
     /// Carried as the typed [`WarningCode`] so a future named-variant
     /// promotion (the IANA registry is empty as of RFC 8915) can land
@@ -945,7 +954,13 @@ pub(crate) fn validate_response(
     if aead_key_len(aead_id).is_none() {
         return Err(KeError::UnsupportedAead(aead_id));
     }
-    let cookies: Vec<Vec<u8>> = records
+    // `b: &Zeroizing<Vec<u8>>`; `b.clone()` delegates to the inner
+    // `Vec<u8>::clone()` and re-wraps in `Zeroizing`, so each cloned
+    // cookie inherits the wipe-on-drop discipline. Carrying the
+    // wrapper through the collection (instead of cloning into a
+    // plain `Vec<u8>`) closes the liveness exposure tracked as bd
+    // nts-8ey.
+    let cookies: Vec<Zeroizing<Vec<u8>>> = records
         .iter()
         .filter_map(|r| match &r.kind {
             RecordKind::NewCookie(b) => Some(b.clone()),
@@ -1006,7 +1021,7 @@ pub(crate) struct KeOutcomePartial {
     ntpv4_host: String,
     ntpv4_port: u16,
     aead_id: u16,
-    cookies: Vec<Vec<u8>>,
+    cookies: Vec<Zeroizing<Vec<u8>>>,
     warnings: Vec<WarningCode>,
 }
 
