@@ -748,10 +748,12 @@ containers rather than naked `Vec<u8>` allocations
 `KeOutcome::cookies` as `Vec<Zeroizing<Vec<u8>>>`,
 `rust/src/nts/cookies.rs` `CookieJar` storing
 `VecDeque<Zeroizing<Vec<u8>>>` natively). The growth-free
-construction discipline above still holds at every step
-(`body.to_vec()` / `clone()` / `Zeroizing::new(...)` are all
-exact-capacity allocations), so neither the liveness surface nor
-the capacity surface remains exposed.
+construction discipline above still holds at every allocating
+step (`body.to_vec()` and `Vec::clone()` both allocate exactly
+`slice.len()` bytes with no reallocation history; `Zeroizing::new`
+is a zero-cost wrapper that does not allocate or copy), so
+neither the liveness surface nor the capacity surface remains
+exposed.
 
 The NTP-response cookie path
 (`ServerResponse::fresh_cookies: Vec<Vec<u8>>` →
