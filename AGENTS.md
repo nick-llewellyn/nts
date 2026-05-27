@@ -40,10 +40,12 @@ authoritative branch-protection table.
 Standard agent loop on a fresh task:
 
 ```bash
-git switch -c <type>/<short-slug>      # e.g. feat/coverage-upload
+git switch -c <type>/<bd-id>-<linear-id>-<short-slug>  # e.g. feat/nts-4ge-NTS-24-coverage-upload
 # ... make edits, run local quality gates (see DEVELOPMENT.md) ...
 git push -u origin HEAD                # push the feature branch
 gh pr create --fill                    # uses .github/pull_request_template.md
+# Immediately link the PR to the Linear issue via the save_issue_linear tool:
+# save_issue_linear id="NTS-24" links=[{url: "https://github.com/...", title: "PR #128"}]
 # ... wait for CI; fix anything red ...
 # STOP HERE. Report PR URL + CI status to the user and wait for
 # explicit "merge it" before running `gh pr merge`. See
@@ -583,6 +585,18 @@ fragment the database. Stick to the canonical `nllewelln@gmail.com`.
 To ensure the human developer can easily map local activity to the Linear project:
 1. **Always use Dual-IDs.** Every mention of an issue in chat or PR descriptions must use the format `bd-id (Linear-id)`. Example: `nts-8wp (NTS-9)`.
 2. **Retrieving Mappings.** If the Linear ID is unknown, run `bd show <id>` and look for the `external_ref` field.
+3. **Branch Naming.** Always include both IDs in the branch name: `<type>/<bd-id>-<linear-id>-<slug>`. Example: `feat/nts-4ge-NTS-24-indented-fences`.
+
+## Linear PR Linking
+
+GitHub's native Linear integration is not currently configured for automatic linkage via branch/commit names in this repository. To ensure traceability, agents must manually link PRs to Linear issues using the following mechanism:
+
+1. **API Link Attachment.** Immediately after creating a PR (`gh pr create`), use the `save_issue_linear` tool to add the PR URL to the `links` field of the Linear issue.
+   ```bash
+   save_issue_linear id="NTS-25" links=[{url: "https://github.com/...", title: "PR #129"}]
+   ```
+2. **PR Description.** Always include the dual-ID reference in the PR description: `Closes nts-6rh / NTS-25`.
+3. **Verification.** Confirm the link appears in the Linear issue's "Links" section.
 
 ## Issue State Synchronization
 

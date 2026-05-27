@@ -9,8 +9,8 @@ Title format: <type>: <imperative summary>
 
 <!--
 What changed and why. Lead with the user-visible effect (or the bug
-symptom this fixes), then the mechanism. Link the beads ticket if
-this resolves one: `Closes nts-xxx`.
+symptom this fixes), then the mechanism. Link the beads ticket and/or
+Linear issue if this resolves one: `Closes nts-xxx / NTS-yyy`.
 -->
 
 ## Type of Change
