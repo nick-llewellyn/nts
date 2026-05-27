@@ -40,12 +40,14 @@ authoritative branch-protection table.
 Standard agent loop on a fresh task:
 
 ```bash
-git switch -c <type>/<bd-id>-<linear-id>-<short-slug>  # e.g. feat/nts-4ge-NTS-24-coverage-upload
+git switch -c <type>/NTS-<num>-<short-slug>  # e.g. feat/NTS-24-coverage-upload
 # ... make edits, run local quality gates (see DEVELOPMENT.md) ...
 git push -u origin HEAD                # push the feature branch
 gh pr create --fill                    # uses .github/pull_request_template.md
-# Immediately link the PR to the Linear issue via the save_issue_linear tool:
-# save_issue_linear id="NTS-24" links=[{url: "https://github.com/...", title: "PR #128"}]
+# The Linear GitHub app picks up the bare Linear identifier (e.g. NTS-24)
+# from the branch name and auto-attaches the PR to the Linear issue --
+# no manual `save_issue_linear` call is required. See "Linear PR Linking"
+# below for the full mechanism.
 # ... wait for CI; fix anything red ...
 # STOP HERE. Report PR URL + CI status to the user and wait for
 # explicit "merge it" before running `gh pr merge`. See
@@ -583,36 +585,54 @@ fragment the database. Stick to the canonical `nllewelln@gmail.com`.
 ## Communication & Reference Convention
 
 To ensure the human developer can easily map local activity to the Linear project:
-1. **Always use Dual-IDs.** Every mention of an issue in chat or PR descriptions must use the format `bd-id (Linear-id)`. Example: `nts-8wp (NTS-9)`.
-2. **Retrieving Mappings.** If the Linear ID is unknown, run `bd show <id>` and look for the `external_ref` field.
-3. **Branch Naming.** Always include both IDs in the branch name: `<type>/<bd-id>-<linear-id>-<slug>`. Example: `feat/nts-4ge-NTS-24-indented-fences`.
+1. **Use the Linear ID.** Every mention of an issue in chat or PR descriptions should use the Linear ID (e.g. `NTS-26`). The Beads ID is an internal detail of the local Dolt database and does not need to appear in branch names, PR titles, or PR bodies.
+2. **Retrieving Mappings.** The Beads issue and Linear issue are already
+   linked via the `external_ref` field in the local Dolt database. To go in
+   either direction:
+   - **Linear ID → Beads ID:** `bd search "NTS-26"` returns the Beads ID
+     (e.g. `nts-6rh`).
+   - **Beads ID → Linear ID:** `bd show nts-6rh` (or `bd show nts-6rh
+     --json | jq -r .external_ref`) returns the Linear URL containing the
+     identifier.
+3. **Branch Naming.** Use `<type>/NTS-<num>-<slug>` (e.g.
+   `feat/NTS-26-link-github-pr`). The Linear ID alone is sufficient — the
+   Linear-GitHub app triggers on it, and the Beads issue is reachable via
+   `bd search "NTS-26"`.
 
 ## Linear PR Linking
 
-GitHub's native Linear integration is not currently configured for automatic linkage via branch/commit names in this repository. To ensure traceability, agents must manually link PRs to Linear issues using the following mechanism:
+PR ↔ Linear-issue linkage and status tracking are handled automatically by
+the **Linear GitHub app**. The app watches for the Linear identifier (e.g.
+`NTS-26`) in the branch name, PR title, or PR description.
 
-1. **API Link Attachment.** Immediately after creating a PR (`gh pr create`), use the `save_issue_linear` tool to add the PR URL to the `links` field of the Linear issue.
-   ```bash
-   save_issue_linear id="NTS-25" links=[{url: "https://github.com/...", title: "PR #129"}]
-   ```
-2. **PR Description.** Always include the dual-ID reference in the PR description: `Closes nts-6rh / NTS-25`.
-3. **Verification.** Confirm the link appears in the Linear issue's "Links" section.
+1. **Auto-Linkage.** As long as the branch name carries the Linear ID (e.g.
+   `feat/NTS-26-link-github-pr`), Linear will automatically attach the PR
+   to the issue.
+2. **Auto-Status (Opened → In Progress).** Opening the PR automatically
+   transitions the Linear issue to "In Progress".
+3. **Auto-Status (Merged → Done).** Merging the PR in GitHub automatically
+   transitions the Linear issue to "Done".
+4. **Branch Format.** The Linear workspace is configured with the
+   `identifier-title` branch format. This ensures that any branches
+   manually generated via the Linear UI carry the required identifier
+   and a readable slug, maintaining consistency with agent-authored
+   branches.
 
 ## Issue State Synchronization
 
-Local state changes (claiming, closing, re-prioritizing) do not propagate to Linear automatically.
+Because of the automatic "Merged → Done" transition, agents should prefer
+a **pull-centric** synchronization flow:
 
-1. **Sync on Claim.** `bd update <id> --claim` only updates the local database.
-   Linear still shows the issue as "Todo" until an explicit push is performed.
-   Follow the sequence in [Claiming an issue](#claiming-an-issue) above: claim
-   locally → push to Linear → push to DoltHub. Do this before opening a branch
-   so Linear reflects "In Progress" for the full duration of the work.
-
-2. **Sync on Close.** `bd close` alone does not update Linear. Follow the
-   sequence in [Closing an issue](#closing-an-issue) above: push while still
-   open → close locally → push to DoltHub → set Linear to Done via
-   `save_issue_linear`. Do **not** use `bd linear sync --push` after closing,
-   as it maps `CLOSED` → Canceled and will clobber a Done status.
+1. **Pull to Close.** At the start of a new session (or after a merge), run
+   `bd linear sync --pull`. This will import the "Done" state from Linear
+   and automatically mark the local Beads issue as `CLOSED`.
+2. **DoltHub Sync.** After the pull, run `bd dolt push` to persist the
+   closed state to the authoritative database.
+3. **Manual Fallback.** Only manually run `bd close` if the issue was
+   abandoned or if the GitHub integration failed to trigger. Note that
+   `bd linear sync --push` on a `CLOSED` issue maps to **Canceled** in
+   Linear; always prefer letting the GitHub merge trigger the **Done**
+   status instead.
 
 ## Versioning & Release Policy
 
