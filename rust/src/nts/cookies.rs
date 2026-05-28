@@ -9,7 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 /// Default per-host capacity. RFC 8915 §6 advises clients keep at most 8
 /// unused cookies per server to bound exposure if KE state is later
@@ -29,21 +29,30 @@ pub const DEFAULT_CAPACITY: usize = 8;
 /// cookie lets an attacker impersonate the original client to the NTS
 /// server for the lifetime of the cookie's server-side AEAD key. The
 /// jar therefore treats cookie bytes the way [`crate::nts::aead`]
-/// treats AEAD key material: bytes are wiped from RAM at every
-/// eviction path ([`Self::put`] overflow, [`Self::clear_host`], and
-/// [`Drop`]) before the backing allocation is returned to the
-/// allocator, and the [`fmt::Debug`] implementation renders only
-/// per-host counts so accidental `{:?}` formatting in logs, panic
-/// messages, or diagnostic output cannot leak bytes. [`Self::take`]
-/// returns the popped cookie wrapped in [`Zeroizing`] so the bytes
-/// are also wiped from RAM once the in-flight NTPv4 exchange drops
-/// the wrapper after building the outbound packet — closing the
-/// last residual surface where a spent cookie could linger in a
-/// freed `Vec<u8>` allocation between the jar and the wire.
+/// treats AEAD key material: each stored cookie is held in
+/// [`Zeroizing<Vec<u8>>`], so the natural drop chain
+/// ([`Self::put`] overflow eviction, [`Self::clear_host`] drain,
+/// [`CookieJar`] going out of scope) wipes the bytes from RAM before
+/// the backing allocation is returned to the allocator. The
+/// [`fmt::Debug`] implementation renders only per-host counts so
+/// accidental `{:?}` formatting in logs, panic messages, or
+/// diagnostic output cannot leak bytes. [`Self::take`] returns the
+/// popped cookie still wrapped in [`Zeroizing`] so the bytes are
+/// also wiped once the in-flight NTPv4 exchange drops the wrapper
+/// after building the outbound packet — closing the last residual
+/// surface where a spent cookie could linger in a freed `Vec<u8>`
+/// allocation between the jar and the wire.
+///
+/// The records-parser → jar pipeline is itself wrapped end-to-end:
+/// [`crate::nts::records::RecordKind::NewCookie`] and
+/// [`crate::nts::ke::KeOutcome::cookies`] both carry
+/// [`Zeroizing<Vec<u8>>`], so a panic anywhere between
+/// `parse_record` and the final `put` no longer drops naked
+/// `Vec<u8>` allocations (bd nts-8ey).
 #[derive(Clone)]
 pub struct CookieJar {
     capacity: usize,
-    inner: HashMap<String, VecDeque<Vec<u8>>>,
+    inner: HashMap<String, VecDeque<Zeroizing<Vec<u8>>>>,
 }
 
 /// Inner-map renderer for [`CookieJar`]'s redacted `Debug`.
@@ -57,7 +66,7 @@ pub struct CookieJar {
 /// snapshot-style regression tests against the rendered form
 /// stable. The wrapper is private to this module — it exists
 /// only as a `&dyn fmt::Debug` target for `debug_struct().field`.
-struct DebugCookieCounts<'a>(&'a HashMap<String, VecDeque<Vec<u8>>>);
+struct DebugCookieCounts<'a>(&'a HashMap<String, VecDeque<Zeroizing<Vec<u8>>>>);
 
 impl fmt::Debug for DebugCookieCounts<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -121,18 +130,26 @@ impl CookieJar {
 
     /// Insert a single cookie, evicting the oldest when at capacity.
     ///
-    /// Evicted cookies are zeroized before their backing allocation
-    /// is released so the bytes cannot be recovered by a later
-    /// memory-scrape on a compromised process — matches the
-    /// `ZeroizeOnDrop` discipline [`crate::nts::aead`] applies to
-    /// AEAD key material.
-    pub fn put(&mut self, host: &str, cookie: Vec<u8>) {
+    /// The `T: Into<Zeroizing<Vec<u8>>>` bound accepts both a plain
+    /// `Vec<u8>` (wrapped on the way in via `Zeroizing::from`) and a
+    /// `Zeroizing<Vec<u8>>` already produced upstream by the
+    /// [`crate::nts::records`] parser or
+    /// [`crate::nts::ke::KeOutcome::cookies`] (bd nts-8ey). Either
+    /// way the stored value is `Zeroizing<Vec<u8>>`, so the natural
+    /// drop chain wipes the bytes on every eviction path — overflow
+    /// pop here, [`Self::clear_host`] drain, [`CookieJar`] going out
+    /// of scope — without any further manual `zeroize()` calls.
+    pub fn put<T>(&mut self, host: &str, cookie: T)
+    where
+        T: Into<Zeroizing<Vec<u8>>>,
+    {
         let queue = self.inner.entry(host.to_owned()).or_default();
-        queue.push_back(cookie);
+        queue.push_back(cookie.into());
         while queue.len() > self.capacity {
-            if let Some(mut victim) = queue.pop_front() {
-                victim.zeroize();
-            }
+            // The popped `Zeroizing<Vec<u8>>` wipes its bytes when
+            // it drops at the end of this iteration; no explicit
+            // `zeroize()` call is needed.
+            let _ = queue.pop_front();
         }
     }
 
@@ -141,28 +158,24 @@ impl CookieJar {
     pub fn put_many<I, T>(&mut self, host: &str, cookies: I)
     where
         I: IntoIterator<Item = T>,
-        T: Into<Vec<u8>>,
+        T: Into<Zeroizing<Vec<u8>>>,
     {
         for c in cookies {
-            self.put(host, c.into());
+            self.put(host, c);
         }
     }
 
     /// Pop and return the oldest unused cookie for `host`, if any.
     ///
-    /// The cookie is returned inside a [`Zeroizing`] wrapper so its
-    /// bytes are wiped from RAM when the consumer drops the wrapper
-    /// (typically at the end of the NTPv4 exchange that spent it).
-    /// Without the wrapper the spent `Vec<u8>` allocation would
-    /// linger in freed memory until the allocator next overwrote
-    /// the page — the same residual-memory-scrape surface
-    /// [`Self::put`]/[`Self::clear_host`]/[`Drop`] already close
-    /// for the in-jar eviction paths.
+    /// The cookie stays inside its [`Zeroizing`] wrapper across the
+    /// hand-off so the bytes are wiped from RAM when the consumer
+    /// drops the wrapper (typically at the end of the NTPv4 exchange
+    /// that spent it). The end-to-end wrap — records parser → KE
+    /// outcome → jar → caller — closes every freed-allocation surface
+    /// where a spent cookie could otherwise linger between the wire
+    /// and the [`Drop`] of the consumer's local.
     pub fn take(&mut self, host: &str) -> Option<Zeroizing<Vec<u8>>> {
-        self.inner
-            .get_mut(host)
-            .and_then(VecDeque::pop_front)
-            .map(Zeroizing::new)
+        self.inner.get_mut(host).and_then(VecDeque::pop_front)
     }
 
     /// Number of cookies currently stored for `host`.
@@ -178,35 +191,18 @@ impl CookieJar {
     /// Drop every cookie for `host`. Useful when a query returns an
     /// authentication failure and the entire pool must be invalidated.
     ///
-    /// Each cookie is zeroized before being dropped so an
-    /// authentication-failure-driven pool invalidation does not leave
-    /// the rejected cookies recoverable in freed allocations.
+    /// The drained `Zeroizing<Vec<u8>>` values wipe their bytes on
+    /// drop, so an authentication-failure-driven pool invalidation
+    /// does not leave the rejected cookies recoverable in freed
+    /// allocations.
     pub fn clear_host(&mut self, host: &str) {
         if let Some(queue) = self.inner.get_mut(host) {
-            for mut cookie in queue.drain(..) {
-                cookie.zeroize();
-            }
+            queue.clear();
         }
     }
 
     pub fn hosts(&self) -> impl Iterator<Item = &str> {
         self.inner.keys().map(String::as_str)
-    }
-}
-
-impl Drop for CookieJar {
-    /// Zeroize every remaining cookie before the jar's backing
-    /// allocations are released. Triggered on every drop path:
-    /// `SessionTable` eviction, `NtsClient::clear`, process teardown,
-    /// or the jar simply going out of scope. Without this the
-    /// `HashMap` / `VecDeque` / `Vec<u8>` natural-drop chain would
-    /// release the cookie bytes back to the allocator intact.
-    fn drop(&mut self) {
-        for queue in self.inner.values_mut() {
-            for cookie in queue.iter_mut() {
-                cookie.zeroize();
-            }
-        }
     }
 }
 
@@ -378,5 +374,33 @@ mod tests {
         // wipe happens only on drop, not on construction).
         assert_eq!(cookie.len(), 64);
         assert!(cookie.iter().all(|&b| b == 0xAB));
+    }
+
+    /// Pins the records-parser → jar handoff (bd nts-8ey): `put` and
+    /// `put_many` must accept `Zeroizing<Vec<u8>>` directly so the
+    /// KE-path collection (`KeOutcome::cookies: Vec<Zeroizing<Vec<u8>>>`)
+    /// can be moved into the jar without unwrapping. A regression
+    /// that tightened the bound back to `T: Into<Vec<u8>>` would
+    /// force a manual unwrap at the call site — re-opening the
+    /// intermediate-Vec liveness exposure this ticket closed.
+    /// Compiles iff the bound stays `T: Into<Zeroizing<Vec<u8>>>`.
+    #[test]
+    fn put_accepts_zeroizing_wrapped_cookies() {
+        let mut jar = CookieJar::with_capacity(4);
+        // Single-cookie path: pre-wrapped Zeroizing payload.
+        jar.put(HOST_A, Zeroizing::new(vec![1u8, 2, 3]));
+        // Bulk path: an iterator of `Zeroizing<Vec<u8>>` — the exact
+        // shape `outcome.cookies.into_iter()` produces in `nts.rs`.
+        jar.put_many(
+            HOST_A,
+            [
+                Zeroizing::new(vec![4u8, 5, 6]),
+                Zeroizing::new(vec![7u8, 8, 9]),
+            ],
+        );
+        assert_eq!(jar.count(HOST_A), 3);
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![1, 2, 3])));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![4, 5, 6])));
+        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![7, 8, 9])));
     }
 }

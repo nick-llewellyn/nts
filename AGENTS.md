@@ -732,22 +732,35 @@ of these.
 
 6. **Redact secret-bearing types in `Debug`.** Manual `impl
    std::fmt::Debug` implementations for `CustomRootsBytes`,
-   `TrustMode`, `CookieJar`, `SivKey`, `SivKey512`, and
-   `Aes128GcmSivKey` render placeholders (`<REDACTED: N bytes>`,
-   count-only summaries) so accidental `{:?}` formatting in logs,
-   panic messages, or diagnostic output cannot leak bytes.
+   `TrustMode`, `CookieJar`, `RecordKind` (for the `NewCookie`
+   variant), `SivKey`, `SivKey512`, and `Aes128GcmSivKey` render
+   placeholders (`<REDACTED: N bytes>`, count-only summaries) so
+   accidental `{:?}` formatting in logs, panic messages, or
+   diagnostic output cannot leak bytes.
 
-### Known residual exposure
+### KE-side cookie pipeline
 
-Between the records parser (`rust/src/nts/records.rs`,
-`RecordKind::NewCookie(Vec<u8>)`) and the cookie jar
-(`rust/src/nts/cookies.rs`), cookie bytes traverse intermediate
-`Vec<u8>` values that are not wrapped in `Zeroizing`. A panic between
-parse and jar-insertion would drop those vectors without wiping.
-This is a *liveness* exposure (an intermediate window), not a
-*capacity* exposure, and is tracked separately as `nts-8ey` rather
-than blocking the current PR. The dominant mitigation today is the
-growth-free construction discipline above: the affected vectors are
-`body.to_vec()` outputs that have no spare capacity and no
-reallocation history, so the residual surface is the initialised
-bytes themselves, not allocator detritus.
+The records parser → KE outcome → [`CookieJar`] handoff is wrapped
+end-to-end so a panic anywhere in the chain drops `Zeroizing`-aware
+containers rather than naked `Vec<u8>` allocations
+(`rust/src/nts/records.rs` `RecordKind::NewCookie(Zeroizing<Vec<u8>>)`,
+`rust/src/nts/ke.rs` `KeOutcomePartial::cookies` /
+`KeOutcome::cookies` as `Vec<Zeroizing<Vec<u8>>>`,
+`rust/src/nts/cookies.rs` `CookieJar` storing
+`VecDeque<Zeroizing<Vec<u8>>>` natively). The growth-free
+construction discipline above still holds at every allocating
+step (`body.to_vec()` and `Vec::clone()` both allocate exactly
+`slice.len()` bytes with no reallocation history; `Zeroizing::new`
+is a zero-cost wrapper that does not allocate or copy), so
+neither the liveness surface nor the capacity surface remains
+exposed.
+
+The NTP-response cookie path
+(`ServerResponse::fresh_cookies: Vec<Vec<u8>>` →
+`SessionTable::deposit_cookies` → `CookieJar::put_many`) still
+carries plain `Vec<u8>` values until they cross the jar boundary;
+`CookieJar::put_many` wraps each one in `Zeroizing` on insertion
+via its `T: Into<Zeroizing<Vec<u8>>>` bound, so the in-jar bytes
+are wiped on drop, but the intermediate `Vec<Vec<u8>>` collection
+remains a residual liveness surface for that path. File a separate
+issue before tightening this path; the KE side is closed.
