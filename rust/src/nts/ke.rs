@@ -205,6 +205,45 @@ fn phase_io_to_ke(e: std::io::Error, phase: KeTimeoutPhase) -> KeError {
 ///    bytes are wiped as soon as that field is dropped.
 /// 3. `Debug` is manually implemented to redact the bytes — see
 ///    the `impl std::fmt::Debug` below.
+///
+/// # Zeroization contract: scope and limits
+///
+/// The wrapper guarantees the **input buffer** is wiped on final-
+/// clone drop. It does **not** extend zeroisation through
+/// downstream copies made during trust-anchor parsing:
+///
+/// - **DER path** ([`build_with_custom_roots`]): the input
+///   buffer is handed to rustls via
+///   [`CertificateDer::from_slice`], which borrows out of the
+///   `Zeroizing<Vec<u8>>` instead of cloning. No intermediate
+///   `Vec<u8>` is allocated, so no intermediate copy exists to
+///   leak. rustls' `RootCertStore::add` then extracts the trust
+///   anchor and retains only the parsed anchor — not the input
+///   DER — so the borrow window is bounded by the `add` call.
+/// - **PEM path** ([`build_with_custom_roots`]): the input is
+///   streamed through `rustls_pemfile::certs`, which allocates a
+///   plain `Vec<u8>` per certificate inside the upstream parser.
+///   Those per-certificate buffers are *not* `Zeroizing`-wrapped
+///   and are not under this crate's control. They are dropped
+///   immediately after each `RootCertStore::add` call (the
+///   refactor processes one cert per loop iteration rather than
+///   accumulating a `Vec<CertificateDer>`), which caps the
+///   residual liveness window to a single iteration — but the
+///   bytes are *not* zeroised on drop. Full closure requires an
+///   upstream rustls / rustls-pemfile API that accepts a
+///   `Zeroizing`-aware backing buffer; tracked as `nts-xdo`.
+/// - **rustls trust anchors**: once `RootCertStore::add` succeeds,
+///   the parsed `TrustAnchor` (subject, SPKI, name constraints)
+///   lives inside the `RootCertStore` and then inside the returned
+///   `ClientConfig`. Those parsed components are not the original
+///   DER bytes, but they are derived from them and retained for
+///   the lifetime of the TLS config; zeroisation of *those*
+///   components is upstream of this crate.
+///
+/// See `AGENTS.md` → "Security: Zeroization" → "Custom roots
+/// parsing pipeline" for the full description.
+///
+/// [`CertificateDer::from_slice`]: rustls::pki_types::CertificateDer::from_slice
 #[derive(Clone, PartialEq, Eq)]
 pub struct CustomRootsBytes(Arc<Zeroizing<Vec<u8>>>);
 
@@ -1295,32 +1334,59 @@ fn build_with_custom_roots(bytes: &[u8]) -> Result<ClientConfig, KeError> {
         .map(|s| s.contains("-----BEGIN CERTIFICATE-----"))
         .unwrap_or(false);
 
-    let mut parsed_certs = Vec::new();
+    // Stream-add certificates: each parsed `CertificateDer<'_>` is
+    // handed to `RootCertStore::add` in the same iteration that
+    // produced it and then dropped, so the function never accumulates
+    // a collection of cert buffers across the parse → add boundary.
+    //
+    // For the PEM path this caps the residual liveness window of each
+    // PEM-allocated `Vec<u8>` to a single loop iteration. Those
+    // per-certificate buffers are not `Zeroizing`-wrapped (they are
+    // owned by `rustls_pemfile::certs`'s yielded `CertificateDer`
+    // values and are not under this crate's control); a fully zeroised
+    // pipeline requires an upstream API change tracked as `nts-xdo`.
+    //
+    // For the DER path this additionally elides the previous
+    // `bytes.to_vec()` copy: `CertificateDer::from_slice` borrows
+    // straight out of `CustomRootsBytes`' `Zeroizing<Vec<u8>>` backing
+    // buffer, so no intermediate `Vec<u8>` is allocated and no
+    // intermediate copy exists that would need to be zeroised on drop.
+    // rustls 0.23 `RootCertStore::add` only needs to read the DER
+    // during anchor extraction (see `webpki::anchors::RootCertStore::add`
+    // → `anchor_from_trusted_cert(&der)?.to_owned()`) and retains only
+    // the parsed `TrustAnchor`, so the borrow window is bounded by the
+    // `add` call.
+    let mut added: usize = 0;
     if is_pem {
         let mut reader = std::io::BufReader::new(bytes);
         for cert in rustls_pemfile::certs(&mut reader) {
             let cert_der = cert.map_err(|e| {
                 KeError::TrustBackendUnavailable(format!("Failed to parse PEM certificate: {}", e))
             })?;
-            parsed_certs.push(cert_der);
+            roots.add(cert_der).map_err(|e| {
+                KeError::TrustBackendUnavailable(format!(
+                    "Failed to add custom root certificate: {}",
+                    e
+                ))
+            })?;
+            added += 1;
         }
     } else {
-        parsed_certs.push(rustls::pki_types::CertificateDer::from(bytes.to_vec()));
+        roots
+            .add(rustls::pki_types::CertificateDer::from_slice(bytes))
+            .map_err(|e| {
+                KeError::TrustBackendUnavailable(format!(
+                    "Failed to add custom root certificate: {}",
+                    e
+                ))
+            })?;
+        added += 1;
     }
 
-    if parsed_certs.is_empty() {
+    if added == 0 {
         return Err(KeError::TrustBackendUnavailable(
             "No custom certificates found in input".to_string(),
         ));
-    }
-
-    for cert in parsed_certs {
-        roots.add(cert).map_err(|e| {
-            KeError::TrustBackendUnavailable(format!(
-                "Failed to add custom root certificate: {}",
-                e
-            ))
-        })?;
     }
 
     let mut cfg = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
