@@ -13,6 +13,20 @@
   wrapper is capacity-leak free without a manual `shrink_to_fit`. See
   `AGENTS.md` → "Security: Zeroization" for the project-wide
   convention.
+- Documented and tightened the custom-roots parsing pipeline scope
+  (`build_with_custom_roots`, `rust/src/nts/ke.rs`). The
+  `CustomRootsBytes` wrapper guarantees the **input** buffer is
+  wiped on final-clone drop; the rustdoc and `AGENTS.md` →
+  "Security: Zeroization" → "Custom roots parsing pipeline" now
+  state the exact scope (input buffer wiped; DER path no longer
+  allocates an intermediate copy because `CertificateDer::from_slice`
+  borrows out of the `Zeroizing` backing buffer; PEM path's
+  upstream-owned per-cert `Vec<u8>` is dropped per loop iteration
+  but not zeroised — full closure requires an upstream
+  rustls/rustls-pemfile API change tracked as `nts-xdo`). The
+  refactor also eliminates the previous `bytes.to_vec()` copy on
+  the DER path and bounds the residual liveness window of PEM
+  per-cert buffers to a single iteration. (nts-r3s)
 - Implemented manual `Debug` for `TrustMode` and internal
   `CustomRootsBytes` to redact sensitive certificate bytes from logs,
   rendering as `<REDACTED: N bytes>`. (nts-8wp)

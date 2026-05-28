@@ -764,3 +764,49 @@ via its `T: Into<Zeroizing<Vec<u8>>>` bound, so the in-jar bytes
 are wiped on drop, but the intermediate `Vec<Vec<u8>>` collection
 remains a residual liveness surface for that path. File a separate
 issue before tightening this path; the KE side is closed.
+
+### Custom roots parsing pipeline
+
+`CustomRootsBytes(Arc<Zeroizing<Vec<u8>>>)` (`rust/src/nts/ke.rs`)
+guarantees the **input** buffer is wiped from RAM when the final
+`Arc` clone drops. The guarantee does **not** extend through every
+downstream copy made during trust-anchor parsing; the scope is:
+
+- **Input buffer:** wiped on final-clone drop, as documented in
+  the `CustomRootsBytes` rustdoc and section "Conventions" above.
+- **DER path** (`build_with_custom_roots`): no intermediate copy
+  exists. The function calls
+  `CertificateDer::from_slice(bytes)` and hands the borrowed
+  `CertificateDer<'_>` straight to `RootCertStore::add`. rustls
+  0.23 extracts the trust anchor inside `add`
+  (`anchor_from_trusted_cert(&der)?.to_owned()`) and retains only
+  the parsed anchor — not the input DER — so the borrow window
+  is bounded by the `add` call and nothing new is allocated that
+  would need zeroising.
+- **PEM path** (`build_with_custom_roots`): the upstream
+  `rustls_pemfile::certs` iterator allocates a plain `Vec<u8>`
+  per certificate inside the parser; those buffers are owned by
+  the yielded `CertificateDer<'static>` values and are not under
+  this crate's control, so they cannot be `Zeroizing`-wrapped
+  without an upstream API change. The refactor processes one
+  cert per loop iteration rather than accumulating a
+  `Vec<CertificateDer>`, so each PEM-allocated buffer is dropped
+  immediately after its `RootCertStore::add` call. This caps the
+  residual liveness window to a single iteration but does **not**
+  zeroise the bytes on drop. Full closure requires an upstream
+  rustls / rustls-pemfile API that accepts a `Zeroizing`-aware
+  backing buffer; tracked as `nts-xdo` (upstream-watch).
+- **rustls trust anchors** (post-`add`): the parsed
+  `TrustAnchor` (subject, SPKI, name constraints) lives inside
+  the `RootCertStore` and then inside the returned
+  `ClientConfig` for the lifetime of the TLS config. Those
+  components are derived from the input DER but are not the
+  original DER bytes; their zeroisation is upstream of this
+  crate and out of scope for `CustomRootsBytes`.
+
+The discipline above means that on the DER path the
+`CustomRootsBytes` guarantee covers the *only* allocation that
+holds the input bytes, and on the PEM path it covers everything
+this crate allocates — the only residual liveness window is the
+upstream-owned per-cert `Vec<u8>` inside each yielded
+`CertificateDer`, which is now bounded to one loop iteration.
