@@ -90,7 +90,7 @@ jobs:
             0)  echo "cargo audit: clean (exit 0)";;
             1)  echo "cargo audit: advisories found (exit 1) -- continuing so the sticky PR comment can render";;
             *)  echo "cargo audit: environmental failure (exit $audit_exit); stderr follows"
-                cat audit.err >&2 || true;;
+                cat audit.err >&2;;
           esac
         working-directory: rust
 
@@ -120,6 +120,12 @@ jobs:
         # found") is already gated by the upstream
         # actions-rust-lang/audit@v1 step; this guard is purely about
         # exit codes that indicate the audit *itself* could not run.
+        #
+        # PR-only: gen_audit_json is gated to same-repo pull_request
+        # events, so on push/schedule/workflow_dispatch it is skipped
+        # and so is this step. Environmental failures on those event
+        # types are caught by the upstream run_audit step (no `if:`
+        # guard) which will still fail the job.
         if: always() && steps.gen_audit_json.outcome == 'success'
         run: |
           audit_exit='${{ steps.gen_audit_json.outputs.audit_exit }}'
@@ -173,10 +179,12 @@ jobs:
           } > audit-summary.md
 
           # Authoritative source for the exit code is the audit job's
-          # output; the audit-exit file inside the artifact is a
-          # defensive fallback for the case where the cross-job value
-          # arrives empty (e.g. the upload step was skipped but the
-          # download somehow succeeded).
+          # cross-job output (AUDIT_EXIT env var set below). The
+          # audit-exit file shipped in the artifact is belt-and-braces:
+          # it is the canonical value for direct human inspection of the
+          # downloaded artifact, not a required code path here (the
+          # download-artifact step would fail before this script runs if
+          # the artifact were missing).
           audit_exit="${AUDIT_EXIT:-}"
           if [ -z "$audit_exit" ] && [ -f audit-exit ]; then
             audit_exit="$(tr -d '[:space:]' <audit-exit)"
@@ -250,18 +258,28 @@ jobs:
             } >> audit-summary.md
             json_size=$(wc -c <audit.json | tr -d '[:space:]')
             if [ "${json_size:-0}" -gt "$INLINE_JSON_CAP" ]; then
+              # Close the fence before the truncation marker so the
+              # inline excerpt is a self-contained (if incomplete) JSON
+              # block. A reviewer who copies it into jq sees a clean
+              # parse error at the cut point rather than a C-style
+              # comment confusing the parser. Note: head -c truncates at
+              # a byte boundary which may land mid-multibyte character;
+              # RustSec advisory content is ASCII in practice so this is
+              # theoretical, but reviewers should not reuse this pattern
+              # on arbitrary user-supplied UTF-8 without a Unicode-aware
+              # truncation step.
               head -c "$INLINE_JSON_CAP" audit.json >> audit-summary.md
               {
                 echo ""
-                echo "/* ... truncated at ${INLINE_JSON_CAP} of ${json_size} bytes; see artifact for the full report ... */"
+                echo "\`\`\`"
+                echo ""
+                echo "_Truncated at ${INLINE_JSON_CAP} of ${json_size} bytes — see the artifact for the full report._"
               } >> audit-summary.md
             else
               cat audit.json >> audit-summary.md
+              echo "\`\`\`" >> audit-summary.md
             fi
-            {
-              echo "\`\`\`"
-              echo "</details>"
-            } >> audit-summary.md
+            echo "</details>" >> audit-summary.md
           else
             # Environmental-failure path (nts-0rn). Surface the
             # captured stderr verbatim instead of the (likely empty or
@@ -284,9 +302,10 @@ jobs:
               echo ""
               echo "<details><summary>Captured stderr (capped at ${INLINE_STDERR_CAP} bytes)</summary>"
               echo ""
-              echo "\`\`\`"
+              echo "\`\`\`text"
             } >> audit-summary.md
-            if [ -f audit.err ]; then
+            if [ -s audit.err ]; then
+              # audit.err exists and is non-empty.
               err_size=$(wc -c <audit.err | tr -d '[:space:]')
               if [ "${err_size:-0}" -gt "$INLINE_STDERR_CAP" ]; then
                 head -c "$INLINE_STDERR_CAP" audit.err >> audit-summary.md
@@ -298,6 +317,8 @@ jobs:
                 cat audit.err >> audit-summary.md
               fi
             else
+              # audit.err is absent or zero-length (cargo audit crashed
+              # before writing any stderr, or the file was not captured).
               echo "(no stderr captured)" >> audit-summary.md
             fi
             {
