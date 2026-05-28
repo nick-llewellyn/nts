@@ -13,6 +13,12 @@
   wrapper is capacity-leak free without a manual `shrink_to_fit`. See
   `AGENTS.md` → "Security: Zeroization" for the project-wide
   convention.
+- Removed unmaintained `rustls-pemfile` crate (RustSec RUSTSEC-2025-0134).
+  PEM certificate parsing in `build_with_custom_roots` now uses
+  `CertificateDer::pem_slice_iter` from `rustls-pki-types` (already a
+  transitive dependency), which is the migration path recommended by the
+  advisory. No new dependencies introduced; `rustls-pemfile` is no longer
+  present in `Cargo.lock`.
 - Documented and tightened the custom-roots parsing pipeline scope
   (`build_with_custom_roots`, `rust/src/nts/ke.rs`). The
   `CustomRootsBytes` wrapper guarantees the **input** buffer is
