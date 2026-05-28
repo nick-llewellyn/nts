@@ -85,7 +85,6 @@ log = "0.4"
 # `build_tls_config` keeps the negotiated version pinned to TLS 1.3.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
 rustls-pki-types = "1"
-rustls-pemfile = "2"
 rustls-platform-verifier = "0.7"
 # `tracing` is the structured event surface used by the iOS observability
 # path (`src/ios_init.rs`) and any future cross-platform instrumentation.

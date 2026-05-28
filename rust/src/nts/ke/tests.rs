@@ -216,7 +216,7 @@ q8P9uhno9+zDMKKpnQ==\n\
 
     #[test]
     fn build_tls_config_custom_empty_pem_surfaces_diagnostic_substring() {
-        // Contains the marker so `is_pem` is true, but `rustls_pemfile` will
+        // Contains the marker so `is_pem` is true, but `pem_slice_iter` will
         // find no valid certificate blocks.
         let empty_pem = "text that contains -----BEGIN CERTIFICATE----- but no actual cert";
         let mode = KeTrustMode::Custom(CustomRootsBytes::new(empty_pem.as_bytes().to_vec()));
@@ -238,7 +238,7 @@ q8P9uhno9+zDMKKpnQ==\n\
     fn build_tls_config_custom_pem_with_pkcs7_preamble_succeeds() {
         // PKCS7-style preamble as `openssl pkcs7 -print_certs` would
         // emit it: attribute lines before the first BEGIN marker.
-        // `rustls_pemfile` ignores bytes before the first recognised
+        // `pem_slice_iter` ignores bytes before the first recognised
         // PEM section, so detection only needs to notice the BEGIN
         // marker is present anywhere in the input — not at the start.
         let pem_with_preamble = format!(
@@ -265,6 +265,27 @@ q8P9uhno9+zDMKKpnQ==\n\
         let build = build_tls_config(mode).expect("custom PEM-with-bag-attrs config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
+    }
+
+    #[test]
+    fn build_tls_config_custom_multi_cert_pem_bundle_parses_all_anchors() {
+        // A valid certificate followed by a malformed one.
+        // If the iterator incorrectly stopped after the first certificate,
+        // `build_tls_config` would succeed. Success requires processing both blocks,
+        // so the malformed second one must trigger an error. This verifies that
+        // the iterator is fully consumed.
+        let invalid_cert = "-----BEGIN CERTIFICATE-----\nINVALID-BASE64\n-----END CERTIFICATE-----";
+        let bundle = format!("{}\n\n{}", TEST_CERT_PEM, invalid_cert);
+        let mode = KeTrustMode::Custom(CustomRootsBytes::new(bundle.as_bytes().to_vec()));
+
+        let err = build_tls_config(mode)
+            .expect_err("multi-cert bundle with malformed second cert should fail");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("Failed to parse PEM certificate"),
+            "error should mention PEM failure: {}",
+            msg
+        );
     }
 
     #[test]
