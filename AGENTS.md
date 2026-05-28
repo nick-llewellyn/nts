@@ -784,7 +784,7 @@ downstream copy made during trust-anchor parsing; the scope is:
   is bounded by the `add` call and nothing new is allocated that
   would need zeroising.
 - **PEM path** (`build_with_custom_roots`): the upstream
-  `rustls_pemfile::certs` iterator allocates a plain `Vec<u8>`
+  `CertificateDer::pem_slice_iter` iterator allocates a plain `Vec<u8>`
   per certificate inside the parser; those buffers are owned by
   the yielded `CertificateDer<'static>` values and are not under
   this crate's control, so they cannot be `Zeroizing`-wrapped
@@ -794,7 +794,7 @@ downstream copy made during trust-anchor parsing; the scope is:
   immediately after its `RootCertStore::add` call. This caps the
   residual liveness window to a single iteration but does **not**
   zeroise the bytes on drop. Full closure requires an upstream
-  rustls / rustls-pemfile API that accepts a `Zeroizing`-aware
+  rustls / rustls-pki-types API that accepts a `Zeroizing`-aware
   backing buffer; tracked as `nts-xdo` (upstream-watch).
 - **rustls trust anchors** (post-`add`): the parsed
   `TrustAnchor` (subject, SPKI, name constraints) lives inside

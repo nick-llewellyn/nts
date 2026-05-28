@@ -29,7 +29,7 @@
   borrows out of the `Zeroizing` backing buffer; PEM path's
   upstream-owned per-cert `Vec<u8>` is dropped per loop iteration
   but not zeroised — full closure requires an upstream
-  rustls/rustls-pemfile API change tracked as `nts-xdo`). The
+  rustls/rustls-pki-types API change tracked as `nts-xdo`). The
   refactor also eliminates the previous `bytes.to_vec()` copy on
   the DER path and bounds the residual liveness window of PEM
   per-cert buffers to a single iteration. (nts-r3s)

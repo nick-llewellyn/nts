@@ -269,16 +269,23 @@ q8P9uhno9+zDMKKpnQ==\n\
 
     #[test]
     fn build_tls_config_custom_multi_cert_pem_bundle_parses_all_anchors() {
-        // Two copies of the test certificate concatenated with a blank line
-        // separator — verifies that `pem_slice_iter` consumes the full slice
-        // and yields both blocks, replicating the behaviour that
-        // `rustls_pemfile::certs` previously provided.
-        let two_cert_bundle = format!("{}\n\n{}", TEST_CERT_PEM, TEST_CERT_PEM);
-        let mode =
-            KeTrustMode::Custom(CustomRootsBytes::new(two_cert_bundle.as_bytes().to_vec()));
-        let build = build_tls_config(mode).expect("two-cert PEM bundle builds");
-        assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
-        assert_eq!(build.initial_backend, KeTrustBackend::Custom);
+        // A valid certificate followed by a malformed one.
+        // If the iterator incorrectly stopped after the first certificate,
+        // `build_tls_config` would succeed. Success requires processing both blocks,
+        // so the malformed second one must trigger an error. This verifies that
+        // the iterator is fully consumed.
+        let invalid_cert = "-----BEGIN CERTIFICATE-----\nINVALID-BASE64\n-----END CERTIFICATE-----";
+        let bundle = format!("{}\n\n{}", TEST_CERT_PEM, invalid_cert);
+        let mode = KeTrustMode::Custom(CustomRootsBytes::new(bundle.as_bytes().to_vec()));
+
+        let err = build_tls_config(mode)
+            .expect_err("multi-cert bundle with malformed second cert should fail");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("Failed to parse PEM certificate"),
+            "error should mention PEM failure: {}",
+            msg
+        );
     }
 
     #[test]

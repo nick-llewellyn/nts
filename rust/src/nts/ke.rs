@@ -1097,6 +1097,7 @@ impl std::fmt::Debug for KeOutcomePartial {
 /// [`build_tls_config_inner`] (both cfg arms), and
 /// [`perform_handshake`] — lives inside this module; the type is
 /// not part of the public Rust API surface.
+#[derive(Debug)]
 pub(crate) struct TlsConfigBuild {
     pub(crate) config: Arc<ClientConfig>,
     pub(crate) initial_backend: KeTrustBackend,
