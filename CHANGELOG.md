@@ -72,6 +72,22 @@
   `example/example.md` using `dart analyze`. (nts-a23)
 - Updated `audit.yml` CI workflow to post `cargo audit` results as sticky PR
   comments, including a vulnerability summary table and full JSON output. (nts-eju)
+- Hardened the `audit.yml` cargo-audit step to capture stderr and surface
+  the exact exit code instead of swallowing every non-zero with `|| true`.
+  The previous redirection collapsed the three documented `cargo audit`
+  states (clean / advisories-found / environmental failure such as advisory
+  DB fetch error) into "succeeded", so a real CI breakage rendered as the
+  uninformative "could not parse" branch in the sticky PR comment. Exit
+  codes other than `0`/`1` are now promoted to a hard job failure after
+  artifact upload, and the comment renderer leads with the captured stderr
+  when the audit itself could not run. (nts-0rn)
+- Replaced the inline "Full JSON Output" block in the cargo-audit sticky
+  PR comment with a link to the uploaded workflow artifact plus a 32 KB
+  inline excerpt. The previous full-JSON inline payload could exceed
+  GitHub's ~65 KB per-comment limit on a noisy advisory day and silently
+  break the sticky-comment action. A workflow-side guard now fails the
+  job loudly if the rendered comment exceeds 60 KB, rather than letting
+  the sticky action fail opaquely. (nts-ca4)
 
 
 ## 5.1.0
