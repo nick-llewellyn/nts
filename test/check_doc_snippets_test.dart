@@ -15,6 +15,8 @@
 @TestOn('vm')
 library;
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import '../tool/check_doc_snippets.dart';
@@ -267,6 +269,171 @@ fn main() {}
         expect(out, contains('--- Wrapped snippet 1 of README.md ---'));
         expect(out, contains('<REDACTED>'));
         expect(out, isNot(contains(secret)));
+      },
+    );
+  });
+
+  // NTS-22: failure attribution now parses `dart analyze --format=machine`
+  // rows and matches them back to snippets by canonical path, replacing the
+  // fragile `stdout.contains(path)` substring test. These pin the pure parser
+  // and attributor; the canonicalizer is injected so no analyzer subprocess
+  // (and, for most cases, no real file) is needed.
+  group('parseMachineDiagnostics (NTS-22)', () {
+    test('parses a well-formed diagnostic row', () {
+      const out =
+          'ERROR|COMPILE_TIME_ERROR|INVALID_ASSIGNMENT|'
+          '/snips/README_md_1.dart|2|11|12|'
+          "A value of type 'String' can't be assigned to 'int'.";
+      final d = parseMachineDiagnostics(out);
+      expect(d, hasLength(1));
+      expect(d.single.severity, 'ERROR');
+      expect(d.single.code, 'INVALID_ASSIGNMENT');
+      expect(d.single.path, '/snips/README_md_1.dart');
+      expect(d.single.line, 2);
+      expect(d.single.column, 11);
+      expect(d.single.message, contains("can't be assigned"));
+    });
+
+    test('skips blank and malformed (non-diagnostic) lines', () {
+      const out =
+          'Analyzing...\n'
+          '\n'
+          'ERROR|COMPILE_TIME_ERROR|X|/snips/a_1.dart|1|1|1|boom\n'
+          'short|row';
+      final d = parseMachineDiagnostics(out);
+      expect(d, hasLength(1));
+      expect(d.single.path, '/snips/a_1.dart');
+    });
+
+    test('reconstructs a message that itself contains a pipe', () {
+      // The MESSAGE field can legitimately contain `|`; splitting on `|`
+      // over-splits it, so the parser rejoins the tail. The path must be
+      // unaffected.
+      const out = 'WARNING|HINT|CODE|/snips/b_2.dart|3|4|5|left | right';
+      final d = parseMachineDiagnostics(out);
+      expect(d.single.path, '/snips/b_2.dart');
+      expect(d.single.message, 'left | right');
+    });
+
+    test('unescapes doubled backslashes in a Windows-style path', () {
+      // machine format doubles backslashes inside fields, so a Windows path
+      // arrives with `\\` separators; the parser must un-double them back to
+      // the on-disk single-backslash form.
+      const out = r'ERROR|T|C|C:\\snips\\c_1.dart|1|1|1|msg';
+      final d = parseMachineDiagnostics(out);
+      expect(d.single.path, r'C:\snips\c_1.dart');
+    });
+
+    test('parses diagnostics regardless of which stream they came from', () {
+      // main() concatenates stdout+stderr before parsing; a row that arrived
+      // on stderr (here following an empty stdout) must still be picked up.
+      const combined =
+          '\n'
+          'ERROR|COMPILE_TIME_ERROR|X|/snips/d_1.dart|9|9|1|from stderr';
+      final d = parseMachineDiagnostics(combined);
+      expect(d, hasLength(1));
+      expect(d.single.path, '/snips/d_1.dart');
+    });
+  });
+
+  group('attributeFailures (NTS-22)', () {
+    SnippetMeta metaFor(String fileName, int index) =>
+        (fileName: fileName, index: index, wrapped: 'void main() {}\n');
+    final snippetMeta = <String, SnippetMeta>{
+      'tool/.snippets/README_md_1.dart': metaFor('README.md', 1),
+      'tool/.snippets/example_example_md_2.dart': metaFor(
+        'example/example.md',
+        2,
+      ),
+    };
+    // Pure canonicalizer (lowercase) so the test needs no real files.
+    String lower(String p) => p.toLowerCase();
+
+    test('attributes each diagnostic to its snippet key', () {
+      final diags = parseMachineDiagnostics(
+        'ERROR|T|C|tool/.snippets/README_md_1.dart|1|1|1|boom\n'
+        'ERROR|T|C|tool/.snippets/example_example_md_2.dart|2|1|1|bang',
+      );
+      final attributed = attributeFailures(
+        diags,
+        snippetMeta,
+        canonicalize: lower,
+      );
+      expect(attributed.keys, hasLength(2));
+      expect(
+        attributed['tool/.snippets/README_md_1.dart']!.single.message,
+        'boom',
+      );
+      expect(
+        attributed['tool/.snippets/example_example_md_2.dart']!.single.message,
+        'bang',
+      );
+    });
+
+    test('matches despite case differences (case-insensitive FS shape)', () {
+      // Analyzer reports an upper-cased variant of the same path; the
+      // lowercasing canonicalizer must still pin it to the snippet.
+      final diags = parseMachineDiagnostics(
+        'ERROR|T|C|TOOL/.SNIPPETS/README_MD_1.dart|1|1|1|boom',
+      );
+      final attributed = attributeFailures(
+        diags,
+        snippetMeta,
+        canonicalize: lower,
+      );
+      expect(attributed.keys, ['tool/.snippets/README_md_1.dart']);
+    });
+
+    test('drops diagnostics that match no snippet', () {
+      final diags = parseMachineDiagnostics(
+        'ERROR|T|C|/somewhere/else/unrelated.dart|1|1|1|boom',
+      );
+      expect(
+        attributeFailures(diags, snippetMeta, canonicalize: lower),
+        isEmpty,
+      );
+    });
+
+    test('ignores non-failing (INFO) diagnostics', () {
+      // INFO-level lints (e.g. FILE_NAMES on the synthetic snippet filenames)
+      // are non-fatal -- `dart analyze` exits zero for them -- so they must
+      // not be attributed as failures even when an unrelated error triggers
+      // the run. Only the ERROR row should be pinned.
+      final diags = parseMachineDiagnostics(
+        'INFO|LINT|FILE_NAMES|tool/.snippets/README_md_1.dart|1|1|1|noise\n'
+        'ERROR|T|C|tool/.snippets/example_example_md_2.dart|2|1|1|real',
+      );
+      final attributed = attributeFailures(
+        diags,
+        snippetMeta,
+        canonicalize: lower,
+      );
+      expect(attributed.keys, ['tool/.snippets/example_example_md_2.dart']);
+    });
+
+    test(
+      'default canonicalizer collapses symlink/string differences to match',
+      () async {
+        // Exercises the real _canonicalPathKey: a string-different but
+        // same-file path (on macOS the temp dir resolves through /private)
+        // must collapse to the snippet key. Uses a real temp file so
+        // resolveSymbolicLinksSync() has something to resolve.
+        final tmp = await Directory.systemTemp.createTemp('nts22_attr_');
+        try {
+          final key = '${tmp.path}/README_md_1.dart';
+          final f = File(key)..writeAsStringSync('void main() {}\n');
+          final meta = <String, SnippetMeta>{key: metaFor('README.md', 1)};
+          // Fully-resolved absolute path, a different *string* from `key`.
+          final resolved = f.resolveSymbolicLinksSync();
+          final diags = parseMachineDiagnostics(
+            'ERROR|T|C|$resolved|1|1|1|boom',
+          );
+          // Default (filesystem) canonicalizer.
+          final attributed = attributeFailures(diags, meta);
+          expect(attributed.keys, [key]);
+        } finally {
+          await tmp.delete(recursive: true);
+        }
       },
     );
   });
