@@ -171,4 +171,103 @@ fn main() {}
       expect(redactSnippetSecrets(body), body);
     });
   });
+
+  // NTS-23: the core security behaviour of this change is that the failure
+  // report suppresses the verbatim wrapped snippet body unless explicitly
+  // opted in. The redaction tests above only cover the opt-in payload; these
+  // pin the *gate* itself so a future refactor cannot silently flip the
+  // default to "echo the body" while the redaction tests stay green.
+  // `reportAnalysisFailure` takes a StringSink so the path is exercised
+  // directly, with no analyzer subprocess.
+  group('reportAnalysisFailure (NTS-23 suppression gate)', () {
+    const secret = 'sk-live-LEAKED-DO-NOT-LOG-9999';
+    final meta = <String, SnippetMeta>{
+      '/tmp/snippets/README_md_1.dart': (
+        fileName: 'README.md',
+        index: 1,
+        wrapped: 'void main() {\n  const apiKey = "$secret";\n}\n',
+      ),
+    };
+
+    test('default mode suppresses the body and emits the hint', () {
+      final buf = StringBuffer();
+      reportAnalysisFailure(
+        buf,
+        printSnippets: false,
+        failed: meta.keys.toSet(),
+        snippetMeta: meta,
+        analyzeStdout: 'error - Undefined name - README_md_1.dart:2:9',
+        analyzeStderr: '',
+        errorPrefix: 'error: ',
+      );
+      final out = buf.toString();
+      expect(out, contains('suppressed'));
+      // No body header, no body content (redacted or otherwise), no secret.
+      // The hint text itself contains the words "Wrapped snippet", so match
+      // the body *header* prefix ('--- Wrapped snippet') to distinguish them.
+      expect(out, isNot(contains('--- Wrapped snippet')));
+      expect(out, isNot(contains('apiKey')));
+      expect(out, isNot(contains(secret)));
+    });
+
+    test('default mode suppresses even when attribution is empty', () {
+      // The security property must hold regardless of the fragile (NTS-22)
+      // path-substring attribution: an empty `failed` set must not leak a
+      // body in the default branch.
+      final buf = StringBuffer();
+      reportAnalysisFailure(
+        buf,
+        printSnippets: false,
+        failed: <String>{},
+        snippetMeta: meta,
+        analyzeStdout: '',
+        analyzeStderr: '',
+        errorPrefix: 'error: ',
+      );
+      final out = buf.toString();
+      expect(out, contains('suppressed'));
+      expect(out, isNot(contains('apiKey')));
+      expect(out, isNot(contains(secret)));
+    });
+
+    test('verbose mode prints the redacted body, no raw secret, no hint', () {
+      final buf = StringBuffer();
+      reportAnalysisFailure(
+        buf,
+        printSnippets: true,
+        failed: meta.keys.toSet(),
+        snippetMeta: meta,
+        analyzeStdout: '',
+        analyzeStderr: '',
+        errorPrefix: 'error: ',
+      );
+      final out = buf.toString();
+      expect(out, contains('--- Wrapped snippet 1 of README.md ---'));
+      expect(out, contains('<REDACTED>'));
+      expect(out, isNot(contains(secret)));
+      expect(out, isNot(contains('suppressed')));
+    });
+
+    test(
+      'verbose mode falls back to all snippets when attribution is empty',
+      () {
+        // With `failed` empty the opt-in path still prints something to triage
+        // (every snippet) rather than nothing -- but still redacted.
+        final buf = StringBuffer();
+        reportAnalysisFailure(
+          buf,
+          printSnippets: true,
+          failed: <String>{},
+          snippetMeta: meta,
+          analyzeStdout: '',
+          analyzeStderr: '',
+          errorPrefix: 'error: ',
+        );
+        final out = buf.toString();
+        expect(out, contains('--- Wrapped snippet 1 of README.md ---'));
+        expect(out, contains('<REDACTED>'));
+        expect(out, isNot(contains(secret)));
+      },
+    );
+  });
 }

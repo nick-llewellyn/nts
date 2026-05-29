@@ -52,6 +52,11 @@ Environment:
   SNIPPET_VALIDATOR_VERBOSE=1   Same effect as --print-snippets.
 ''';
 
+/// Metadata captured for each extracted snippet so analyzer output can be
+/// attributed back to its origin (doc file + index) after the batched
+/// `dart analyze` run, and so the wrapped body can optionally be echoed.
+typedef SnippetMeta = ({String fileName, int index, String wrapped});
+
 Future<void> main(List<String> args) async {
   // Argument parsing is intentionally dependency-free (no package:args): the
   // tool takes one optional boolean flag, so a small hand-rolled loop is
@@ -97,8 +102,7 @@ Future<void> main(List<String> args) async {
 
   // Collect snippet metadata so we can attribute analyzer output back to
   // (docFile, snippetIndex) after the single batched `dart analyze` run.
-  final snippetMeta =
-      <String, ({String fileName, int index, String wrapped})>{};
+  final snippetMeta = <String, SnippetMeta>{};
 
   try {
     for (final fileName in _docFiles) {
@@ -176,39 +180,14 @@ Future<void> main(List<String> args) async {
         // If we cannot attribute (unexpected output shape) treat the whole
         // batch as one failure so we still exit non-zero.
         totalErrors = failed.isEmpty ? 1 : failed.length;
-        for (final path in failed) {
-          final m = snippetMeta[path]!;
-          stderr.writeln(
-            '${_errorPrefix}Snippet ${m.index} in ${m.fileName} '
-            'failed analysis ($path).',
-          );
-        }
-        stderr.writeln('--- dart analyze output ---');
-        stderr.writeln(stdoutStr);
-        stderr.writeln(result.stderr);
-        if (printSnippets) {
-          // Print the failing snippets. When attribution could not pin the
-          // failure to specific snippets (`failed` empty -- the path-substring
-          // match is fragile; robustness is tracked as NTS-22) fall back to
-          // every snippet so the opt-in flag still yields something to triage.
-          final toPrint = failed.isNotEmpty ? failed : snippetMeta.keys;
-          for (final path in toPrint) {
-            final m = snippetMeta[path]!;
-            stderr.writeln(
-              '--- Wrapped snippet ${m.index} of ${m.fileName} ---',
-            );
-            // This body is the verbatim doc source being written to the
-            // retained CI log; redactSnippetSecrets is a best-effort
-            // defence-in-depth pass, not a guarantee.
-            stderr.writeln(redactSnippetSecrets(m.wrapped));
-          }
-        } else {
-          stderr.writeln(
-            'Wrapped snippet bodies suppressed to avoid echoing doc source '
-            'into the retained CI log. Re-run with --print-snippets (or set '
-            'SNIPPET_VALIDATOR_VERBOSE=1) to print them.',
-          );
-        }
+        reportAnalysisFailure(
+          stderr,
+          printSnippets: printSnippets,
+          failed: failed,
+          snippetMeta: snippetMeta,
+          analyzeStdout: stdoutStr,
+          analyzeStderr: result.stderr.toString(),
+        );
       } else {
         for (final m in snippetMeta.values) {
           stdout.writeln('  Snippet ${m.index} of ${m.fileName}: OK');
@@ -234,6 +213,63 @@ Future<void> main(List<String> args) async {
     exit(1);
   } else {
     stdout.writeln('\nAll documentation snippets passed analysis.');
+  }
+}
+
+/// Writes the failure report for a non-zero `dart analyze` run to [sink].
+///
+/// This is the security-sensitive gate introduced by NTS-23. By default
+/// ([printSnippets] false) the verbatim wrapped snippet bodies are
+/// *suppressed*: only the per-snippet attribution, the analyzer diagnostics,
+/// and a hint pointing at the opt-in flag are written, so the doc source is
+/// never echoed into the retained CI log. When [printSnippets] is set the
+/// bodies are written through [redactSnippetSecrets] as a best-effort
+/// defence-in-depth pass (not a guarantee -- the body is verbatim doc source).
+///
+/// [failed] is the set of snippet-file paths that attribution could pin the
+/// failure to. The `stdout.contains(path)` match behind it is fragile
+/// (robustness is tracked as NTS-22); when it comes back empty the verbose
+/// path falls back to printing every snippet in [snippetMeta] so the opt-in
+/// flag still yields something to triage. The suppression branch is
+/// unconditional regardless of [failed], so the default never leaks a body.
+///
+/// Takes a [StringSink] (rather than writing to `stderr` directly) so the gate
+/// can be exercised by unit tests with a [StringBuffer]; [errorPrefix] defaults
+/// to the environment-derived [_errorPrefix] but is injectable for the same
+/// reason.
+void reportAnalysisFailure(
+  StringSink sink, {
+  required bool printSnippets,
+  required Set<String> failed,
+  required Map<String, SnippetMeta> snippetMeta,
+  required String analyzeStdout,
+  required String analyzeStderr,
+  String? errorPrefix,
+}) {
+  final prefix = errorPrefix ?? _errorPrefix;
+  for (final path in failed) {
+    final m = snippetMeta[path]!;
+    sink.writeln(
+      '${prefix}Snippet ${m.index} in ${m.fileName} '
+      'failed analysis ($path).',
+    );
+  }
+  sink.writeln('--- dart analyze output ---');
+  sink.writeln(analyzeStdout);
+  sink.writeln(analyzeStderr);
+  if (printSnippets) {
+    final toPrint = failed.isNotEmpty ? failed : snippetMeta.keys;
+    for (final path in toPrint) {
+      final m = snippetMeta[path]!;
+      sink.writeln('--- Wrapped snippet ${m.index} of ${m.fileName} ---');
+      sink.writeln(redactSnippetSecrets(m.wrapped));
+    }
+  } else {
+    sink.writeln(
+      'Wrapped snippet bodies suppressed to avoid echoing doc source '
+      'into the retained CI log. Re-run with --print-snippets (or set '
+      'SNIPPET_VALIDATOR_VERBOSE=1) to print them.',
+    );
   }
 }
 
