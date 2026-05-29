@@ -109,9 +109,11 @@ void main() {
         reason: 'KE handshake must harvest at least one cookie',
       );
       expect(
-        TrustBackend.values.contains(outcome.trustBackend),
-        isTrue,
-        reason: 'warmCookies must resolve a real trust backend',
+        outcome.trustBackend,
+        isNot(equals(TrustBackend.custom)),
+        reason:
+            'warmCookies against a public server (no custom roots) must '
+            'not resolve to the custom trust backend',
       );
     });
 
@@ -225,8 +227,9 @@ Future<T> _queryWithRetry<T>(String label, Future<T> Function() op) async {
 /// shape, using the loose cross-server criteria from NTS-13 (the tighter
 /// Cloudflare-specific AEAD check lives in the single-server sub-tests):
 /// a valid `1..15` stratum, a real round-trip measurement below 500ms, a
-/// resolved (non-sentinel) trust backend, and a server clock within ±5
-/// minutes of local time. Failures fail the test (these signal a real
+/// trust backend other than `custom` (no custom roots are supplied, so a
+/// `custom` resolution would be a real bug), and a server clock within
+/// ±5 minutes of local time. Failures fail the test (these signal a real
 /// protocol or crate-level bug, not network weather).
 void _assertHealthySample(NtsServerSpec spec, NtsTimeSample sample) {
   final host = spec.host;
@@ -248,9 +251,11 @@ void _assertHealthySample(NtsServerSpec spec, NtsTimeSample sample) {
         'happy-path budget',
   );
   expect(
-    TrustBackend.values.contains(sample.trustBackend),
-    isTrue,
-    reason: '$host: trust backend not resolved',
+    sample.trustBackend,
+    isNot(equals(TrustBackend.custom)),
+    reason:
+        '$host: public server (no custom roots) must not resolve to the '
+        'custom trust backend',
   );
   final nowMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
   final skewMicros = (sample.utcUnixMicros - nowMicros).abs();

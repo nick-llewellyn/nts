@@ -85,6 +85,13 @@ flutter_rust_bridge.yaml
 # lints, so shipping it is noise on the package surface.
 analysis_options.yaml
 
+# Maintainer's test-runner configuration. Defines the `live` tag-skip
+# directive that keeps the opt-in network suite under test/ out of the
+# default `flutter test` gate; consumers never run this repo's test
+# suite (test/ itself is excluded above), so the config is pure noise
+# on the published surface.
+dart_test.yaml
+
 # Internal tooling. tool/check_bindings.dart is a CI drift check for
 # the FRB codegen step that only runs when rust/src/api/*.rs changes;
 # consumers never invoke it.
