@@ -127,4 +127,48 @@ fn main() {}
       expect(extractDartSnippets(markdown), isEmpty);
     });
   });
+
+  // NTS-23: the failure path can opt back into echoing wrapped snippet
+  // bodies, but only after a best-effort redaction of obvious secret-shaped
+  // tokens. These pin that redaction down without exercising the full
+  // (process-spawning) failure path.
+  group('redactSnippetSecrets', () {
+    test('redacts secret-keyed assignments while preserving structure', () {
+      const body = 'final apiKey = "sk-LIVE-abcdef123456";';
+      final out = redactSnippetSecrets(body);
+      expect(out, isNot(contains('sk-LIVE-abcdef123456')));
+      expect(out, contains('<REDACTED>'));
+      // Key name is preserved so the redaction reads clearly in the log.
+      expect(out, contains('apiKey'));
+    });
+
+    test('redacts Bearer authorization tokens', () {
+      const body = "headers['Authorization'] = 'Bearer abc.def.GHI-123';";
+      final out = redactSnippetSecrets(body);
+      expect(out, isNot(contains('abc.def.GHI-123')));
+      expect(out, contains('Bearer <REDACTED>'));
+    });
+
+    test('redacts AWS access-key IDs', () {
+      const body = 'const key = "AKIAIOSFODNN7EXAMPLE";';
+      final out = redactSnippetSecrets(body);
+      expect(out, isNot(contains('AKIAIOSFODNN7EXAMPLE')));
+      expect(out, contains('<REDACTED>'));
+    });
+
+    test('collapses PEM private-key blocks, including the markers', () {
+      const body =
+          '-----BEGIN PRIVATE KEY-----\n'
+          'MIIBVgIBADANBgkqhkiG9w0BAQEFA\n'
+          '-----END PRIVATE KEY-----';
+      final out = redactSnippetSecrets(body);
+      expect(out, isNot(contains('MIIBVgIBADANBgkqhkiG9w0BAQEFA')));
+      expect(out, contains('<REDACTED PRIVATE KEY>'));
+    });
+
+    test('leaves ordinary snippet code untouched', () {
+      const body = 'final sample = await client.query(spec);\nprint(sample);';
+      expect(redactSnippetSecrets(body), body);
+    });
+  });
 }

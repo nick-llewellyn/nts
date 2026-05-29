@@ -4,6 +4,14 @@
 
 ### Security
 
+- Gated verbose snippet-body output in the doc-snippet validator
+  (`tool/check_doc_snippets.dart`) behind `--print-snippets` /
+  `SNIPPET_VALIDATOR_VERBOSE=1`. On analysis failure the tool no longer
+  echoes the verbatim wrapped snippet bodies into the retained CI log by
+  default — only the doc file, snippet index, and analyzer diagnostics are
+  printed. The opt-in path additionally runs a best-effort redaction pass
+  over obvious secret-shaped tokens (key/value assignments, `Bearer`
+  tokens, AWS access-key IDs, PEM private-key blocks). (nts-mf7)
 - Hardened `TrustMode::Custom` roots handling: caller-supplied root
   certificate bytes are now stored as `Arc<Zeroizing<Vec<u8>>>`. The
   bytes are wiped from RAM when the final `Arc` clone is dropped (the

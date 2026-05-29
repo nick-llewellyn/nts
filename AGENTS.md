@@ -316,6 +316,28 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
+## Doc-Snippet Validator
+
+`tool/check_doc_snippets.dart` extracts fenced `dart` code blocks from the
+docs (README, CHANGELOG, ARCHITECTURE, `example/example.md`), wraps fragments
+in a harness, and runs `dart analyze`. CI runs it via the "Verify
+documentation snippets" step.
+
+On failure it prints the failing doc file, snippet index, and the analyzer
+diagnostics. The **wrapped snippet body is suppressed by default** so verbatim
+doc source is never echoed into the retained GitHub Actions log. When triaging
+a real failure, opt back in:
+
+```bash
+dart run tool/check_doc_snippets.dart --print-snippets
+# or, equivalently:
+SNIPPET_VALIDATOR_VERBOSE=1 dart run tool/check_doc_snippets.dart
+```
+
+Prefer `--print-snippets` **locally**: a best-effort redaction pass strips
+obvious secret-shaped tokens before printing, but it is defence-in-depth, not
+a guarantee. `--help` lists all flags.
+
 ## DoltHub Session Completion (overrides the auto-generated block below)
 
 DoltHub (`nick-llewellyn/nts` on dolthub.com) is the **authoritative** store
