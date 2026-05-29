@@ -1,0 +1,15 @@
+# Test-runner config for `package:nts`.
+#
+# The `live` tag marks the real-network integration suite under
+# `test/live/` (see test/live/nts_live_test.dart). It is `skip:`-ped by
+# default so the required, hermetic `flutter test --coverage` gate never
+# touches the network or the native dylib. `flutter test` honours this
+# skip even though it ignores the `paths:` key, so no CI-invocation
+# change is needed to keep the gate clean.
+#
+# To run the live suite, override the skip and target the directory:
+#
+#   fvm flutter test --run-skipped test/live/
+tags:
+  live:
+    skip: "live network suite; run: flutter test --run-skipped test/live/"
