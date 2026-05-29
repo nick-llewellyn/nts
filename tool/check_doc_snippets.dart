@@ -8,7 +8,11 @@
 //
 // Usage:
 //
-//     dart run tool/check_doc_snippets.dart
+//     dart run tool/check_doc_snippets.dart [--print-snippets] [--help]
+//
+// On analysis failure the wrapped snippet bodies are suppressed by default so
+// the verbatim doc source is not echoed into the retained CI log; pass
+// `--print-snippets` (or set `SNIPPET_VALIDATOR_VERBOSE=1`) to opt back in.
 //
 
 import 'dart:io';
@@ -26,7 +30,53 @@ String get _errorPrefix => Platform.environment.containsKey('GITHUB_ACTIONS')
     ? '::error::'
     : 'error: ';
 
+const _usage = '''
+Validate Dart code snippets embedded in project documentation.
+
+Extracts `dart` fenced code blocks from README.md, CHANGELOG.md,
+ARCHITECTURE.md, and example/example.md, wraps fragments in a minimal harness,
+and runs `dart analyze` over them.
+
+Usage: dart run tool/check_doc_snippets.dart [options]
+
+Options:
+  --print-snippets   On analysis failure, also echo the wrapped snippet body
+                     for each failing snippet. Off by default: the body is the
+                     verbatim doc source and is written to the retained CI log.
+                     Enable only when triaging a failure (ideally locally). A
+                     best-effort redaction pass strips obvious secret-shaped
+                     tokens first, but is not a guarantee.
+  -h, --help         Show this help and exit.
+
+Environment:
+  SNIPPET_VALIDATOR_VERBOSE=1   Same effect as --print-snippets.
+''';
+
+/// Metadata captured for each extracted snippet so analyzer output can be
+/// attributed back to its origin (doc file + index) after the batched
+/// `dart analyze` run, and so the wrapped body can optionally be echoed.
+typedef SnippetMeta = ({String fileName, int index, String wrapped});
+
 Future<void> main(List<String> args) async {
+  // Argument parsing is intentionally dependency-free (no package:args): the
+  // tool takes one optional boolean flag, so a small hand-rolled loop is
+  // clearer than adding a dependency to CI tooling. `--print-snippets` and
+  // `SNIPPET_VALIDATOR_VERBOSE=1` are equivalent.
+  var printSnippets = Platform.environment['SNIPPET_VALIDATOR_VERBOSE'] == '1';
+  for (final arg in args) {
+    switch (arg) {
+      case '--print-snippets':
+        printSnippets = true;
+      case '-h' || '--help':
+        stdout.write(_usage);
+        return;
+      default:
+        stderr.writeln('${_errorPrefix}Unknown argument: $arg\n');
+        stderr.write(_usage);
+        exit(2);
+    }
+  }
+
   // Enforce running from the repo root so we find the docs.  Both
   // `pubspec.yaml` and `rust/Cargo.toml` must be present together --
   // `pubspec.yaml` alone is not enough because `example/pubspec.yaml`
@@ -52,8 +102,7 @@ Future<void> main(List<String> args) async {
 
   // Collect snippet metadata so we can attribute analyzer output back to
   // (docFile, snippetIndex) after the single batched `dart analyze` run.
-  final snippetMeta =
-      <String, ({String fileName, int index, String wrapped})>{};
+  final snippetMeta = <String, SnippetMeta>{};
 
   try {
     for (final fileName in _docFiles) {
@@ -131,21 +180,14 @@ Future<void> main(List<String> args) async {
         // If we cannot attribute (unexpected output shape) treat the whole
         // batch as one failure so we still exit non-zero.
         totalErrors = failed.isEmpty ? 1 : failed.length;
-        for (final path in failed) {
-          final m = snippetMeta[path]!;
-          stderr.writeln(
-            '${_errorPrefix}Snippet ${m.index} in ${m.fileName} '
-            'failed analysis ($path).',
-          );
-        }
-        stderr.writeln('--- dart analyze output ---');
-        stderr.writeln(stdoutStr);
-        stderr.writeln(result.stderr);
-        for (final path in failed) {
-          final m = snippetMeta[path]!;
-          stderr.writeln('--- Wrapped snippet ${m.index} of ${m.fileName} ---');
-          stderr.writeln(m.wrapped);
-        }
+        reportAnalysisFailure(
+          stderr,
+          printSnippets: printSnippets,
+          failed: failed,
+          snippetMeta: snippetMeta,
+          analyzeStdout: stdoutStr,
+          analyzeStderr: result.stderr.toString(),
+        );
       } else {
         for (final m in snippetMeta.values) {
           stdout.writeln('  Snippet ${m.index} of ${m.fileName}: OK');
@@ -171,6 +213,63 @@ Future<void> main(List<String> args) async {
     exit(1);
   } else {
     stdout.writeln('\nAll documentation snippets passed analysis.');
+  }
+}
+
+/// Writes the failure report for a non-zero `dart analyze` run to [sink].
+///
+/// This is the security-sensitive gate introduced by NTS-23. By default
+/// ([printSnippets] false) the verbatim wrapped snippet bodies are
+/// *suppressed*: only the per-snippet attribution, the analyzer diagnostics,
+/// and a hint pointing at the opt-in flag are written, so the doc source is
+/// never echoed into the retained CI log. When [printSnippets] is set the
+/// bodies are written through [redactSnippetSecrets] as a best-effort
+/// defence-in-depth pass (not a guarantee -- the body is verbatim doc source).
+///
+/// [failed] is the set of snippet-file paths that attribution could pin the
+/// failure to. The `stdout.contains(path)` match behind it is fragile
+/// (robustness is tracked as NTS-22); when it comes back empty the verbose
+/// path falls back to printing every snippet in [snippetMeta] so the opt-in
+/// flag still yields something to triage. The suppression branch is
+/// unconditional regardless of [failed], so the default never leaks a body.
+///
+/// Takes a [StringSink] (rather than writing to `stderr` directly) so the gate
+/// can be exercised by unit tests with a [StringBuffer]; [errorPrefix] defaults
+/// to the environment-derived [_errorPrefix] but is injectable for the same
+/// reason.
+void reportAnalysisFailure(
+  StringSink sink, {
+  required bool printSnippets,
+  required Set<String> failed,
+  required Map<String, SnippetMeta> snippetMeta,
+  required String analyzeStdout,
+  required String analyzeStderr,
+  String? errorPrefix,
+}) {
+  final prefix = errorPrefix ?? _errorPrefix;
+  for (final path in failed) {
+    final m = snippetMeta[path]!;
+    sink.writeln(
+      '${prefix}Snippet ${m.index} in ${m.fileName} '
+      'failed analysis ($path).',
+    );
+  }
+  sink.writeln('--- dart analyze output ---');
+  sink.writeln(analyzeStdout);
+  sink.writeln(analyzeStderr);
+  if (printSnippets) {
+    final toPrint = failed.isNotEmpty ? failed : snippetMeta.keys;
+    for (final path in toPrint) {
+      final m = snippetMeta[path]!;
+      sink.writeln('--- Wrapped snippet ${m.index} of ${m.fileName} ---');
+      sink.writeln(redactSnippetSecrets(m.wrapped));
+    }
+  } else {
+    sink.writeln(
+      'Wrapped snippet bodies suppressed to avoid echoing doc source '
+      'into the retained CI log. Re-run with --print-snippets (or set '
+      'SNIPPET_VALIDATOR_VERBOSE=1) to print them.',
+    );
   }
 }
 
@@ -398,4 +497,62 @@ String _prepareSnippet(String snippet) {
   }
 
   return sb.toString();
+}
+
+/// Best-effort redaction of obvious secret-shaped substrings in [body] before
+/// a failing snippet is echoed to the (retained) CI log.
+///
+/// This runs only on the opt-in `--print-snippets` /
+/// `SNIPPET_VALIDATOR_VERBOSE=1` path and is defence-in-depth, not a control:
+/// the real protection is keeping secrets out of the documentation corpus.
+/// It is deliberately conservative -- it targets a small set of unambiguous
+/// shapes so it does not mangle ordinary example code, accepting false
+/// negatives in exchange for not corrupting legitimate snippets:
+///
+///  * assignments keyed on a secret-ish identifier (`password`, `secret`,
+///    `token`, `api_key`, `client_secret`, `access_key`, `authorization`),
+///  * `Bearer <token>` authorization values,
+///  * AWS access-key IDs (`AKIA` + 16 base32 chars),
+///  * PEM private-key blocks.
+///
+/// Each match has its value replaced with `<REDACTED>` while the surrounding
+/// structure (key name, separator, quoting) is preserved so the redaction is
+/// obvious to a human reading the log.
+String redactSnippetSecrets(String body) {
+  var out = body;
+
+  // PEM private-key blocks (any key type), including the wrapping markers.
+  // Done first so the multi-line block is collapsed before the line-oriented
+  // patterns below can partially match its base64 payload.
+  out = out.replaceAll(
+    RegExp(
+      r'-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?'
+      r'-----END [A-Z ]*PRIVATE KEY-----',
+    ),
+    '<REDACTED PRIVATE KEY>',
+  );
+
+  // `Bearer <token>` (Authorization header style). Run before the generic
+  // key/value pass so the token (not just the word "Bearer") is removed.
+  out = out.replaceAllMapped(
+    RegExp(r'(Bearer\s+)[A-Za-z0-9._~+/=-]+', caseSensitive: false),
+    (m) => '${m.group(1)}<REDACTED>',
+  );
+
+  // AWS access-key IDs.
+  out = out.replaceAll(RegExp(r'AKIA[0-9A-Z]{16}'), '<REDACTED>');
+
+  // key: "value" / key = 'value' / key=value, keyed on a secret-ish name.
+  // Group 1 captures the key, separator, and any opening quote; the value run
+  // up to the next quote, whitespace, comma, semicolon, or closing bracket is
+  // dropped.
+  out = out.replaceAllMapped(
+    RegExp(
+      r'''((?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?key|client[_-]?secret|authorization)\s*[:=]\s*["']?)[^"'\s,;)}]+''',
+      caseSensitive: false,
+    ),
+    (m) => '${m.group(1)}<REDACTED>',
+  );
+
+  return out;
 }
