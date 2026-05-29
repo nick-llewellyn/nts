@@ -70,10 +70,14 @@ cd rust && cargo test
 flutter test
 ```
 
-This runs `test/ffi_smoke_test.dart`, which exercises the generated
-FRB API contract in mock mode. Live Dart→Rust→network round-trips
-run from the example app (`example/`); the underlying Rust crate
-ships live integration probes against `time.cloudflare.com` that
+This runs the mock-mode suite (e.g. `test/ffi_smoke_test.dart`,
+`test/api_smoke_test.dart`), which exercises the generated FRB API
+contract without a native dylib or network. Live Dart→Rust→network
+round-trips run from the example app (`example/`) and from the
+opt-in Dart suite under `test/live/` (see [Live Dart integration
+suite](#live-dart-integration-suite-testlive) below); the underlying
+Rust crate ships live integration probes against `time.cloudflare.com`
+that
 run as part of `cargo test --lib` (un-gated from `#[ignore]` by
 `nts-dbg` once GHA runners proved to have stable outbound
 TCP/4460 + UDP/123 to Cloudflare). Network flake on those probes
@@ -107,6 +111,43 @@ cd rust && cargo test -p nts_rust nts_query_live_ipv6_ptb -- --ignored --nocaptu
 
 GHA Linux runners have inconsistent IPv6 connectivity by Azure
 region, which is the reason the IPv6 probe stays gated.
+
+### Live Dart integration suite (`test/live/`)
+
+`test/live/nts_live_test.dart` is the Dart-level analogue of the Rust
+`ke_live_*` probes: it drives the public stability layer (`ntsQuery`,
+`ntsWarmCookies`, and the per-instance `NtsClient`) against three real
+public NTS-KE endpoints — `time.cloudflare.com`, `nts.netnod.se`, and
+`ptbtime1.ptb.de`. The happy-path probe tolerates one endpoint being
+down (passes when ≥ 2 of 3 succeed); the remaining sub-tests
+(`ntsWarmCookies`, a fresh-instance round-trip, the
+`TrustMode.platformOnly` backend assertion, cached-session reuse, and
+an unreachable-host error-path check) are Cloudflare-only and must
+pass. Transient `NtsErrorNetwork` / `NtsErrorTimeout` failures are
+absorbed by the file's `_queryWithRetry` helper (3 attempts, 500/1000
+ms back-off), mirroring the Rust `retry_on_transient`.
+
+The suite is **opt-in** and never runs in the required `flutter test`
+gate. Every test carries the `live` tag (via the file's
+`@Tags(['live'])` library annotation), and the root `dart_test.yaml`
+marks that tag `skip:` by default. A bare `flutter test` therefore
+discovers the file but skips the whole suite at the suite level —
+`NtsRustLib.init()` and every socket stay untouched, so the gate
+remains hermetic with no CI-invocation change. (`flutter test`
+honours this tag skip even though it ignores `dart_test.yaml`'s
+`paths:` key, which is why path placement alone is insufficient.)
+
+To run it, build the native release dylib so its FRB content-hash
+matches the committed bindings, then opt in with `--run-skipped`:
+
+```bash
+(cd rust && cargo build --release -p nts_rust)
+flutter test --run-skipped test/live/
+```
+
+`--run-skipped` is required: pointing `flutter test test/live/` at the
+directory without it still skips, because the tag-skip config applies
+regardless of the path selector.
 
 ### Fuzzing the Rust parsers (cargo-fuzz)
 
