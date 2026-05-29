@@ -58,6 +58,11 @@ const _timeoutMs = 10000;
 const _aeadAesSivCmac256 = 15;
 
 void main() {
+  // Matches the other suites in this repo (api_smoke_test.dart,
+  // ffi_smoke_test.dart): the binding must be live before NtsRustLib.init()
+  // loads the dylib over the FFI / Native Assets path.
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('live nts', () {
     setUpAll(() async {
       await NtsRustLib.init();
