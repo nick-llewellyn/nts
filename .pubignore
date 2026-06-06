@@ -92,7 +92,7 @@ analysis_options.yaml
 # on the published surface.
 dart_test.yaml
 
-# Maintainer's SonarCloud/SonarQube project configuration. Read only by
+# Maintainer's SonarCloud/SonarQube project configuration. Read solely by
 # the SonarCloud CI analysis that runs against this repo; package
 # consumers never invoke SonarCloud against the published tarball, so
 # the file is pure noise on the published surface — same rationale as
