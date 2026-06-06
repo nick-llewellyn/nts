@@ -11,7 +11,7 @@
 // Storage is an immutable list assigned to `entries.value` rather
 // than an in-place mutation. That makes signal-driven UI updates
 // trivially correct: every observer sees a consistent snapshot, and
-// `Watch` rebuilds fire exactly when the list reference changes
+// `SignalBuilder` rebuilds fire exactly when the list reference changes
 // rather than relying on listeners noticing in-place edits.
 
 import 'package:nts/nts.dart' show TrustBackend, TrustMode;

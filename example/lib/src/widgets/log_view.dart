@@ -18,7 +18,7 @@
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:signals/signals.dart' show effect;
-import 'package:signals/signals_flutter.dart' show Watch;
+import 'package:signals/signals_flutter.dart' show SignalBuilder;
 
 import '../state/app_state.dart';
 import '../state/log_entry.dart';
@@ -52,7 +52,7 @@ class _LogViewState extends State<LogView> {
     super.initState();
     // Register a signals `effect` so we re-evaluate exactly when the
     // log buffer mutates, instead of running side-effects from the
-    // `Watch` builder. Reading `entries.value` once is enough to bind
+    // `SignalBuilder` builder. Reading `entries.value` once is enough to bind
     // the dependency; we don't actually need the snapshot here.
     _disposeAutoScroll = effect(() {
       // ignore: unused_local_variable
@@ -74,7 +74,7 @@ class _LogViewState extends State<LogView> {
   /// are deliberately *not* yanked forward.
   ///
   /// The stickiness decision is made *synchronously* against the
-  /// current (pre-append) layout, before `Watch` has rebuilt and the
+  /// current (pre-append) layout, before `SignalBuilder` has rebuilt and the
   /// viewport has remeasured. Deferring it into the post-frame
   /// callback would compare the user's unchanged `pos.pixels` against
   /// the post-append (larger) `maxScrollExtent`, so any burst of
@@ -121,38 +121,40 @@ class _LogViewState extends State<LogView> {
           _LogHeader(state: widget.state),
           const Divider(height: 1),
           Expanded(
-            child: Watch((context) {
-              final entries = widget.state.log.entries.value;
-              if (entries.isEmpty) {
-                return Center(
-                  child: Text(
-                    'Log is empty — run an NTS query to populate it.',
-                    style: theme.textTheme.bodySmall,
+            child: SignalBuilder(
+              builder: (context) {
+                final entries = widget.state.log.entries.value;
+                if (entries.isEmpty) {
+                  return Center(
+                    child: Text(
+                      'Log is empty — run an NTS query to populate it.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  );
+                }
+                return Scrollbar(
+                  controller: _scroll,
+                  child: SingleChildScrollView(
+                    controller: _scroll,
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                    child: SelectableText.rich(
+                      TextSpan(
+                        children: [
+                          for (var i = 0; i < entries.length; i++) ...[
+                            if (i > 0) const TextSpan(text: '\n'),
+                            ...buildLogEntrySpans(theme, colors, entries[i]),
+                          ],
+                        ],
+                      ),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontFamily: 'monospace',
+                        height: 1.35,
+                      ),
+                    ),
                   ),
                 );
-              }
-              return Scrollbar(
-                controller: _scroll,
-                child: SingleChildScrollView(
-                  controller: _scroll,
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                  child: SelectableText.rich(
-                    TextSpan(
-                      children: [
-                        for (var i = 0; i < entries.length; i++) ...[
-                          if (i > 0) const TextSpan(text: '\n'),
-                          ...buildLogEntrySpans(theme, colors, entries[i]),
-                        ],
-                      ],
-                    ),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontFamily: 'monospace',
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              );
-            }),
+              },
+            ),
           ),
         ],
       ),
@@ -236,23 +238,25 @@ class _LogHeader extends StatelessWidget {
           const SizedBox(width: 8),
           Text('Live log', style: theme.textTheme.titleSmall),
           const Spacer(),
-          Watch((context) {
-            final empty = state.log.entries.value.isEmpty;
-            return Row(
-              children: [
-                IconButton(
-                  tooltip: 'Share log',
-                  icon: const Icon(Icons.share),
-                  onPressed: empty ? null : () => _shareLog(context, state),
-                ),
-                IconButton(
-                  tooltip: 'Clear log',
-                  icon: const Icon(Icons.delete_sweep),
-                  onPressed: empty ? null : state.log.clear,
-                ),
-              ],
-            );
-          }),
+          SignalBuilder(
+            builder: (context) {
+              final empty = state.log.entries.value.isEmpty;
+              return Row(
+                children: [
+                  IconButton(
+                    tooltip: 'Share log',
+                    icon: const Icon(Icons.share),
+                    onPressed: empty ? null : () => _shareLog(context, state),
+                  ),
+                  IconButton(
+                    tooltip: 'Clear log',
+                    icon: const Icon(Icons.delete_sweep),
+                    onPressed: empty ? null : state.log.clear,
+                  ),
+                ],
+              );
+            },
+          ),
         ],
       ),
     );

@@ -25,7 +25,7 @@
 // singleton row.
 
 import 'package:flutter/material.dart';
-import 'package:signals/signals_flutter.dart' show Watch;
+import 'package:signals/signals_flutter.dart' show SignalBuilder;
 
 import '../state/app_state.dart';
 import '../state/nts_format.dart';
@@ -69,17 +69,19 @@ class _LastHandshakeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Watch((context) {
-      final backend = state.lastHandshakeBackend.value;
-      final body = backend == null
-          ? 'last-handshake-backend: (no per-client handshake yet)'
-          : 'last-handshake-backend: ${formatTrustBackend(backend)}';
-      return Text(
-        body,
-        style: theme.textTheme.bodySmall?.copyWith(
-          fontFeatures: const [FontFeature.tabularFigures()],
-        ),
-      );
-    });
+    return SignalBuilder(
+      builder: (context) {
+        final backend = state.lastHandshakeBackend.value;
+        final body = backend == null
+            ? 'last-handshake-backend: (no per-client handshake yet)'
+            : 'last-handshake-backend: ${formatTrustBackend(backend)}';
+        return Text(
+          body,
+          style: theme.textTheme.bodySmall?.copyWith(
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        );
+      },
+    );
   }
 }
