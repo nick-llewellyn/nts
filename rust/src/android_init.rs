@@ -3,7 +3,7 @@
 //! The platform verifier delegates X.509 chain validation to the Android
 //! system's `X509TrustManager`. To do that it has to call into the JVM, so
 //! the crate requires a one-time initialization step from a JNI entry
-//! point that hands it a [`jni::JNIEnv`] and an [`android.content.Context`]
+//! point that hands it a [`jni::Env`] and an [`android.content.Context`]
 //! reference. If that step is skipped, the first TLS handshake panics with
 //! `Expect rustls-platform-verifier to be initialized…` (RFC 8915 §4 NTS-KE
 //! over TLS 1.3 in our case).
@@ -31,25 +31,26 @@
 
 use jni::objects::{JClass, JObject};
 use jni::sys::jboolean;
-use jni::JNIEnv;
+use jni::EnvUnowned;
 
 use crate::nts::trust_state::TRUST_STATE;
 
 /// JNI entry point invoked by `com.nllewellyn.nts.PlatformInit.nativeInit`.
 ///
-/// Returns `JNI_TRUE` (1) when the verifier was initialized successfully or
-/// was already initialized by a previous call, and `JNI_FALSE` (0) when the
-/// underlying call to `rustls_platform_verifier::android::init_with_env`
-/// returned an error (e.g. the supplied object did not implement
-/// `getClassLoader`). The Kotlin side surfaces the boolean to the host app
-/// as a non-fatal warning so a failed bootstrap downgrades to the
-/// `webpki-roots` fallback in `nts/ke.rs::build_tls_config` rather than
-/// crashing the process.
+/// Returns `true` when the verifier was initialized successfully or was
+/// already initialized by a previous call, and `false` when the underlying
+/// call to `rustls_platform_verifier::android::init_with_env` returned an
+/// error (e.g. the supplied object did not implement `getClassLoader`). The
+/// Kotlin side surfaces the boolean to the host app as a non-fatal warning
+/// so a failed bootstrap downgrades to the `webpki-roots` fallback in
+/// `nts/ke.rs::build_tls_config` rather than crashing the process.
 ///
 /// # Safety
 ///
 /// Called by the JVM with a valid `JNIEnv*` and a non-null `Context`. The
-/// `JNIEnv` is bound to the calling thread; we do not retain it past return.
+/// unowned environment handle is bound to the calling thread; we upgrade it
+/// to an owned `Env` via `EnvUnowned::with_env` for the duration of the call
+/// and do not retain it past return.
 /// `rustls_platform_verifier::android::init_with_env` upgrades the supplied
 /// `JObject` to a `GlobalRef` internally before the function returns, so the
 /// local reference passed in is safe to drop on return.
@@ -66,22 +67,32 @@ use crate::nts::trust_state::TRUST_STATE;
 )]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_nllewellyn_nts_PlatformInit_nativeInit<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     context: JObject<'local>,
 ) -> jboolean {
-    match rustls_platform_verifier::android::init_with_env(&mut env, context) {
-        Ok(()) => {
-            // Latch the process-wide diagnostic flag so
-            // `nts_trust_status()` reports the JNI bootstrap as
-            // successful for the rest of the process lifetime. The
-            // underlying `init_with_env` is itself
-            // `OnceCell`-guarded, so re-entry from a second JNI call
-            // after a successful first call is idempotent on both
-            // sides.
-            TRUST_STATE.record_android_init_success();
-            1
+    // `jni` 0.22 split the old `JNIEnv` into `Env` (owned) and `EnvUnowned`
+    // (the unowned handle a JVM native-method entry point receives), and
+    // `init_with_env` now requires `&mut Env`. Upgrade the unowned handle to
+    // an owned `Env` via `with_env`. The closure maps every outcome to
+    // `Ok(bool)`, so the `ThrowRuntimeExAndDefault` error policy below is
+    // inert: a failed bootstrap must reach Kotlin as `false` (non-fatal,
+    // downgrades to the `webpki-roots` fallback) rather than throwing a Java
+    // exception.
+    env.with_env(|env| -> jni::errors::Result<bool> {
+        match rustls_platform_verifier::android::init_with_env(env, context) {
+            Ok(()) => {
+                // Latch the process-wide diagnostic flag so
+                // `nts_trust_status()` reports the JNI bootstrap as
+                // successful for the rest of the process lifetime. The
+                // underlying `init_with_env` is itself `OnceCell`-guarded, so
+                // re-entry from a second JNI call after a successful first
+                // call is idempotent on both sides.
+                TRUST_STATE.record_android_init_success();
+                Ok(true)
+            }
+            Err(_) => Ok(false),
         }
-        Err(_) => 0,
-    }
+    })
+    .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
 }

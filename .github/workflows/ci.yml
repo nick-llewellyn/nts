@@ -366,6 +366,37 @@ jobs:
         working-directory: rust
         run: cargo clippy --lib --tests --locked -- -D warnings
 
+      # Cross-compile *type-check* for the on-device JNI shim
+      # (`src/android_init.rs`, gated `#[cfg(target_os = "android")]`).
+      # The host build / test / coverage steps above never compile this
+      # file -- it is even excluded from the tarpaulin denominator below --
+      # so an API break in the JNI bindings (such as the `jni` 0.22
+      # `Env`/`EnvUnowned` split that broke the v5 Android build) stays
+      # invisible to them. A `cargo check` for the Android target closes
+      # that gap. `ring`'s build script compiles target objects, so the
+      # NDK clang must back CC/AR; ubuntu-latest ships the NDK at
+      # $ANDROID_NDK_LATEST_HOME. API level 21 is used purely to select an
+      # always-present per-API clang wrapper; it does not affect the
+      # type-check result.
+      - name: Add Android aarch64 Rust target
+        run: rustup target add aarch64-linux-android
+
+      - name: Type-check Android JNI shim (cargo check)
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          if [ -z "$ndk" ] || [ ! -d "$ndk" ]; then
+            echo "Android NDK not found (ANDROID_NDK_LATEST_HOME / ANDROID_NDK_HOME unset)" >&2
+            exit 1
+          fi
+          api=21
+          tc="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$tc/aarch64-linux-android${api}-clang"
+          export AR_aarch64_linux_android="$tc/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$tc/aarch64-linux-android${api}-clang"
+          cargo check --lib --locked --target aarch64-linux-android
+
       # Tarpaulin install is the dominant cold-build cost of the
       # coverage step (~3-5 min from source). Caching the binary by
       # runner OS + version keeps subsequent runs at ~5 s for this
