@@ -314,9 +314,10 @@ typedef MachineDiagnostic = ({
 /// Lines that are blank, malformed (fewer than the eight expected fields), or
 /// whose first field is not a known severity are skipped, so non-diagnostic
 /// noise (progress text, a trailing summary, a crash banner) is ignored rather
-/// than misparsed. Only field index 3 (PATH) is read positionally; the MESSAGE
-/// field -- which may legitimately contain `|` -- is reconstructed by rejoining
-/// the remainder, so an embedded pipe never shifts the path.
+/// than misparsed. The leading fields (SEVERITY, CODE, PATH, LINE, COL) are
+/// read by fixed index; the key invariant is that PATH stays at index 3 because
+/// the MESSAGE field -- which may legitimately contain `|` -- is reconstructed
+/// by rejoining fields 7..end, so an embedded pipe never shifts PATH.
 List<MachineDiagnostic> parseMachineDiagnostics(String output) {
   final diagnostics = <MachineDiagnostic>[];
   for (final line in const LineSplitter().convert(output)) {
