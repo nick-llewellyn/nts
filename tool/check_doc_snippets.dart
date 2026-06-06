@@ -442,9 +442,13 @@ String renderAttributedDiagnostics(
   for (final entry in attributed.entries) {
     final m = snippetMeta[entry.key]!;
     for (final d in entry.value) {
+      // `parseMachineDiagnostics` unescapes `\n`/`\r` into real newlines, so a
+      // multi-line analyzer message would otherwise break the one-line-per-
+      // diagnostic contract. Re-escape them to visible tokens before writing.
+      final message = d.message.replaceAll('\n', r'\n').replaceAll('\r', r'\r');
       buf.writeln(
         '${m.fileName} (snippet ${m.index}): ${d.severity} ${d.code} '
-        'at ${d.line}:${d.column} - ${d.message}',
+        'at ${d.line}:${d.column} - $message',
       );
     }
   }

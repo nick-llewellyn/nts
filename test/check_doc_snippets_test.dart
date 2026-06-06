@@ -15,6 +15,7 @@
 @TestOn('vm')
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -467,5 +468,33 @@ fn main() {}
         }
       },
     );
+  });
+
+  group('renderAttributedDiagnostics (NTS-22)', () {
+    test('keeps one line per diagnostic when a message contains newlines', () {
+      // parseMachineDiagnostics unescapes `\n`/`\r` into real newlines; the
+      // renderer must re-escape them so the per-snippet block stays scannable.
+      final meta = <String, SnippetMeta>{
+        'tool/.snippets/README_md_1.dart': (
+          fileName: 'README.md',
+          index: 1,
+          wrapped: 'void main() {}\n',
+        ),
+      };
+      final diags = parseMachineDiagnostics(
+        'ERROR|T|C|tool/.snippets/README_md_1.dart|1|1|1|first\\nsecond\\rmore',
+      );
+      final attributed = attributeFailures(
+        diags,
+        meta,
+        canonicalize: (p) => p.toLowerCase(),
+      );
+      final rendered = renderAttributedDiagnostics(attributed, meta);
+      expect(
+        const LineSplitter().convert(rendered).where((l) => l.isNotEmpty),
+        hasLength(1),
+      );
+      expect(rendered, contains(r'first\nsecond\rmore'));
+    });
   });
 }
