@@ -1,6 +1,46 @@
 # Changelog
 
-## 5.1
+## 5.1.0
+
+### Added
+
+- `TrustMode.bundledOnly` validates exclusively against the
+  bundled `webpki-roots` set. No platform-store consultation, no
+  silent fallback. Allows consumers to enforce strict validation
+  against the library's static bundle, preventing platform-level
+  CA compromises or middlebox/decryption proxies from intercepting
+  the exchange.
+- `TrustMode.custom` alongside `customRoots` list of bytes (PEM
+  or DER format) to trust only caller-supplied root certificates.
+  Allows consumers to authenticate TLS connections in private
+  environments or using custom/enterprise CAs without relying on
+  the global platform store or other clients.
+- Plumbed a fourth trust telemetry counter (`custom`) to trace
+  custom-roots handshakes.
+- Validates constructor parameters of `NtsClient` synchronously.
+
+### Fixed
+
+- Adapted the Android JNI bootstrap (`rust/src/android_init.rs`)
+  to the `jni` 0.22 `Env` / `EnvUnowned` split and the
+  `jboolean` → `bool` change. `rustls-platform-verifier` 0.7's
+  `init_with_env` requires `&mut Env`, so the unowned
+  native-method handle is upgraded to an owned `Env` via
+  `EnvUnowned::with_env` and `init_with_env` is called inside the
+  closure returning `bool`. Init failure maps to `Ok(false)`
+  inside the closure so a failed bootstrap stays non-fatal (no
+  Java exception) and downgrades to the `webpki-roots` fallback,
+  preserving the prior contract. The shim is
+  `#[cfg(target_os = "android")]` and host CI runners never
+  compiled it, so this break shipped in v5.0.0 undetected; a new
+  `aarch64-linux-android` `cargo check` step in the rust CI job
+  now guards it. (#145, closes #143, NTS-30)
+- Removed misleading `(PlatformOnly mode)` prefix from the
+  `KeError::TrustBackendUnavailable` `Display` implementation. The
+  variant is shared between platform-verifier failures and
+  custom-roots failures, so the prefix was inaccurate for the latter.
+  `PlatformOnly`-specific context is now embedded inside the message
+  string at the two call sites that produce it (nts-o88).
 
 ### Security
 
@@ -54,82 +94,6 @@
   advisory id, URL, title). URL validation is out of scope; the
   RustSec database is treated as trusted upstream. (nts-mat)
 
-### Fixed
-
-- Removed misleading `(PlatformOnly mode)` prefix from the
-  `KeError::TrustBackendUnavailable` `Display` implementation. The
-  variant is shared between platform-verifier failures and
-  custom-roots failures, so the prefix was inaccurate for the latter.
-  `PlatformOnly`-specific context is now embedded inside the message
-  string at the two call sites that produce it (nts-o88).
-
-### Internal
-
-- Pinned specific error-message substrings in `build_with_custom_roots`
-  ("PEM certificate", "custom root certificate", "No custom certificates")
-  via new regression tests to prevent diagnostic drift (nts-o88).
-- Hardened `tool/check_bindings.dart` with a mandatory DCO unreachable
-  patcher match check and a `dart analyze` validation step. Ensures that
-  FRB-codegen changes do not silently break the `${raw[0]}` assumption
-  in the diagnostic-bearing codec patches (nts-6e0).
-- Added an FRB version consistency check to `tool/check_bindings.dart`
-  that verifies `pubspec.yaml` and `rust/Cargo.toml` move in lockstep
-  (nts-6e0).
-- Added `tool/check_doc_snippets.dart` which extracts and validates Dart code
-  blocks in `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`, and
-  `example/example.md` using `dart analyze`. (nts-a23)
-- Updated `audit.yml` CI workflow to post `cargo audit` results as sticky PR
-  comments, including a vulnerability summary table and full JSON output. (nts-eju)
-- Hardened the `audit.yml` cargo-audit step to capture stderr and surface
-  the exact exit code instead of swallowing every non-zero with `|| true`.
-  The previous redirection collapsed the three documented `cargo audit`
-  states (clean / advisories-found / environmental failure such as advisory
-  DB fetch error) into "succeeded", so a real CI breakage rendered as the
-  uninformative "could not parse" branch in the sticky PR comment. Exit
-  codes other than `0`/`1` are now promoted to a hard job failure after
-  artifact upload, and the comment renderer leads with the captured stderr
-  when the audit itself could not run. (nts-0rn)
-- Replaced the inline "Full JSON Output" block in the cargo-audit sticky
-  PR comment with a link to the uploaded workflow artifact plus a 32 KB
-  inline excerpt. The previous full-JSON inline payload could exceed
-  GitHub's ~65 KB per-comment limit on a noisy advisory day and silently
-  break the sticky-comment action. A workflow-side guard now fails the
-  job loudly if the rendered comment exceeds 60 KB, rather than letting
-  the sticky action fail opaquely. (nts-ca4)
-- Made doc-snippet validator failure attribution robust
-  (`tool/check_doc_snippets.dart`). The tool now runs
-  `dart analyze --format=machine` and parses the structured
-  `SEVERITY|TYPE|CODE|PATH|LINE|COL|LENGTH|MESSAGE` rows from **both**
-  stdout and stderr, replacing the previous `stdout.contains(path)`
-  substring match that was sensitive to absolute-vs-relative paths,
-  separator and case differences, and missed stderr-only diagnostics.
-  Each diagnostic is mapped back to its originating snippet by canonical
-  path (symlinks resolved, absolutised, lowercased), and only
-  failure-causing severities (ERROR/WARNING) are attributed so non-fatal
-  INFO lints on the synthetic snippet filenames no longer mis-attribute
-  every snippet. Failures are now reported as a compact per-snippet
-  diagnostics block. (nts-asv)
-
-
-## 5.1.0
-
-### Added
-
-- `TrustMode.bundledOnly` validates exclusively against the
-  bundled `webpki-roots` set. No platform-store consultation, no
-  silent fallback. Allows consumers to enforce strict validation
-  against the library's static bundle, preventing platform-level
-  CA compromises or middlebox/decryption proxies from intercepting
-  the exchange.
-- `TrustMode.custom` alongside `customRoots` list of bytes (PEM
-  or DER format) to trust only caller-supplied root certificates.
-  Allows consumers to authenticate TLS connections in private
-  environments or using custom/enterprise CAs without relying on
-  the global platform store or other clients.
-- Plumbed a fourth trust telemetry counter (`custom`) to trace
-  custom-roots handshakes.
-- Validates constructor parameters of `NtsClient` synchronously.
-
 ### Documentation
 
 - Expanded `TrustMode` API documentation to detail the security
@@ -141,6 +105,17 @@
   `NtsClient(trustMode: TrustMode.bundledOnly)` in the API doc,
   `README.md` Security Considerations section, and the
   `ARCHITECTURE.md` trust-anchor reference.
+
+### Packaging
+
+- `.pubignore` now also excludes `sonar-project.properties`, the
+  maintainer-only SonarCloud/SonarQube project configuration. It
+  joins the maintainer configs already excluded
+  (`analysis_options.yaml`, `dart_test.yaml`,
+  `flutter_rust_bridge.yaml`); package consumers never run
+  SonarCloud against the published tarball, so the file is pure
+  noise on the published surface. Sub-1 KB, so no archive-size
+  impact.
 
 ### Internal
 
@@ -179,6 +154,12 @@
   shape. Adding a future `KeTrustMode` variant will now force a
   compile-time decision at this site rather than silently
   inheriting the `PlatformWithFallback` arm.
+- Added `example/**` to the `dart` path filter in
+  `.github/workflows/ci.yml` so example-only diffs run the
+  `Analyze example app` step and a broken example turns the
+  `Dart tests gate` red. Closes the gating gap exposed by
+  #142 / #145, where an example-only change could merge without
+  the gate reflecting `flutter analyze` breakage. (NTS-32, #147)
 
 ## 5.0.0
 
