@@ -7,7 +7,7 @@
 //
 // The store is one-way reactive: writes go through [add] / [remove],
 // each of which schedules an opportunistic write back to disk. The
-// signal value is kept fully in memory so reads in `Watch` rebuilds
+// signal value is kept fully in memory so reads in `SignalBuilder` rebuilds
 // stay synchronous and free of `FutureBuilder` plumbing.
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -40,7 +40,7 @@ class FavoritesStore {
   bool contains(String hostname) => favorites.value.contains(hostname);
 
   /// Toggle membership for [hostname]. Emits a new immutable set so
-  /// `Watch` observers re-render even though the underlying signal
+  /// `SignalBuilder` observers re-render even though the underlying signal
   /// type is a mutable container.
   void toggle(String hostname) {
     final next = favorites.value.toSet();

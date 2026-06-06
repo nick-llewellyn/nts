@@ -1,6 +1,6 @@
 // Single-entry summary card surfaced on the Client tab.
 //
-// Reads `state.log.entries.value.lastOrNull` through `Watch` and
+// Reads `state.log.entries.value.lastOrNull` through `SignalBuilder` and
 // renders that one entry using the same span structure the full
 // `LogView` uses on the Log tab — see [buildLogEntrySpans]. The
 // goal is byte-for-byte rendering parity so the user can compare a
@@ -16,7 +16,7 @@
 // user is told exactly where to tap next.
 
 import 'package:flutter/material.dart';
-import 'package:signals/signals_flutter.dart' show Watch;
+import 'package:signals/signals_flutter.dart' show SignalBuilder;
 
 import '../state/app_state.dart';
 import '../theme/nts_colors.dart';
@@ -47,23 +47,25 @@ class LatestResultPanel extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Watch((context) {
-              final latest = state.log.entries.value.lastOrNull;
-              if (latest == null) {
-                return Text(
-                  'No queries yet — tap NTS Query to populate.',
-                  style: theme.textTheme.bodySmall,
+            SignalBuilder(
+              builder: (context) {
+                final latest = state.log.entries.value.lastOrNull;
+                if (latest == null) {
+                  return Text(
+                    'No queries yet — tap NTS Query to populate.',
+                    style: theme.textTheme.bodySmall,
+                  );
+                }
+                return SelectableText.rich(
+                  TextSpan(children: buildLogEntrySpans(theme, colors, latest)),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: 'monospace',
+                    height: 1.35,
+                  ),
+                  maxLines: 4,
                 );
-              }
-              return SelectableText.rich(
-                TextSpan(children: buildLogEntrySpans(theme, colors, latest)),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  fontFamily: 'monospace',
-                  height: 1.35,
-                ),
-                maxLines: 4,
-              );
-            }),
+              },
+            ),
           ],
         ),
       ),
