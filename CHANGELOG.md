@@ -96,6 +96,19 @@
   break the sticky-comment action. A workflow-side guard now fails the
   job loudly if the rendered comment exceeds 60 KB, rather than letting
   the sticky action fail opaquely. (nts-ca4)
+- Made doc-snippet validator failure attribution robust
+  (`tool/check_doc_snippets.dart`). The tool now runs
+  `dart analyze --format=machine` and parses the structured
+  `SEVERITY|TYPE|CODE|PATH|LINE|COL|LENGTH|MESSAGE` rows from **both**
+  stdout and stderr, replacing the previous `stdout.contains(path)`
+  substring match that was sensitive to absolute-vs-relative paths,
+  separator and case differences, and missed stderr-only diagnostics.
+  Each diagnostic is mapped back to its originating snippet by canonical
+  path (symlinks resolved, absolutised, lowercased), and only
+  failure-causing severities (ERROR/WARNING) are attributed so non-fatal
+  INFO lints on the synthetic snippet filenames no longer mis-attribute
+  every snippet. Failures are now reported as a compact per-snippet
+  diagnostics block. (nts-asv)
 
 
 ## 5.1.0

@@ -15,6 +15,7 @@
 // `--print-snippets` (or set `SNIPPET_VALIDATOR_VERBOSE=1`) to opt back in.
 //
 
+import 'dart:convert';
 import 'dart:io';
 
 const _docFiles = [
@@ -165,28 +166,61 @@ Future<void> main(List<String> args) async {
     if (snippetMeta.isNotEmpty) {
       stdout.writeln(
         '\nAnalyzing ${snippetMeta.length} snippet(s) with '
-        '`dart analyze ${dir.path}`...',
+        '`dart analyze --format=machine ${dir.path}`...',
       );
-      final result = await Process.run('dart', ['analyze', dir.path]);
+      // `--format=machine` emits one diagnostic per line as
+      // `SEVERITY|TYPE|CODE|PATH|LINE|COL|LENGTH|MESSAGE`, each row carrying
+      // its file path explicitly. This replaces the previous
+      // `stdout.contains(path)` substring match, which was sensitive to
+      // absolute-vs-relative paths, separator and case differences, and
+      // missed diagnostics emitted on stderr (NTS-22).
+      final result = await Process.run('dart', [
+        'analyze',
+        '--format=machine',
+        dir.path,
+      ]);
       if (result.exitCode != 0) {
-        // Attribute failures by matching snippet file paths in stdout.
         final stdoutStr = result.stdout.toString();
-        final failed = <String>{};
-        for (final path in snippetMeta.keys) {
-          if (stdoutStr.contains(path)) {
-            failed.add(path);
-          }
-        }
+        final stderrStr = result.stderr.toString();
+        // Parse both streams: some analyzer diagnostics surface on stderr.
+        final diagnostics = parseMachineDiagnostics('$stdoutStr\n$stderrStr');
+        final attributed = attributeFailures(diagnostics, snippetMeta);
+        final failed = attributed.keys.toSet();
         // If we cannot attribute (unexpected output shape) treat the whole
         // batch as one failure so we still exit non-zero.
         totalErrors = failed.isEmpty ? 1 : failed.length;
+        // Only switch to the compact per-snippet view when *every* failing
+        // (ERROR/WARNING) diagnostic was pinned to a snippet. Under partial
+        // attribution an unmatched failing diagnostic would vanish entirely --
+        // absent from the rendered block and stripped from the stderr dump --
+        // so fall back to the raw analyzer output to guarantee nothing is
+        // hidden.
+        final failingCount = diagnostics
+            .where((d) => _failingSeverities.contains(d.severity))
+            .length;
+        final attributedCount = attributed.values.fold<int>(
+          0,
+          (n, ds) => n + ds.length,
+        );
+        final rendered = attributedCount == failingCount
+            ? renderAttributedDiagnostics(attributed, snippetMeta)
+            : '';
         reportAnalysisFailure(
           stderr,
           printSnippets: printSnippets,
           failed: failed,
           snippetMeta: snippetMeta,
-          analyzeStdout: stdoutStr,
-          analyzeStderr: result.stderr.toString(),
+          analyzeStdout: rendered.isNotEmpty ? rendered : stdoutStr,
+          // In the rendered case the per-snippet block already lists every
+          // parsed diagnostic (stdout+stderr), so strip machine-format rows
+          // from the raw stderr dump to avoid printing stderr-emitted
+          // diagnostics twice; non-diagnostic stderr (crash banners) is
+          // preserved. The fallback keeps raw stderr so a malformed,
+          // unattributable (or only partially attributable) run still surfaces
+          // everything for triage.
+          analyzeStderr: rendered.isNotEmpty
+              ? stripMachineDiagnosticLines(stderrStr)
+              : stderrStr,
         );
       } else {
         for (final m in snippetMeta.values) {
@@ -271,6 +305,206 @@ void reportAnalysisFailure(
       'SNIPPET_VALIDATOR_VERBOSE=1) to print them.',
     );
   }
+}
+
+/// A single parsed `dart analyze --format=machine` diagnostic row.
+///
+/// Machine format emits one diagnostic per line as
+/// `SEVERITY|TYPE|CODE|PATH|LINE|COL|LENGTH|MESSAGE`, with `|`, `\`, and
+/// newlines backslash-escaped inside individual fields.
+typedef MachineDiagnostic = ({
+  String severity,
+  String code,
+  String path,
+  int line,
+  int column,
+  String message,
+});
+
+/// Parses `dart analyze --format=machine` output (pass the combined
+/// stdout+stderr) into structured [MachineDiagnostic]s.
+///
+/// Lines that are blank, malformed (fewer than the eight expected fields), or
+/// whose first field is not a known severity are skipped, so non-diagnostic
+/// noise (progress text, a trailing summary, a crash banner) is ignored rather
+/// than misparsed. Rows are split on *unescaped* `|` only (via
+/// [_splitMachineFields]) because machine format escapes a literal pipe as
+/// `\|`; the leading fields (SEVERITY, CODE, PATH, LINE, COL) are then read by
+/// fixed index. PATH thus stays at index 3 even when it (or an earlier field)
+/// contains an escaped pipe, and the MESSAGE field -- which may carry either an
+/// escaped `\|` or a raw `|` -- is reconstructed by rejoining fields 7..end.
+List<MachineDiagnostic> parseMachineDiagnostics(String output) {
+  final diagnostics = <MachineDiagnostic>[];
+  for (final line in const LineSplitter().convert(output)) {
+    if (!_isMachineDiagnosticRow(line)) continue;
+    final fields = _splitMachineFields(line);
+    diagnostics.add((
+      severity: fields[0],
+      code: _unescapeMachineField(fields[2]),
+      path: _unescapeMachineField(fields[3]),
+      line: int.tryParse(fields[4]) ?? 0,
+      column: int.tryParse(fields[5]) ?? 0,
+      message: _unescapeMachineField(fields.sublist(7).join('|')),
+    ));
+  }
+  return diagnostics;
+}
+
+/// The severities `--format=machine` can lead a diagnostic row with.
+const _machineSeverities = {'ERROR', 'WARNING', 'INFO'};
+
+/// Severities that make `dart analyze` exit non-zero, and so are attributed
+/// back to a snippet. INFO-level diagnostics are non-fatal noise. Shared by
+/// [attributeFailures] (its default filter) and the attribution-completeness
+/// check in [main] so the two cannot disagree on what "failing" means.
+const _failingSeverities = {'ERROR', 'WARNING'};
+
+/// Splits a `--format=machine` row into fields on *unescaped* `|` only.
+///
+/// Machine format backslash-escapes literal pipes (`\|`) and backslashes
+/// (`\\`) inside fields, so a naive `String.split('|')` would treat an escaped
+/// pipe in (e.g.) PATH as a delimiter, shift every later field, and mis-parse
+/// PATH/LINE/COL. This scanner keeps each `\X` pair as literal field text --
+/// leaving the escape intact for [_unescapeMachineField] to resolve -- and
+/// breaks the row only at a bare `|`.
+List<String> _splitMachineFields(String line) {
+  final fields = <String>[];
+  final field = StringBuffer();
+  for (var i = 0; i < line.length; i++) {
+    final ch = line[i];
+    if (ch == r'\' && i + 1 < line.length) {
+      field
+        ..write(ch)
+        ..write(line[i + 1]);
+      i++;
+      continue;
+    }
+    if (ch == '|') {
+      fields.add(field.toString());
+      field.clear();
+      continue;
+    }
+    field.write(ch);
+  }
+  fields.add(field.toString());
+  return fields;
+}
+
+/// True when [line] is a `--format=machine` diagnostic row: eight or more
+/// fields (split on unescaped `|`) led by a known severity. Shared by
+/// [parseMachineDiagnostics] (to select rows to parse) and
+/// [stripMachineDiagnosticLines] (to select rows to drop), so the two cannot
+/// drift apart on what counts as a diagnostic line.
+bool _isMachineDiagnosticRow(String line) {
+  if (line.isEmpty) return false;
+  final fields = _splitMachineFields(line);
+  return fields.length >= 8 && _machineSeverities.contains(fields[0]);
+}
+
+/// Removes `--format=machine` diagnostic rows from [text], preserving every
+/// other line (progress text, blank lines, analyzer crash banners).
+///
+/// Used on the raw stderr dump in the rendered failure report: diagnostics are
+/// parsed from stdout+stderr and re-emitted in the per-snippet block, so an
+/// stderr-emitted row would otherwise be printed twice. Stripping the rows here
+/// keeps the report compact while still surfacing non-diagnostic stderr noise.
+String stripMachineDiagnosticLines(String text) => const LineSplitter()
+    .convert(text)
+    .where((line) => !_isMachineDiagnosticRow(line))
+    .join('\n');
+
+/// Reverses the backslash escaping `--format=machine` applies inside fields
+/// (`\|`, `\\`, `\n`, `\r`). Run over the PATH field this also un-doubles the
+/// backslashes a Windows analyzer emits, so the result matches an on-disk path.
+String _unescapeMachineField(String field) =>
+    field.replaceAllMapped(RegExp(r'\\(.)'), (m) {
+      switch (m[1]) {
+        case 'n':
+          return '\n';
+        case 'r':
+          return '\r';
+        default:
+          return m[1]!;
+      }
+    });
+
+/// Attributes each diagnostic in [diagnostics] back to the snippet file that
+/// produced it, returning a map of matched [snippetMeta] key -> its
+/// diagnostics. Unmatched diagnostics (e.g. from outside the snippet dir) are
+/// dropped.
+///
+/// Only diagnostics whose severity is in [failingSeverities] (ERROR and
+/// WARNING by default) are attributed: those are exactly the severities that
+/// make `dart analyze` exit non-zero. INFO-level lints (e.g. FILE_NAMES firing
+/// on the synthetic `<doc>_<n>.dart` snippet filenames) are non-fatal noise and
+/// would otherwise mis-attribute every snippet as failed once an unrelated
+/// error triggered the run.
+///
+/// Matching is by *canonical* path rather than the previous fragile substring
+/// test: [canonicalize] reduces both the analyzer-reported path and each
+/// snippet path to a comparable key. The default ([_canonicalPathKey]) resolves
+/// symlinks, absolutises, and lowercases, so absolute-vs-relative, separator,
+/// and case-insensitive-filesystem differences all collapse to the same key.
+/// Tests inject a pure variant so no real files are required.
+Map<String, List<MachineDiagnostic>> attributeFailures(
+  List<MachineDiagnostic> diagnostics,
+  Map<String, SnippetMeta> snippetMeta, {
+  String Function(String path) canonicalize = _canonicalPathKey,
+  Set<String> failingSeverities = _failingSeverities,
+}) {
+  final byCanonical = <String, String>{
+    for (final key in snippetMeta.keys) canonicalize(key): key,
+  };
+  final attributed = <String, List<MachineDiagnostic>>{};
+  for (final d in diagnostics) {
+    if (!failingSeverities.contains(d.severity)) continue;
+    final match = byCanonical[canonicalize(d.path)];
+    if (match != null) {
+      (attributed[match] ??= <MachineDiagnostic>[]).add(d);
+    }
+  }
+  return attributed;
+}
+
+/// Canonical comparison key for a filesystem [path]: symlinks resolved and the
+/// path absolutised when it exists (falling back to a plain absolutise when it
+/// does not), then lowercased. Lowercasing is the pragmatic form of the
+/// "absolute + lowercase on case-insensitive filesystems" option from the
+/// NTS-22 acceptance: it can only ever over-match two paths differing solely by
+/// case, which the generated `<doc>_<n>.dart` snippet names never are.
+String _canonicalPathKey(String path) {
+  String resolved;
+  try {
+    resolved = File(path).resolveSymbolicLinksSync();
+  } on FileSystemException {
+    resolved = File(path).absolute.path;
+  }
+  return resolved.toLowerCase();
+}
+
+/// Renders [attributed] diagnostics into a compact, human-readable block for
+/// the failure report -- one line per diagnostic, tagged with the originating
+/// doc file and snippet index. Returns an empty string when nothing was
+/// attributed (the caller then falls back to the raw analyzer output).
+String renderAttributedDiagnostics(
+  Map<String, List<MachineDiagnostic>> attributed,
+  Map<String, SnippetMeta> snippetMeta,
+) {
+  final buf = StringBuffer();
+  for (final entry in attributed.entries) {
+    final m = snippetMeta[entry.key]!;
+    for (final d in entry.value) {
+      // `parseMachineDiagnostics` unescapes `\n`/`\r` into real newlines, so a
+      // multi-line analyzer message would otherwise break the one-line-per-
+      // diagnostic contract. Re-escape them to visible tokens before writing.
+      final message = d.message.replaceAll('\n', r'\n').replaceAll('\r', r'\r');
+      buf.writeln(
+        '${m.fileName} (snippet ${m.index}): ${d.severity} ${d.code} '
+        'at ${d.line}:${d.column} - $message',
+      );
+    }
+  }
+  return buf.toString();
 }
 
 /// Guards both deletion sites against the snippet directory being replaced by
