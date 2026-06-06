@@ -341,7 +341,7 @@ jobs:
           fi
 
       - name: Sticky Comment
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: cargo-audit
           path: audit-summary.md
