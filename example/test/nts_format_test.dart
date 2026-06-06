@@ -171,8 +171,7 @@ void main() {
             message: 'platform CA bundle missing',
           ),
         ),
-        'TrustBackendUnavailable (PlatformOnly mode rejected fallback): '
-        'platform CA bundle missing',
+        'TrustBackendUnavailable: platform CA bundle missing',
       );
     });
   });
