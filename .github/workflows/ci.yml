@@ -76,6 +76,11 @@ jobs:
             dart:
               - 'lib/**'
               - 'test/**'
+              # The `build` job is the only one that runs `flutter analyze`
+              # on the example app, so example-only diffs must set `dart` to
+              # avoid passing the `Dart tests gate` by skip (the signals v7
+              # `Watch` break in #142 reached `main` exactly this way).
+              - 'example/**'
               - 'pubspec.yaml'
               - 'analysis_options.yaml'
               - 'sonar-project.properties'
