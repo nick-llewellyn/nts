@@ -457,9 +457,22 @@ fn main() {}
           final meta = <String, SnippetMeta>{key: metaFor('README.md', 1)};
           // Fully-resolved absolute path, a different *string* from `key`.
           final resolved = f.resolveSymbolicLinksSync();
-          final diags = parseMachineDiagnostics(
-            'ERROR|T|C|$resolved|1|1|1|boom',
-          );
+          // Build the diagnostic directly rather than round-tripping `resolved`
+          // through parseMachineDiagnostics: a Windows path contains single
+          // backslashes, but machine format escapes them, so feeding the raw
+          // path to the parser would let _unescapeMachineField strip separators
+          // (e.g. `\U` -> `U`) and fail only on Windows. This test targets
+          // _canonicalPathKey/attributeFailures, not the parser.
+          final diags = <MachineDiagnostic>[
+            (
+              severity: 'ERROR',
+              code: 'C',
+              path: resolved,
+              line: 1,
+              column: 1,
+              message: 'boom',
+            ),
+          ];
           // Default (filesystem) canonicalizer.
           final attributed = attributeFailures(diags, meta);
           expect(attributed.keys, [key]);
