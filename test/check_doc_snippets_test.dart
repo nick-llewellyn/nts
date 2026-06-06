@@ -325,6 +325,29 @@ fn main() {}
       expect(d.single.path, r'C:\snips\c_1.dart');
     });
 
+    test('an escaped pipe in PATH does not shift later fields', () {
+      // machine format escapes a literal pipe as `\|`. Splitting on raw `|`
+      // would treat it as a delimiter and shift PATH/LINE/COL; the parser must
+      // split on unescaped `|` only, so PATH stays at index 3 and unescapes to
+      // a single literal `|`.
+      const out = r'ERROR|T|C|/snips/we\|ird_1.dart|7|3|9|boom';
+      final d = parseMachineDiagnostics(out);
+      expect(d, hasLength(1));
+      expect(d.single.path, '/snips/we|ird_1.dart');
+      expect(d.single.line, 7);
+      expect(d.single.column, 3);
+      expect(d.single.message, 'boom');
+    });
+
+    test('reconstructs a message containing an escaped pipe', () {
+      // An escaped pipe inside MESSAGE must survive splitting and unescape to a
+      // literal `|`, with PATH unaffected.
+      const out = r'WARNING|HINT|CODE|/snips/b_2.dart|3|4|5|left \| right';
+      final d = parseMachineDiagnostics(out);
+      expect(d.single.path, '/snips/b_2.dart');
+      expect(d.single.message, 'left | right');
+    });
+
     test('parses diagnostics regardless of which stream they came from', () {
       // main() concatenates stdout+stderr before parsing; a row that arrived
       // on stderr (here following an empty stdout) must still be picked up.

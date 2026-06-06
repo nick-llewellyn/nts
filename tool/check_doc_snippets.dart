@@ -189,10 +189,22 @@ Future<void> main(List<String> args) async {
         // If we cannot attribute (unexpected output shape) treat the whole
         // batch as one failure so we still exit non-zero.
         totalErrors = failed.isEmpty ? 1 : failed.length;
-        // Render the structured diagnostics into a friendly per-snippet block;
-        // fall back to the raw analyzer stdout when nothing could be
-        // attributed so a malformed run still surfaces something to triage.
-        final rendered = renderAttributedDiagnostics(attributed, snippetMeta);
+        // Only switch to the compact per-snippet view when *every* failing
+        // (ERROR/WARNING) diagnostic was pinned to a snippet. Under partial
+        // attribution an unmatched failing diagnostic would vanish entirely --
+        // absent from the rendered block and stripped from the stderr dump --
+        // so fall back to the raw analyzer output to guarantee nothing is
+        // hidden.
+        final failingCount = diagnostics
+            .where((d) => _failingSeverities.contains(d.severity))
+            .length;
+        final attributedCount = attributed.values.fold<int>(
+          0,
+          (n, ds) => n + ds.length,
+        );
+        final rendered = attributedCount == failingCount
+            ? renderAttributedDiagnostics(attributed, snippetMeta)
+            : '';
         reportAnalysisFailure(
           stderr,
           printSnippets: printSnippets,
@@ -204,7 +216,8 @@ Future<void> main(List<String> args) async {
           // from the raw stderr dump to avoid printing stderr-emitted
           // diagnostics twice; non-diagnostic stderr (crash banners) is
           // preserved. The fallback keeps raw stderr so a malformed,
-          // unattributable run still surfaces everything for triage.
+          // unattributable (or only partially attributable) run still surfaces
+          // everything for triage.
           analyzeStderr: rendered.isNotEmpty
               ? stripMachineDiagnosticLines(stderrStr)
               : stderrStr,
@@ -314,15 +327,17 @@ typedef MachineDiagnostic = ({
 /// Lines that are blank, malformed (fewer than the eight expected fields), or
 /// whose first field is not a known severity are skipped, so non-diagnostic
 /// noise (progress text, a trailing summary, a crash banner) is ignored rather
-/// than misparsed. The leading fields (SEVERITY, CODE, PATH, LINE, COL) are
-/// read by fixed index; the key invariant is that PATH stays at index 3 because
-/// the MESSAGE field -- which may legitimately contain `|` -- is reconstructed
-/// by rejoining fields 7..end, so an embedded pipe never shifts PATH.
+/// than misparsed. Rows are split on *unescaped* `|` only (via
+/// [_splitMachineFields]) because machine format escapes a literal pipe as
+/// `\|`; the leading fields (SEVERITY, CODE, PATH, LINE, COL) are then read by
+/// fixed index. PATH thus stays at index 3 even when it (or an earlier field)
+/// contains an escaped pipe, and the MESSAGE field -- which may carry either an
+/// escaped `\|` or a raw `|` -- is reconstructed by rejoining fields 7..end.
 List<MachineDiagnostic> parseMachineDiagnostics(String output) {
   final diagnostics = <MachineDiagnostic>[];
   for (final line in const LineSplitter().convert(output)) {
     if (!_isMachineDiagnosticRow(line)) continue;
-    final fields = line.split('|');
+    final fields = _splitMachineFields(line);
     diagnostics.add((
       severity: fields[0],
       code: _unescapeMachineField(fields[2]),
@@ -338,14 +353,51 @@ List<MachineDiagnostic> parseMachineDiagnostics(String output) {
 /// The severities `--format=machine` can lead a diagnostic row with.
 const _machineSeverities = {'ERROR', 'WARNING', 'INFO'};
 
+/// Severities that make `dart analyze` exit non-zero, and so are attributed
+/// back to a snippet. INFO-level diagnostics are non-fatal noise. Shared by
+/// [attributeFailures] (its default filter) and the attribution-completeness
+/// check in [main] so the two cannot disagree on what "failing" means.
+const _failingSeverities = {'ERROR', 'WARNING'};
+
+/// Splits a `--format=machine` row into fields on *unescaped* `|` only.
+///
+/// Machine format backslash-escapes literal pipes (`\|`) and backslashes
+/// (`\\`) inside fields, so a naive `String.split('|')` would treat an escaped
+/// pipe in (e.g.) PATH as a delimiter, shift every later field, and mis-parse
+/// PATH/LINE/COL. This scanner keeps each `\X` pair as literal field text --
+/// leaving the escape intact for [_unescapeMachineField] to resolve -- and
+/// breaks the row only at a bare `|`.
+List<String> _splitMachineFields(String line) {
+  final fields = <String>[];
+  final field = StringBuffer();
+  for (var i = 0; i < line.length; i++) {
+    final ch = line[i];
+    if (ch == r'\' && i + 1 < line.length) {
+      field
+        ..write(ch)
+        ..write(line[i + 1]);
+      i++;
+      continue;
+    }
+    if (ch == '|') {
+      fields.add(field.toString());
+      field.clear();
+      continue;
+    }
+    field.write(ch);
+  }
+  fields.add(field.toString());
+  return fields;
+}
+
 /// True when [line] is a `--format=machine` diagnostic row: eight or more
-/// pipe-separated fields led by a known severity. Shared by
+/// fields (split on unescaped `|`) led by a known severity. Shared by
 /// [parseMachineDiagnostics] (to select rows to parse) and
 /// [stripMachineDiagnosticLines] (to select rows to drop), so the two cannot
 /// drift apart on what counts as a diagnostic line.
 bool _isMachineDiagnosticRow(String line) {
   if (line.isEmpty) return false;
-  final fields = line.split('|');
+  final fields = _splitMachineFields(line);
   return fields.length >= 8 && _machineSeverities.contains(fields[0]);
 }
 
@@ -398,7 +450,7 @@ Map<String, List<MachineDiagnostic>> attributeFailures(
   List<MachineDiagnostic> diagnostics,
   Map<String, SnippetMeta> snippetMeta, {
   String Function(String path) canonicalize = _canonicalPathKey,
-  Set<String> failingSeverities = const {'ERROR', 'WARNING'},
+  Set<String> failingSeverities = _failingSeverities,
 }) {
   final byCanonical = <String, String>{
     for (final key in snippetMeta.keys) canonicalize(key): key,
