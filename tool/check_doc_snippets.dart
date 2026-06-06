@@ -199,7 +199,15 @@ Future<void> main(List<String> args) async {
           failed: failed,
           snippetMeta: snippetMeta,
           analyzeStdout: rendered.isNotEmpty ? rendered : stdoutStr,
-          analyzeStderr: stderrStr,
+          // In the rendered case the per-snippet block already lists every
+          // parsed diagnostic (stdout+stderr), so strip machine-format rows
+          // from the raw stderr dump to avoid printing stderr-emitted
+          // diagnostics twice; non-diagnostic stderr (crash banners) is
+          // preserved. The fallback keeps raw stderr so a malformed,
+          // unattributable run still surfaces everything for triage.
+          analyzeStderr: rendered.isNotEmpty
+              ? stripMachineDiagnosticLines(stderrStr)
+              : stderrStr,
         );
       } else {
         for (final m in snippetMeta.values) {
@@ -310,13 +318,10 @@ typedef MachineDiagnostic = ({
 /// field -- which may legitimately contain `|` -- is reconstructed by rejoining
 /// the remainder, so an embedded pipe never shifts the path.
 List<MachineDiagnostic> parseMachineDiagnostics(String output) {
-  const severities = {'ERROR', 'WARNING', 'INFO'};
   final diagnostics = <MachineDiagnostic>[];
   for (final line in const LineSplitter().convert(output)) {
-    if (line.isEmpty) continue;
+    if (!_isMachineDiagnosticRow(line)) continue;
     final fields = line.split('|');
-    if (fields.length < 8) continue;
-    if (!severities.contains(fields[0])) continue;
     diagnostics.add((
       severity: fields[0],
       code: _unescapeMachineField(fields[2]),
@@ -328,6 +333,32 @@ List<MachineDiagnostic> parseMachineDiagnostics(String output) {
   }
   return diagnostics;
 }
+
+/// The severities `--format=machine` can lead a diagnostic row with.
+const _machineSeverities = {'ERROR', 'WARNING', 'INFO'};
+
+/// True when [line] is a `--format=machine` diagnostic row: eight or more
+/// pipe-separated fields led by a known severity. Shared by
+/// [parseMachineDiagnostics] (to select rows to parse) and
+/// [stripMachineDiagnosticLines] (to select rows to drop), so the two cannot
+/// drift apart on what counts as a diagnostic line.
+bool _isMachineDiagnosticRow(String line) {
+  if (line.isEmpty) return false;
+  final fields = line.split('|');
+  return fields.length >= 8 && _machineSeverities.contains(fields[0]);
+}
+
+/// Removes `--format=machine` diagnostic rows from [text], preserving every
+/// other line (progress text, blank lines, analyzer crash banners).
+///
+/// Used on the raw stderr dump in the rendered failure report: diagnostics are
+/// parsed from stdout+stderr and re-emitted in the per-snippet block, so an
+/// stderr-emitted row would otherwise be printed twice. Stripping the rows here
+/// keeps the report compact while still surfacing non-diagnostic stderr noise.
+String stripMachineDiagnosticLines(String text) => const LineSplitter()
+    .convert(text)
+    .where((line) => !_isMachineDiagnosticRow(line))
+    .join('\n');
 
 /// Reverses the backslash escaping `--format=machine` applies inside fields
 /// (`\|`, `\\`, `\n`, `\r`). Run over the PATH field this also un-doubles the

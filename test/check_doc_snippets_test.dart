@@ -336,6 +336,37 @@ fn main() {}
     });
   });
 
+  // NTS-22: in the rendered failure report the per-snippet block already lists
+  // every parsed diagnostic, so the raw stderr dump has its machine rows
+  // stripped to avoid printing stderr-emitted diagnostics twice.
+  group('stripMachineDiagnosticLines (NTS-22)', () {
+    test('drops machine diagnostic rows but keeps non-diagnostic noise', () {
+      const stderrText =
+          'Analyzing...\n'
+          'ERROR|COMPILE_TIME_ERROR|X|/snips/a_1.dart|1|1|1|boom\n'
+          'analyzer crashed: stack overflow';
+      final out = stripMachineDiagnosticLines(stderrText);
+      expect(out, contains('Analyzing...'));
+      expect(out, contains('analyzer crashed: stack overflow'));
+      expect(out, isNot(contains('boom')));
+      expect(out, isNot(contains('/snips/a_1.dart')));
+    });
+
+    test(
+      'preserves a row that itself contains a pipe but is not a diagnostic',
+      () {
+        // Fewer than eight fields, or a non-severity lead field, is not a
+        // diagnostic row and must survive (e.g. an unrelated tool banner).
+        const stderrText = 'some | piped | banner | text';
+        expect(stripMachineDiagnosticLines(stderrText), stderrText);
+      },
+    );
+
+    test('returns empty for empty input', () {
+      expect(stripMachineDiagnosticLines(''), isEmpty);
+    });
+  });
+
   group('attributeFailures (NTS-22)', () {
     SnippetMeta metaFor(String fileName, int index) =>
         (fileName: fileName, index: index, wrapped: 'void main() {}\n');
