@@ -3,10 +3,12 @@
 //! The platform verifier delegates X.509 chain validation to the Android
 //! system's `X509TrustManager`. To do that it has to call into the JVM, so
 //! the crate requires a one-time initialization step from a JNI entry
-//! point that hands it a [`jni::Env`] and an [`android.content.Context`]
-//! reference. If that step is skipped, the first TLS handshake panics with
-//! `Expect rustls-platform-verifier to be initialized…` (RFC 8915 §4 NTS-KE
-//! over TLS 1.3 in our case).
+//! point. The JVM hands that entry point an unowned [`jni::EnvUnowned`]
+//! handle and an [`android.content.Context`] reference; we upgrade the
+//! handle to an owned [`jni::Env`] via `EnvUnowned::with_env` and pass that
+//! owned env to `init_with_env`. If that step is skipped, the first TLS
+//! handshake panics with `Expect rustls-platform-verifier to be
+//! initialized…` (RFC 8915 §4 NTS-KE over TLS 1.3 in our case).
 //!
 //! # Wire contract
 //!
