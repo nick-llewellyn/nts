@@ -97,7 +97,7 @@ jobs:
       - name: Upload Audit JSON
         id: upload_audit_json
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.run_audit.outcome != 'cancelled'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: audit-results
           # Include audit.err and audit-exit alongside audit.json so
