@@ -977,4 +977,48 @@ mod tests {
         );
         assert_eq!(inner.call_count.load(Ordering::Relaxed), 1);
     }
+
+    /// The decorator rewrites only the `now` argument of
+    /// `verify_server_cert`; the signature-verification and
+    /// supported-scheme methods must forward verbatim to the inner
+    /// verifier. Asserting the wrapped verifier's responses equal the
+    /// bare inner's pins that pass-through and exercises the
+    /// otherwise-uncovered delegated trait methods.
+    #[test]
+    fn time_override_delegates_non_now_methods_to_inner() {
+        let inner = FakePlatform::new(|| Ok(ServerCertVerified::assertion()));
+        let override_time =
+            UnixTime::since_unix_epoch(std::time::Duration::from_secs(1_500_000_000));
+        let verifier = TimeOverrideVerifier::new(inner.clone(), override_time);
+        let (leaf, _intermediates, _server_name, _now) = dummy_args();
+        // rustls makes `DigitallySignedStruct::new` `pub(crate)`, so build
+        // one from its TLS wire encoding via the public `Codec` API:
+        // a 2-byte SignatureScheme (ED25519 = 0x0807) followed by a
+        // PayloadU16 signature (2-byte big-endian length 0x0002, bytes).
+        use rustls::internal::msgs::codec::Codec;
+        let dss = DigitallySignedStruct::read_bytes(&[0x08, 0x07, 0x00, 0x02, 0xAB, 0xCD])
+            .expect("well-formed DigitallySignedStruct wire bytes");
+
+        // verify_tls12_signature forwards: the inner fails closed on TLS 1.2.
+        assert!(
+            matches!(
+                verifier.verify_tls12_signature(b"msg", &leaf, &dss),
+                Err(Error::PeerIncompatible(
+                    PeerIncompatible::Tls12NotOfferedOrEnabled
+                ))
+            ),
+            "tls12 signature verdict must come from the inner verifier",
+        );
+        // verify_tls13_signature forwards: the inner accepts.
+        assert!(
+            verifier.verify_tls13_signature(b"msg", &leaf, &dss).is_ok(),
+            "tls13 signature verdict must come from the inner verifier",
+        );
+        // supported_verify_schemes forwards the inner's set verbatim.
+        assert_eq!(
+            verifier.supported_verify_schemes(),
+            inner.supported_verify_schemes(),
+            "supported schemes must be the inner verifier's set verbatim",
+        );
+    }
 }

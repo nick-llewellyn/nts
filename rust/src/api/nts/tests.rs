@@ -21,6 +21,27 @@ fn validate_rejects_zero_port() {
     assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
 }
 
+/// `None` (no override) and any non-negative epoch-ms value are valid
+/// `verificationTimeMs` inputs and must pass `validate_verification_time_ms`.
+#[test]
+fn validate_verification_time_ms_accepts_none_and_non_negative() {
+    assert!(validate_verification_time_ms(None).is_ok());
+    assert!(validate_verification_time_ms(Some(0)).is_ok());
+    assert!(validate_verification_time_ms(Some(1_700_000_000_000)).is_ok());
+}
+
+/// A negative `verificationTimeMs` cannot denote a real instant. The
+/// Rust entry points must reject it with `InvalidSpec` rather than
+/// silently falling back to the system clock, matching the Dart
+/// wrapper's `invalidSpec` rejection (nts-lc03 / NTS-33 review follow-up).
+#[test]
+fn validate_verification_time_ms_rejects_negative() {
+    let err = validate_verification_time_ms(Some(-1)).unwrap_err();
+    assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
+    let err = validate_verification_time_ms(Some(i64::MIN)).unwrap_err();
+    assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
+}
+
 /// Pins the FFI-default behaviour for `dns_concurrency_cap`: a `0`
 /// from Dart is the agreed sentinel for "use the built-in default",
 /// matching `timeout_ms`. Regressing this would silently let a

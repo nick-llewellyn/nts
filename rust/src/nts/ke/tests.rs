@@ -71,6 +71,21 @@ mod tls_config {
         assert_eq!(build.initial_backend, KeTrustBackend::WebpkiRoots);
     }
 
+    /// A `Some(_)` `verificationTimeMs` override drives the `Some` arm of
+    /// `maybe_wrap_time_override`, which the `None`-only tests above leave
+    /// uncovered. The override path must build a working config through
+    /// the same funnel — same ALPN and trust backend as the no-override
+    /// `build_tls_config_bundled_only_succeeds`.
+    #[test]
+    fn build_tls_config_bundled_only_with_time_override_succeeds() {
+        let override_time =
+            UnixTime::since_unix_epoch(std::time::Duration::from_secs(1_500_000_000));
+        let build = build_tls_config(KeTrustMode::BundledOnly, Some(override_time))
+            .expect("config builds with time override");
+        assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
+        assert_eq!(build.initial_backend, KeTrustBackend::WebpkiRoots);
+    }
+
     #[test]
     fn build_tls_config_bundled_only_matches_webpki_only_protocol_options() {
         let build_bundled =

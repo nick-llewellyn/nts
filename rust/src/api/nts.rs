@@ -1489,6 +1489,28 @@ fn validate(spec: &NtsServerSpec) -> Result<(), NtsError> {
     Ok(())
 }
 
+/// Reject a caller-supplied `verification_time_ms` that cannot denote a
+/// real instant. The override is an epoch-milliseconds count converted
+/// to a `UnixTime` via `Duration::from_millis(u64)` in
+/// `establish_session`, so a negative value is meaningless. The Dart
+/// wrapper already rejects negatives before dispatch (surfacing
+/// `NtsError.invalidSpec`); enforcing the same rule here gives direct
+/// Rust/FFI callers identical semantics and stops a negative from
+/// silently falling back to the system clock — a fallback whose
+/// visibility otherwise depended on whether a cached session existed.
+/// `None` and any non-negative value pass through unchanged.
+fn validate_verification_time_ms(verification_time_ms: Option<i64>) -> Result<(), NtsError> {
+    if let Some(ms) = verification_time_ms {
+        if ms < 0 {
+            return Err(NtsError::InvalidSpec(format!(
+                "verificationTimeMs {ms} is negative; it must be a non-negative \
+                 count of milliseconds since the Unix epoch"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn effective_timeout(timeout_ms: u32) -> Duration {
     let ms = if timeout_ms == 0 {
         DEFAULT_TIMEOUT_MS
@@ -1601,11 +1623,12 @@ fn establish_session(
     verification_time_ms: Option<i64>,
 ) -> Result<(Session, KePhaseTimings), NtsError> {
     // Convert the optional caller-supplied epoch-ms override into the
-    // `UnixTime` the TLS verifier expects. A negative value (which the
-    // Dart layer rejects before it reaches here) cannot form a
-    // `UnixTime`, so it maps to `None` rather than wrapping — the
-    // handshake then uses the system clock, matching no-override
-    // behaviour.
+    // `UnixTime` the TLS verifier expects. Negative values are rejected
+    // upstream at both entry points — the Dart wrapper
+    // (`NtsError.invalidSpec`) and `validate_verification_time_ms` on
+    // the Rust query / warm-cookie paths — so the `try_from` below is
+    // belt-and-suspenders: a negative cannot reach here, and were one
+    // to, it would map to `None` (system clock) rather than wrapping.
     let verification_time_override = verification_time_ms
         .and_then(|ms| u64::try_from(ms).ok())
         .map(|ms| UnixTime::since_unix_epoch(Duration::from_millis(ms)));
@@ -2602,6 +2625,7 @@ fn nts_query_inner(
     verification_time_ms: Option<i64>,
 ) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
+    validate_verification_time_ms(verification_time_ms)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
     let key = session_key(&spec);
@@ -2811,6 +2835,7 @@ fn nts_warm_cookies_inner(
     verification_time_ms: Option<i64>,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
     validate(&spec)?;
+    validate_verification_time_ms(verification_time_ms)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
     // Route through `SessionTable::warm_cookies` so concurrent forced
