@@ -960,12 +960,20 @@ mod tests {
         let verifier = TimeOverrideVerifier::new(inner.clone(), override_time);
         let (leaf, intermediates, server_name, now) = dummy_args();
         let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+        // Match on the verdict without interpolating `result` into the
+        // failure message: the inner verifier returns an opaque `Err`
+        // here, but formatting a `verify_server_cert` result into a
+        // panic string trips CodeQL's "cleartext logging of sensitive
+        // information" taint sink. The `matches!` arm fully encodes the
+        // expectation, and the call-count assertion below corroborates
+        // that the rejection came from the wrapped inner verifier.
+        let propagated = matches!(
+            result,
+            Err(Error::InvalidCertificate(CertificateError::UnknownIssuer))
+        );
         assert!(
-            matches!(
-                result,
-                Err(Error::InvalidCertificate(CertificateError::UnknownIssuer))
-            ),
-            "decorator must propagate the inner verifier's rejection verbatim; got {result:?}",
+            propagated,
+            "decorator must propagate the inner verifier's rejection verbatim",
         );
         assert_eq!(inner.call_count.load(Ordering::Relaxed), 1);
     }
