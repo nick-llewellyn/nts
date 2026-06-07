@@ -114,10 +114,12 @@ Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
+  PlatformInt64? verificationTimeMs,
 }) => NtsRustLib.instance.api.crateApiNtsNtsQuery(
   spec: spec,
   timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
+  verificationTimeMs: verificationTimeMs,
 );
 
 /// Force a fresh NTS-KE handshake against `spec` and return the
@@ -137,10 +139,12 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
+  PlatformInt64? verificationTimeMs,
 }) => NtsRustLib.instance.api.crateApiNtsNtsWarmCookies(
   spec: spec,
   timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
+  verificationTimeMs: verificationTimeMs,
 );
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NtsClient>>
@@ -191,6 +195,7 @@ abstract class NtsClient implements RustOpaqueInterface {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   });
 
   /// Trust-anchor policy this client was constructed with. Useful
@@ -212,6 +217,7 @@ abstract class NtsClient implements RustOpaqueInterface {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   });
 
   /// Construct a fresh client with the caller-selected

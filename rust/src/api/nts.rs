@@ -38,6 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+use rustls::pki_types::UnixTime;
 use zeroize::Zeroizing;
 
 use crate::nts::aead::{AeadError, AeadKey};
@@ -1369,6 +1370,7 @@ impl NtsClient {
         spec: NtsServerSpec,
         timeout_ms: u32,
         dns_concurrency_cap: u32,
+        verification_time_ms: Option<i64>,
     ) -> Result<NtsTimeSample, NtsError> {
         nts_query_inner(
             &self.table,
@@ -1377,6 +1379,7 @@ impl NtsClient {
             dns_concurrency_cap,
             self.trust_mode.clone(),
             self.is_default,
+            verification_time_ms,
         )
     }
 
@@ -1387,6 +1390,7 @@ impl NtsClient {
         spec: NtsServerSpec,
         timeout_ms: u32,
         dns_concurrency_cap: u32,
+        verification_time_ms: Option<i64>,
     ) -> Result<NtsWarmCookiesOutcome, NtsError> {
         nts_warm_cookies_inner(
             &self.table,
@@ -1395,6 +1399,7 @@ impl NtsClient {
             dns_concurrency_cap,
             self.trust_mode.clone(),
             self.is_default,
+            verification_time_ms,
         )
     }
 
@@ -1593,7 +1598,17 @@ fn establish_session(
     timeout: Duration,
     dns_concurrency_cap: usize,
     trust_mode: KeTrustMode,
+    verification_time_ms: Option<i64>,
 ) -> Result<(Session, KePhaseTimings), NtsError> {
+    // Convert the optional caller-supplied epoch-ms override into the
+    // `UnixTime` the TLS verifier expects. A negative value (which the
+    // Dart layer rejects before it reaches here) cannot form a
+    // `UnixTime`, so it maps to `None` rather than wrapping — the
+    // handshake then uses the system clock, matching no-override
+    // behaviour.
+    let verification_time_override = verification_time_ms
+        .and_then(|ms| u64::try_from(ms).ok())
+        .map(|ms| UnixTime::since_unix_epoch(Duration::from_millis(ms)));
     let req = KeRequest {
         host: spec.host.clone(),
         port: spec.port,
@@ -1601,6 +1616,7 @@ fn establish_session(
         timeout: Some(timeout),
         dns_concurrency_cap,
         trust_mode,
+        verification_time_override,
     };
     let outcome: KeOutcome = perform_handshake(&req)?;
     let trust_backend: TrustBackend = outcome.trust_backend.into();
@@ -1728,9 +1744,10 @@ impl SessionTable {
         timeout: Duration,
         dns_concurrency_cap: usize,
         trust_mode: KeTrustMode,
+        verification_time_ms: Option<i64>,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         self.checkout_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
-            establish_session(s, t, c, trust_mode.clone())
+            establish_session(s, t, c, trust_mode.clone(), verification_time_ms)
         })
     }
 
@@ -2161,9 +2178,10 @@ impl SessionTable {
         timeout: Duration,
         dns_concurrency_cap: usize,
         trust_mode: KeTrustMode,
+        verification_time_ms: Option<i64>,
     ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
         self.warm_cookies_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
-            establish_session(s, t, c, trust_mode.clone())
+            establish_session(s, t, c, trust_mode.clone(), verification_time_ms)
         })
     }
 
@@ -2524,8 +2542,9 @@ pub fn nts_query(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
+    verification_time_ms: Option<i64>,
 ) -> Result<NtsTimeSample, NtsError> {
-    default_nts_client().query(spec, timeout_ms, dns_concurrency_cap)
+    default_nts_client().query(spec, timeout_ms, dns_concurrency_cap, verification_time_ms)
 }
 
 /// Implementation shared by [`nts_query`] (which delegates to the
@@ -2580,6 +2599,7 @@ fn nts_query_inner(
     dns_concurrency_cap: u32,
     trust_mode: KeTrustMode,
     is_default_client: bool,
+    verification_time_ms: Option<i64>,
 ) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
@@ -2594,7 +2614,8 @@ fn nts_query_inner(
     // which contradicts the documented "single global wall-clock
     // budget" contract on `timeout_ms`.
     let started = Instant::now();
-    let (ctx, ke_timings) = table.checkout(&spec, timeout, cap, trust_mode)?;
+    let (ctx, ke_timings) =
+        table.checkout(&spec, timeout, cap, trust_mode, verification_time_ms)?;
     let session_generation = ctx.session_generation;
     if is_default_client {
         crate::nts::trust_state::TRUST_STATE.record_default_backend(ctx.trust_backend.into());
@@ -2768,8 +2789,9 @@ pub fn nts_warm_cookies(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
+    verification_time_ms: Option<i64>,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
-    default_nts_client().warm_cookies(spec, timeout_ms, dns_concurrency_cap)
+    default_nts_client().warm_cookies(spec, timeout_ms, dns_concurrency_cap, verification_time_ms)
 }
 
 /// Implementation shared by [`nts_warm_cookies`] (default-client
@@ -2786,6 +2808,7 @@ fn nts_warm_cookies_inner(
     dns_concurrency_cap: u32,
     trust_mode: KeTrustMode,
     is_default_client: bool,
+    verification_time_ms: Option<i64>,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
     validate(&spec)?;
     let timeout = effective_timeout(timeout_ms);
@@ -2800,7 +2823,8 @@ fn nts_warm_cookies_inner(
     // and report `KePhaseTimings::default()` because they did not
     // perform KE work themselves. See `SessionTable::warm_cookies_with`
     // for the full state-machine documentation.
-    let (count, ke_timings, trust_backend) = table.warm_cookies(&spec, timeout, cap, trust_mode)?;
+    let (count, ke_timings, trust_backend) =
+        table.warm_cookies(&spec, timeout, cap, trust_mode, verification_time_ms)?;
     if is_default_client {
         crate::nts::trust_state::TRUST_STATE.record_default_backend(trust_backend.into());
     }

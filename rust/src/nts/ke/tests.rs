@@ -42,7 +42,8 @@ mod tls_config {
     /// version probe redundant at this layer.
     #[test]
     fn build_tls_config_advertises_ntske_alpn() {
-        let build = build_tls_config(KeTrustMode::PlatformWithFallback).expect("config builds");
+        let build =
+            build_tls_config(KeTrustMode::PlatformWithFallback, None).expect("config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
     }
 
@@ -58,22 +59,23 @@ mod tls_config {
     /// the faux-responder fixture tracked separately.
     #[test]
     fn build_tls_config_platform_only_succeeds_when_verifier_constructs() {
-        let build = build_tls_config(KeTrustMode::PlatformOnly).expect("config builds");
+        let build = build_tls_config(KeTrustMode::PlatformOnly, None).expect("config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Platform);
     }
 
     #[test]
     fn build_tls_config_bundled_only_succeeds() {
-        let build = build_tls_config(KeTrustMode::BundledOnly).expect("config builds");
+        let build = build_tls_config(KeTrustMode::BundledOnly, None).expect("config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::WebpkiRoots);
     }
 
     #[test]
     fn build_tls_config_bundled_only_matches_webpki_only_protocol_options() {
-        let build_bundled = build_tls_config(KeTrustMode::BundledOnly).expect("config builds");
-        let expected_cfg = build_webpki_only_config().expect("webpki config builds");
+        let build_bundled =
+            build_tls_config(KeTrustMode::BundledOnly, None).expect("config builds");
+        let expected_cfg = build_webpki_only_config(None).expect("webpki config builds");
         assert_eq!(
             build_bundled.config.alpn_protocols,
             expected_cfg.alpn_protocols
@@ -164,7 +166,7 @@ q8P9uhno9+zDMKKpnQ==\n\
     #[test]
     fn build_tls_config_custom_pem_succeeds() {
         let mode = KeTrustMode::Custom(CustomRootsBytes::new(TEST_CERT_PEM.as_bytes().to_vec()));
-        let build = build_tls_config(mode).expect("custom PEM config builds");
+        let build = build_tls_config(mode, None).expect("custom PEM config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
     }
@@ -172,7 +174,7 @@ q8P9uhno9+zDMKKpnQ==\n\
     #[test]
     fn build_tls_config_custom_der_succeeds() {
         let mode = KeTrustMode::Custom(CustomRootsBytes::new(TEST_CERT_DER.to_vec()));
-        let build = build_tls_config(mode).expect("custom DER config builds");
+        let build = build_tls_config(mode, None).expect("custom DER config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
     }
@@ -181,7 +183,7 @@ q8P9uhno9+zDMKKpnQ==\n\
     fn build_tls_config_custom_malformed_pem_surfaces_diagnostic_substring() {
         let malformed_pem = "-----BEGIN CERTIFICATE-----\nnot-base64\n-----END CERTIFICATE-----";
         let mode = KeTrustMode::Custom(CustomRootsBytes::new(malformed_pem.as_bytes().to_vec()));
-        let build = build_tls_config(mode);
+        let build = build_tls_config(mode, None);
         // Manual error extraction because TlsConfigBuild is not Debug
         let err = match build {
             Err(e) => e,
@@ -200,7 +202,7 @@ q8P9uhno9+zDMKKpnQ==\n\
     fn build_tls_config_custom_malformed_der_surfaces_diagnostic_substring() {
         // Not a PEM, so it falls through to DER parsing which fails in `roots.add(cert)`
         let mode = KeTrustMode::Custom(CustomRootsBytes::new(b"not-a-valid-cert-bytes".to_vec()));
-        let build = build_tls_config(mode);
+        let build = build_tls_config(mode, None);
         let err = match build {
             Err(e) => e,
             Ok(_) => panic!("malformed DER must fail"),
@@ -220,7 +222,7 @@ q8P9uhno9+zDMKKpnQ==\n\
         // find no valid certificate blocks.
         let empty_pem = "text that contains -----BEGIN CERTIFICATE----- but no actual cert";
         let mode = KeTrustMode::Custom(CustomRootsBytes::new(empty_pem.as_bytes().to_vec()));
-        let build = build_tls_config(mode);
+        let build = build_tls_config(mode, None);
         let err = match build {
             Err(e) => e,
             Ok(_) => panic!("empty PEM must fail"),
@@ -247,7 +249,7 @@ q8P9uhno9+zDMKKpnQ==\n\
         );
         let mode =
             KeTrustMode::Custom(CustomRootsBytes::new(pem_with_preamble.as_bytes().to_vec()));
-        let build = build_tls_config(mode).expect("custom PEM-with-preamble config builds");
+        let build = build_tls_config(mode, None).expect("custom PEM-with-preamble config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
     }
@@ -262,7 +264,7 @@ q8P9uhno9+zDMKKpnQ==\n\
         );
         let mode =
             KeTrustMode::Custom(CustomRootsBytes::new(pem_with_preamble.as_bytes().to_vec()));
-        let build = build_tls_config(mode).expect("custom PEM-with-bag-attrs config builds");
+        let build = build_tls_config(mode, None).expect("custom PEM-with-bag-attrs config builds");
         assert_eq!(build.config.alpn_protocols, vec![ALPN_NTSKE.to_vec()]);
         assert_eq!(build.initial_backend, KeTrustBackend::Custom);
     }
@@ -278,7 +280,7 @@ q8P9uhno9+zDMKKpnQ==\n\
         let bundle = format!("{}\n\n{}", TEST_CERT_PEM, invalid_cert);
         let mode = KeTrustMode::Custom(CustomRootsBytes::new(bundle.as_bytes().to_vec()));
 
-        let err = build_tls_config(mode)
+        let err = build_tls_config(mode, None)
             .expect_err("multi-cert bundle with malformed second cert should fail");
         let msg = format!("{}", err);
         assert!(
@@ -1325,6 +1327,7 @@ mod live_integration {
             timeout: Some(Duration::from_secs(10)),
             dns_concurrency_cap: crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
             trust_mode: KeTrustMode::PlatformWithFallback,
+            verification_time_override: None,
         };
         let outcome = perform_handshake(&req).expect("handshake");
         assert_eq!(outcome.aead_id, aead::AES_SIV_CMAC_256);

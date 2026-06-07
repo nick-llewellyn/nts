@@ -351,6 +351,103 @@ fn host_for_log(server_name: &ServerName<'_>) -> String {
     }
 }
 
+/// A [`ServerCertVerifier`] decorator that substitutes the `now`
+/// timestamp used for the X.509 validity-window check.
+///
+/// Wraps an inner verifier and, on every [`Self::verify_server_cert`]
+/// call, replaces the `now: UnixTime` argument rustls derives from the
+/// system clock with a caller-supplied fixed timestamp before
+/// delegating. Every other trait method delegates verbatim, so the
+/// decorator is transparent for signature verification and supported-
+/// scheme negotiation.
+///
+/// # Why
+///
+/// At cold start a device whose real-time clock is badly wrong (factory
+/// reset, dead RTC battery, never-set clock) cannot complete an NTS-KE
+/// handshake: rustls rejects the server certificate as
+/// [`CertificateError::Expired`] or [`CertificateError::NotValidYet`]
+/// because the `notBefore`/`notAfter` window is checked against the
+/// skewed clock — yet NTS-KE is exactly the mechanism that would correct
+/// the clock. Pinning the validity-window check to a trusted timestamp
+/// (e.g. a build-baked "this binary cannot predate X" floor) breaks that
+/// circular dependency. See the `verificationTimeMs` primitive plumbed
+/// through [`crate::nts::ke::build_tls_config`].
+///
+/// # Scope of the override
+///
+/// The substitution is deliberately confined to the temporal check: the
+/// inner verifier still performs chain-of-trust, name, and signature
+/// validation against its own trust anchors. A caller that pins a
+/// timestamp inside a certificate's validity window does **not** weaken
+/// any other aspect of authentication — an untrusted issuer, a
+/// hostname mismatch, or a bad signature still fails. The blast radius
+/// is limited to "treat the clock as if it were `now_override`", which
+/// is precisely the cold-start rescue intent.
+#[derive(Debug)]
+pub struct TimeOverrideVerifier {
+    inner: Arc<dyn ServerCertVerifier>,
+    now_override: UnixTime,
+}
+
+impl TimeOverrideVerifier {
+    /// Wrap `inner`, substituting `now_override` for the system-clock
+    /// `now` on every [`Self::verify_server_cert`] call. `inner` keeps
+    /// ownership of every other verification responsibility.
+    pub fn new(inner: Arc<dyn ServerCertVerifier>, now_override: UnixTime) -> Self {
+        Self {
+            inner,
+            now_override,
+        }
+    }
+}
+
+impl ServerCertVerifier for TimeOverrideVerifier {
+    /// Delegate to the inner verifier, but with the incoming `_now`
+    /// (derived by rustls from the system clock, see
+    /// `rustls/src/client/tls13.rs` `now = config.current_time()`)
+    /// replaced by `self.now_override`. Only the validity-window check
+    /// inside the inner verifier observes the substitution.
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        self.inner.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            self.now_override,
+        )
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -752,5 +849,124 @@ mod tests {
         let verifier = HybridVerifier::new(KeTrustMode::PlatformOnly, provider)
             .expect("HybridVerifier::new must succeed with the ring CryptoProvider");
         assert_eq!(verifier.fallback_count(), 0);
+    }
+
+    /// Test fake that records the `now: UnixTime` it was last invoked
+    /// with (as whole seconds since the epoch), so a wrapping decorator's
+    /// timestamp substitution can be asserted at the trait boundary
+    /// without standing up a real chain or a skewed-clock handshake.
+    /// `verify_server_cert` always accepts so the `TimeOverrideVerifier`
+    /// success path is exercised end-to-end.
+    struct NowCapturingVerifier {
+        last_now_secs: AtomicU64,
+    }
+
+    impl std::fmt::Debug for NowCapturingVerifier {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("NowCapturingVerifier")
+                .field("last_now_secs", &self.last_now_secs.load(Ordering::Relaxed))
+                .finish()
+        }
+    }
+
+    impl NowCapturingVerifier {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                last_now_secs: AtomicU64::new(0),
+            })
+        }
+    }
+
+    impl ServerCertVerifier for NowCapturingVerifier {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp_response: &[u8],
+            now: UnixTime,
+        ) -> Result<ServerCertVerified, Error> {
+            self.last_now_secs.store(now.as_secs(), Ordering::Relaxed);
+            Ok(ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, Error> {
+            Err(Error::PeerIncompatible(
+                PeerIncompatible::Tls12NotOfferedOrEnabled,
+            ))
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            Vec::new()
+        }
+    }
+
+    /// `nts-lc03` (NTS-33) core acceptance criterion: the
+    /// [`TimeOverrideVerifier`] decorator substitutes its pinned
+    /// `now_override` for the system-derived `now` that rustls passes
+    /// into `verify_server_cert`. We assert the substitution at the
+    /// trait boundary: the inner verifier observes the override
+    /// timestamp, not the (distinct) `now` from `dummy_args`.
+    #[test]
+    fn time_override_substitutes_now_at_trait_boundary() {
+        let inner = NowCapturingVerifier::new();
+        // Distinct from dummy_args' now (1_700_000_000) so a pass-through
+        // bug (delegating the original `now`) would fail the assertion.
+        let override_secs = 1_500_000_000u64;
+        let override_time =
+            UnixTime::since_unix_epoch(std::time::Duration::from_secs(override_secs));
+        let verifier = TimeOverrideVerifier::new(inner.clone(), override_time);
+        let (leaf, intermediates, server_name, now) = dummy_args();
+        assert_ne!(
+            now.as_secs(),
+            override_secs,
+            "test precondition: dummy_args `now` must differ from the override",
+        );
+        verifier
+            .verify_server_cert(&leaf, &intermediates, &server_name, &[], now)
+            .expect("inner accepts");
+        assert_eq!(
+            inner.last_now_secs.load(Ordering::Relaxed),
+            override_secs,
+            "decorator must pass the pinned override timestamp to the inner verifier, \
+             not the system `now` rustls supplied",
+        );
+    }
+
+    /// The decorator is transparent for verdicts: a rejection from the
+    /// inner verifier propagates verbatim. This pins that the wrapper
+    /// only rewrites the `now` argument and never masks the inner
+    /// verifier's chain/name/signature decision.
+    #[test]
+    fn time_override_propagates_inner_rejection() {
+        let inner =
+            FakePlatform::new(|| Err(Error::InvalidCertificate(CertificateError::UnknownIssuer)));
+        let override_time =
+            UnixTime::since_unix_epoch(std::time::Duration::from_secs(1_500_000_000));
+        let verifier = TimeOverrideVerifier::new(inner.clone(), override_time);
+        let (leaf, intermediates, server_name, now) = dummy_args();
+        let result = verifier.verify_server_cert(&leaf, &intermediates, &server_name, &[], now);
+        assert!(
+            matches!(
+                result,
+                Err(Error::InvalidCertificate(CertificateError::UnknownIssuer))
+            ),
+            "decorator must propagate the inner verifier's rejection verbatim; got {result:?}",
+        );
+        assert_eq!(inner.call_count.load(Ordering::Relaxed), 1);
     }
 }
