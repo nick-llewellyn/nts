@@ -2552,6 +2552,18 @@ where
 /// share the same in-flight pool: the effective ceiling at any moment is
 /// whichever caller is currently being admitted.
 ///
+/// `verification_time_ms`, when `Some`, overrides the timestamp used to
+/// check the NTS-KE server certificate's validity window
+/// (`notBefore`/`notAfter`), expressed as milliseconds since the Unix
+/// epoch. It must be non-negative — a negative value returns
+/// `NtsError::InvalidSpec` (see `validate_verification_time_ms`). It
+/// affects *only* the certificate validity-window check; all other
+/// certificate verification (signature, hostname, chain) continues to
+/// use the inner verifier unchanged. `None` uses the system clock, which
+/// is the normal behaviour. This exists to break the cold-start
+/// clock-skew deadlock where a wrong system clock would otherwise reject
+/// an in-window certificate as expired or not-yet-valid.
+///
 /// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
 /// finished synchronized clock. `utc_unix_micros` is the server transmit
 /// timestamp exactly as it appeared on the wire; it does not include any
@@ -2809,6 +2821,13 @@ fn nts_query_inner(
 /// connect, TLS, KE record I/O) — there is no UDP NTP exchange on
 /// this path, so the `Ntp` phase is implicitly zero and not
 /// represented.
+///
+/// `verification_time_ms` carries the identical semantics as on
+/// [`nts_query`]: when `Some` it pins the TLS certificate
+/// validity-window check to the supplied epoch-milliseconds instant
+/// (must be non-negative; a negative returns `NtsError::InvalidSpec`)
+/// instead of the system clock, leaving all other certificate
+/// verification intact. `None` uses the system clock.
 pub fn nts_warm_cookies(
     spec: NtsServerSpec,
     timeout_ms: u32,
