@@ -24,6 +24,8 @@
 // the full rationale.
 
 import 'dart:typed_data';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show PlatformInt64, PlatformInt64Util;
 import '../ffi/api/nts.dart' as ffi;
 import 'errors.dart';
 import 'models.dart';
@@ -137,7 +139,7 @@ Future<NtsTimeSample> ntsQuery({
       spec: _ffiSpec(spec),
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
-      verificationTimeMs: verificationTimeMs,
+      verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
     );
     return _publicSample(ffiSample);
   } on ffi.NtsError catch (err, stack) {
@@ -193,7 +195,7 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
       spec: _ffiSpec(spec),
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
-      verificationTimeMs: verificationTimeMs,
+      verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
     );
     return _publicWarm(ffiOutcome);
   } on ffi.NtsError catch (err, stack) {
@@ -461,7 +463,7 @@ class NtsClient {
         spec: _ffiSpec(spec),
         timeoutMs: timeoutMs,
         dnsConcurrencyCap: dnsConcurrencyCap,
-        verificationTimeMs: verificationTimeMs,
+        verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
       );
       return _publicSample(ffiSample);
     } on ffi.NtsError catch (err, stack) {
@@ -501,7 +503,7 @@ class NtsClient {
         spec: _ffiSpec(spec),
         timeoutMs: timeoutMs,
         dnsConcurrencyCap: dnsConcurrencyCap,
-        verificationTimeMs: verificationTimeMs,
+        verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
       );
       return _publicWarm(ffiOutcome);
     } on ffi.NtsError catch (err, stack) {
@@ -636,6 +638,17 @@ void _validateRanges({
 
 ffi.NtsServerSpec _ffiSpec(NtsServerSpec spec) =>
     ffi.NtsServerSpec(host: spec.host, port: spec.port);
+
+// `verificationTimeMs` crosses the boundary as the FRB `PlatformInt64`
+// (the Rust side is `Option<i64>`). On the native platforms this package
+// targets (`web`/`wasm` are excluded — see `pubspec.yaml`) `PlatformInt64`
+// is an alias for `int`, so this conversion is an identity; routing
+// through `PlatformInt64Util.from` keeps the to-FFI boundary explicit and
+// correct independent of the FRB platform mapping, mirroring the
+// `.toInt()` calls used in the FFI -> public direction. Negative values
+// are rejected by `_validateRanges` before reaching here.
+PlatformInt64? _ffiVerificationTime(int? ms) =>
+    ms == null ? null : PlatformInt64Util.from(ms);
 
 NtsTimeSample _publicSample(ffi.NtsTimeSample s) => NtsTimeSample(
   utcUnixMicros: s.utcUnixMicros.toInt(),
