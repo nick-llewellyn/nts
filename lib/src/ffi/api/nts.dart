@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `lock_recover`, `new`, `new`, `new`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`, `wait_until`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `lock_recover`, `new`, `new`, `new`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
 
@@ -101,6 +101,18 @@ NtsTrustStatus ntsTrustStatus() =>
 /// share the same in-flight pool: the effective ceiling at any moment is
 /// whichever caller is currently being admitted.
 ///
+/// `verification_time_ms`, when `Some`, overrides the timestamp used to
+/// check the NTS-KE server certificate's validity window
+/// (`notBefore`/`notAfter`), expressed as milliseconds since the Unix
+/// epoch. It must be non-negative — a negative value returns
+/// `NtsError::InvalidSpec` (see `validate_verification_time_ms`). It
+/// affects *only* the certificate validity-window check; all other
+/// certificate verification (signature, hostname, chain) continues to
+/// use the inner verifier unchanged. `None` uses the system clock, which
+/// is the normal behaviour. This exists to break the cold-start
+/// clock-skew deadlock where a wrong system clock would otherwise reject
+/// an in-window certificate as expired or not-yet-valid.
+///
 /// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
 /// finished synchronized clock. `utc_unix_micros` is the server transmit
 /// timestamp exactly as it appeared on the wire; it does not include any
@@ -135,6 +147,13 @@ Future<NtsTimeSample> ntsQuery({
 /// connect, TLS, KE record I/O) — there is no UDP NTP exchange on
 /// this path, so the `Ntp` phase is implicitly zero and not
 /// represented.
+///
+/// `verification_time_ms` carries the identical semantics as on
+/// [`nts_query`]: when `Some` it pins the TLS certificate
+/// validity-window check to the supplied epoch-milliseconds instant
+/// (must be non-negative; a negative returns `NtsError::InvalidSpec`)
+/// instead of the system clock, leaving all other certificate
+/// verification intact. `None` uses the system clock.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   required int timeoutMs,
