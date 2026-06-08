@@ -202,6 +202,7 @@ fn wire__crate__api__nts__NtsClient_query_impl(
             let api_spec = <crate::api::nts::NtsServerSpec>::sse_decode(&mut deserializer);
             let api_timeout_ms = <u32>::sse_decode(&mut deserializer);
             let api_dns_concurrency_cap = <u32>::sse_decode(&mut deserializer);
+            let api_verification_time_ms = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::nts::NtsError>((move || {
@@ -224,6 +225,7 @@ fn wire__crate__api__nts__NtsClient_query_impl(
                         api_spec,
                         api_timeout_ms,
                         api_dns_concurrency_cap,
+                        api_verification_time_ms,
                     )?;
                     Ok(output_ok)
                 })())
@@ -306,6 +308,7 @@ fn wire__crate__api__nts__NtsClient_warm_cookies_impl(
             let api_spec = <crate::api::nts::NtsServerSpec>::sse_decode(&mut deserializer);
             let api_timeout_ms = <u32>::sse_decode(&mut deserializer);
             let api_dns_concurrency_cap = <u32>::sse_decode(&mut deserializer);
+            let api_verification_time_ms = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::nts::NtsError>((move || {
@@ -328,6 +331,7 @@ fn wire__crate__api__nts__NtsClient_warm_cookies_impl(
                         api_spec,
                         api_timeout_ms,
                         api_dns_concurrency_cap,
+                        api_verification_time_ms,
                     )?;
                     Ok(output_ok)
                 })())
@@ -455,6 +459,7 @@ fn wire__crate__api__nts__nts_query_impl(
             let api_spec = <crate::api::nts::NtsServerSpec>::sse_decode(&mut deserializer);
             let api_timeout_ms = <u32>::sse_decode(&mut deserializer);
             let api_dns_concurrency_cap = <u32>::sse_decode(&mut deserializer);
+            let api_verification_time_ms = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::nts::NtsError>((move || {
@@ -462,6 +467,7 @@ fn wire__crate__api__nts__nts_query_impl(
                         api_spec,
                         api_timeout_ms,
                         api_dns_concurrency_cap,
+                        api_verification_time_ms,
                     )?;
                     Ok(output_ok)
                 })())
@@ -523,6 +529,7 @@ fn wire__crate__api__nts__nts_warm_cookies_impl(
             let api_spec = <crate::api::nts::NtsServerSpec>::sse_decode(&mut deserializer);
             let api_timeout_ms = <u32>::sse_decode(&mut deserializer);
             let api_dns_concurrency_cap = <u32>::sse_decode(&mut deserializer);
+            let api_verification_time_ms = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::nts::NtsError>((move || {
@@ -530,6 +537,7 @@ fn wire__crate__api__nts__nts_warm_cookies_impl(
                         api_spec,
                         api_timeout_ms,
                         api_dns_concurrency_cap,
+                        api_verification_time_ms,
                     )?;
                     Ok(output_ok)
                 })())
@@ -799,6 +807,17 @@ impl SseDecode for crate::api::nts::NtsWarmCookiesOutcome {
             phase_timings: var_phaseTimings,
             trust_backend: var_trustBackend,
         };
+    }
+}
+
+impl SseDecode for Option<i64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<i64>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
     }
 }
 
@@ -1443,6 +1462,16 @@ impl SseEncode for crate::api::nts::NtsWarmCookiesOutcome {
         <u32>::sse_encode(self.fresh_cookies, serializer);
         <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
         <crate::api::nts::TrustBackend>::sse_encode(self.trust_backend, serializer);
+    }
+}
+
+impl SseEncode for Option<i64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <i64>::sse_encode(value, serializer);
+        }
     }
 }
 

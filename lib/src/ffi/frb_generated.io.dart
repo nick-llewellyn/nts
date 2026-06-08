@@ -47,6 +47,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   bool dco_decode_bool(dynamic raw);
 
   @protected
+  PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
   NtsServerSpec dco_decode_box_autoadd_nts_server_spec(dynamic raw);
 
   @protected
@@ -81,6 +84,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
 
   @protected
   NtsWarmCookiesOutcome dco_decode_nts_warm_cookies_outcome(dynamic raw);
+
+  @protected
+  PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
   TrustBackend? dco_decode_opt_box_autoadd_trust_backend(dynamic raw);
@@ -140,6 +146,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
+  PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
   NtsServerSpec sse_decode_box_autoadd_nts_server_spec(
     SseDeserializer deserializer,
   );
@@ -180,6 +189,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   NtsWarmCookiesOutcome sse_decode_nts_warm_cookies_outcome(
     SseDeserializer deserializer,
   );
+
+  @protected
+  PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
   TrustBackend? sse_decode_opt_box_autoadd_trust_backend(
@@ -244,6 +256,12 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_i_64(
+    PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_nts_server_spec(
     NtsServerSpec self,
     SseSerializer serializer,
@@ -297,6 +315,12 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   @protected
   void sse_encode_nts_warm_cookies_outcome(
     NtsWarmCookiesOutcome self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_i_64(
+    PlatformInt64? self,
     SseSerializer serializer,
   );
 

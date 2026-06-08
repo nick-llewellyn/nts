@@ -21,6 +21,27 @@ fn validate_rejects_zero_port() {
     assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
 }
 
+/// `None` (no override) and any non-negative epoch-ms value are valid
+/// `verificationTimeMs` inputs and must pass `validate_verification_time_ms`.
+#[test]
+fn validate_verification_time_ms_accepts_none_and_non_negative() {
+    assert!(validate_verification_time_ms(None).is_ok());
+    assert!(validate_verification_time_ms(Some(0)).is_ok());
+    assert!(validate_verification_time_ms(Some(1_700_000_000_000)).is_ok());
+}
+
+/// A negative `verificationTimeMs` cannot denote a real instant. The
+/// Rust entry points must reject it with `InvalidSpec` rather than
+/// silently falling back to the system clock, matching the Dart
+/// wrapper's `invalidSpec` rejection (nts-lc03 / NTS-33 review follow-up).
+#[test]
+fn validate_verification_time_ms_rejects_negative() {
+    let err = validate_verification_time_ms(Some(-1)).unwrap_err();
+    assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
+    let err = validate_verification_time_ms(Some(i64::MIN)).unwrap_err();
+    assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
+}
+
 /// Pins the FFI-default behaviour for `dns_concurrency_cap`: a `0`
 /// from Dart is the agreed sentinel for "use the built-in default",
 /// matching `timeout_ms`. Regressing this would silently let a
@@ -473,7 +494,7 @@ fn nts_query_evicts_session_on_aead_authentication_failure() {
         host: host.to_owned(),
         port: server_port,
     };
-    let result = nts_query(spec, 2_000, 64);
+    let result = nts_query(spec, 2_000, 64, None);
     handler.join().expect("faux server thread panicked");
 
     match result {
@@ -537,7 +558,7 @@ fn nts_query_preserves_session_on_non_authentication_failure() {
         host: host.to_owned(),
         port: server_port,
     };
-    let result = nts_query(spec, 2_000, 64);
+    let result = nts_query(spec, 2_000, 64, None);
     handler.join().expect("faux server thread panicked");
 
     match result {
@@ -644,7 +665,7 @@ fn nts_query_evicts_session_on_ntsn_kod_with_matching_uid() {
         host: host.to_owned(),
         port: server_port,
     };
-    let result = nts_query(spec, 2_000, 64);
+    let result = nts_query(spec, 2_000, 64, None);
     handler.join().expect("faux server thread panicked");
 
     // The unauthenticated NTSN routes through `From<NtpError>` to
@@ -720,7 +741,7 @@ fn nts_query_preserves_session_on_ntsn_kod_with_wrong_uid() {
         host: host.to_owned(),
         port: server_port,
     };
-    let result = nts_query(spec, 2_000, 64);
+    let result = nts_query(spec, 2_000, 64, None);
     handler.join().expect("faux server thread panicked");
 
     // Wrong-UID NTSN falls through to `MissingAuthenticator` in
@@ -1408,7 +1429,7 @@ fn nts_client_query_rejects_invalid_spec_via_validate() {
         host: String::new(),
         port: 4460,
     };
-    match client.query(spec, 1000, 1) {
+    match client.query(spec, 1000, 1, None) {
         Err(NtsError::InvalidSpec(_)) => {}
         other => panic!("expected InvalidSpec, got {other:?}"),
     }
@@ -1421,7 +1442,7 @@ fn nts_client_warm_cookies_rejects_invalid_spec_via_validate() {
         host: "ok.invalid".to_owned(),
         port: 0,
     };
-    match client.warm_cookies(spec, 1000, 1) {
+    match client.warm_cookies(spec, 1000, 1, None) {
         Err(NtsError::InvalidSpec(_)) => {}
         other => panic!("expected InvalidSpec, got {other:?}"),
     }
@@ -1433,7 +1454,7 @@ fn nts_warm_cookies_top_level_rejects_invalid_spec_via_validate() {
         host: String::new(),
         port: 4460,
     };
-    match nts_warm_cookies(spec, 1000, 1) {
+    match nts_warm_cookies(spec, 1000, 1, None) {
         Err(NtsError::InvalidSpec(_)) => {}
         other => panic!("expected InvalidSpec, got {other:?}"),
     }
@@ -1494,7 +1515,7 @@ fn nts_client_query_evicts_session_on_aead_failure_in_client_table() {
         host: host.to_owned(),
         port: server_port,
     };
-    let result = client.query(spec.clone(), 2_000, 64);
+    let result = client.query(spec.clone(), 2_000, 64, None);
     handler.join().expect("faux server thread panicked");
 
     match result {
@@ -1678,7 +1699,7 @@ fn nts_query_live_cloudflare() {
         port: DEFAULT_KE_PORT,
     };
     let sample = retry_on_transient("nts_query cloudflare", || {
-        nts_query(spec.clone(), 10_000, 0)
+        nts_query(spec.clone(), 10_000, 0, None)
     });
     assert_cloudflare_time_sample(&sample);
 }
@@ -1706,12 +1727,12 @@ fn nts_query_live_cloudflare_via_client() {
     };
     let client = NtsClient::new();
     let sample = retry_on_transient("NtsClient::query cloudflare (fresh)", || {
-        client.query(spec.clone(), 10_000, 0)
+        client.query(spec.clone(), 10_000, 0, None)
     });
     assert_cloudflare_time_sample(&sample);
 
     let sample2 = retry_on_transient("NtsClient::query cloudflare (reuse)", || {
-        client.query(spec.clone(), 10_000, 0)
+        client.query(spec.clone(), 10_000, 0, None)
     });
     assert_cloudflare_time_sample(&sample2);
     // Cache-hit signal: the cached-session branch skips connect /
@@ -1755,7 +1776,7 @@ fn nts_warm_cookies_live_cloudflare() {
         port: DEFAULT_KE_PORT,
     };
     let outcome = retry_on_transient("nts_warm_cookies cloudflare", || {
-        nts_warm_cookies(spec.clone(), 10_000, 0)
+        nts_warm_cookies(spec.clone(), 10_000, 0, None)
     });
     assert!(
         outcome.fresh_cookies > 0,
@@ -1778,7 +1799,7 @@ fn nts_warm_cookies_live_cloudflare_via_client() {
     };
     let client = NtsClient::new();
     let outcome = retry_on_transient("NtsClient::warm_cookies cloudflare", || {
-        client.warm_cookies(spec.clone(), 10_000, 0)
+        client.warm_cookies(spec.clone(), 10_000, 0, None)
     });
     assert!(
         outcome.fresh_cookies > 0,
@@ -1806,7 +1827,7 @@ fn nts_query_live_ipv6_ptb() {
         host: "ptbtime1.ptb.de".to_owned(),
         port: DEFAULT_KE_PORT,
     };
-    match nts_query(spec, 10_000, 0) {
+    match nts_query(spec, 10_000, 0, None) {
         Ok(sample) => {
             assert!(sample.server_stratum > 0 && sample.server_stratum < 16);
             assert!(sample.round_trip_micros > 0);
@@ -2517,6 +2538,7 @@ fn checkout_cache_hit_preserves_session_trust_backend() {
             Duration::from_secs(5),
             4,
             crate::nts::ke::KeTrustMode::PlatformWithFallback,
+            None,
         )
         .expect("cache hit");
     assert_eq!(ctx.trust_backend, TrustBackend::PlatformWithHybridFallback);
@@ -3335,7 +3357,7 @@ fn nts_query_inner_increments_custom_counter_for_default_client() {
     // is non-resolvable, but the counter bump happens immediately after
     // `checkout` returns `Ok(ctx)`, before the NTP attempt. A 1 ms
     // timeout keeps the test fast without affecting correctness.
-    let _ = super::nts_query_inner(&table, spec, 1, 1, KeTrustMode::BundledOnly, true);
+    let _ = super::nts_query_inner(&table, spec, 1, 1, KeTrustMode::BundledOnly, true, None);
 
     let final_status = nts_trust_status();
     assert!(
@@ -3362,7 +3384,7 @@ fn nts_query_inner_increments_custom_counter_for_default_client() {
     table.install(&spec2, session2);
 
     let before_custom_client = nts_trust_status();
-    let _ = super::nts_query_inner(&table, spec2, 1, 1, KeTrustMode::BundledOnly, false);
+    let _ = super::nts_query_inner(&table, spec2, 1, 1, KeTrustMode::BundledOnly, false, None);
     let after_custom_client = nts_trust_status();
     assert_eq!(
         after_custom_client.default_backend_custom_count,

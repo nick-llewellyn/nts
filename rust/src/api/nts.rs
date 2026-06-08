@@ -38,6 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+use rustls::pki_types::UnixTime;
 use zeroize::Zeroizing;
 
 use crate::nts::aead::{AeadError, AeadKey};
@@ -1369,6 +1370,7 @@ impl NtsClient {
         spec: NtsServerSpec,
         timeout_ms: u32,
         dns_concurrency_cap: u32,
+        verification_time_ms: Option<i64>,
     ) -> Result<NtsTimeSample, NtsError> {
         nts_query_inner(
             &self.table,
@@ -1377,6 +1379,7 @@ impl NtsClient {
             dns_concurrency_cap,
             self.trust_mode.clone(),
             self.is_default,
+            verification_time_ms,
         )
     }
 
@@ -1387,6 +1390,7 @@ impl NtsClient {
         spec: NtsServerSpec,
         timeout_ms: u32,
         dns_concurrency_cap: u32,
+        verification_time_ms: Option<i64>,
     ) -> Result<NtsWarmCookiesOutcome, NtsError> {
         nts_warm_cookies_inner(
             &self.table,
@@ -1395,6 +1399,7 @@ impl NtsClient {
             dns_concurrency_cap,
             self.trust_mode.clone(),
             self.is_default,
+            verification_time_ms,
         )
     }
 
@@ -1480,6 +1485,28 @@ fn validate(spec: &NtsServerSpec) -> Result<(), NtsError> {
     }
     if spec.port == 0 {
         return Err(NtsError::InvalidSpec("port must be non-zero".into()));
+    }
+    Ok(())
+}
+
+/// Reject a caller-supplied `verification_time_ms` that cannot denote a
+/// real instant. The override is an epoch-milliseconds count converted
+/// to a `UnixTime` via `Duration::from_millis(u64)` in
+/// `establish_session`, so a negative value is meaningless. The Dart
+/// wrapper already rejects negatives before dispatch (surfacing
+/// `NtsError.invalidSpec`); enforcing the same rule here gives direct
+/// Rust/FFI callers identical semantics and stops a negative from
+/// silently falling back to the system clock — a fallback whose
+/// visibility otherwise depended on whether a cached session existed.
+/// `None` and any non-negative value pass through unchanged.
+fn validate_verification_time_ms(verification_time_ms: Option<i64>) -> Result<(), NtsError> {
+    if let Some(ms) = verification_time_ms {
+        if ms < 0 {
+            return Err(NtsError::InvalidSpec(format!(
+                "verificationTimeMs {ms} is negative; it must be a non-negative \
+                 count of milliseconds since the Unix epoch"
+            )));
+        }
     }
     Ok(())
 }
@@ -1593,7 +1620,18 @@ fn establish_session(
     timeout: Duration,
     dns_concurrency_cap: usize,
     trust_mode: KeTrustMode,
+    verification_time_ms: Option<i64>,
 ) -> Result<(Session, KePhaseTimings), NtsError> {
+    // Convert the optional caller-supplied epoch-ms override into the
+    // `UnixTime` the TLS verifier expects. Negative values are rejected
+    // upstream at both entry points — the Dart wrapper
+    // (`NtsError.invalidSpec`) and `validate_verification_time_ms` on
+    // the Rust query / warm-cookie paths — so the `try_from` below is
+    // belt-and-suspenders: a negative cannot reach here, and were one
+    // to, it would map to `None` (system clock) rather than wrapping.
+    let verification_time_override = verification_time_ms
+        .and_then(|ms| u64::try_from(ms).ok())
+        .map(|ms| UnixTime::since_unix_epoch(Duration::from_millis(ms)));
     let req = KeRequest {
         host: spec.host.clone(),
         port: spec.port,
@@ -1601,6 +1639,7 @@ fn establish_session(
         timeout: Some(timeout),
         dns_concurrency_cap,
         trust_mode,
+        verification_time_override,
     };
     let outcome: KeOutcome = perform_handshake(&req)?;
     let trust_backend: TrustBackend = outcome.trust_backend.into();
@@ -1728,9 +1767,10 @@ impl SessionTable {
         timeout: Duration,
         dns_concurrency_cap: usize,
         trust_mode: KeTrustMode,
+        verification_time_ms: Option<i64>,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         self.checkout_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
-            establish_session(s, t, c, trust_mode.clone())
+            establish_session(s, t, c, trust_mode.clone(), verification_time_ms)
         })
     }
 
@@ -2161,9 +2201,10 @@ impl SessionTable {
         timeout: Duration,
         dns_concurrency_cap: usize,
         trust_mode: KeTrustMode,
+        verification_time_ms: Option<i64>,
     ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
         self.warm_cookies_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
-            establish_session(s, t, c, trust_mode.clone())
+            establish_session(s, t, c, trust_mode.clone(), verification_time_ms)
         })
     }
 
@@ -2511,6 +2552,20 @@ where
 /// share the same in-flight pool: the effective ceiling at any moment is
 /// whichever caller is currently being admitted.
 ///
+/// `verification_time_ms`, when `Some`, overrides the `now` timestamp
+/// the certificate verifier reads, expressed as milliseconds since the
+/// Unix epoch. It must be non-negative — a negative value returns
+/// `NtsError::InvalidSpec` (see `validate_verification_time_ms`). It
+/// pins every time-based check the verifier derives from that timestamp
+/// — chiefly the validity window (`notBefore`/`notAfter`), plus any
+/// other check the verifier consults `now` for (e.g. stapled-OCSP
+/// timing) — while the non-temporal checks (signature, hostname, chain)
+/// do not consult `now` and continue to use the inner verifier
+/// unchanged. `None` uses the system clock, which
+/// is the normal behaviour. This exists to break the cold-start
+/// clock-skew deadlock where a wrong system clock would otherwise reject
+/// an in-window certificate as expired or not-yet-valid.
+///
 /// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
 /// finished synchronized clock. `utc_unix_micros` is the server transmit
 /// timestamp exactly as it appeared on the wire; it does not include any
@@ -2524,8 +2579,9 @@ pub fn nts_query(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
+    verification_time_ms: Option<i64>,
 ) -> Result<NtsTimeSample, NtsError> {
-    default_nts_client().query(spec, timeout_ms, dns_concurrency_cap)
+    default_nts_client().query(spec, timeout_ms, dns_concurrency_cap, verification_time_ms)
 }
 
 /// Implementation shared by [`nts_query`] (which delegates to the
@@ -2580,8 +2636,10 @@ fn nts_query_inner(
     dns_concurrency_cap: u32,
     trust_mode: KeTrustMode,
     is_default_client: bool,
+    verification_time_ms: Option<i64>,
 ) -> Result<NtsTimeSample, NtsError> {
     validate(&spec)?;
+    validate_verification_time_ms(verification_time_ms)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
     let key = session_key(&spec);
@@ -2594,7 +2652,8 @@ fn nts_query_inner(
     // which contradicts the documented "single global wall-clock
     // budget" contract on `timeout_ms`.
     let started = Instant::now();
-    let (ctx, ke_timings) = table.checkout(&spec, timeout, cap, trust_mode)?;
+    let (ctx, ke_timings) =
+        table.checkout(&spec, timeout, cap, trust_mode, verification_time_ms)?;
     let session_generation = ctx.session_generation;
     if is_default_client {
         crate::nts::trust_state::TRUST_STATE.record_default_backend(ctx.trust_backend.into());
@@ -2764,12 +2823,22 @@ fn nts_query_inner(
 /// connect, TLS, KE record I/O) — there is no UDP NTP exchange on
 /// this path, so the `Ntp` phase is implicitly zero and not
 /// represented.
+///
+/// `verification_time_ms` carries the identical semantics as on
+/// [`nts_query`]: when `Some` it substitutes the supplied
+/// epoch-milliseconds instant for the system clock as the `now` the
+/// certificate verifier reads (must be non-negative; a negative returns
+/// `NtsError::InvalidSpec`), pinning every time-based check the verifier
+/// derives from `now` — chiefly the validity window — while the
+/// non-temporal checks (signature, hostname, chain) are left intact.
+/// `None` uses the system clock.
 pub fn nts_warm_cookies(
     spec: NtsServerSpec,
     timeout_ms: u32,
     dns_concurrency_cap: u32,
+    verification_time_ms: Option<i64>,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
-    default_nts_client().warm_cookies(spec, timeout_ms, dns_concurrency_cap)
+    default_nts_client().warm_cookies(spec, timeout_ms, dns_concurrency_cap, verification_time_ms)
 }
 
 /// Implementation shared by [`nts_warm_cookies`] (default-client
@@ -2786,8 +2855,10 @@ fn nts_warm_cookies_inner(
     dns_concurrency_cap: u32,
     trust_mode: KeTrustMode,
     is_default_client: bool,
+    verification_time_ms: Option<i64>,
 ) -> Result<NtsWarmCookiesOutcome, NtsError> {
     validate(&spec)?;
+    validate_verification_time_ms(verification_time_ms)?;
     let timeout = effective_timeout(timeout_ms);
     let cap = effective_dns_concurrency_cap(dns_concurrency_cap);
     // Route through `SessionTable::warm_cookies` so concurrent forced
@@ -2800,7 +2871,8 @@ fn nts_warm_cookies_inner(
     // and report `KePhaseTimings::default()` because they did not
     // perform KE work themselves. See `SessionTable::warm_cookies_with`
     // for the full state-machine documentation.
-    let (count, ke_timings, trust_backend) = table.warm_cookies(&spec, timeout, cap, trust_mode)?;
+    let (count, ke_timings, trust_backend) =
+        table.warm_cookies(&spec, timeout, cap, trust_mode, verification_time_ms)?;
     if is_default_client {
         crate::nts::trust_state::TRUST_STATE.record_default_backend(trust_backend.into());
     }

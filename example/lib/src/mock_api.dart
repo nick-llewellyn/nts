@@ -116,6 +116,7 @@ class MockNtsApi implements NtsRustLibApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     // Simulate a realistic TLS+UDP RTT so the UI feels live.
     final rttMs = 25 + _random.nextInt(40);
@@ -143,6 +144,7 @@ class MockNtsApi implements NtsRustLibApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 80));
     _recordSingletonBackend(TrustBackend.platform);
@@ -185,6 +187,7 @@ class MockNtsApi implements NtsRustLibApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     final rttMs = 25 + _random.nextInt(40);
     await Future<void>.delayed(Duration(milliseconds: rttMs));
@@ -198,6 +201,7 @@ class MockNtsApi implements NtsRustLibApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 80));
     final backend = _resolveBackendForClient(that);
@@ -309,11 +313,13 @@ class _FakeMockNtsClient implements NtsClient {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) => NtsRustLib.instance.api.crateApiNtsNtsClientQuery(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    verificationTimeMs: verificationTimeMs,
   );
 
   @override
@@ -321,11 +327,13 @@ class _FakeMockNtsClient implements NtsClient {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) => NtsRustLib.instance.api.crateApiNtsNtsClientWarmCookies(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    verificationTimeMs: verificationTimeMs,
   );
 
   @override

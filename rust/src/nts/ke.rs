@@ -13,8 +13,10 @@ use std::time::{Duration, Instant};
 
 use super::dns::{resolve_with_global, system_lookup};
 
+use rustls::client::danger::ServerCertVerifier;
+use rustls::client::WebPkiServerVerifier;
 use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, Stream, SupportedProtocolVersion};
 use zeroize::Zeroizing;
 
@@ -357,6 +359,17 @@ pub struct KeRequest {
     /// should add `trust_mode: KeTrustMode::PlatformWithFallback`
     /// to preserve existing behaviour.
     pub trust_mode: KeTrustMode,
+    /// Optional override for the timestamp used by the TLS server-cert
+    /// validity-window (`notBefore`/`notAfter`) check, plumbed from the
+    /// public `verificationTimeMs` parameter. When `Some`, every TLS
+    /// path wraps its verifier in
+    /// [`TimeOverrideVerifier`](crate::nts::hybrid_verifier::TimeOverrideVerifier)
+    /// so the certificate's temporal validity is checked against this
+    /// instant rather than the (possibly skewed) system clock; chain,
+    /// name, and signature validation are unaffected. `None` leaves the
+    /// system-clock behaviour untouched. See the cold-start clock-skew
+    /// rescue rationale on `TimeOverrideVerifier`.
+    pub verification_time_override: Option<UnixTime>,
 }
 
 /// Phase of an NTS-KE handshake whose budget elapsed.
@@ -1151,9 +1164,12 @@ pub(crate) struct TlsConfigBuild {
 /// `pub(crate)` because every caller — [`perform_handshake`] and the
 /// in-module test fixture — lives inside this module; the function
 /// is not part of the public Rust API surface.
-pub(crate) fn build_tls_config(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+pub(crate) fn build_tls_config(
+    trust_mode: KeTrustMode,
+    verification_time_override: Option<UnixTime>,
+) -> Result<TlsConfigBuild, KeError> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    build_tls_config_inner(trust_mode)
+    build_tls_config_inner(trust_mode, verification_time_override)
 }
 
 /// Constructs a [`KeError::TrustBackendUnavailable`] for the `PlatformOnly`
@@ -1165,18 +1181,45 @@ fn platform_only_unavailable(e: impl std::fmt::Display) -> KeError {
     KeError::TrustBackendUnavailable(format!("PlatformOnly mode: {e}"))
 }
 
+/// Wrap `inner` in a
+/// [`TimeOverrideVerifier`](crate::nts::hybrid_verifier::TimeOverrideVerifier)
+/// when a `verification_time_override` is present, so the certificate
+/// validity-window check runs against the pinned timestamp instead of
+/// the system clock. With `None` the inner verifier is returned
+/// unchanged, keeping the default (non-rescue) path byte-identical to
+/// its pre-`verificationTimeMs` behaviour. Used by every TLS build path
+/// so the override applies uniformly across all trust modes.
+fn maybe_wrap_time_override(
+    inner: Arc<dyn ServerCertVerifier>,
+    verification_time_override: Option<UnixTime>,
+) -> Arc<dyn ServerCertVerifier> {
+    match verification_time_override {
+        Some(now_override) => Arc::new(crate::nts::hybrid_verifier::TimeOverrideVerifier::new(
+            inner,
+            now_override,
+        )),
+        None => inner,
+    }
+}
+
 #[cfg(target_os = "android")]
-fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+fn build_tls_config_inner(
+    trust_mode: KeTrustMode,
+    verification_time_override: Option<UnixTime>,
+) -> Result<TlsConfigBuild, KeError> {
     if trust_mode == KeTrustMode::BundledOnly {
         return Ok(TlsConfigBuild {
-            config: Arc::new(build_webpki_only_config()?),
+            config: Arc::new(build_webpki_only_config(verification_time_override)?),
             initial_backend: KeTrustBackend::WebpkiRoots,
             hybrid: None,
         });
     }
     if let KeTrustMode::Custom(ref bytes) = trust_mode {
         return Ok(TlsConfigBuild {
-            config: Arc::new(build_with_custom_roots(bytes.as_slice())?),
+            config: Arc::new(build_with_custom_roots(
+                bytes.as_slice(),
+                verification_time_override,
+            )?),
             initial_backend: KeTrustBackend::Custom,
             hybrid: None,
         });
@@ -1187,7 +1230,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
     // exhaustive match below. The clone is O(1) regardless of
     // payload size (see `KeTrustMode::Custom` rustdoc).
     let mode_for_fallback = trust_mode.clone();
-    match build_with_native_verifier_android(trust_mode) {
+    match build_with_native_verifier_android(trust_mode, verification_time_override) {
         Ok((mut cfg, hybrid)) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
             Ok(TlsConfigBuild {
@@ -1205,7 +1248,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
         Err(e) => match mode_for_fallback {
             KeTrustMode::PlatformOnly => Err(platform_only_unavailable(e)),
             KeTrustMode::PlatformWithFallback => Ok(TlsConfigBuild {
-                config: Arc::new(build_webpki_only_config()?),
+                config: Arc::new(build_webpki_only_config(verification_time_override)?),
                 initial_backend: KeTrustBackend::WebpkiRoots,
                 hybrid: None,
             }),
@@ -1219,20 +1262,26 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
 }
 
 #[cfg(not(target_os = "android"))]
-fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeError> {
+fn build_tls_config_inner(
+    trust_mode: KeTrustMode,
+    verification_time_override: Option<UnixTime>,
+) -> Result<TlsConfigBuild, KeError> {
     if trust_mode == KeTrustMode::BundledOnly {
         return Ok(TlsConfigBuild {
-            config: Arc::new(build_webpki_only_config()?),
+            config: Arc::new(build_webpki_only_config(verification_time_override)?),
             initial_backend: KeTrustBackend::WebpkiRoots,
         });
     }
     if let KeTrustMode::Custom(ref bytes) = trust_mode {
         return Ok(TlsConfigBuild {
-            config: Arc::new(build_with_custom_roots(bytes.as_slice())?),
+            config: Arc::new(build_with_custom_roots(
+                bytes.as_slice(),
+                verification_time_override,
+            )?),
             initial_backend: KeTrustBackend::Custom,
         });
     }
-    match build_with_native_verifier() {
+    match build_with_native_verifier(verification_time_override) {
         Ok(mut cfg) => {
             cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
             Ok(TlsConfigBuild {
@@ -1249,7 +1298,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
         Err(e) => match trust_mode {
             KeTrustMode::PlatformOnly => Err(platform_only_unavailable(e)),
             KeTrustMode::PlatformWithFallback => Ok(TlsConfigBuild {
-                config: Arc::new(build_webpki_only_config()?),
+                config: Arc::new(build_webpki_only_config(verification_time_override)?),
                 initial_backend: KeTrustBackend::WebpkiRoots,
             }),
             KeTrustMode::BundledOnly | KeTrustMode::Custom(_) => unreachable!(
@@ -1264,6 +1313,7 @@ fn build_tls_config_inner(trust_mode: KeTrustMode) -> Result<TlsConfigBuild, KeE
 #[cfg(target_os = "android")]
 fn build_with_native_verifier_android(
     trust_mode: KeTrustMode,
+    verification_time_override: Option<UnixTime>,
 ) -> Result<
     (
         ClientConfig,
@@ -1275,15 +1325,22 @@ fn build_with_native_verifier_android(
     let builder = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS);
     let provider = builder.crypto_provider().clone();
     let hybrid = Arc::new(HybridVerifier::new(trust_mode, provider)?);
+    // Install a (possibly time-override-wrapped) dyn-coerced clone, but
+    // still return the bare `hybrid` Arc so `perform_handshake` can
+    // sample its per-instance fallback counter. With no override the
+    // clone is installed unchanged — identical to the pre-rescue path.
+    let verifier = maybe_wrap_time_override(hybrid.clone(), verification_time_override);
     let cfg = builder
         .dangerous()
-        .with_custom_certificate_verifier(hybrid.clone())
+        .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
     Ok((cfg, hybrid))
 }
 
 #[cfg(not(target_os = "android"))]
-fn build_with_native_verifier() -> Result<ClientConfig, rustls::Error> {
+fn build_with_native_verifier(
+    verification_time_override: Option<UnixTime>,
+) -> Result<ClientConfig, rustls::Error> {
     // We deliberately bypass `rustls_platform_verifier::ConfigVerifierExt`
     // here. That extension trait calls `ClientConfig::builder()` (which
     // expands to `with_safe_default_protocol_versions()`) and would re-
@@ -1294,30 +1351,51 @@ fn build_with_native_verifier() -> Result<ClientConfig, rustls::Error> {
     use rustls_platform_verifier::Verifier as PlatformVerifier;
     let builder = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS);
     let provider = builder.crypto_provider().clone();
-    let verifier = PlatformVerifier::new(provider)?;
+    let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PlatformVerifier::new(provider)?);
+    let verifier = maybe_wrap_time_override(verifier, verification_time_override);
     Ok(builder
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_custom_certificate_verifier(verifier)
         .with_no_client_auth())
 }
 
-fn build_webpki_only_config() -> Result<ClientConfig, KeError> {
-    let mut cfg = build_with_webpki_roots()?;
+fn build_webpki_only_config(
+    verification_time_override: Option<UnixTime>,
+) -> Result<ClientConfig, KeError> {
+    let mut cfg = build_with_webpki_roots(verification_time_override)?;
     cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
     Ok(cfg)
 }
 
-fn build_with_webpki_roots() -> Result<ClientConfig, KeError> {
+fn build_with_webpki_roots(
+    verification_time_override: Option<UnixTime>,
+) -> Result<ClientConfig, KeError> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    // Build the webpki verifier explicitly (rather than via the terse
+    // `.with_root_certificates(roots)`, which hides the verifier inside
+    // the builder) so it can be wrapped by `maybe_wrap_time_override`.
+    // For a non-empty, valid root store this is behaviourally identical
+    // to `.with_root_certificates`, which constructs the same
+    // `WebPkiServerVerifier` internally.
+    let verifier: Arc<dyn ServerCertVerifier> = WebPkiServerVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|e| {
+            KeError::TrustBackendUnavailable(format!("webpki-roots verifier unavailable: {e}"))
+        })?;
+    let verifier = maybe_wrap_time_override(verifier, verification_time_override);
     Ok(
         ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
-            .with_root_certificates(roots)
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
             .with_no_client_auth(),
     )
 }
 
-fn build_with_custom_roots(bytes: &[u8]) -> Result<ClientConfig, KeError> {
+fn build_with_custom_roots(
+    bytes: &[u8],
+    verification_time_override: Option<UnixTime>,
+) -> Result<ClientConfig, KeError> {
     let mut roots = RootCertStore::empty();
 
     // PEM detection: treat the input as PEM whenever the UTF-8 view
@@ -1374,14 +1452,12 @@ fn build_with_custom_roots(bytes: &[u8]) -> Result<ClientConfig, KeError> {
             added += 1;
         }
     } else {
-        roots
-            .add(CertificateDer::from_slice(bytes))
-            .map_err(|e| {
-                KeError::TrustBackendUnavailable(format!(
-                    "Failed to add custom root certificate: {}",
-                    e
-                ))
-            })?;
+        roots.add(CertificateDer::from_slice(bytes)).map_err(|e| {
+            KeError::TrustBackendUnavailable(format!(
+                "Failed to add custom root certificate: {}",
+                e
+            ))
+        })?;
         added += 1;
     }
 
@@ -1391,8 +1467,20 @@ fn build_with_custom_roots(bytes: &[u8]) -> Result<ClientConfig, KeError> {
         ));
     }
 
+    // Build the verifier explicitly so it can be wrapped by
+    // `maybe_wrap_time_override`. Parse/add failures for malformed
+    // custom roots already surfaced above; for a populated, valid root
+    // store this is behaviourally identical to the prior
+    // `.with_root_certificates(roots)` call.
+    let verifier: Arc<dyn ServerCertVerifier> = WebPkiServerVerifier::builder(Arc::new(roots))
+        .build()
+        .map_err(|e| {
+            KeError::TrustBackendUnavailable(format!("Failed to build custom-roots verifier: {e}"))
+        })?;
+    let verifier = maybe_wrap_time_override(verifier, verification_time_override);
     let mut cfg = ClientConfig::builder_with_protocol_versions(TLS_PROTOCOL_VERSIONS)
-        .with_root_certificates(roots)
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
     cfg.alpn_protocols = vec![ALPN_NTSKE.to_vec()];
     Ok(cfg)
@@ -1427,7 +1515,7 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     if req.aead_algorithms.is_empty() {
         return Err(KeError::MissingAead.into());
     }
-    let build = build_tls_config(req.trust_mode.clone())?;
+    let build = build_tls_config(req.trust_mode.clone(), req.verification_time_override)?;
     // Snapshot the per-instance hybrid-fallback counter *before* the
     // handshake so we can detect a fallback firing on this specific
     // chain. Only meaningful on Android with the platform path; `None`

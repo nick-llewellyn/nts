@@ -24,6 +24,8 @@
 // the full rationale.
 
 import 'dart:typed_data';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show PlatformInt64, PlatformInt64Util;
 import '../ffi/api/nts.dart' as ffi;
 import 'errors.dart';
 import 'models.dart';
@@ -102,22 +104,42 @@ const int kDefaultDnsConcurrencyCap = 4;
 /// boundary, on the same `await`/`catch` shape as every other failure
 /// mode this wrapper surfaces.
 ///
+/// `verificationTimeMs`, when non-null, overrides the timestamp used to
+/// check the NTS-KE server certificate's validity window
+/// (`notBefore`/`notAfter`) — expressed as milliseconds since the Unix
+/// epoch. It exists to break the cold-start clock-skew deadlock: a
+/// device whose real-time clock is badly wrong (factory reset, dead RTC
+/// battery, never-set clock) cannot complete the NTS-KE TLS handshake
+/// because the certificate is judged expired or not-yet-valid against
+/// the skewed clock — yet NTS-KE is the very mechanism that would fix
+/// the clock. Supplying a trusted timestamp here (for example a
+/// build-baked "this binary cannot predate X" floor) pins the temporal
+/// check to that instant while leaving chain-of-trust, hostname, and
+/// signature validation fully intact: an untrusted issuer, a hostname
+/// mismatch, or a bad signature still fails. When omitted (the default)
+/// the system clock is used, exactly as in every prior release.
+/// Negative values are rejected with [NtsError.invalidSpec] before
+/// dispatch.
+///
 /// Throws an [NtsError] on every failure path.
 Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   int timeoutMs = kDefaultTimeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+  int? verificationTimeMs,
 }) async {
   _validateRanges(
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    verificationTimeMs: verificationTimeMs,
   );
   try {
     final ffiSample = await ffi.ntsQuery(
       spec: _ffiSpec(spec),
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
+      verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
     );
     return _publicSample(ffiSample);
   } on ffi.NtsError catch (err, stack) {
@@ -148,22 +170,32 @@ Future<NtsTimeSample> ntsQuery({
 /// cause the returned `Future` to complete with [NtsError.invalidSpec]
 /// without reaching the Rust boundary.
 ///
+/// `verificationTimeMs` carries the identical clock-skew-rescue
+/// semantics described on [ntsQuery]: when non-null it pins the TLS
+/// certificate validity-window check to the supplied epoch-milliseconds
+/// instant instead of the system clock, leaving all other certificate
+/// validation intact. Negative values are rejected with
+/// [NtsError.invalidSpec] before dispatch.
+///
 /// Throws an [NtsError] on every failure path.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   int timeoutMs = kDefaultTimeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+  int? verificationTimeMs,
 }) async {
   _validateRanges(
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    verificationTimeMs: verificationTimeMs,
   );
   try {
     final ffiOutcome = await ffi.ntsWarmCookies(
       spec: _ffiSpec(spec),
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
+      verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
     );
     return _publicWarm(ffiOutcome);
   } on ffi.NtsError catch (err, stack) {
@@ -402,13 +434,15 @@ class NtsClient {
   /// NTS-KE handshake runs, then subsequent calls reuse the cached
   /// session.
   ///
-  /// Parameter semantics for `timeoutMs` and `dnsConcurrencyCap` are
-  /// identical to [ntsQuery]; defaults come from [kDefaultTimeoutMs]
-  /// and [kDefaultDnsConcurrencyCap], and out-of-range values cause
-  /// the returned `Future` to complete with [NtsError.invalidSpec] on
-  /// the same terms as the top-level wrapper. The [NtsTimeSample]
-  /// return shape is identical too — see [ntsQuery]'s dartdoc for the
-  /// raw protocol primitives the sample exposes and how to apply the
+  /// Parameter semantics for `timeoutMs`, `dnsConcurrencyCap`, and
+  /// `verificationTimeMs` are identical to [ntsQuery]; defaults come
+  /// from [kDefaultTimeoutMs] and [kDefaultDnsConcurrencyCap], and
+  /// out-of-range values cause the returned `Future` to complete with
+  /// [NtsError.invalidSpec] on the same terms as the top-level wrapper.
+  /// `verificationTimeMs` carries the same cold-start clock-skew-rescue
+  /// behaviour documented on [ntsQuery]. The [NtsTimeSample] return
+  /// shape is identical too — see [ntsQuery]'s dartdoc for the raw
+  /// protocol primitives the sample exposes and how to apply the
   /// one-way-delay correction.
   ///
   /// Throws an [NtsError] on every failure path.
@@ -416,17 +450,20 @@ class NtsClient {
     required NtsServerSpec spec,
     int timeoutMs = kDefaultTimeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     _validateRanges(
       spec: spec,
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
+      verificationTimeMs: verificationTimeMs,
     );
     try {
       final ffiSample = await _inner.query(
         spec: _ffiSpec(spec),
         timeoutMs: timeoutMs,
         dnsConcurrencyCap: dnsConcurrencyCap,
+        verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
       );
       return _publicSample(ffiSample);
     } on ffi.NtsError catch (err, stack) {
@@ -445,24 +482,28 @@ class NtsClient {
   /// range before dispatch on the same terms as [ntsQuery] /
   /// [ntsWarmCookies]; out-of-range values cause the returned `Future`
   /// to complete with [NtsError.invalidSpec] without reaching the
-  /// Rust boundary.
+  /// Rust boundary. `verificationTimeMs` carries the same cold-start
+  /// clock-skew-rescue behaviour documented on [ntsQuery].
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsWarmCookiesOutcome> warmCookies({
     required NtsServerSpec spec,
     int timeoutMs = kDefaultTimeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     _validateRanges(
       spec: spec,
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
+      verificationTimeMs: verificationTimeMs,
     );
     try {
       final ffiOutcome = await _inner.warmCookies(
         spec: _ffiSpec(spec),
         timeoutMs: timeoutMs,
         dnsConcurrencyCap: dnsConcurrencyCap,
+        verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
       );
       return _publicWarm(ffiOutcome);
     } on ffi.NtsError catch (err, stack) {
@@ -555,6 +596,7 @@ void _validateRanges({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
+  int? verificationTimeMs,
 }) {
   _validatePort(spec);
   if (timeoutMs < 1 || timeoutMs > _kU32Max) {
@@ -573,6 +615,18 @@ void _validateRanges({
           '($kDefaultDnsConcurrencyCap) to inherit the package default',
     );
   }
+  // `verificationTimeMs` is an epoch-milliseconds instant: the Rust
+  // side maps it to a `UnixTime` via `Duration::from_millis(u64)`, so a
+  // negative value cannot encode a real instant. Reject it here with the
+  // same `invalidSpec` surface as the other range checks rather than
+  // letting it silently fall back to the system clock on the Rust side.
+  if (verificationTimeMs != null && verificationTimeMs < 0) {
+    throw NtsError.invalidSpec(
+      message:
+          'verificationTimeMs $verificationTimeMs is negative; it must be '
+          'a non-negative count of milliseconds since the Unix epoch',
+    );
+  }
 }
 
 // --- conversion layer (FFI <-> public) -------------------------------
@@ -584,6 +638,17 @@ void _validateRanges({
 
 ffi.NtsServerSpec _ffiSpec(NtsServerSpec spec) =>
     ffi.NtsServerSpec(host: spec.host, port: spec.port);
+
+// `verificationTimeMs` crosses the boundary as the FRB `PlatformInt64`
+// (the Rust side is `Option<i64>`). On the native platforms this package
+// targets (`web`/`wasm` are excluded — see `pubspec.yaml`) `PlatformInt64`
+// is an alias for `int`, so this conversion is an identity; routing
+// through `PlatformInt64Util.from` keeps the to-FFI boundary explicit and
+// correct independent of the FRB platform mapping, mirroring the
+// `.toInt()` calls used in the FFI -> public direction. Negative values
+// are rejected by `_validateRanges` before reaching here.
+PlatformInt64? _ffiVerificationTime(int? ms) =>
+    ms == null ? null : PlatformInt64Util.from(ms);
 
 NtsTimeSample _publicSample(ffi.NtsTimeSample s) => NtsTimeSample(
   utcUnixMicros: s.utcUnixMicros.toInt(),

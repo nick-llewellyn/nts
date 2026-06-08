@@ -41,6 +41,7 @@ class _FakeNtsRustLibApi implements NtsRustLibApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async => NtsTimeSample(
     utcUnixMicros: PlatformInt64Util.from(1_777_334_400 * 1000000),
     roundTripMicros: PlatformInt64Util.from(12_500),
@@ -56,6 +57,7 @@ class _FakeNtsRustLibApi implements NtsRustLibApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async => NtsWarmCookiesOutcome(
     freshCookies: 8,
     phaseTimings: _zeroPhaseTimings(),

@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `lock_recover`, `new`, `new`, `new`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate`, `wait_until`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `lock_recover`, `new`, `new`, `new`, `new`, `next_session_generation`, `ntp64_to_unix_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `assert_receiver_is_total_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
 
@@ -101,6 +101,20 @@ NtsTrustStatus ntsTrustStatus() =>
 /// share the same in-flight pool: the effective ceiling at any moment is
 /// whichever caller is currently being admitted.
 ///
+/// `verification_time_ms`, when `Some`, overrides the `now` timestamp
+/// the certificate verifier reads, expressed as milliseconds since the
+/// Unix epoch. It must be non-negative — a negative value returns
+/// `NtsError::InvalidSpec` (see `validate_verification_time_ms`). It
+/// pins every time-based check the verifier derives from that timestamp
+/// — chiefly the validity window (`notBefore`/`notAfter`), plus any
+/// other check the verifier consults `now` for (e.g. stapled-OCSP
+/// timing) — while the non-temporal checks (signature, hostname, chain)
+/// do not consult `now` and continue to use the inner verifier
+/// unchanged. `None` uses the system clock, which
+/// is the normal behaviour. This exists to break the cold-start
+/// clock-skew deadlock where a wrong system clock would otherwise reject
+/// an in-window certificate as expired or not-yet-valid.
+///
 /// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
 /// finished synchronized clock. `utc_unix_micros` is the server transmit
 /// timestamp exactly as it appeared on the wire; it does not include any
@@ -114,10 +128,12 @@ Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
+  PlatformInt64? verificationTimeMs,
 }) => NtsRustLib.instance.api.crateApiNtsNtsQuery(
   spec: spec,
   timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
+  verificationTimeMs: verificationTimeMs,
 );
 
 /// Force a fresh NTS-KE handshake against `spec` and return the
@@ -133,14 +149,25 @@ Future<NtsTimeSample> ntsQuery({
 /// connect, TLS, KE record I/O) — there is no UDP NTP exchange on
 /// this path, so the `Ntp` phase is implicitly zero and not
 /// represented.
+///
+/// `verification_time_ms` carries the identical semantics as on
+/// [`nts_query`]: when `Some` it substitutes the supplied
+/// epoch-milliseconds instant for the system clock as the `now` the
+/// certificate verifier reads (must be non-negative; a negative returns
+/// `NtsError::InvalidSpec`), pinning every time-based check the verifier
+/// derives from `now` — chiefly the validity window — while the
+/// non-temporal checks (signature, hostname, chain) are left intact.
+/// `None` uses the system clock.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
+  PlatformInt64? verificationTimeMs,
 }) => NtsRustLib.instance.api.crateApiNtsNtsWarmCookies(
   spec: spec,
   timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
+  verificationTimeMs: verificationTimeMs,
 );
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NtsClient>>
@@ -191,6 +218,7 @@ abstract class NtsClient implements RustOpaqueInterface {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   });
 
   /// Trust-anchor policy this client was constructed with. Useful
@@ -212,6 +240,7 @@ abstract class NtsClient implements RustOpaqueInterface {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   });
 
   /// Construct a fresh client with the caller-selected

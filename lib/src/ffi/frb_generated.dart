@@ -93,6 +93,7 @@ abstract class NtsRustLibApi extends BaseApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   });
 
   TrustMode crateApiNtsNtsClientTrustMode({required NtsClient that});
@@ -102,6 +103,7 @@ abstract class NtsRustLibApi extends BaseApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   });
 
   NtsClient crateApiNtsNtsClientWithTrustMode({required TrustMode trustMode});
@@ -114,6 +116,7 @@ abstract class NtsRustLibApi extends BaseApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   });
 
   NtsTrustStatus crateApiNtsNtsTrustStatus();
@@ -122,6 +125,7 @@ abstract class NtsRustLibApi extends BaseApi {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   });
 
   Future<PhaseTimings> crateApiNtsPhaseTimingsDefault();
@@ -232,6 +236,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -244,6 +249,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           sse_encode_box_autoadd_nts_server_spec(spec, serializer);
           sse_encode_u_32(timeoutMs, serializer);
           sse_encode_u_32(dnsConcurrencyCap, serializer);
+          sse_encode_opt_box_autoadd_i_64(verificationTimeMs, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -256,7 +262,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           decodeErrorData: sse_decode_nts_error,
         ),
         constMeta: kCrateApiNtsNtsClientQueryConstMeta,
-        argValues: [that, spec, timeoutMs, dnsConcurrencyCap],
+        argValues: [
+          that,
+          spec,
+          timeoutMs,
+          dnsConcurrencyCap,
+          verificationTimeMs,
+        ],
         apiImpl: this,
       ),
     );
@@ -264,7 +276,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientQueryConstMeta => const TaskConstMeta(
     debugName: "NtsClient_query",
-    argNames: ["that", "spec", "timeoutMs", "dnsConcurrencyCap"],
+    argNames: [
+      "that",
+      "spec",
+      "timeoutMs",
+      "dnsConcurrencyCap",
+      "verificationTimeMs",
+    ],
   );
 
   @override
@@ -302,6 +320,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -314,6 +333,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           sse_encode_box_autoadd_nts_server_spec(spec, serializer);
           sse_encode_u_32(timeoutMs, serializer);
           sse_encode_u_32(dnsConcurrencyCap, serializer);
+          sse_encode_opt_box_autoadd_i_64(verificationTimeMs, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -326,7 +346,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           decodeErrorData: sse_decode_nts_error,
         ),
         constMeta: kCrateApiNtsNtsClientWarmCookiesConstMeta,
-        argValues: [that, spec, timeoutMs, dnsConcurrencyCap],
+        argValues: [
+          that,
+          spec,
+          timeoutMs,
+          dnsConcurrencyCap,
+          verificationTimeMs,
+        ],
         apiImpl: this,
       ),
     );
@@ -335,7 +361,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   TaskConstMeta get kCrateApiNtsNtsClientWarmCookiesConstMeta =>
       const TaskConstMeta(
         debugName: "NtsClient_warm_cookies",
-        argNames: ["that", "spec", "timeoutMs", "dnsConcurrencyCap"],
+        argNames: [
+          "that",
+          "spec",
+          "timeoutMs",
+          "dnsConcurrencyCap",
+          "verificationTimeMs",
+        ],
       );
 
   @override
@@ -419,6 +451,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -427,6 +460,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           sse_encode_box_autoadd_nts_server_spec(spec, serializer);
           sse_encode_u_32(timeoutMs, serializer);
           sse_encode_u_32(dnsConcurrencyCap, serializer);
+          sse_encode_opt_box_autoadd_i_64(verificationTimeMs, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -439,7 +473,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           decodeErrorData: sse_decode_nts_error,
         ),
         constMeta: kCrateApiNtsNtsQueryConstMeta,
-        argValues: [spec, timeoutMs, dnsConcurrencyCap],
+        argValues: [spec, timeoutMs, dnsConcurrencyCap, verificationTimeMs],
         apiImpl: this,
       ),
     );
@@ -447,7 +481,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsQueryConstMeta => const TaskConstMeta(
     debugName: "nts_query",
-    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap"],
+    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap", "verificationTimeMs"],
   );
 
   @override
@@ -477,6 +511,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -485,6 +520,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           sse_encode_box_autoadd_nts_server_spec(spec, serializer);
           sse_encode_u_32(timeoutMs, serializer);
           sse_encode_u_32(dnsConcurrencyCap, serializer);
+          sse_encode_opt_box_autoadd_i_64(verificationTimeMs, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -497,7 +533,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           decodeErrorData: sse_decode_nts_error,
         ),
         constMeta: kCrateApiNtsNtsWarmCookiesConstMeta,
-        argValues: [spec, timeoutMs, dnsConcurrencyCap],
+        argValues: [spec, timeoutMs, dnsConcurrencyCap, verificationTimeMs],
         apiImpl: this,
       ),
     );
@@ -505,7 +541,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsWarmCookiesConstMeta => const TaskConstMeta(
     debugName: "nts_warm_cookies",
-    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap"],
+    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap", "verificationTimeMs"],
   );
 
   @override
@@ -580,6 +616,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
+  }
+
+  @protected
+  PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_i_64(raw);
   }
 
   @protected
@@ -738,6 +780,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_i_64(raw);
+  }
+
+  @protected
   TrustBackend? dco_decode_opt_box_autoadd_trust_backend(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_box_autoadd_trust_backend(raw);
@@ -871,6 +919,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
+  }
+
+  @protected
+  PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_i_64(deserializer));
   }
 
   @protected
@@ -1069,6 +1123,17 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_i_64(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   TrustBackend? sse_decode_opt_box_autoadd_trust_backend(
     SseDeserializer deserializer,
   ) {
@@ -1216,6 +1281,15 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   void sse_encode_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self ? 1 : 0);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_i_64(
+    PlatformInt64 self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_64(self, serializer);
   }
 
   @protected
@@ -1388,6 +1462,19 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_i_64(
+    PlatformInt64? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_i_64(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_box_autoadd_trust_backend(
     TrustBackend? self,
     SseSerializer serializer,
@@ -1523,11 +1610,13 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   }) => NtsRustLib.instance.api.crateApiNtsNtsClientQuery(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    verificationTimeMs: verificationTimeMs,
   );
 
   /// Trust-anchor policy this client was constructed with. Useful
@@ -1550,10 +1639,12 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
     required NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    PlatformInt64? verificationTimeMs,
   }) => NtsRustLib.instance.api.crateApiNtsNtsClientWarmCookies(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    verificationTimeMs: verificationTimeMs,
   );
 }

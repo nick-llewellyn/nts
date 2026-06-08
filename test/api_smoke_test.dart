@@ -31,8 +31,10 @@ import 'package:nts/src/ffi/frb_generated.dart';
 class _RecordingApi implements NtsRustLibApi {
   int? lastQueryTimeoutMs;
   int? lastQueryDnsCap;
+  int? lastQueryVerificationTimeMs;
   int? lastWarmTimeoutMs;
   int? lastWarmDnsCap;
+  int? lastWarmVerificationTimeMs;
   int dnsPoolStatsCalls = 0;
   // Pinned FFI values returned by the mock. Tests assert that the
   // wrapper converts these into the matching public DTOs.
@@ -50,9 +52,11 @@ class _RecordingApi implements NtsRustLibApi {
   ffi.NtsClient? lastClientQueryThat;
   int? lastClientQueryTimeoutMs;
   int? lastClientQueryDnsCap;
+  int? lastClientQueryVerificationTimeMs;
   ffi.NtsClient? lastClientWarmThat;
   int? lastClientWarmTimeoutMs;
   int? lastClientWarmDnsCap;
+  int? lastClientWarmVerificationTimeMs;
   ffi.NtsClient? lastClientInvalidateThat;
   ffi.NtsServerSpec? lastClientInvalidateSpec;
   ffi.NtsClient? lastClientClearThat;
@@ -85,8 +89,10 @@ class _RecordingApi implements NtsRustLibApi {
   void reset() {
     lastQueryTimeoutMs = null;
     lastQueryDnsCap = null;
+    lastQueryVerificationTimeMs = null;
     lastWarmTimeoutMs = null;
     lastWarmDnsCap = null;
+    lastWarmVerificationTimeMs = null;
     dnsPoolStatsCalls = 0;
     nextSample = _ffiSample();
     nextWarm = _ffiWarm(0);
@@ -95,9 +101,11 @@ class _RecordingApi implements NtsRustLibApi {
     lastClientQueryThat = null;
     lastClientQueryTimeoutMs = null;
     lastClientQueryDnsCap = null;
+    lastClientQueryVerificationTimeMs = null;
     lastClientWarmThat = null;
     lastClientWarmTimeoutMs = null;
     lastClientWarmDnsCap = null;
+    lastClientWarmVerificationTimeMs = null;
     lastClientInvalidateThat = null;
     lastClientInvalidateSpec = null;
     lastClientClearThat = null;
@@ -117,9 +125,11 @@ class _RecordingApi implements NtsRustLibApi {
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     lastQueryTimeoutMs = timeoutMs;
     lastQueryDnsCap = dnsConcurrencyCap;
+    lastQueryVerificationTimeMs = verificationTimeMs;
     final t = nextThrow;
     if (t != null) throw t;
     return nextSample;
@@ -130,9 +140,11 @@ class _RecordingApi implements NtsRustLibApi {
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     lastWarmTimeoutMs = timeoutMs;
     lastWarmDnsCap = dnsConcurrencyCap;
+    lastWarmVerificationTimeMs = verificationTimeMs;
     final t = nextThrow;
     if (t != null) throw t;
     return nextWarm;
@@ -196,10 +208,12 @@ class _RecordingApi implements NtsRustLibApi {
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     lastClientQueryThat = that;
     lastClientQueryTimeoutMs = timeoutMs;
     lastClientQueryDnsCap = dnsConcurrencyCap;
+    lastClientQueryVerificationTimeMs = verificationTimeMs;
     final t = nextThrow;
     if (t != null) throw t;
     return nextSample;
@@ -211,10 +225,12 @@ class _RecordingApi implements NtsRustLibApi {
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) async {
     lastClientWarmThat = that;
     lastClientWarmTimeoutMs = timeoutMs;
     lastClientWarmDnsCap = dnsConcurrencyCap;
+    lastClientWarmVerificationTimeMs = verificationTimeMs;
     final t = nextThrow;
     if (t != null) throw t;
     return nextWarm;
@@ -271,11 +287,13 @@ class _FakeFfiNtsClient implements ffi.NtsClient {
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) => NtsRustLib.instance.api.crateApiNtsNtsClientQuery(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    verificationTimeMs: verificationTimeMs,
   );
 
   @override
@@ -283,11 +301,13 @@ class _FakeFfiNtsClient implements ffi.NtsClient {
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
+    int? verificationTimeMs,
   }) => NtsRustLib.instance.api.crateApiNtsNtsClientWarmCookies(
     that: this,
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    verificationTimeMs: verificationTimeMs,
   );
 
   @override
@@ -400,6 +420,41 @@ void main() {
     });
 
     test(
+      'ntsQuery defaults verificationTimeMs to null (system clock)',
+      () async {
+        await ntsQuery(spec: spec);
+        expect(api.lastQueryVerificationTimeMs, isNull);
+      },
+    );
+
+    test('ntsQuery forwards verificationTimeMs to the FFI boundary', () async {
+      await ntsQuery(spec: spec, verificationTimeMs: 1_700_000_000_000);
+      expect(api.lastQueryVerificationTimeMs, 1_700_000_000_000);
+    });
+
+    test('ntsQuery accepts verificationTimeMs == 0 (epoch) as valid', () async {
+      await ntsQuery(spec: spec, verificationTimeMs: 0);
+      expect(api.lastQueryVerificationTimeMs, 0);
+    });
+
+    test('ntsQuery rejects negative verificationTimeMs with '
+        'NtsError.invalidSpec', () async {
+      await expectLater(
+        ntsQuery(spec: spec, verificationTimeMs: -1),
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains('verificationTimeMs -1 is negative'),
+          ),
+        ),
+      );
+      // Rejected before any FFI dispatch.
+      expect(api.lastQueryVerificationTimeMs, isNull);
+      expect(api.lastQueryTimeoutMs, isNull);
+    });
+
+    test(
       'ntsQuery rejects port outside 1..65535 with NtsError.invalidSpec',
       () async {
         // Port=0 used to fall through to Rust's `port must be non-zero`
@@ -495,6 +550,18 @@ void main() {
       await ntsWarmCookies(spec: spec, timeoutMs: 9000, dnsConcurrencyCap: 16);
       expect(api.lastWarmTimeoutMs, 9000);
       expect(api.lastWarmDnsCap, 16);
+    });
+
+    test('ntsWarmCookies forwards verificationTimeMs and rejects '
+        'negatives', () async {
+      await ntsWarmCookies(spec: spec, verificationTimeMs: 1_700_000_000_000);
+      expect(api.lastWarmVerificationTimeMs, 1_700_000_000_000);
+      api.reset();
+      await expectLater(
+        ntsWarmCookies(spec: spec, verificationTimeMs: -5),
+        throwsA(isA<NtsErrorInvalidSpec>()),
+      );
+      expect(api.lastWarmVerificationTimeMs, isNull);
     });
 
     test('ntsDnsPoolStats is synchronous and converts the FFI struct', () {
@@ -1197,6 +1264,18 @@ void main() {
       expect(api.lastClientQueryDnsCap, 32);
     });
 
+    test('query forwards verificationTimeMs and rejects negatives', () async {
+      final client = NtsClient();
+      await client.query(spec: spec, verificationTimeMs: 1_700_000_000_000);
+      expect(api.lastClientQueryVerificationTimeMs, 1_700_000_000_000);
+      api.reset();
+      await expectLater(
+        client.query(spec: spec, verificationTimeMs: -1),
+        throwsA(isA<NtsErrorInvalidSpec>()),
+      );
+      expect(api.lastClientQueryVerificationTimeMs, isNull);
+    });
+
     test('warmCookies forwards spec, defaults, and the FFI outcome', () async {
       final client = NtsClient();
       api.nextWarm = _ffiWarm(7);
@@ -1216,6 +1295,22 @@ void main() {
       );
       expect(api.lastClientWarmTimeoutMs, 9876);
       expect(api.lastClientWarmDnsCap, 8);
+    });
+
+    test('warmCookies forwards verificationTimeMs and rejects '
+        'negatives', () async {
+      final client = NtsClient();
+      await client.warmCookies(
+        spec: spec,
+        verificationTimeMs: 1_700_000_000_000,
+      );
+      expect(api.lastClientWarmVerificationTimeMs, 1_700_000_000_000);
+      api.reset();
+      await expectLater(
+        client.warmCookies(spec: spec, verificationTimeMs: -1),
+        throwsA(isA<NtsErrorInvalidSpec>()),
+      );
+      expect(api.lastClientWarmVerificationTimeMs, isNull);
     });
 
     test('invalidate forwards the spec and returns the FFI bool', () {
