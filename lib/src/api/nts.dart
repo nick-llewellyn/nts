@@ -584,6 +584,12 @@ class NtsClient {
 
 const int _kU32Max = 0xFFFFFFFF;
 
+// Signed 64-bit ceiling for `verificationTimeMs`, which crosses the FFI
+// boundary as a Rust `i64`. See the upper-bound check in `_validateRanges`
+// for why this is a defensive guard rather than a reachable bound on the
+// native-only supported platforms.
+const int _kI64Max = 0x7FFFFFFFFFFFFFFF;
+
 void _validatePort(NtsServerSpec spec) {
   if (spec.port < 1 || spec.port > 65535) {
     throw NtsError.invalidSpec(
@@ -625,6 +631,23 @@ void _validateRanges({
       message:
           'verificationTimeMs $verificationTimeMs is negative; it must be '
           'a non-negative count of milliseconds since the Unix epoch',
+    );
+  }
+  // Upper bound: `verificationTimeMs` crosses the FFI boundary as a Rust
+  // `i64`, so a value above `_kI64Max` cannot be encoded — FRB's `i64`
+  // codec would throw a low-level `RangeError`, escaping this wrapper's
+  // "invalidSpec, never a raw RangeError" contract. Translate it to the
+  // same `invalidSpec` surface up front. On the native-only platforms this
+  // package supports, Dart `int` is itself 64-bit two's-complement
+  // (`int.maxValue == _kI64Max`), so no `int` argument can reach this
+  // branch; it is retained as defense-in-depth against a future change to
+  // the supported platform set or to FRB's native `int` mapping.
+  if (verificationTimeMs != null && verificationTimeMs > _kI64Max) {
+    throw NtsError.invalidSpec(
+      message:
+          'verificationTimeMs $verificationTimeMs exceeds the maximum '
+          'encodable value $_kI64Max (signed 64-bit milliseconds since '
+          'the Unix epoch)',
     );
   }
 }
