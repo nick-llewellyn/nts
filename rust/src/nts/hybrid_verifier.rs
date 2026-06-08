@@ -352,7 +352,8 @@ fn host_for_log(server_name: &ServerName<'_>) -> String {
 }
 
 /// A [`ServerCertVerifier`] decorator that substitutes the `now`
-/// timestamp used for the X.509 validity-window check.
+/// timestamp the inner verifier consults for its time-based checks
+/// (chiefly the X.509 validity-window check).
 ///
 /// Wraps an inner verifier and, on every [`Self::verify_server_cert`]
 /// call, replaces the `now: UnixTime` argument rustls derives from the
@@ -378,14 +379,18 @@ fn host_for_log(server_name: &ServerName<'_>) -> String {
 ///
 /// # Scope of the override
 ///
-/// The substitution is deliberately confined to the temporal check: the
-/// inner verifier still performs chain-of-trust, name, and signature
-/// validation against its own trust anchors. A caller that pins a
-/// timestamp inside a certificate's validity window does **not** weaken
-/// any other aspect of authentication — an untrusted issuer, a
-/// hostname mismatch, or a bad signature still fails. The blast radius
-/// is limited to "treat the clock as if it were `now_override`", which
-/// is precisely the cold-start rescue intent.
+/// The substitution is deliberately confined to time-based checks: it
+/// replaces the `now` the inner verifier reads, so the X.509
+/// validity-window check — and any other check the inner verifier
+/// derives from `now`, such as stapled-OCSP timing — observes the
+/// override. The inner verifier still performs chain-of-trust, name,
+/// and signature validation against its own trust anchors; none of
+/// those consult `now`, so a caller that pins a timestamp inside a
+/// certificate's validity window does **not** weaken any other aspect
+/// of authentication — an untrusted issuer, a hostname mismatch, or a
+/// bad signature still fails. The blast radius is limited to "treat the
+/// clock as if it were `now_override`", which is precisely the
+/// cold-start rescue intent.
 #[derive(Debug)]
 pub struct TimeOverrideVerifier {
     inner: Arc<dyn ServerCertVerifier>,
@@ -408,8 +413,10 @@ impl ServerCertVerifier for TimeOverrideVerifier {
     /// Delegate to the inner verifier, but with the incoming `_now`
     /// (derived by rustls from the system clock, see
     /// `rustls/src/client/tls13.rs` `now = config.current_time()`)
-    /// replaced by `self.now_override`. Only the validity-window check
-    /// inside the inner verifier observes the substitution.
+    /// replaced by `self.now_override`. Every time-based check the inner
+    /// verifier derives from `now` — chiefly the X.509 validity-window
+    /// check — observes the substitution; the non-temporal checks
+    /// (chain, name, signature) do not consult `now` and are unaffected.
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
