@@ -372,7 +372,9 @@ fn host_for_log(server_name: &ServerName<'_>) -> String {
 /// the clock. Pinning the validity-window check to a trusted timestamp
 /// (e.g. a build-baked "this binary cannot predate X" floor) breaks that
 /// circular dependency. See the `verificationTimeMs` primitive plumbed
-/// through [`crate::nts::ke::build_tls_config`].
+/// through `crate::nts::ke::build_tls_config` (a `pub(crate)` internal,
+/// referenced here in plain backticks rather than an intra-doc link so
+/// this public item's rustdoc carries no broken private-item link).
 ///
 /// # Scope of the override
 ///
