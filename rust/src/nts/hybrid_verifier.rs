@@ -554,6 +554,31 @@ mod tests {
         (leaf, Vec::new(), server_name, now)
     }
 
+    /// Build a throwaway [`DigitallySignedStruct`] for the signature-method
+    /// delegation tests, which need *some* `&DigitallySignedStruct` to pass
+    /// in (its contents are never inspected — the inner fake returns a fixed
+    /// verdict regardless).
+    ///
+    /// rustls 0.23 exposes no public constructor: `new` is `pub(crate)` and
+    /// the `sig` field is private, so the only way to obtain one from outside
+    /// the crate is `Codec::read_bytes` from the rustls TLS wire encoding.
+    /// `Codec` is re-exported solely under `rustls::internal`, which rustls
+    /// documents as "used in integration tests" but explicitly NOT part of
+    /// its stable interface. We confine that single unstable dependency to
+    /// this one helper: it is `#[cfg(test)]`-only, and should a future rustls
+    /// upgrade move or rename the `internal` path, the breakage surfaces here
+    /// at compile time on the Rust CI build with a one-line fix, never in
+    /// shipped code.
+    ///
+    /// The bytes encode a 2-byte `SignatureScheme` (ED25519 = `0x0807`)
+    /// followed by a `PayloadU16` signature (2-byte big-endian length
+    /// `0x0002`, then the signature bytes).
+    fn sample_dss() -> DigitallySignedStruct {
+        use rustls::internal::msgs::codec::Codec;
+        DigitallySignedStruct::read_bytes(&[0x08, 0x07, 0x00, 0x02, 0xAB, 0xCD])
+            .expect("well-formed DigitallySignedStruct wire bytes")
+    }
+
     /// Pin the marker substring against the exact format string upstream
     /// emits in `rustls-platform-verifier-0.7.x`. If the upstream wording
     /// changes (e.g. on a major bump) this test fails loudly so the
@@ -991,13 +1016,8 @@ mod tests {
             UnixTime::since_unix_epoch(std::time::Duration::from_secs(1_500_000_000));
         let verifier = TimeOverrideVerifier::new(inner.clone(), override_time);
         let (leaf, _intermediates, _server_name, _now) = dummy_args();
-        // rustls makes `DigitallySignedStruct::new` `pub(crate)`, so build
-        // one from its TLS wire encoding via the public `Codec` API:
-        // a 2-byte SignatureScheme (ED25519 = 0x0807) followed by a
-        // PayloadU16 signature (2-byte big-endian length 0x0002, bytes).
-        use rustls::internal::msgs::codec::Codec;
-        let dss = DigitallySignedStruct::read_bytes(&[0x08, 0x07, 0x00, 0x02, 0xAB, 0xCD])
-            .expect("well-formed DigitallySignedStruct wire bytes");
+        // `internal`-dependent construction is centralized in `sample_dss()`.
+        let dss = sample_dss();
 
         // verify_tls12_signature forwards: the inner fails closed on TLS 1.2.
         assert!(
