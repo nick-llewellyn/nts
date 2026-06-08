@@ -101,14 +101,16 @@ NtsTrustStatus ntsTrustStatus() =>
 /// share the same in-flight pool: the effective ceiling at any moment is
 /// whichever caller is currently being admitted.
 ///
-/// `verification_time_ms`, when `Some`, overrides the timestamp used to
-/// check the NTS-KE server certificate's validity window
-/// (`notBefore`/`notAfter`), expressed as milliseconds since the Unix
-/// epoch. It must be non-negative — a negative value returns
+/// `verification_time_ms`, when `Some`, overrides the `now` timestamp
+/// the certificate verifier reads, expressed as milliseconds since the
+/// Unix epoch. It must be non-negative — a negative value returns
 /// `NtsError::InvalidSpec` (see `validate_verification_time_ms`). It
-/// affects *only* the certificate validity-window check; all other
-/// certificate verification (signature, hostname, chain) continues to
-/// use the inner verifier unchanged. `None` uses the system clock, which
+/// pins every time-based check the verifier derives from that timestamp
+/// — chiefly the validity window (`notBefore`/`notAfter`), plus any
+/// other check the verifier consults `now` for (e.g. stapled-OCSP
+/// timing) — while the non-temporal checks (signature, hostname, chain)
+/// do not consult `now` and continue to use the inner verifier
+/// unchanged. `None` uses the system clock, which
 /// is the normal behaviour. This exists to break the cold-start
 /// clock-skew deadlock where a wrong system clock would otherwise reject
 /// an in-window certificate as expired or not-yet-valid.
@@ -149,11 +151,13 @@ Future<NtsTimeSample> ntsQuery({
 /// represented.
 ///
 /// `verification_time_ms` carries the identical semantics as on
-/// [`nts_query`]: when `Some` it pins the TLS certificate
-/// validity-window check to the supplied epoch-milliseconds instant
-/// (must be non-negative; a negative returns `NtsError::InvalidSpec`)
-/// instead of the system clock, leaving all other certificate
-/// verification intact. `None` uses the system clock.
+/// [`nts_query`]: when `Some` it substitutes the supplied
+/// epoch-milliseconds instant for the system clock as the `now` the
+/// certificate verifier reads (must be non-negative; a negative returns
+/// `NtsError::InvalidSpec`), pinning every time-based check the verifier
+/// derives from `now` — chiefly the validity window — while the
+/// non-temporal checks (signature, hostname, chain) are left intact.
+/// `None` uses the system clock.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   required int timeoutMs,
