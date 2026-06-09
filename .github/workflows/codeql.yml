@@ -43,6 +43,9 @@ jobs:
     name: Analyze (Rust)
     runs-on: ubuntu-latest
     permissions:
+      # Job-level permissions replace the workflow baseline wholesale, so
+      # `contents: read` must be restated here for `actions/checkout`.
+      contents: read
       # Required to publish SARIF results to the Security tab.
       security-events: write
     timeout-minutes: 60
