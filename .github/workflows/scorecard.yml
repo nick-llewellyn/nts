@@ -15,13 +15,12 @@ on:
     - cron: '0 4 * * 1'
   workflow_dispatch:
 
-# `contents: read` for checkout; `id-token: write` to mint the OIDC JWT
-# that scorecard-action uses to authenticate the result publish;
-# `security-events: write` to upload the SARIF to the Security tab.
+# Top-level permissions are read-only. The Scorecard API's workflow
+# verification rejects the badge publish with HTTP 400 if `id-token: write`
+# is granted at the workflow (global) level, so the write scopes are declared
+# at the job level instead, per the canonical ossf/scorecard-action template.
 permissions:
   contents: read
-  id-token: write
-  security-events: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,6 +30,13 @@ jobs:
   scorecard:
     name: OpenSSF Scorecard analysis
     runs-on: ubuntu-latest
+    # `id-token: write` mints the OIDC JWT scorecard-action uses to
+    # authenticate the result publish; `security-events: write` uploads the
+    # SARIF to the Security tab; `contents: read` is for checkout.
+    permissions:
+      contents: read
+      id-token: write
+      security-events: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
