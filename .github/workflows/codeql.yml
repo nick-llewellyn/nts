@@ -29,11 +29,9 @@ on:
     - cron: '0 3 * * 0'
   workflow_dispatch:
 
-# Workflow-wide GITHUB_TOKEN baseline: `contents: read` for checkout,
-# `security-events: write` to publish the SARIF results to the Security tab.
+# Workflow-wide GITHUB_TOKEN baseline: `contents: read`.
 permissions:
   contents: read
-  security-events: write
 
 # Cancel superseded runs on PR branches.
 concurrency:
@@ -44,6 +42,9 @@ jobs:
   analyze:
     name: Analyze (Rust)
     runs-on: ubuntu-latest
+    permissions:
+      # Required to publish SARIF results to the Security tab.
+      security-events: write
     timeout-minutes: 60
 
     steps:
