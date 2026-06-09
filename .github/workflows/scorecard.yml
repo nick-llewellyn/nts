@@ -1,10 +1,10 @@
 name: Scorecard
 
 # Runs OpenSSF Scorecard on every push to main and on a weekly schedule.
-# `publish_results: true` uploads results to api.scorecard.dev, which is
-# what populates the badge in README.md and the Security tab overview.
-# The action must run from the default branch (main) to publish results;
-# PR runs are informational only (no publish).
+# `publish_results` is true only when running from the default branch (main),
+# which is the only context the Scorecard API accepts for badge publication.
+# workflow_dispatch is included so the analysis can be triggered manually on
+# any branch for debugging; results are only published when ref is main.
 
 on:
   push:
@@ -31,12 +31,6 @@ jobs:
   scorecard:
     name: OpenSSF Scorecard analysis
     runs-on: ubuntu-latest
-    # publish_results only works from the default branch; guard so a
-    # workflow_dispatch from a feature branch doesn't fail the publish step.
-    if: >-
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,7 +42,7 @@ jobs:
         with:
           results_file: scorecard-results.sarif
           results_format: sarif
-          publish_results: true
+          publish_results: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Upload SARIF results to Security tab
         uses: github/codeql-action/upload-sarif@v3
