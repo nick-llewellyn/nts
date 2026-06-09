@@ -1,5 +1,16 @@
 # Changelog
 
+## 5.2.0
+
+### Added
+
+- Added `verificationTimeMs` to `ntsQuery`, `ntsWarmCookies`, and the
+  corresponding `NtsClient` methods. This optional clock-skew override
+  substitutes a caller-supplied timestamp for the TLS verifier's "current
+  time" when checking certificate validity windows, which can rescue
+  cold-start scenarios where a badly-skewed device clock would otherwise
+  deadlock on the initial handshake.
+
 ## 5.1.0
 
 ### Added
