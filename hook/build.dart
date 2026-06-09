@@ -10,7 +10,7 @@
 // against `rust/` and emit the `cdylib` (`.dylib` on Apple, `.so` on
 // Linux/Android, `.dll` on Windows) keyed off the host/target the SDK
 // requested. The release/debug split is driven by the `verbose_logs`
-// user-define documented below; the `hooks: ^1.0.3` API does not expose
+// user-defined documented below; the `hooks: ^2.0.2` API does not expose
 // a separate dry-run / declare-only mode at this layer.
 //
 // Cross-compile targets are pinned in `rust/rust-toolchain.toml`; this hook

@@ -1,0 +1,50 @@
+name: Scorecard
+
+# Runs OpenSSF Scorecard on every push to main and on a weekly schedule.
+# `publish_results` is true only when running from the default branch (main),
+# which is the only context the Scorecard API accepts for badge publication.
+# workflow_dispatch is included so the analysis can be triggered manually on
+# any branch for debugging; results are only published when ref is main.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly on Monday at 04:00 UTC (offset from the Sunday cron in
+    # codeql.yml to spread load across runners).
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+# `contents: read` for checkout; `id-token: write` to mint the OIDC JWT
+# that scorecard-action uses to authenticate the result publish;
+# `security-events: write` to upload the SARIF to the Security tab.
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scorecard:
+    name: OpenSSF Scorecard analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard analysis
+        uses: ossf/scorecard-action@v2.4.2
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          publish_results: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Upload SARIF results to Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scorecard-results.sarif

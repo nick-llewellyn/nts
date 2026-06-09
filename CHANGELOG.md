@@ -11,6 +11,17 @@
   cold-start scenarios where a badly-skewed device clock would otherwise
   deadlock on the initial handshake.
 
+### Changed
+
+- Upgraded `hooks` from `^1.0.3` to `^2.0.2` (no API changes to
+  `hook/build.dart`; the 2.0.0 breaking change affects packages that
+  implement `ProtocolExtension`, which this hook does not).
+- Upgraded `build_runner` from `^2.14.1` to `^2.15.0`.
+- Dependency resolution updates: `native_toolchain_rust` 1.0.4+0
+  (direct dependency) plus transitive `code_assets` 1.2.1, `build`
+  4.0.6, `built_value` 8.12.6, `json_annotation` 4.12.0, `source_gen`
+  4.2.3, `vm_service` 15.2.0.
+
 ## 5.1.0
 
 ### Added

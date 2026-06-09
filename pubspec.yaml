@@ -72,7 +72,7 @@ dependencies:
   # Build-hook dependencies (consumed only by `hook/build.dart`). The Dart
   # SDK resolves these out-of-band when running the Native Assets pipeline,
   # so they don't pull native_toolchain_rust into the app's runtime graph.
-  hooks: ^1.0.3
+  hooks: ^2.0.2
   native_toolchain_rust: ^1.0.4
 
 dev_dependencies:
@@ -86,7 +86,7 @@ dev_dependencies:
   # bridging Rust enums-with-data to Dart sealed classes.
   freezed: ^3.2.5
   # Required by `freezed`'s build pipeline.
-  build_runner: ^2.14.1
+  build_runner: ^2.15.0
 
 # Flutter plugin classification. Declared here so consuming Flutter apps
 # pick up the Android library module shipped under `android/`, which
