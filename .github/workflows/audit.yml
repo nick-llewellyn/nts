@@ -43,11 +43,11 @@ jobs:
       artifact_url: ${{ steps.upload_audit_json.outputs.artifact-url }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Audit Rust dependencies
         id: run_audit
-        uses: actions-rust-lang/audit@v1
+        uses: actions-rust-lang/audit@72c09e02f132669d52284a3323acdb503cfc1a24 # v1
         with:
           workingDirectory: rust
 
@@ -97,7 +97,7 @@ jobs:
       - name: Upload Audit JSON
         id: upload_audit_json
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.run_audit.outcome != 'cancelled'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: audit-results
           # Include audit.err and audit-exit alongside audit.json so
@@ -146,7 +146,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Download Audit JSON
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: audit-results
           path: .
@@ -341,7 +341,7 @@ jobs:
           fi
 
       - name: Sticky Comment
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3
         with:
           header: cargo-audit
           path: audit-summary.md

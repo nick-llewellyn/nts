@@ -101,7 +101,7 @@ jobs:
           - validate_response
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       # cargo-fuzz requires nightly for the sanitizer-coverage
       # instrumentation `cargo fuzz {build,run}` injects into the
@@ -111,7 +111,7 @@ jobs:
       # invocations below double-pin against any future regression
       # that changes default-toolchain semantics.
       - name: Install Rust nightly toolchain
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@5b842231ba77f5c045dba54ac5560fed2db780e2 # nightly
 
       # cargo-fuzz writes incremental build output to
       # `rust/fuzz/target/`. Including `${{ matrix.target }}` in the
@@ -121,7 +121,7 @@ jobs:
       # separate from the parent `rust/` workspace -- see
       # `rust/fuzz/Cargo.toml` for the rationale).
       - name: Cache cargo registry + fuzz target dir
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: rust/fuzz
           key: ${{ matrix.target }}
@@ -139,7 +139,7 @@ jobs:
       # CI behaviour.
       - name: Cache cargo-fuzz binary
         id: cargo-fuzz-cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-${{ runner.os }}-${{ env.CARGO_FUZZ_VERSION }}
@@ -199,7 +199,7 @@ jobs:
       # as a regression seed before the artefact expires.
       - name: Upload crash artefacts on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: fuzz-crashes-${{ matrix.target }}-${{ github.run_id }}
           path: rust/fuzz/artifacts/${{ matrix.target }}/
