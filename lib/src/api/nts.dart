@@ -256,12 +256,12 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 
 /// Snapshot the process-global trust-anchor diagnostic state.
-/// Synchronous (no future / isolate hop): backed by three atomic
+/// Synchronous (no future / isolate hop): backed by seven atomic
 /// loads, cheap enough to call from a UI poll loop or a pre-flight
 /// "can I even validate against the platform store?" check.
 ///
 /// Requires `await NtsRustLib.init()` to have completed on the calling
-/// isolate before invocation: the three atomic reads happen on the
+/// isolate before invocation: the seven atomic reads happen on the
 /// Rust side and dispatch through the FRB v2 dispatch table even
 /// though the call returns synchronously, so a missed initialization
 /// fails with a low-level FRB error rather than a structured
@@ -272,7 +272,7 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// `NtsPlugin` JNI bootstrap that runs before `main()`, distinct from
 /// `NtsRustLib.init()`.
 ///
-/// Returns six observables that callers cannot recover from a
+/// Returns seven observables that callers cannot recover from a
 /// per-query [NtsTimeSample] alone:
 ///
 /// 1. `defaultClientBackend` — backend the *default singleton*
@@ -282,7 +282,7 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 ///    marker, not a steady-state signal: a transient
 ///    `webpkiRoots`-resolving handshake latches this field
 ///    permanently until the next `platform`-resolving one. Use the
-///    three counters in (2)–(4) for dashboard panels that need
+///    four counters in (2)–(5) for dashboard panels that need
 ///    trend visibility. Custom-client callers should read
 ///    [NtsTimeSample.trustBackend] / [NtsWarmCookiesOutcome.trustBackend]
 ///    for accurate per-client attribution.
@@ -294,10 +294,16 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 ///    non-Android platforms.
 /// 4. `defaultBackendWebpkiCount` — cumulative count of singleton
 ///    handshakes that resolved to [TrustBackend.webpkiRoots].
-/// 5. `androidPlatformInitSucceeded` — `true` iff the Android JNI
+/// 5. `defaultBackendCustomCount` — cumulative count of singleton
+///    handshakes that resolved to [TrustBackend.custom]. The
+///    default singleton is constructed with
+///    [TrustMode.platformWithFallback] and never resolves to
+///    `custom`, so in practice this stays zero; it completes the
+///    per-backend partition for symmetry.
+/// 6. `androidPlatformInitSucceeded` — `true` iff the Android JNI
 ///    bootstrap reported success at least once. `false` on every
 ///    other platform.
-/// 6. `androidHybridFallbackCount` — cumulative count of TLS chains
+/// 7. `androidHybridFallbackCount` — cumulative count of TLS chains
 ///    the Android hybrid verifier has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
 ///    platforms.
@@ -305,7 +311,7 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// Per-counter monotonicity holds across consecutive snapshots; the
 /// snapshot is intended for human / dashboard consumption, not for
 /// cross-thread synchronisation. Cross-counter invariants within a
-/// single snapshot do not hold — the sum of the three
+/// single snapshot do not hold — the sum of the four
 /// `defaultBackend*Count` fields can be observed to lag the
 /// [NtsTrustStatus.defaultClientBackend] pointer by a single
 /// store-pair across concurrent snapshots.
