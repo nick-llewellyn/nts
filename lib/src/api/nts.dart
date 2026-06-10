@@ -256,12 +256,12 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 
 /// Snapshot the process-global trust-anchor diagnostic state.
-/// Synchronous (no future / isolate hop): backed by three atomic
+/// Synchronous (no future / isolate hop): backed by seven atomic
 /// loads, cheap enough to call from a UI poll loop or a pre-flight
 /// "can I even validate against the platform store?" check.
 ///
 /// Requires `await NtsRustLib.init()` to have completed on the calling
-/// isolate before invocation: the three atomic reads happen on the
+/// isolate before invocation: the seven atomic reads happen on the
 /// Rust side and dispatch through the FRB v2 dispatch table even
 /// though the call returns synchronously, so a missed initialization
 /// fails with a low-level FRB error rather than a structured
