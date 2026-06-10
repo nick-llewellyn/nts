@@ -272,7 +272,7 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// `NtsPlugin` JNI bootstrap that runs before `main()`, distinct from
 /// `NtsRustLib.init()`.
 ///
-/// Returns six observables that callers cannot recover from a
+/// Returns seven observables that callers cannot recover from a
 /// per-query [NtsTimeSample] alone:
 ///
 /// 1. `defaultClientBackend` — backend the *default singleton*
@@ -282,7 +282,7 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 ///    marker, not a steady-state signal: a transient
 ///    `webpkiRoots`-resolving handshake latches this field
 ///    permanently until the next `platform`-resolving one. Use the
-///    three counters in (2)–(4) for dashboard panels that need
+///    four counters in (2)–(5) for dashboard panels that need
 ///    trend visibility. Custom-client callers should read
 ///    [NtsTimeSample.trustBackend] / [NtsWarmCookiesOutcome.trustBackend]
 ///    for accurate per-client attribution.
@@ -294,10 +294,16 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 ///    non-Android platforms.
 /// 4. `defaultBackendWebpkiCount` — cumulative count of singleton
 ///    handshakes that resolved to [TrustBackend.webpkiRoots].
-/// 5. `androidPlatformInitSucceeded` — `true` iff the Android JNI
+/// 5. `defaultBackendCustomCount` — cumulative count of singleton
+///    handshakes that resolved to [TrustBackend.custom]. The
+///    default singleton is constructed with
+///    [TrustMode.platformWithFallback] and never resolves to
+///    `custom`, so in practice this stays zero; it completes the
+///    per-backend partition for symmetry.
+/// 6. `androidPlatformInitSucceeded` — `true` iff the Android JNI
 ///    bootstrap reported success at least once. `false` on every
 ///    other platform.
-/// 6. `androidHybridFallbackCount` — cumulative count of TLS chains
+/// 7. `androidHybridFallbackCount` — cumulative count of TLS chains
 ///    the Android hybrid verifier has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
 ///    platforms.
