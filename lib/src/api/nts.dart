@@ -311,7 +311,7 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// Per-counter monotonicity holds across consecutive snapshots; the
 /// snapshot is intended for human / dashboard consumption, not for
 /// cross-thread synchronisation. Cross-counter invariants within a
-/// single snapshot do not hold — the sum of the three
+/// single snapshot do not hold — the sum of the four
 /// `defaultBackend*Count` fields can be observed to lag the
 /// [NtsTrustStatus.defaultClientBackend] pointer by a single
 /// store-pair across concurrent snapshots.
