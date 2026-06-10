@@ -1,5 +1,18 @@
 # Changelog
 
+
+## 5.2.1
+
+### Fixed
+
+- Completed the API-summary table in `README.md`, adding the missing `NtsClient`
+  row, `TrustMode` / `TrustBackend` enum variants, and the four missing
+  `defaultBackend*Count` telemetry counters.
+- Corrected the `ntsTrustStatus()` dartdoc observable count (six -> seven) and
+  added the missing description for `defaultBackendCustomCount`.
+- Fixed stale references to "three" atomic loads and counters in the
+  `ntsTrustStatus()` documentation to match the current implementation.
+
 ## 5.2.0
 
 ### Added
