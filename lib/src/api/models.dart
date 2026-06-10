@@ -416,7 +416,7 @@ enum TrustMode {
 ///
 /// The fields combine one overwrite-on-store event marker (which
 /// backend the default singleton client *most recently* resolved
-/// to), three cumulative counters that partition the singleton's
+/// to), four cumulative counters that partition the singleton's
 /// resolution history by backend, a static flag indicating whether
 /// the Android JNI bootstrap succeeded, and one Android-only
 /// fallback counter. Fields not relevant to the current platform
