@@ -364,8 +364,8 @@ before the relative fallback can fire.
 | Symbol | Purpose |
 |--------|---------|
 | `NtsRustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
-| `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. |
-| `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap})` | Force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. |
+| `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, verificationTimeMs})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTimeMs` (optional, non-negative epoch-ms) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. |
+| `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, verificationTimeMs})` | Force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTimeMs` carries the same clock-skew-rescue semantics as on `ntsQuery`. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
 | `ntsTrustStatus()` | Synchronous snapshot of the process-global trust-anchor diagnostic state. Returns the default singleton's most-recent backend, the Android JNI bootstrap success flag, and the cumulative Android hybrid-fallback acceptance count. Cheap enough for a UI poll loop. |
 | `kDefaultTimeoutMs` | Package default for `timeoutMs` (5000). |
@@ -382,10 +382,10 @@ before the relative fallback can fire.
 | `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout(TimeoutPhase)`, `noCookies`, `trustBackendUnavailable`, `internal`. |
 
 `ntsQuery` and `ntsWarmCookies` ship as a hand-written wrapper around
-the bundled FFI surface; consumers can omit `timeoutMs` and
-`dnsConcurrencyCap` to inherit the package defaults, and future
-internal-only Rust signature changes do not propagate as breaking call-
-site edits. See [ARCHITECTURE.md](ARCHITECTURE.md)'s "Public API
+the bundled FFI surface; consumers can omit `timeoutMs`,
+`dnsConcurrencyCap`, and `verificationTimeMs` to inherit the package
+defaults, and future internal-only Rust signature changes do not
+propagate as breaking call-site edits. See [ARCHITECTURE.md](ARCHITECTURE.md)'s "Public API
 stability layer" section for the contract.
 
 `timeoutMs` is a global wall-clock budget anchored at the start of
