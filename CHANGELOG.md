@@ -1,6 +1,19 @@
 # Changelog
 
 
+## 5.2.2
+
+### Security
+
+- Hardened the `verificationTimeMs` clock-skew override with a defensive
+  upper bound. Values above `9999-12-31T23:59:59Z`
+  (`253_402_300_799_000` epoch ms) are now rejected with
+  `NtsError.invalidSpec` rather than being fed into the
+  `Duration::from_millis` conversion that pins the TLS certificate
+  validity-window check. The override was already validated as
+  non-negative; this closes the matching open-ended upper bound on a
+  security-relevant time path. (NTS-39)
+
 ## 5.2.1
 
 ### Fixed

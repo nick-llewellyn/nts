@@ -21,13 +21,15 @@ fn validate_rejects_zero_port() {
     assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
 }
 
-/// `None` (no override) and any non-negative epoch-ms value are valid
-/// `verificationTimeMs` inputs and must pass `validate_verification_time_ms`.
+/// `None` (no override) and any in-range non-negative epoch-ms value are
+/// valid `verificationTimeMs` inputs and must pass
+/// `validate_verification_time_ms`. The year-9999 ceiling is inclusive.
 #[test]
 fn validate_verification_time_ms_accepts_none_and_non_negative() {
     assert!(validate_verification_time_ms(None).is_ok());
     assert!(validate_verification_time_ms(Some(0)).is_ok());
     assert!(validate_verification_time_ms(Some(1_700_000_000_000)).is_ok());
+    assert!(validate_verification_time_ms(Some(MAX_VERIFICATION_TIME_MS)).is_ok());
 }
 
 /// A negative `verificationTimeMs` cannot denote a real instant. The
@@ -39,6 +41,18 @@ fn validate_verification_time_ms_rejects_negative() {
     let err = validate_verification_time_ms(Some(-1)).unwrap_err();
     assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
     let err = validate_verification_time_ms(Some(i64::MIN)).unwrap_err();
+    assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
+}
+
+/// A `verificationTimeMs` above the year-9999 ceiling cannot denote a real
+/// instant and would feed an absurd timestamp into the
+/// `Duration::from_millis` conversion on the security-relevant time path.
+/// The validator must reject it with `InvalidSpec` (nts-j0jm / NTS-39).
+#[test]
+fn validate_verification_time_ms_rejects_above_maximum() {
+    let err = validate_verification_time_ms(Some(MAX_VERIFICATION_TIME_MS + 1)).unwrap_err();
+    assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
+    let err = validate_verification_time_ms(Some(i64::MAX)).unwrap_err();
     assert!(matches!(err, NtsError::InvalidSpec(_)), "got {err:?}");
 }
 
