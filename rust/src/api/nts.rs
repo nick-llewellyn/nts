@@ -65,6 +65,14 @@ const PLACEHOLDERS_PER_QUERY: usize = 1;
 /// Difference between the NTP epoch (1900-01-01) and the Unix epoch (1970-01-01).
 const NTP_TO_UNIX_EPOCH_SECS: u64 = 2_208_988_800;
 
+/// Defensive ceiling for a caller-supplied `verification_time_ms`, set to
+/// `9999-12-31T23:59:59Z` in epoch milliseconds. Any plausible clock-skew
+/// override lands far below this; values above it cannot denote a real
+/// instant and are rejected before reaching the `Duration::from_millis`
+/// conversion in `establish_session`, keeping the security-relevant time
+/// path away from implausible inputs.
+const MAX_VERIFICATION_TIME_MS: i64 = 253_402_300_799_000;
+
 /// Address of an NTS-KE endpoint.
 #[derive(Debug, Clone)]
 pub struct NtsServerSpec {
@@ -1498,13 +1506,25 @@ fn validate(spec: &NtsServerSpec) -> Result<(), NtsError> {
 /// Rust/FFI callers identical semantics and stops a negative from
 /// silently falling back to the system clock — a fallback whose
 /// visibility otherwise depended on whether a cached session existed.
-/// `None` and any non-negative value pass through unchanged.
+///
+/// An implausibly large value is rejected too: anything above
+/// `MAX_VERIFICATION_TIME_MS` (the year-9999 ceiling) cannot denote a
+/// real instant and would otherwise feed an absurd timestamp into the
+/// `Duration::from_millis` conversion on this security-relevant path.
+/// `None` and any in-range non-negative value pass through unchanged.
 fn validate_verification_time_ms(verification_time_ms: Option<i64>) -> Result<(), NtsError> {
     if let Some(ms) = verification_time_ms {
         if ms < 0 {
             return Err(NtsError::InvalidSpec(format!(
                 "verificationTimeMs {ms} is negative; it must be a non-negative \
                  count of milliseconds since the Unix epoch"
+            )));
+        }
+        if ms > MAX_VERIFICATION_TIME_MS {
+            return Err(NtsError::InvalidSpec(format!(
+                "verificationTimeMs {ms} exceeds the maximum of \
+                 {MAX_VERIFICATION_TIME_MS} (9999-12-31T23:59:59Z); it must be \
+                 a plausible count of milliseconds since the Unix epoch"
             )));
         }
     }
