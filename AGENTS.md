@@ -675,11 +675,19 @@ Then retry the sync.
 ## Assignee Convention
 
 This is a single-developer repository. Every issue — whether created locally
-with `bd` or imported from Linear — must have an owner set to
-`nllewelln@gmail.com` (the email auto-derived from `git config user.email`,
-already used by every issue in the database). The string is also what
-Linear recognises for this workspace, so assignments round-trip across
-`bd linear sync` without a separate user-mapping table.
+with `bd` or imported from Linear — must have its `assignee` set to
+`nllewelln@gmail.com`. That is the field Linear recognises for this workspace,
+so assignments round-trip across `bd linear sync` without a separate
+user-mapping table.
+
+In `bd` 1.0.5 `owner` and `assignee` are **distinct fields**, and the
+convention targets `assignee` deliberately. `owner` is auto-derived from the
+actor (git `user.name` / `user.email`) at `bd create` time and has **no CLI
+setter** — `bd assign` and `bd update --assignee` write `assignee` only.
+Locally-created beads get `owner` populated automatically; beads that arrive
+via `bd linear sync --pull` land with `owner` unset and there is no sanctioned
+way to backfill it. `assignee`, by contrast, is settable and round-trips to
+Linear, so it is the field the audit below checks.
 
 `bd` does not expose a `default.assignee` config key, so the rule is
 agent-enforced rather than tool-enforced. The agent operating this repo
@@ -694,12 +702,12 @@ must apply it on every relevant command:
 
 2. **Linear pull.** `bd linear sync --pull` does not honour any default
    assignee — issues whose Linear assignee is unset land in the local
-   database with an empty owner. Immediately after every pull, backfill:
+   database with an empty `assignee`. Immediately after every pull, backfill:
 
    ```bash
    bd linear sync --pull
    bd list --json \
-     | python3 -c 'import json,sys;[print(i["id"]) for i in json.load(sys.stdin) if not i.get("owner")]' \
+     | python3 -c 'import json,sys;[print(i["id"]) for i in json.load(sys.stdin) if not i.get("assignee")]' \
      | xargs -I{} bd assign {} nllewelln@gmail.com
    ```
 
@@ -709,16 +717,16 @@ must apply it on every relevant command:
 
    ```bash
    bd list --json \
-     | python3 -c 'import json,sys;[print(i["id"]) for i in json.load(sys.stdin) if not i.get("owner")]' \
+     | python3 -c 'import json,sys;[print(i["id"]) for i in json.load(sys.stdin) if not i.get("assignee")]' \
      | xargs -I{} bd assign {} nllewelln@gmail.com
    ```
 
-   A silent run means zero unassigned issues. As of the audit that
-   accompanied filing this section, all 9 open issues already carry the
-   correct owner; the audit step is a guard against future drift, not a
-   currently-needed cleanup.
+   A silent run means zero unassigned issues. Note that Linear-imported beads
+   may still show an empty `owner` (e.g. `nts-gbqn4m` / NTS-8); that is
+   expected and harmless, because `owner` has no CLI setter and this audit
+   tracks `assignee`, not `owner`.
 
-`bd` filters owner strings by exact match, so any divergence (e.g.
+`bd` filters assignee strings by exact match, so any divergence (e.g.
 `Nicholas Llewellyn`, `nick.l`, capitalisation drift) will silently
 fragment the database. Stick to the canonical `nllewelln@gmail.com`.
 
