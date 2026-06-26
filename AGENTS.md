@@ -451,21 +451,34 @@ The `LINEAR_API_KEY` is stored in the macOS Keychain and exported lazily via `~/
 
 ### Sync Workflow
 
-Always pull before pushing to avoid creating duplicates and to surface conflicts locally:
+Always pull before pushing to avoid creating duplicates and to surface
+conflicts locally:
 
 ```bash
 bd linear sync --pull          # import from Linear first
 bd linear sync --push          # then export local changes
 ```
 
+`bd 1.0.5` adds several flags worth knowing (all confirmed via
+`bd linear sync --help`):
+
+| Flag | Purpose |
+|---|---|
+| `--prefer-linear` / `--prefer-local` | Conflict resolution — force one side to win when timestamps diverge. `--prefer-linear` is the correct way to make a pull adopt Linear's terminal state (see "Issue State Synchronization"). |
+| `--pull-if-stale [--threshold 20m]` | Pull only if the local Linear cache is older than the threshold (default 20m). This is the source of the recurring `⚠ Linear data is … stale` warning. |
+| `--state open\|closed\|all` | Restrict the sync to issues in a given local state (default `all`). |
+| `--issues a,b` / `--parent TICKET` | Scope a push to specific beads or a ticket subtree. **Required** for any push that must succeed reliably — see Gotcha #4. |
+| `--create-only` | On push, only create new Linear issues; never update existing ones. |
+| `--relations` | On pull, import Linear blocking relations as bd dependencies. |
+| `--milestones` | On pull, reconstruct Linear project milestones as local epic parents. |
+| `--type t` / `--exclude-type t` | Filter the sync to/from specific issue types. |
+
 ### Claiming an issue
 
 `bd update <id> --claim` (and `bd update <id> --status in_progress`) write only
-to the local Dolt database. They do **not** notify Linear. Until an explicit push
-is performed, Linear still shows the issue as "Todo" or whatever state it was in
-before the claim — which means anyone checking Linear sees no work in progress,
-and a subsequent `bd linear sync --pull` can overwrite the local `IN_PROGRESS`
-state back to whatever Linear currently holds (Gotcha #2).
+to the local Dolt database. They do **not** notify Linear. Until an explicit
+push is performed, Linear still shows the issue as "Todo" or whatever state it
+was in before the claim.
 
 The correct sequence for claiming an issue is:
 
@@ -473,79 +486,185 @@ The correct sequence for claiming an issue is:
 # 1. Claim locally.
 bd update <id> --claim          # or: bd update <id> --status in_progress
 
-# 2. Immediately push the updated state to Linear.
+# 2. Push the updated state to Linear. ALWAYS scope with --issues — an
+#    unscoped push errors on the workspace's ambiguous state_map (Gotcha #4).
 bd linear sync --push --issues <id>
 
 # 3. Persist to DoltHub.
 bd dolt push --remote origin
 ```
 
-Do this **before** opening a branch or writing any code, so Linear reflects
-"In Progress" for the full duration of the work.
+A scoped single-issue push of an `in_progress` bead succeeds in practice (the
+name-keyed `In Progress = in_progress` override resolves the started-type
+ambiguity). Do this **before** opening a branch or writing any code, so Linear
+reflects "In Progress" for the full duration of the work.
+
+Alternatively — and more robustly — let the **Linear GitHub app** drive the
+status: opening the PR transitions the linked issue to "In Progress"
+automatically (see "Linear PR Linking"). The manual push above only matters for
+the window between claiming and opening the PR.
 
 ### Closing an issue
 
 `bd close` writes only to the local Dolt database. It does **not** notify
-Linear. Running `bd dolt push --remote origin` afterwards persists the `CLOSED` state to
-DoltHub but still does not touch Linear. A subsequent `bd linear sync --pull`
-will then overwrite the local `CLOSED` back to whatever Linear currently shows
-(Gotcha #2), erasing the closure.
+Linear. Running `bd dolt push --remote origin` afterwards persists the `CLOSED`
+state to DoltHub but still does not touch Linear.
 
-The correct sequence for completing an issue is:
+**Preferred path: let the PR close the issue.** Merging the linked PR
+transitions the Linear issue to "Done" automatically (Linear GitHub app), and
+the next `bd linear sync --pull --prefer-linear` imports that "Done" as a local
+`CLOSED` (see "Issue State Synchronization"). No manual state mapping is
+involved, so this side-steps the ambiguity entirely.
+
+**Manual fallback** (issue abandoned, or the GitHub integration did not fire):
 
 ```bash
-# 1. Push current state to Linear while the issue is still open/in-progress,
-#    so Linear has a record of the linked issue before closure.
-bd linear sync --push --issues <id>
-
-# 2. Close locally and persist to DoltHub.
+# 1. Close locally and persist to DoltHub.
 bd close <id>
 bd dolt push --remote origin
 
-# 3. Transition Linear to Done (NOT via --push, which would send Canceled).
+# 2. Transition Linear to Done directly — do NOT rely on a push to map it.
 #    Use the save_issue_linear tool or the Linear UI:
 #      save_issue_linear id="<LINEAR-ID>" state="Done"
 ```
 
-Do **not** run a blind `bd linear sync --push` after step 2 — it will push
-`CLOSED` → Canceled and overwrite the Done status set in step 3 (Gotcha #1 +
-Gotcha #2 combined). Use `--issues` with only open/in-progress issues if a
-broader sync is needed after closing.
+Whether `bd linear sync --push` maps a local `CLOSED` to Linear **Done** or
+**Canceled** is **not reliably determined** for this workspace — the
+`completed` and `canceled` types both map to `closed`, leaving the push inverse
+ambiguous (Gotcha #1, investigated in NTS-29). A `closed`-only push does not
+*error*, but the resulting Linear state is unverified for a non-terminal
+target. Set the terminal Linear state **explicitly** (step 2 above) rather than
+trusting a push, and prefer the PR-merge path whenever possible.
 
 ### Known Gotchas (read before every sync)
 
-#### 1. Status Mapping: CLOSED → Canceled
+> **`bd 1.0.5` note.** These behaviours were re-verified against `bd 1.0.5`
+> (Homebrew) this session. `bd 1.0.5` did **not** retire the workarounds below;
+> its hardened push validator (upstream PR #3328) actually *tightened* sync,
+> introducing Gotcha #4. Treat the pull-centric, scoped-push flow as mandatory,
+> not optional.
 
-`bd` maps its local `CLOSED` state to Linear's **Canceled** status. There is no built-in distinction between "completed" and "abandoned" in the mapping.
+#### 1. Status Mapping: CLOSED → Done vs Canceled is ambiguous
 
-**Consequence:** Completed issues pushed to Linear will appear as **Canceled**, not **Done**.
+`bd`'s `linear.state_map` maps Linear **state types** to beads statuses, and the
+sensible defaults map *both* `completed` **and** `canceled` to `closed`. That
+makes the **push inverse ambiguous**: a local `CLOSED` has no single,
+deterministic Linear target, so it may land as **Canceled** rather than
+**Done**.
 
-**Workaround:** After any push that includes closed issues, manually transition the completed ones to **Done** in Linear (via the Linear UI or `save_issue_linear` tool with `state: "Done"`).
+This workspace carries name-keyed overrides (`linear.state_map.Done = closed`,
+`In Progress = in_progress`, `Todo = open`) that *attempt* to disambiguate. A
+`closed`-only push no longer errors, but **whether it produces Done or Canceled
+for a non-terminal Linear target is unverified** — do not assume it is fixed.
 
-**Tracking fix:** NTS-8 covers improving this mapping in `bd`.
+**Workaround:** Do not trust a push to set the terminal Linear state. Set
+**Done** explicitly (Linear UI or `save_issue_linear` with `state: "Done"`),
+or — better — let the PR-merge webhook transition it (see "Closing an issue").
 
-#### 2. State Clobbering: Manual Linear Edits Are Overwritten
+**Tracking:** NTS-29 (Done) is the full investigation record; NTS-8 (open)
+tracks the underlying `bd`-side mapping limitation.
 
-Running `bd linear sync --push` re-pushes local state and **overwrites any manual status changes made directly in Linear**. For example, if you manually set an issue to **Done** in Linear, a subsequent `--push` will revert it to **Canceled** if the local `bd` state is `CLOSED`.
+#### 2. State Clobbering: Manual Linear Edits Can Be Overwritten
 
-**Rule:** After manually correcting statuses in Linear, do **not** run a blind `bd linear sync --push` for issues that are locally `CLOSED`. Use `--issues` to target only the specific issues you intend to push.
+A push re-applies local state and can **overwrite manual status changes made
+directly in Linear** (e.g. a hand-set **Done** reverting if the local state
+re-maps differently).
 
-#### 3. Implicit Filtering: New Issues May Be Silently Skipped
+**Mitigations in `bd 1.0.5`:**
+- **Conflict-resolution flags** — `--prefer-local` / `--prefer-linear` make the
+  winning side explicit instead of relying on newer-timestamp-wins.
+- **Scope every push** with `--issues` (or `--parent`) so a broad sync cannot
+  touch issues you did not intend.
 
-`bd linear sync --push` (without `--issues`) only updates issues that already have an `external_ref` (i.e., a Linear ID). Locally open issues that have never been pushed are silently skipped. The warning message `"Linear data has never been pulled"` is the signal that this is happening.
+**Rule:** After correcting statuses in Linear, never run a blind, unscoped
+`bd linear sync --push`. Scope it, and reach for `--prefer-linear` when Linear
+should win.
 
-**Workaround:** To push unlinked issues, first run `bd linear sync --pull`, then explicitly name the issue IDs:
+#### 3. Push Only Touches Linked Issues (intentional, hardened)
+
+An unscoped `bd linear sync --push` only updates issues that already have an
+`external_ref`; locally-created issues that have never been linked are skipped.
+As of `bd 1.0.5` this is **intentional, hardened behaviour**, not a bug — the
+`"Linear data has never been pulled"` warning is the signal.
+
+**To create new Linear issues from local beads,** use `--create-only` with an
+explicit scope, after a pull:
 
 ```bash
 bd linear sync --pull
-bd linear sync --push --issues nts-abc,nts-def,nts-xyz
+bd linear sync --push --create-only --issues nts-abc,nts-def
 ```
+
+…but note this create path is itself subject to Gotcha #4. When it errors, the
+reliable fallback is to **create the Linear issue directly** (`save_issue_linear`)
+and link the bead's `external_ref` to its URL, then use an `NTS-<n>` branch so
+the Linear GitHub app attaches the PR.
+
+#### 4. `bd 1.0.5` Push Ambiguity Rejection (the new failure mode)
+
+`bd 1.0.5`'s push validator (upstream PR #3328) **errors** rather than guessing
+when the `state_map` is ambiguous:
+
+```text
+linear.state_map maps beads status X to multiple Linear states
+```
+
+The nts team triggers this because it has **two started-type states**
+(*In Progress*, *In Review*) and **two open-ish states** (*Backlog* = backlog,
+*Todo* = unstarted). The beads → Linear inverse for `open` and `in_progress` is
+therefore non-deterministic. Per NTS-29, **every** `state_map` variant tried
+(display-name keys, type-based keys, name-keyed overrides) errored on either the
+`open` or `in_progress` ambiguity; the config was restored to its original state
+with no net change. Upstream PR #3500 (dotted state-NAME keys) is the candidate
+fix but needs source-level investigation of the validator's grouping.
+
+**Practical consequences:**
+- **Always scope pushes** with `--issues` / `--parent`. A single linked,
+  `in_progress` issue pushes fine (the `In Progress` override resolves the
+  started-type case); broad unscoped pushes are the ones that error.
+- **Do not rely on push to create `NTS-` IDs** for brand-new beads — create the
+  Linear issue directly and link `external_ref` (see Gotcha #3).
+- This is a `bd`/workspace limitation, not something to "fix" by editing the map
+  blindly — NTS-29 already established that no config variant resolves it.
 
 ### Troubleshooting
 
+#### Push fails: "maps beads status … to multiple Linear states"
+
+This is Gotcha #4. The push you ran was unscoped (or spanned `open`/
+`in_progress` issues). Re-run it scoped to a single linked issue:
+
+```bash
+bd linear sync --push --issues <id>
+```
+
+For brand-new issues, create the Linear side directly (`save_issue_linear`)
+instead of pushing. See Gotcha #4 for the full explanation.
+
+#### Pull won't adopt Linear's state (e.g. a merged issue stays open locally)
+
+`bd`'s default conflict resolution is newer-timestamp-wins; local edits (claims,
+pushes) can bump the local `updatedAt` so a plain pull keeps the local state.
+Force Linear to win:
+
+```bash
+bd linear sync --pull --prefer-linear
+```
+
+#### Recurring `⚠ Linear data is … stale` warning
+
+The local Linear cache has a staleness clock. Either pull, or gate pulls on the
+threshold so they only run when actually stale:
+
+```bash
+bd linear sync --pull-if-stale                 # default 20m threshold
+bd linear sync --pull-if-stale --threshold 5m  # pull if older than 5 minutes
+```
+
 #### GraphQL Argument Validation Error
 
-If `bd linear sync` fails with a "GraphQL Argument Validation" error, the stored sync timestamp is stale (usually from a different workspace). Reset it:
+If `bd linear sync` fails with a "GraphQL Argument Validation" error, the stored
+sync timestamp is stale (usually from a different workspace). Reset it:
 
 ```bash
 bd config set linear.last_sync "0001-01-01T00:00:00Z"
@@ -646,15 +765,20 @@ Because of the automatic "Merged → Done" transition, agents should prefer
 a **pull-centric** synchronization flow:
 
 1. **Pull to Close.** At the start of a new session (or after a merge), run
-   `bd linear sync --pull`. This will import the "Done" state from Linear
-   and automatically mark the local Beads issue as `CLOSED`.
+   `bd linear sync --pull --prefer-linear`. The `--prefer-linear` flag matters:
+   `bd`'s default newer-timestamp-wins conflict resolution means a plain
+   `--pull` can *keep* a stale local `IN_PROGRESS`/`OPEN` when local edits (a
+   claim, a push) bumped the local `updatedAt` after the Linear "Done".
+   `--prefer-linear` forces Linear's terminal state to win, importing it as a
+   local `CLOSED`. This addresses the "pull didn't close it" symptom seen in
+   earlier sessions.
 2. **DoltHub Sync.** After the pull, run `bd dolt push` to persist the
    closed state to the authoritative database.
 3. **Manual Fallback.** Only manually run `bd close` if the issue was
-   abandoned or if the GitHub integration failed to trigger. Note that
-   `bd linear sync --push` on a `CLOSED` issue maps to **Canceled** in
-   Linear; always prefer letting the GitHub merge trigger the **Done**
-   status instead.
+   abandoned or if the GitHub integration failed to trigger. Do **not** rely on
+   `bd linear sync --push` to set the terminal Linear state — its `CLOSED`
+   inverse is ambiguous (Gotcha #1). Prefer letting the PR-merge webhook set
+   **Done**, or set it explicitly via `save_issue_linear`.
 
 ## Versioning & Release Policy
 
