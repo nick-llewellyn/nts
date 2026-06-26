@@ -334,11 +334,14 @@ enum TrustBackend {
 ///
 /// ## Reaching multiple trust domains
 ///
-/// Because the policy is fixed per client, one [NtsClient] cannot
-/// span two trust domains: a [TrustMode.custom] client scoped to a
+/// The policy is fixed per client and applies to every host that
+/// client queries, so one [NtsClient] cannot apply different
+/// per-host trust policies: a [TrustMode.custom] client scoped to a
 /// private CA rejects public servers, and a [TrustMode.bundledOnly]
-/// or platform client rejects a private-CA certificate. To reach
-/// servers in different trust domains from one app — for example an
+/// client rejects a private-CA certificate. (A platform-mode client
+/// is less clear-cut — it accepts a private-CA server only when that
+/// CA is installed in the OS trust store.) To enforce distinct trust
+/// boundaries for distinct hosts from one app — for example an
 /// internal server behind a private CA alongside public servers — do
 /// not widen a single client's anchor set. Construct one [NtsClient]
 /// per trust domain and route each query to the client whose

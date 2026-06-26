@@ -317,17 +317,22 @@ full decision matrix.
 
 ### Reaching multiple trust domains
 
-A single client carries exactly one trust policy, fixed at
-construction (the `TrustMode` is immutable per client). That is
-deliberate — it keeps each CA scoped to the hosts it should
-authenticate — but it means one client cannot span two trust
-domains. A `TrustMode.custom` client built around a private CA
-rejects `time.cloudflare.com`, and a `bundledOnly` (or platform)
-client rejects a server presenting a private-CA certificate.
+A single client applies one trust policy to *every* host it
+queries — the `TrustMode` is fixed at construction and immutable
+per client. You cannot route different per-host trust policies
+through one client. A `TrustMode.custom` client built around a
+private CA accepts only certificates that chain to that CA, so it
+rejects `time.cloudflare.com`; a `bundledOnly` client trusts only
+the public `webpki-roots` bundle, so it rejects a server
+presenting a private-CA certificate. (A platform-mode client is
+the awkward middle case: whether it accepts a private-CA server
+depends on whether that CA is installed in the OS trust store, so
+it does not give a clean, predictable boundary either way.)
 
-When an app must reach both — say an internal NTS server behind a
-private CA *and* public servers — mint one client per trust domain
-and route each query to the matching client:
+When an app must enforce distinct boundaries for distinct hosts —
+say an internal NTS server behind a private CA *and* public
+servers — mint one client per trust domain and route each query to
+the matching client:
 
 ```dart
 import 'dart:io';
