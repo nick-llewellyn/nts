@@ -2613,8 +2613,9 @@ pub fn nts_query(
 /// Production source of the per-request 32-octet Unique Identifier
 /// and AEAD nonce. The single funnel through which `nts_query_inner`
 /// pulls request-scoped randomness, exposed at module scope so the
-/// regression test
-/// [`tests::consecutive_request_uids_from_helper_are_distinct`] can
+/// regression tests
+/// [`tests::consecutive_request_uids_from_helper_are_distinct`] and
+/// [`tests::consecutive_request_nonces_from_helper_are_distinct`] can
 /// drive the same code path the production query uses (rather than
 /// reimplementing the `getrandom`-then-pack-into-`ClientRequest`
 /// flow inline, which would let `nts_query_inner` drift to a

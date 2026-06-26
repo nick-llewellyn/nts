@@ -14,6 +14,17 @@
   domain keeps each CA scoped to the hosts it should authenticate rather
   than widening every server's trusted-issuer set to the union. (NTS-48)
 
+### Security
+
+- Hardened the per-request nonce contract at the NTPv4 codec boundary.
+  `build_client_request` and the `ClientRequest::nonce` field now document
+  that the nonce MUST be CSPRNG-sourced and unique per request under a given
+  C2S key — the non-empty check is a floor, not the full contract, because
+  the codec is RNG-free and stateless by design. Added a regression test
+  that drives the production randomness funnel and asserts the on-wire
+  Authenticator nonce is distinct across 100 consecutive requests, mirroring
+  the existing Unique Identifier test. No behaviour change. (NTS-41)
+
 ## 5.2.2
 
 ### Security

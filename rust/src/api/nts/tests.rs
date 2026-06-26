@@ -3588,6 +3588,87 @@ fn consecutive_request_uids_from_helper_are_distinct() {
     );
 }
 
+/// Companion to [`consecutive_request_uids_from_helper_are_distinct`]
+/// for the Authenticator nonce. RFC 8915 §5.6 builds its replay and
+/// forgery protection on the AEAD seal, which in turn requires every
+/// nonce to be unique per request under a given C2S key — a reused
+/// nonce voids the SIV authentication guarantee. The codec layer
+/// ([`build_client_request`]) only rejects the empty nonce; the
+/// per-request-uniqueness obligation lives with the caller, so this
+/// test pins it at the production funnel.
+///
+/// Like its UID sibling it drives the same module-scope helper
+/// [`super::fresh_request_uid_and_nonce`] that `nts_query_inner` uses,
+/// then serialises each nonce into a `ClientRequest`, runs it through
+/// `build_client_request`, and recovers the *on-wire* nonce from the
+/// Authenticator extension body — so a regression that returned
+/// distinct helper nonces but pinned the wire nonce to a constant would
+/// still be caught.
+///
+/// 100 iterations catches the gross-brokenness shape; at
+/// `RECOMMENDED_NONCE_LEN` (128 bits of nonce entropy) the birthday
+/// bound makes a real-RNG collision astronomically unlikely, so this
+/// test does not flake on healthy `getrandom`.
+#[test]
+fn consecutive_request_nonces_from_helper_are_distinct() {
+    use crate::nts::ntp::{
+        build_client_request, ext_type, parse_authenticator_body, parse_extensions, ClientRequest,
+        HEADER_LEN,
+    };
+    use std::collections::HashSet;
+
+    let c2s_key = AeadKey::from_keying_material(15, &[0x11u8; 32])
+        .expect("c2s key constructs from canonical SIV-CMAC-256 material");
+    let nonce_len = c2s_key.nonce_len();
+    let cookie = vec![0x55u8; 64];
+
+    let mut seen = HashSet::with_capacity(100);
+    for iteration in 0..100 {
+        // Production helper: same call site as `nts_query_inner`.
+        let (uid, nonce) = super::fresh_request_uid_and_nonce(nonce_len)
+            .unwrap_or_else(|e| panic!("iteration {iteration}: helper failed: {e:?}"));
+
+        let req = ClientRequest {
+            unique_id: uid.to_vec(),
+            cookie: zeroize::Zeroizing::new(cookie.clone()),
+            placeholder_count: 0,
+            nonce,
+            transmit_timestamp: 0,
+        };
+        let packet = build_client_request(&req, &c2s_key)
+            .unwrap_or_else(|e| panic!("iteration {iteration}: build_client_request: {e:?}"));
+        let extensions = parse_extensions(&packet[HEADER_LEN..])
+            .unwrap_or_else(|e| panic!("iteration {iteration}: parse_extensions: {e:?}"));
+        let auth_body = extensions
+            .iter()
+            .find(|ext| ext.field_type == ext_type::NTS_AUTHENTICATOR)
+            .unwrap_or_else(|| {
+                panic!("iteration {iteration}: Authenticator extension missing on wire")
+            })
+            .body
+            .clone();
+        let on_wire_nonce = parse_authenticator_body(&auth_body)
+            .unwrap_or_else(|e| panic!("iteration {iteration}: parse_authenticator_body: {e:?}"))
+            .nonce
+            .to_vec();
+        assert_eq!(
+            on_wire_nonce.len(),
+            nonce_len,
+            "iteration {iteration}: on-wire nonce length is not {nonce_len}",
+        );
+        assert!(
+            seen.insert(on_wire_nonce.clone()),
+            "iteration {iteration}: nonce collision against earlier iteration ({on_wire_nonce:02x?})",
+        );
+    }
+    assert_eq!(
+        seen.len(),
+        100,
+        "expected 100 distinct nonces, got {}",
+        seen.len()
+    );
+}
+
 /// Regression tests for the [`super::lock_recover`] poisoning-
 /// recovery helper. Every `.lock().expect(…)` site in the
 /// `api::nts` module has been swept to `lock_recover(&...)` so a
