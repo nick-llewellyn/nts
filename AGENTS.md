@@ -466,7 +466,7 @@ bd linear sync --push          # then export local changes
 |---|---|
 | `--prefer-linear` / `--prefer-local` | Conflict resolution — force one side to win when timestamps diverge. `--prefer-linear` is the correct way to make a pull adopt Linear's terminal state (see "Issue State Synchronization"). |
 | `--pull-if-stale [--threshold 20m]` | Pull only if the local Linear cache is older than the threshold (default 20m). This is the source of the recurring `⚠ Linear data is … stale` warning. |
-| `--state open\|closed\|all` | Restrict the sync to issues in a given local state (default `all`). |
+| `--state` (`open`, `closed`, or `all`) | Restrict the sync to issues in a given local state (default `all`). |
 | `--issues a,b` / `--parent TICKET` | Scope a push to specific beads or a ticket subtree. **Required** for any push that must succeed reliably — see Gotcha #4. |
 | `--create-only` | On push, only create new Linear issues; never update existing ones. |
 | `--relations` | On pull, import Linear blocking relations as bd dependencies. |
