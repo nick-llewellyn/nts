@@ -315,6 +315,62 @@ use `TrustMode.custom` with the relevant root bundle supplied via
 [ARCHITECTURE.md](ARCHITECTURE.md#trust-anchor-diagnostics) for the
 full decision matrix.
 
+### Reaching multiple trust domains
+
+A single client applies one trust policy to *every* host it
+queries — the `TrustMode` is fixed at construction and immutable
+per client. You cannot route different per-host trust policies
+through one client. A `TrustMode.custom` client built around a
+private CA accepts only certificates that chain to that CA, so it
+rejects `time.cloudflare.com`; a `bundledOnly` client trusts only
+the public `webpki-roots` bundle, so it rejects a server
+presenting a private-CA certificate. (A platform-mode client is
+the awkward middle case: whether it accepts a private-CA server
+depends on whether that CA is installed in the OS trust store, so
+it does not give a clean, predictable boundary either way.)
+
+When an app must enforce distinct boundaries for distinct hosts —
+say an internal NTS server behind a private CA *and* public
+servers — mint one client per trust domain and route each query to
+the matching client:
+
+```dart
+import 'dart:io';
+import 'package:nts/nts.dart';
+
+Future<void> main() async {
+  await NtsRustLib.init(); // must complete before using NtsClient
+
+  // Trusts only the private CA, so it authenticates only the
+  // internal server; public hosts are rejected.
+  final privateRoots = File('/etc/nts/internal-ca.pem').readAsBytesSync();
+  final internalClient = NtsClient(
+    trustMode: TrustMode.custom,
+    customRoots: privateRoots,
+  );
+
+  // Trusts only the public webpki-roots bundle, so an MDM-injected
+  // root or the private CA above cannot authenticate these hosts.
+  final publicClient = NtsClient(trustMode: TrustMode.bundledOnly);
+
+  final internal = await internalClient.query(
+    spec: const NtsServerSpec(host: 'ntp.internal.example', port: 4460),
+  );
+  final external = await publicClient.query(
+    spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),
+  );
+}
+```
+
+Per-client scoping is the security point, not just an ergonomic
+convenience: it keeps the private CA trusted *only* for the internal
+server. Merging both anchor sets into one client would let the
+private CA authenticate a public hostname (and vice-versa), widening
+every server's trusted-issuer set to the union — the exact exposure
+the per-client boundary exists to prevent. Each client also owns its
+own session table, so cookies and AEAD keys never cross the domain
+boundary.
+
 ### Non-Flutter Dart callers must pass `externalLibrary` explicitly
 
 The FRB-generated default loader
