@@ -1,6 +1,19 @@
 # Changelog
 
 
+## 5.2.3
+
+### Documentation
+
+- Documented the multi-client trust-routing pattern for apps that must reach
+  servers in more than one trust domain (e.g. a private-CA internal server
+  alongside public servers). Added a "Reaching multiple trust domains"
+  section to `README.md` with a worked two-client example, and a matching
+  cross-reference in the `TrustMode` API documentation. Reinforces that
+  `TrustMode` is fixed per client and that minting one client per trust
+  domain keeps each CA scoped to the hosts it should authenticate rather
+  than widening every server's trusted-issuer set to the union. (NTS-48)
+
 ## 5.2.2
 
 ### Security

@@ -331,6 +331,20 @@ enum TrustBackend {
 /// against NTS servers that present certificates from a private or
 /// enterprise CA. For those deployments use [TrustMode.custom]
 /// with the relevant PEM or DER root bundle instead.
+///
+/// ## Reaching multiple trust domains
+///
+/// Because the policy is fixed per client, one [NtsClient] cannot
+/// span two trust domains: a [TrustMode.custom] client scoped to a
+/// private CA rejects public servers, and a [TrustMode.bundledOnly]
+/// or platform client rejects a private-CA certificate. To reach
+/// servers in different trust domains from one app — for example an
+/// internal server behind a private CA alongside public servers — do
+/// not widen a single client's anchor set. Construct one [NtsClient]
+/// per trust domain and route each query to the client whose
+/// [TrustMode] matches, which keeps each CA trusted only for the
+/// hosts it should authenticate. See the "Reaching multiple trust
+/// domains" section of the README for a worked two-client example.
 enum TrustMode {
   /// Consults the platform trust store first; if
   /// `build_with_native_verifier` fails at TLS-config construction,
