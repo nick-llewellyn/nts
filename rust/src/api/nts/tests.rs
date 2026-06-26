@@ -3542,7 +3542,7 @@ fn consecutive_request_uids_from_helper_are_distinct() {
     };
     use std::collections::HashSet;
 
-    let c2s_key = AeadKey::from_keying_material(15, &[0x11u8; 32])
+    let c2s_key = AeadKey::from_keying_material(aead_ids::AES_SIV_CMAC_256, &[0x11u8; 32])
         .expect("c2s key constructs from canonical SIV-CMAC-256 material");
     let nonce_len = c2s_key.nonce_len();
     let cookie = vec![0x55u8; 64];
@@ -3617,7 +3617,7 @@ fn consecutive_request_nonces_from_helper_are_distinct() {
     };
     use std::collections::HashSet;
 
-    let c2s_key = AeadKey::from_keying_material(15, &[0x11u8; 32])
+    let c2s_key = AeadKey::from_keying_material(aead_ids::AES_SIV_CMAC_256, &[0x11u8; 32])
         .expect("c2s key constructs from canonical SIV-CMAC-256 material");
     let nonce_len = c2s_key.nonce_len();
     let cookie = vec![0x55u8; 64];
