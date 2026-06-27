@@ -107,4 +107,19 @@ _Add a brief overview of your project architecture_
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+### Linear sync (authoritative reference: AGENTS.md)
+
+The full `bd ↔ Linear` sync workflow, flag reference, and gotchas live in
+`AGENTS.md` ("Linear Sync Configuration" onward). Do not duplicate that content
+here; treat AGENTS.md as the source of truth.
+
+One technical gotcha worth surfacing at the CLAUDE.md level, because it bites at
+session close: `bd linear sync --pull --prefer-linear` does **not** reliably
+adopt Linear's terminal state. When local edits (a claim, a scoped push) have
+bumped the local `updatedAt`, the pull keeps the local non-terminal state even
+under `--prefer-linear` — observed twice during the NTS-40 close against an
+issue Linear already showed as **Done**. Reconcile manually with `bd close <id>`
+followed by the mandatory pull-then-push DoltHub order (`bd dolt pull` then
+`bd dolt push --remote origin`) documented under "DoltHub Session Completion".
+This is an upstream `bd` limitation, not a repo-fixable bug (investigated under
+NTS-8; push-side counterpart under NTS-29).
