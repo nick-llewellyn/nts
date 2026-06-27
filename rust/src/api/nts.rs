@@ -936,8 +936,8 @@ impl From<AeadError> for NtsError {
 /// [`nts_query`] (`socket.send` / `socket.recv` propagate
 /// `io::Error` directly). The KE pipeline never reaches this impl —
 /// it routes through `From<KeError>` which carries
-/// [`KeTimeoutPhase`] via [`KeError::PhaseTimeout`] — and
-/// [`bind_connected_udp_using`] does its own phase-aware translation
+/// `KeTimeoutPhase` via `KeError::PhaseTimeout` — and
+/// `bind_connected_udp_using` does its own phase-aware translation
 /// for the UDP setup leg, so the only `io::Error` shapes that
 /// actually flow through here are the NTP `send`/`recv` ones. That
 /// makes [`TimeoutPhase::Ntp`] the correct (and only) timeout tag
