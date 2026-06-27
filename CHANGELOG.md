@@ -5,11 +5,12 @@
 
 ### Documentation
 
-- Fixed three broken intra-doc links in the `From<std::io::Error> for
-  NtsError` doc block in `rust/src/api/nts.rs`. The block linked to
-  crate-private items (`KeTimeoutPhase`, `KeError::PhaseTimeout`,
-  `bind_connected_udp_using`) from a public-API doc context, which
-  `rustdoc -D warnings` rejects as `private_intra_doc_links`. Demoted the
+- Fixed three broken intra-doc links in the
+  `From<std::io::Error> for NtsError` doc block in `rust/src/api/nts.rs`.
+  The block linked to crate-private items (`KeTimeoutPhase`,
+  `KeError::PhaseTimeout`, `bind_connected_udp_using`) from a public-API
+  doc context, which `rustdoc -D warnings` rejects as
+  `private_intra_doc_links`. Demoted the
   three references to plain code spans (matching how the same items are
   already cited elsewhere in the file); the two resolvable links on the
   block (`nts_query`, `TimeoutPhase::Ntp`) are unchanged. Comment-only; no
