@@ -25,6 +25,22 @@
   Authenticator nonce is distinct across 100 consecutive requests, mirroring
   the existing Unique Identifier test. No behaviour change. (NTS-41)
 
+- Added a short-lived in-memory replay guard over accepted-response Unique
+  Identifiers as a defense-in-depth layer above the AEAD. The post-AEAD
+  replay protection previously rested entirely on two stateless echo checks
+  — the response must echo the request's Unique Identifier (RFC 8915 §5.3)
+  and its `origin_timestamp` must echo the request's `transmit_timestamp`
+  (RFC 5905 §8) — whose replay resistance assumes a unique UID per request
+  without enforcing it. Each `NtsClient`'s session table now remembers the
+  UIDs of responses it has accepted for a bounded window (5 minutes, capped
+  at 4096 entries with FIFO eviction) and rejects a response whose UID was
+  already accepted with `NtsError.ntpProtocol`, before its now-stale cookies
+  are deposited. The AEAD remains the primary guarantee; the cache only
+  closes the residual UID-reuse gap (e.g. a CSPRNG failure or caller bug
+  reusing a UID together with a transmit timestamp). Behaviour change on the
+  replayed-UID path only — the happy path mints a fresh CSPRNG UID per
+  request and never trips the guard. (NTS-40)
+
 ## 5.2.2
 
 ### Security

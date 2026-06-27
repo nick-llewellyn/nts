@@ -3790,3 +3790,126 @@ fn query_context_cookie_is_zeroizing_wrapped() {
     };
     assert_zeroizing_vec(&ctx.cookie);
 }
+
+// ---------------------------------------------------------------------------
+// NTS-40 / Finding #2: short-lived UID replay-guard cache (`SeenUidCache`)
+// ---------------------------------------------------------------------------
+
+/// Distinct Unique Identifiers noted at the same instant are all
+/// newly-seen — the happy path, where every request mints a fresh
+/// CSPRNG UID, must never trip the replay guard.
+#[test]
+fn seen_uid_cache_accepts_distinct_uids() {
+    let base = Instant::now();
+    let mut cache = SeenUidCache::new();
+    assert!(cache.note(&[0x01u8; UID_LEN], base));
+    assert!(cache.note(&[0x02u8; UID_LEN], base));
+    assert!(cache.note(&[0x03u8; UID_LEN], base));
+    assert_eq!(cache.order.len(), 3);
+    assert_eq!(cache.seen.len(), 3);
+}
+
+/// Re-noting the same UID inside the TTL window is flagged as a replay
+/// (returns `false`). This is the core defense-in-depth assertion: a
+/// response whose UID was already accepted must be rejected before its
+/// stale cookies are deposited.
+#[test]
+fn seen_uid_cache_rejects_duplicate_within_ttl() {
+    let base = Instant::now();
+    let mut cache = SeenUidCache::new();
+    let uid = [0xABu8; UID_LEN];
+    assert!(cache.note(&uid, base), "first sighting must be accepted");
+    assert!(
+        !cache.note(&uid, base + Duration::from_millis(1)),
+        "duplicate UID within TTL must be rejected as a replay",
+    );
+    // A near-but-still-inside-window repeat is also a replay. Use a
+    // checked subtraction for the offset so neither the `Duration` nor
+    // the `Instant` arithmetic trips clippy::unchecked_time_subtraction.
+    let just_inside = base
+        + SEEN_UID_TTL
+            .checked_sub(Duration::from_millis(1))
+            .expect("TTL exceeds 1ms");
+    assert!(
+        !cache.note(&uid, just_inside),
+        "duplicate UID just inside the TTL window must still be rejected",
+    );
+}
+
+/// Once an entry ages past [`SEEN_UID_TTL`] it is pruned, so the same
+/// UID is accepted again — the cache is deliberately "short-lived" and
+/// does not retain UIDs forever.
+#[test]
+fn seen_uid_cache_reaccepts_after_ttl_expiry() {
+    let base = Instant::now();
+    let mut cache = SeenUidCache::new();
+    let uid = [0xCDu8; UID_LEN];
+    assert!(cache.note(&uid, base));
+    assert!(
+        cache.note(&uid, base + SEEN_UID_TTL),
+        "a UID whose prior sighting has aged past the TTL must be accepted again",
+    );
+    // The expired entry was pruned, not accumulated alongside the new one.
+    assert_eq!(cache.order.len(), 1);
+    assert_eq!(cache.seen.len(), 1);
+}
+
+/// The cache is bounded: filling it past [`SEEN_UID_CAP`] evicts the
+/// oldest entries FIFO rather than growing without bound, and the most
+/// recent `SEEN_UID_CAP` UIDs are retained.
+#[test]
+fn seen_uid_cache_enforces_capacity_bound() {
+    let base = Instant::now();
+    let mut cache = SeenUidCache::new();
+    let total = SEEN_UID_CAP + 5;
+    let uids: Vec<[u8; UID_LEN]> = (0..total)
+        .map(|i| {
+            let mut u = [0u8; UID_LEN];
+            u[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            u
+        })
+        .collect();
+    // All inserted at `base`, so only the capacity bound (not the TTL)
+    // drives eviction here.
+    for u in &uids {
+        assert!(cache.note(u, base));
+    }
+    assert_eq!(cache.order.len(), SEEN_UID_CAP);
+    assert_eq!(cache.seen.len(), SEEN_UID_CAP);
+    // The earliest `total - SEEN_UID_CAP` UIDs were evicted FIFO.
+    for u in &uids[..(total - SEEN_UID_CAP)] {
+        assert!(
+            !cache.seen.contains(u.as_slice()),
+            "oldest UID should have been evicted under the capacity bound",
+        );
+    }
+    // The most recent `SEEN_UID_CAP` UIDs remain.
+    for u in &uids[(total - SEEN_UID_CAP)..] {
+        assert!(
+            cache.seen.contains(u.as_slice()),
+            "most recent UID should still be retained",
+        );
+    }
+}
+
+/// End-to-end through the `SessionTable` wrapper: the first sighting of
+/// a UID is accepted, an immediate repeat is rejected as a replay, and
+/// a distinct UID is independently accepted. Exercises the production
+/// `note_unique_id` path (which stamps `Instant::now()` internally;
+/// the intra-test elapsed time is far below `SEEN_UID_TTL`, so dedup
+/// holds).
+#[test]
+fn session_table_note_unique_id_dedups() {
+    let table = SessionTable::new();
+    let uid_a = [0x11u8; UID_LEN];
+    let uid_b = [0x22u8; UID_LEN];
+    assert!(table.note_unique_id(&uid_a), "first sighting accepted");
+    assert!(
+        !table.note_unique_id(&uid_a),
+        "second sighting of the same UID must be rejected as a replay",
+    );
+    assert!(
+        table.note_unique_id(&uid_b),
+        "a distinct UID must be accepted independently",
+    );
+}
