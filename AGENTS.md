@@ -490,7 +490,9 @@ bd update <id> --claim          # or: bd update <id> --status in_progress
 #    unscoped push errors on the workspace's ambiguous state_map (Gotcha #4).
 bd linear sync --push --issues <id>
 
-# 3. Persist to DoltHub.
+# 3. Persist to DoltHub using the mandatory pull-then-push order (see
+#    "DoltHub Session Completion") — pull first to surface conflicts locally.
+bd dolt pull
 bd dolt push --remote origin
 ```
 
@@ -511,16 +513,23 @@ Linear. Running `bd dolt push --remote origin` afterwards persists the `CLOSED`
 state to DoltHub but still does not touch Linear.
 
 **Preferred path: let the PR close the issue.** Merging the linked PR
-transitions the Linear issue to "Done" automatically (Linear GitHub app), and
-the next `bd linear sync --pull --prefer-linear` imports that "Done" as a local
-`CLOSED` (see "Issue State Synchronization"). No manual state mapping is
-involved, so this side-steps the ambiguity entirely.
+transitions the Linear issue to "Done" automatically (Linear GitHub app), which
+side-steps the push-side mapping ambiguity entirely. A subsequent
+`bd linear sync --pull --prefer-linear` is *intended* to import that "Done" as a
+local `CLOSED` (see "Issue State Synchronization"), but in practice the pull is
+**unreliable** — see the "Pull won't adopt Linear's state" troubleshooting entry
+and the manual `bd close` fallback below, which is the expected reconciliation,
+not an exceptional one.
 
-**Manual fallback** (issue abandoned, or the GitHub integration did not fire):
+**Manual fallback** (the `--prefer-linear` pull did not adopt Linear's state —
+the common case — or the issue was abandoned, or the GitHub integration did not
+fire):
 
 ```bash
-# 1. Close locally and persist to DoltHub.
+# 1. Close locally, then persist to DoltHub using the mandatory pull-then-push
+#    order (see "DoltHub Session Completion") — pull first to surface conflicts.
 bd close <id>
+bd dolt pull
 bd dolt push --remote origin
 
 # 2. Transition Linear to Done directly — do NOT rely on a push to map it.
