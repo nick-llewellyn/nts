@@ -659,13 +659,17 @@ authoritative side, so close the local bead to match and persist to DoltHub:
 
 ```bash
 bd close <id>                 # match Linear's terminal state locally
+bd dolt pull                  # MANDATORY before any push — surface conflicts here
 bd dolt push --remote origin
 ```
 
-This is the same manual reconciliation as in "Closing an issue"; the only new
-point is that it is required **even after `--prefer-linear`**, not just when the
-PR webhook failed to fire. This is an upstream `bd` limitation, not a
-repo-fixable bug (investigated under NTS-8; push-side counterpart under NTS-29).
+The `bd dolt pull` step is not optional: per "DoltHub Session Completion" the
+mandatory push order is always pull-then-push, so DoltHub conflicts surface
+locally rather than on the push. This is the same manual reconciliation as in
+"Closing an issue"; the only new point is that it is required **even after
+`--prefer-linear`**, not just when the PR webhook failed to fire. This is an
+upstream `bd` limitation, not a repo-fixable bug (investigated under NTS-8;
+push-side counterpart under NTS-29).
 
 #### Recurring `⚠ Linear data is … stale` warning
 

@@ -118,7 +118,8 @@ session close: `bd linear sync --pull --prefer-linear` does **not** reliably
 adopt Linear's terminal state. When local edits (a claim, a scoped push) have
 bumped the local `updatedAt`, the pull keeps the local non-terminal state even
 under `--prefer-linear` — observed twice during the NTS-40 close against an
-issue Linear already showed as **Done**. Reconcile manually with
-`bd close <id>` then `bd dolt push --remote origin`. This is an upstream `bd`
-limitation, not a repo-fixable bug (investigated under NTS-8; push-side
-counterpart under NTS-29).
+issue Linear already showed as **Done**. Reconcile manually with `bd close <id>`
+followed by the mandatory pull-then-push DoltHub order (`bd dolt pull` then
+`bd dolt push --remote origin`) documented under "DoltHub Session Completion".
+This is an upstream `bd` limitation, not a repo-fixable bug (investigated under
+NTS-8; push-side counterpart under NTS-29).
