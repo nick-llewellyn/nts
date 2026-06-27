@@ -32,7 +32,7 @@
 //! orthogonal to the per-host session table that `NtsClient` owns
 //! and is unaffected by the per-client refactor.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -1213,6 +1213,126 @@ impl Drop for LeaderGuard<'_> {
     }
 }
 
+/// Time-to-live for an entry in the [`SeenUidCache`]. An accepted
+/// response's Unique Identifier is remembered for this long as a
+/// defense-in-depth replay guard (NTS-40 / Finding #2); once it
+/// elapses the entry is pruned and that UID would be accepted again.
+/// Sized to comfortably exceed any plausible request/response round
+/// trip — the per-call `timeout_ms` ceiling is far smaller — while
+/// keeping the cache "short-lived" so it cannot grow without bound.
+const SEEN_UID_TTL: Duration = Duration::from_secs(300);
+
+/// Hard ceiling on the number of Unique Identifiers retained in the
+/// [`SeenUidCache`]. Bounds worst-case memory under sustained
+/// high query rates: once the cache is full the oldest entry is
+/// evicted FIFO to make room, shrinking the replay-detection window
+/// for the least-recently-seen UID rather than growing without
+/// bound. 4096 × a 32-octet UID ≈ a few hundred KiB.
+const SEEN_UID_CAP: usize = 4096;
+
+/// Short-lived in-memory set of Unique Identifiers from server
+/// responses this table has already accepted.
+///
+/// Layered above the per-request UID echo check in
+/// [`parse_server_response`] and the AEAD seal as a defense-in-depth
+/// replay guard (NTS-40 / Finding #2). The post-AEAD replay
+/// protection otherwise rests entirely on two *echo* checks — the
+/// response must echo the request's Unique Identifier (RFC 8915 §5.3)
+/// and its `origin_timestamp` must echo the request's
+/// `transmit_timestamp` (RFC 5905 §8) — neither of which keeps any
+/// cross-request state. Their replay resistance therefore *assumes*
+/// the client mints a unique UID per request but does not *enforce*
+/// it: a CSPRNG failure or caller bug that reused a UID (alongside a
+/// reused transmit timestamp) could let a previously-captured
+/// response pass both echoes. Remembering accepted UIDs converts that
+/// assumption into an enforced invariant within the TTL window — a
+/// response whose UID was already accepted is rejected before its
+/// (necessarily stale) cookies are deposited.
+///
+/// The AEAD remains the primary guarantee: a replay must still verify
+/// under the session's S2C key, so this cache is strictly additive.
+/// It is keyed on the raw UID bytes (globally unique 32-octet random
+/// values per RFC 8915 §5.3) and is intentionally *not* partitioned
+/// by host — a UID collision across hosts is exactly as unlikely as
+/// within one, and a single global set is both simpler and strictly
+/// more conservative than a per-host one.
+struct SeenUidCache {
+    /// UIDs in insertion order paired with their insertion instant,
+    /// for age-based (TTL) and capacity-based (FIFO) pruning. The
+    /// front is always the oldest entry. The UID bytes are held behind
+    /// an `Arc<[u8]>` shared with `seen`, so each UID is heap-allocated
+    /// once and both collections only carry a refcount bump.
+    order: VecDeque<(Arc<[u8]>, Instant)>,
+    /// Membership index over the same UIDs for O(1) duplicate
+    /// detection. Kept in lockstep with `order` and sharing its
+    /// backing allocation via `Arc<[u8]>`.
+    seen: HashSet<Arc<[u8]>>,
+}
+
+impl SeenUidCache {
+    fn new() -> Self {
+        Self {
+            order: VecDeque::new(),
+            seen: HashSet::new(),
+        }
+    }
+
+    /// Drop entries older than [`SEEN_UID_TTL`] relative to `now`.
+    /// Entries are pushed in non-decreasing `now` order, so the front
+    /// is always the oldest and a single front-to-back walk that stops
+    /// at the first still-live entry suffices.
+    ///
+    /// This pass is TTL-only: the [`SEEN_UID_CAP`] ceiling is enforced
+    /// separately, on the insertion path in [`note`](Self::note), so a
+    /// rejected duplicate never evicts an unrelated UID (which would
+    /// silently shrink the replay-detection window).
+    ///
+    /// Uses `saturating_duration_since` rather than `duration_since` so
+    /// a `now` that is somehow earlier than a front entry's insertion
+    /// instant yields `Duration::ZERO` (treated as still-live) instead
+    /// of panicking. `note` samples `now` under the same lock that
+    /// guards insertion, so the non-decreasing invariant holds in
+    /// practice; the saturating call hardens the path against any
+    /// future caller that violates it.
+    fn prune(&mut self, now: Instant) {
+        while let Some((_, inserted)) = self.order.front() {
+            if now.saturating_duration_since(*inserted) >= SEEN_UID_TTL {
+                if let Some((uid, _)) = self.order.pop_front() {
+                    self.seen.remove(&uid);
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Record `uid` as seen at `now`, returning `true` if it was newly
+    /// recorded (accept the response) or `false` if it was already
+    /// present within the TTL window (replay — reject the response).
+    ///
+    /// TTL pruning runs first so an expired prior sighting does not
+    /// spuriously flag a replay. The [`SEEN_UID_CAP`] ceiling is
+    /// enforced only once the UID is confirmed new and about to be
+    /// inserted, so a rejected duplicate leaves the existing window
+    /// untouched. The UID is heap-allocated once as an `Arc<[u8]>` and
+    /// shared between `seen` and `order`.
+    fn note(&mut self, uid: &[u8], now: Instant) -> bool {
+        self.prune(now);
+        if self.seen.contains(uid) {
+            return false;
+        }
+        while self.order.len() >= SEEN_UID_CAP {
+            if let Some((evicted, _)) = self.order.pop_front() {
+                self.seen.remove(&evicted);
+            }
+        }
+        let shared: Arc<[u8]> = Arc::from(uid);
+        self.seen.insert(Arc::clone(&shared));
+        self.order.push_back((shared, now));
+        true
+    }
+}
+
 /// Per-host session table keyed by `host:port` so two specs with
 /// different KE ports stay isolated even when they share a hostname.
 ///
@@ -1246,6 +1366,13 @@ pub(crate) struct SessionTable {
     /// `inflight` mutexes are deliberately *not* held simultaneously
     /// to avoid lock-order discipline.
     inflight: Mutex<HashMap<String, Arc<HandshakeSlot>>>,
+    /// Short-lived replay guard over accepted-response Unique
+    /// Identifiers (NTS-40 / Finding #2). See [`SeenUidCache`] for the
+    /// threat model. Its mutex is independent of `map` / `inflight`
+    /// and is taken alone, briefly, in [`note_unique_id`](Self::note_unique_id),
+    /// never while either of the others is held — so it adds no
+    /// lock-ordering obligation.
+    seen_uids: Mutex<SeenUidCache>,
 }
 
 impl SessionTable {
@@ -1253,6 +1380,7 @@ impl SessionTable {
         Self {
             map: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashMap::new()),
+            seen_uids: Mutex::new(SeenUidCache::new()),
         }
     }
 }
@@ -2228,6 +2356,29 @@ impl SessionTable {
         })
     }
 
+    /// Record the Unique Identifier echoed by an accepted server
+    /// response in the short-lived [`SeenUidCache`], returning `true`
+    /// if it was newly seen (the caller should accept the response) or
+    /// `false` if it was already recorded within the TTL window (a
+    /// replay — the caller must reject the response before depositing
+    /// its now-stale cookies). See [`SeenUidCache`] for the full
+    /// threat model. Defense-in-depth layered above the AEAD; NTS-40 /
+    /// Finding #2.
+    ///
+    /// Takes the `seen_uids` mutex alone for the duration of the
+    /// lookup-and-insert; it is never held alongside `map` or
+    /// `inflight`, so it imposes no lock-ordering discipline.
+    ///
+    /// `now` is sampled *after* the lock is acquired so the timestamp
+    /// written into the cache is ordered consistently with the
+    /// insertion itself: under contention, the thread that wins the
+    /// lock both samples the later instant and pushes the later entry,
+    /// keeping [`SeenUidCache`]'s non-decreasing-`now` invariant intact.
+    fn note_unique_id(&self, uid: &[u8]) -> bool {
+        let mut cache = lock_recover(&self.seen_uids);
+        cache.note(uid, Instant::now())
+    }
+
     /// Deposit fresh cookies harvested from a verified server reply.
     ///
     /// The cookies are AEAD-sealed by the server with the C2S/S2C key pair
@@ -2799,6 +2950,31 @@ fn nts_query_inner(
 
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
         .map_err(evict_on_rekey_signal)?;
+
+    // NTS-40 / Finding #2: defense-in-depth replay guard above the
+    // AEAD. `parse_server_response` already verified the response
+    // echoes this request's Unique Identifier (RFC 8915 §5.3) and
+    // `transmit_timestamp` (RFC 5905 §8) and that it seals under the
+    // session's S2C key — but those are stateless *echo* checks whose
+    // replay resistance assumes per-request UID uniqueness without
+    // enforcing it. Reject (before depositing the response's
+    // now-stale cookies) if this UID was already accepted inside the
+    // short-lived window; the AEAD stays the primary guarantee and
+    // this only closes the residual UID-reuse gap the finding names.
+    // The session is *not* evicted — a replay is not a rekey signal,
+    // so the cached keys and remaining cookies stay valid for the
+    // next query.
+    if !table.note_unique_id(&response.unique_id) {
+        return Err(attribute_post_handshake(NtsError::NtpProtocol {
+            message: format!(
+                "replayed Unique Identifier: response UID already accepted \
+                 within the {}s replay-guard window",
+                SEEN_UID_TTL.as_secs()
+            ),
+            trust_backend: None,
+        }));
+    }
+
     let fresh_count = response.fresh_cookies.len() as u32;
     table.deposit_cookies(&key, session_generation, response.fresh_cookies);
 
