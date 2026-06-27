@@ -5,6 +5,15 @@
 
 ### Documentation
 
+- Documented `CookieJar`'s concurrency contract on the struct's rustdoc. The
+  type auto-derives `Send + Sync` (all its fields are `Send + Sync`), so the
+  marker traits alone do not warn callers off concurrent use; the real
+  constraint is the absence of interior mutability — every mutator takes
+  `&mut self`, so a jar shared across threads must be externally synchronised.
+  `SessionTable` already owns every jar inside its `Mutex<HashMap<…>>`; the new
+  note closes the gap for any future caller that reaches for `CookieJar`
+  directly. Comment-only; no behaviour change. (NTS-42)
+
 - Documented the multi-client trust-routing pattern for apps that must reach
   servers in more than one trust domain (e.g. a private-CA internal server
   alongside public servers). Added a "Reaching multiple trust domains"

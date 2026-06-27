@@ -49,6 +49,20 @@ pub const DEFAULT_CAPACITY: usize = 8;
 /// [`Zeroizing<Vec<u8>>`], so a panic anywhere between
 /// `parse_record` and the final `put` no longer drops naked
 /// `Vec<u8>` allocations (bd nts-8ey).
+///
+/// CONCURRENCY: this type auto-derives `Send + Sync` (its fields —
+/// `usize`, `HashMap`, `VecDeque`, `Zeroizing<Vec<u8>>` — are all
+/// `Send + Sync`), so the marker traits alone do *not* warn callers
+/// off concurrent use. The real constraint is that it carries **no
+/// interior mutability**: every mutator ([`Self::put`],
+/// [`Self::put_many`], [`Self::take`], [`Self::clear_host`]) takes
+/// `&mut self`, so two threads cannot mutate the same jar without
+/// external synchronisation. A future caller that reaches for
+/// `CookieJar` directly outside [`crate::api::nts`] must wrap it in a
+/// `Mutex` (or equivalent) before sharing it across threads;
+/// [`crate::api::nts`]'s `SessionTable` already does this by owning
+/// every jar inside its `Mutex<HashMap<String, Session>>` and only
+/// touching it under that lock.
 #[derive(Clone)]
 pub struct CookieJar {
     capacity: usize,
