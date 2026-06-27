@@ -464,7 +464,7 @@ bd linear sync --push          # then export local changes
 
 | Flag | Purpose |
 |---|---|
-| `--prefer-linear` / `--prefer-local` | Conflict resolution — force one side to win when timestamps diverge. `--prefer-linear` is the correct way to make a pull adopt Linear's terminal state (see "Issue State Synchronization"). |
+| `--prefer-linear` / `--prefer-local` | Conflict resolution — force one side to win when timestamps diverge. `--prefer-linear` is the *intended* way to make a pull adopt Linear's terminal state, but it is **not reliable** in practice: when local edits bumped the local `updatedAt`, an observed `--prefer-linear` pull still kept the local non-terminal state (see "Pull won't adopt Linear's state" and "Issue State Synchronization"). |
 | `--pull-if-stale [--threshold 20m]` | Pull only if the local Linear cache is older than the threshold (default 20m). This is the source of the recurring `⚠ Linear data is … stale` warning. |
 | `--state` (`open`, `closed`, or `all`) | Restrict the sync to issues in a given local state (default `all`). |
 | `--issues a,b` / `--parent TICKET` | Scope a push to specific beads or a ticket subtree. **Required** for any push that must succeed reliably — see Gotcha #4. |
@@ -645,11 +645,27 @@ instead of pushing. See Gotcha #4 for the full explanation.
 
 `bd`'s default conflict resolution is newer-timestamp-wins; local edits (claims,
 pushes) can bump the local `updatedAt` so a plain pull keeps the local state.
-Force Linear to win:
+The documented first move is to force Linear to win:
 
 ```bash
 bd linear sync --pull --prefer-linear
 ```
+
+**Caveat (observed, not theoretical):** `--prefer-linear` is **not reliable**
+for this. During the NTS-40 close it was run twice against an issue Linear
+already showed as **Done**, and the local bead stayed `in_progress` both times.
+When `--prefer-linear` does not take, reconcile manually — Linear is the
+authoritative side, so close the local bead to match and persist to DoltHub:
+
+```bash
+bd close <id>                 # match Linear's terminal state locally
+bd dolt push --remote origin
+```
+
+This is the same manual reconciliation as in "Closing an issue"; the only new
+point is that it is required **even after `--prefer-linear`**, not just when the
+PR webhook failed to fire. This is an upstream `bd` limitation, not a
+repo-fixable bug (investigated under NTS-8; push-side counterpart under NTS-29).
 
 #### Recurring `⚠ Linear data is … stale` warning
 
@@ -777,13 +793,18 @@ a **pull-centric** synchronization flow:
    `bd`'s default newer-timestamp-wins conflict resolution means a plain
    `--pull` can *keep* a stale local `IN_PROGRESS`/`OPEN` when local edits (a
    claim, a push) bumped the local `updatedAt` after the Linear "Done".
-   `--prefer-linear` forces Linear's terminal state to win, importing it as a
-   local `CLOSED`. This addresses the "pull didn't close it" symptom seen in
-   earlier sessions.
+   `--prefer-linear` is *intended* to make Linear's terminal state win,
+   importing it as a local `CLOSED`. In practice this is **unreliable** — see
+   "Pull won't adopt Linear's state" in Troubleshooting; an observed
+   `--prefer-linear` pull left the local bead `in_progress` despite Linear
+   showing **Done**. Treat the manual `bd close` reconciliation in step 3 as the
+   expected fallback, not an exceptional one.
 2. **DoltHub Sync.** After the pull, run `bd dolt push` to persist the
    closed state to the authoritative database.
-3. **Manual Fallback.** Only manually run `bd close` if the issue was
-   abandoned or if the GitHub integration failed to trigger. Do **not** rely on
+3. **Manual Fallback.** Manually run `bd close` whenever the `--prefer-linear`
+   pull does not adopt Linear's terminal state (the common case when local edits
+   bumped the local timestamp), as well as when the issue was abandoned or the
+   GitHub integration failed to trigger. Do **not** rely on
    `bd linear sync --push` to set the terminal Linear state — its `CLOSED`
    inverse is ambiguous (Gotcha #1). Prefer letting the PR-merge webhook set
    **Done**, or set it explicitly via `save_issue_linear`.
