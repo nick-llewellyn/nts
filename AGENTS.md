@@ -803,8 +803,10 @@ a **pull-centric** synchronization flow:
    `--prefer-linear` pull left the local bead `in_progress` despite Linear
    showing **Done**. Treat the manual `bd close` reconciliation in step 3 as the
    expected fallback, not an exceptional one.
-2. **DoltHub Sync.** After the pull, run `bd dolt push` to persist the
-   closed state to the authoritative database.
+2. **DoltHub Sync.** After the pull, persist the closed state to the
+   authoritative database using the mandatory pull-then-push order from
+   "DoltHub Session Completion" — `bd dolt pull` first to surface any
+   conflicts locally, then `bd dolt push --remote origin`.
 3. **Manual Fallback.** Manually run `bd close` whenever the `--prefer-linear`
    pull does not adopt Linear's terminal state (the common case when local edits
    bumped the local timestamp), as well as when the issue was abandoned or the
