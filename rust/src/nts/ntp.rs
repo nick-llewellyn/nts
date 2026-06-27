@@ -387,7 +387,20 @@ pub struct ClientRequest {
     pub cookie: Zeroizing<Vec<u8>>,
     /// Number of NTS Cookie Placeholder fields requesting extra cookies in the reply.
     pub placeholder_count: usize,
-    /// SIV nonce; `RECOMMENDED_NONCE_LEN` octets matches the high-level Aead trait.
+    /// SIV nonce; `RECOMMENDED_NONCE_LEN` octets matches the high-level
+    /// Aead trait.
+    ///
+    /// Like `unique_id`, the caller MUST source this from a CSPRNG and
+    /// MUST NOT reuse it across requests under a given C2S key. This
+    /// module cannot enforce that contract — it is RNG-free by design
+    /// (see the module-level rustdoc) and [`build_client_request`] only
+    /// rejects the empty nonce. Per-request uniqueness is what the AEAD
+    /// seal depends on: a reused nonce under the same key voids the SIV
+    /// authentication guarantee (RFC 8915 §5.6). The production funnel
+    /// `crate::api::nts::fresh_request_uid_and_nonce` satisfies this via
+    /// `getrandom::fill`; the regression test
+    /// `crate::api::nts::tests::consecutive_request_nonces_from_helper_are_distinct`
+    /// pins it at that call site.
     pub nonce: Vec<u8>,
     /// Client transmit timestamp (NTP 64-bit short format).
     pub transmit_timestamp: u64,
@@ -422,10 +435,25 @@ impl std::fmt::Debug for ClientRequest {
 /// `c2s_key` selects the AEAD algorithm: SIV-CMAC-256 emits a 16-byte
 /// authenticator tag (empty plaintext, RFC 8915 §5.6); GCM-SIV emits a
 /// 16-byte tag too (the GCM-SIV tag length, RFC 8452).
+///
+/// # Nonce contract
+///
+/// `req.nonce` MUST be CSPRNG-sourced and unique per request under a
+/// given `c2s_key`. This function validates only that the nonce is
+/// non-empty — the deeper unpredictability and per-request-uniqueness
+/// obligations cannot be checked here because the codec is RNG-free and
+/// stateless by design (see the module-level rustdoc). A reused nonce
+/// under the same key collapses the AEAD authentication guarantee
+/// (RFC 8915 §5.6), so any caller minting its own [`ClientRequest`] must
+/// uphold this; the production path funnels every nonce through
+/// `crate::api::nts::fresh_request_uid_and_nonce`.
 pub fn build_client_request(req: &ClientRequest, c2s_key: &AeadKey) -> Result<Vec<u8>, NtpError> {
     if req.unique_id.is_empty() {
         return Err(NtpError::MissingUniqueIdentifier);
     }
+    // Floor check only: per-request uniqueness and CSPRNG sourcing are
+    // the caller's contract (see `# Nonce contract` above); a stateless
+    // codec cannot verify either.
     if req.nonce.is_empty() {
         return Err(NtpError::EmptyNonce);
     }
