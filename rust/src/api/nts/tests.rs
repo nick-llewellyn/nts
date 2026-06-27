@@ -3892,6 +3892,51 @@ fn seen_uid_cache_enforces_capacity_bound() {
     }
 }
 
+/// A rejected replay must not perturb the cache. When the cache is full
+/// (exactly [`SEEN_UID_CAP`] entries) and a duplicate `note()` arrives,
+/// the duplicate is rejected *without* evicting the oldest unrelated
+/// UID — otherwise a replay attempt would silently shrink the
+/// replay-detection window. Regression guard for the bug where capacity
+/// was enforced in `prune()` (run before the duplicate check) rather
+/// than on the insertion path.
+#[test]
+fn seen_uid_cache_replay_at_capacity_does_not_evict() {
+    let base = Instant::now();
+    let mut cache = SeenUidCache::new();
+    let uids: Vec<[u8; UID_LEN]> = (0..SEEN_UID_CAP)
+        .map(|i| {
+            let mut u = [0u8; UID_LEN];
+            u[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            u
+        })
+        .collect();
+    // Fill to exactly capacity, all stamped at `base` so nothing is
+    // TTL-eligible for the duration of the test.
+    for u in &uids {
+        assert!(cache.note(u, base));
+    }
+    assert_eq!(cache.order.len(), SEEN_UID_CAP);
+
+    // Re-note the most-recent UID (a replay) while at capacity.
+    assert!(
+        !cache.note(&uids[SEEN_UID_CAP - 1], base),
+        "a duplicate UID must be rejected as a replay",
+    );
+
+    // The rejected replay left the window intact: still exactly
+    // capacity entries, and the oldest unrelated UID was not evicted.
+    assert_eq!(
+        cache.order.len(),
+        SEEN_UID_CAP,
+        "a rejected replay must not change the entry count",
+    );
+    assert_eq!(cache.seen.len(), SEEN_UID_CAP);
+    assert!(
+        cache.seen.contains(uids[0].as_slice()),
+        "the oldest unrelated UID must survive a rejected replay",
+    );
+}
+
 /// End-to-end through the `SessionTable` wrapper: the first sighting of
 /// a UID is accepted, an immediate repeat is rejected as a replay, and
 /// a distinct UID is independently accepted. Exercises the production

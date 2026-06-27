@@ -1259,11 +1259,14 @@ const SEEN_UID_CAP: usize = 4096;
 struct SeenUidCache {
     /// UIDs in insertion order paired with their insertion instant,
     /// for age-based (TTL) and capacity-based (FIFO) pruning. The
-    /// front is always the oldest entry.
-    order: VecDeque<(Box<[u8]>, Instant)>,
+    /// front is always the oldest entry. The UID bytes are held behind
+    /// an `Arc<[u8]>` shared with `seen`, so each UID is heap-allocated
+    /// once and both collections only carry a refcount bump.
+    order: VecDeque<(Arc<[u8]>, Instant)>,
     /// Membership index over the same UIDs for O(1) duplicate
-    /// detection. Kept in lockstep with `order`.
-    seen: HashSet<Box<[u8]>>,
+    /// detection. Kept in lockstep with `order` and sharing its
+    /// backing allocation via `Arc<[u8]>`.
+    seen: HashSet<Arc<[u8]>>,
 }
 
 impl SeenUidCache {
@@ -1274,11 +1277,15 @@ impl SeenUidCache {
         }
     }
 
-    /// Drop entries older than [`SEEN_UID_TTL`] relative to `now`,
-    /// then enforce the [`SEEN_UID_CAP`] ceiling. Entries are pushed
-    /// in non-decreasing `now` order, so the front is always the
-    /// oldest and a single front-to-back walk that stops at the first
-    /// still-live entry suffices for the TTL pass.
+    /// Drop entries older than [`SEEN_UID_TTL`] relative to `now`.
+    /// Entries are pushed in non-decreasing `now` order, so the front
+    /// is always the oldest and a single front-to-back walk that stops
+    /// at the first still-live entry suffices.
+    ///
+    /// This pass is TTL-only: the [`SEEN_UID_CAP`] ceiling is enforced
+    /// separately, on the insertion path in [`note`](Self::note), so a
+    /// rejected duplicate never evicts an unrelated UID (which would
+    /// silently shrink the replay-detection window).
     fn prune(&mut self, now: Instant) {
         while let Some((_, inserted)) = self.order.front() {
             if now.duration_since(*inserted) >= SEEN_UID_TTL {
@@ -1289,26 +1296,31 @@ impl SeenUidCache {
                 break;
             }
         }
-        while self.order.len() >= SEEN_UID_CAP {
-            if let Some((uid, _)) = self.order.pop_front() {
-                self.seen.remove(&uid);
-            }
-        }
     }
 
     /// Record `uid` as seen at `now`, returning `true` if it was newly
     /// recorded (accept the response) or `false` if it was already
     /// present within the TTL window (replay — reject the response).
-    /// Pruning runs first so an expired prior sighting does not
-    /// spuriously flag a replay.
+    ///
+    /// TTL pruning runs first so an expired prior sighting does not
+    /// spuriously flag a replay. The [`SEEN_UID_CAP`] ceiling is
+    /// enforced only once the UID is confirmed new and about to be
+    /// inserted, so a rejected duplicate leaves the existing window
+    /// untouched. The UID is heap-allocated once as an `Arc<[u8]>` and
+    /// shared between `seen` and `order`.
     fn note(&mut self, uid: &[u8], now: Instant) -> bool {
         self.prune(now);
         if self.seen.contains(uid) {
             return false;
         }
-        let boxed: Box<[u8]> = uid.into();
-        self.seen.insert(boxed.clone());
-        self.order.push_back((boxed, now));
+        while self.order.len() >= SEEN_UID_CAP {
+            if let Some((evicted, _)) = self.order.pop_front() {
+                self.seen.remove(&evicted);
+            }
+        }
+        let shared: Arc<[u8]> = Arc::from(uid);
+        self.seen.insert(Arc::clone(&shared));
+        self.order.push_back((shared, now));
         true
     }
 }
