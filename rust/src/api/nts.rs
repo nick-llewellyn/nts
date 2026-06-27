@@ -2348,18 +2348,6 @@ impl SessionTable {
         })
     }
 
-    /// Deposit fresh cookies harvested from a verified server reply.
-    ///
-    /// The cookies are AEAD-sealed by the server with the C2S/S2C key pair
-    /// from `expected_generation`. If a concurrent `nts_warm_cookies` (or
-    /// another `checkout` that ran its own re-handshake) replaced the
-    /// session under `spec_key` while this query was on the wire, the
-    /// cached entry now holds an unrelated key pair and these cookies
-    /// would be unusable against it — every future query that spent one
-    /// would round-trip through `NtsError::Authentication` and force yet
-    /// another KE handshake. Drop the cookies on the floor in that case;
-    /// the next query will simply re-handshake and refill the jar from
-    /// scratch, which is strictly cheaper than poisoning the cache.
     /// Record the Unique Identifier echoed by an accepted server
     /// response in the short-lived [`SeenUidCache`], returning `true`
     /// if it was newly seen (the caller should accept the response) or
@@ -2376,6 +2364,18 @@ impl SessionTable {
         lock_recover(&self.seen_uids).note(uid, Instant::now())
     }
 
+    /// Deposit fresh cookies harvested from a verified server reply.
+    ///
+    /// The cookies are AEAD-sealed by the server with the C2S/S2C key pair
+    /// from `expected_generation`. If a concurrent `nts_warm_cookies` (or
+    /// another `checkout` that ran its own re-handshake) replaced the
+    /// session under `spec_key` while this query was on the wire, the
+    /// cached entry now holds an unrelated key pair and these cookies
+    /// would be unusable against it — every future query that spent one
+    /// would round-trip through `NtsError::Authentication` and force yet
+    /// another KE handshake. Drop the cookies on the floor in that case;
+    /// the next query will simply re-handshake and refill the jar from
+    /// scratch, which is strictly cheaper than poisoning the cache.
     fn deposit_cookies(&self, spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8>>) {
         if cookies.is_empty() {
             return;
