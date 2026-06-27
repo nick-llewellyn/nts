@@ -3854,6 +3854,37 @@ fn seen_uid_cache_reaccepts_after_ttl_expiry() {
     assert_eq!(cache.seen.len(), 1);
 }
 
+/// `prune` must not panic when handed a `now` earlier than a front
+/// entry's insertion instant. The production path samples `now` under
+/// the same lock that guards insertion, so this never happens in
+/// practice, but `saturating_duration_since` hardens the path against
+/// any future caller that violates the non-decreasing-`now` invariant:
+/// an out-of-order `now` yields `Duration::ZERO`, so the entry is
+/// treated as still-live and simply retained rather than tripping a
+/// panic.
+#[test]
+fn seen_uid_cache_prune_tolerates_earlier_now() {
+    let base = Instant::now();
+    let mut cache = SeenUidCache::new();
+    let uid = [0xEFu8; UID_LEN];
+    assert!(cache.note(&uid, base + SEEN_UID_TTL));
+    // A second note with a `now` earlier than the first entry's
+    // timestamp would panic under `duration_since`; with the
+    // saturating call it computes a zero age, retains the live entry,
+    // and rejects the duplicate.
+    let earlier = [0x01u8; UID_LEN];
+    assert!(
+        cache.note(&earlier, base),
+        "a distinct UID must be accepted even when `now` regresses",
+    );
+    assert!(
+        !cache.note(&uid, base),
+        "the still-live original UID must remain a replay under a regressed `now`",
+    );
+    assert_eq!(cache.order.len(), 2);
+    assert_eq!(cache.seen.len(), 2);
+}
+
 /// The cache is bounded: filling it past [`SEEN_UID_CAP`] evicts the
 /// oldest entries FIFO rather than growing without bound, and the most
 /// recent `SEEN_UID_CAP` UIDs are retained.

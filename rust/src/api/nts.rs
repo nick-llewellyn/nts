@@ -1286,9 +1286,17 @@ impl SeenUidCache {
     /// separately, on the insertion path in [`note`](Self::note), so a
     /// rejected duplicate never evicts an unrelated UID (which would
     /// silently shrink the replay-detection window).
+    ///
+    /// Uses `saturating_duration_since` rather than `duration_since` so
+    /// a `now` that is somehow earlier than a front entry's insertion
+    /// instant yields `Duration::ZERO` (treated as still-live) instead
+    /// of panicking. `note` samples `now` under the same lock that
+    /// guards insertion, so the non-decreasing invariant holds in
+    /// practice; the saturating call hardens the path against any
+    /// future caller that violates it.
     fn prune(&mut self, now: Instant) {
         while let Some((_, inserted)) = self.order.front() {
-            if now.duration_since(*inserted) >= SEEN_UID_TTL {
+            if now.saturating_duration_since(*inserted) >= SEEN_UID_TTL {
                 if let Some((uid, _)) = self.order.pop_front() {
                     self.seen.remove(&uid);
                 }
@@ -2360,8 +2368,15 @@ impl SessionTable {
     /// Takes the `seen_uids` mutex alone for the duration of the
     /// lookup-and-insert; it is never held alongside `map` or
     /// `inflight`, so it imposes no lock-ordering discipline.
+    ///
+    /// `now` is sampled *after* the lock is acquired so the timestamp
+    /// written into the cache is ordered consistently with the
+    /// insertion itself: under contention, the thread that wins the
+    /// lock both samples the later instant and pushes the later entry,
+    /// keeping [`SeenUidCache`]'s non-decreasing-`now` invariant intact.
     fn note_unique_id(&self, uid: &[u8]) -> bool {
-        lock_recover(&self.seen_uids).note(uid, Instant::now())
+        let mut cache = lock_recover(&self.seen_uids);
+        cache.note(uid, Instant::now())
     }
 
     /// Deposit fresh cookies harvested from a verified server reply.
