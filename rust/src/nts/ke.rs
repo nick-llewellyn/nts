@@ -8,6 +8,7 @@
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -370,6 +371,15 @@ pub struct KeRequest {
     /// system-clock behaviour untouched. See the cold-start clock-skew
     /// rescue rationale on `TimeOverrideVerifier`.
     pub verification_time_override: Option<UnixTime>,
+    /// Advisory live-phase channel for the singleflight machinery in
+    /// `crate::api::nts`. When `Some`, [`perform_handshake`] records the
+    /// milestone it is currently inside (Connect, Tls, KE record I/O) at
+    /// each phase boundary so a *waiter* parked on the same handshake's
+    /// singleflight slot can attribute a timeout to the phase the leader
+    /// was actually in, instead of a blanket `KeRecordIo` guess. `None`
+    /// for every non-singleflight caller (direct `perform_handshake`
+    /// users, unit tests); those pay nothing. See [`PhaseReporter`].
+    pub phase_reporter: Option<PhaseReporter>,
 }
 
 /// Phase of an NTS-KE handshake whose budget elapsed.
@@ -401,6 +411,90 @@ pub enum KeTimeoutPhase {
     /// budget — the server completed TLS but is now drip-feeding (or
     /// has stalled completely on) the record exchange.
     KeRecordIo,
+}
+
+/// Advisory live-phase channel from a singleflight *leader* running an
+/// NTS-KE handshake to the *waiters* parked on its slot. The leader
+/// stores the milestone it is currently inside via
+/// [`enter`](Self::enter) at each phase boundary of
+/// [`perform_handshake`]; a waiter that times out reads the latest
+/// milestone via [`current`](Self::current) and attributes its
+/// `Timeout` to the phase the leader was actually in, instead of the
+/// blanket `KeRecordIo` it used to guess regardless of the leader's
+/// true position.
+///
+/// The shared cell is an `AtomicU8` accessed with `Relaxed` ordering:
+/// the value is purely advisory diagnostic metadata with no
+/// happens-before relationship to any other state (the leader's actual
+/// result is published through the slot's mutex + condvar in
+/// `crate::api::nts`), so no stronger ordering is warranted. A waiter
+/// may observe a milestone one boundary behind the leader's true
+/// position; the attribution is monotonic
+/// (DNS → Connect → Tls → KeRecordIo) and still far more accurate than
+/// the previous always-`KeRecordIo` behaviour.
+///
+/// Only the milestones a leader can *linger* in are representable. The
+/// default is DNS — a leader stuck there is a slow resolver, surfaced
+/// to the waiter as `DnsTimeout`. `DnsSaturation` is a fast-fail
+/// terminal error the leader publishes as an `Err` *result* on the
+/// slot, never a live milestone, so [`enter`](Self::enter) folds it
+/// onto the DNS encoding.
+#[derive(Debug, Clone)]
+pub struct PhaseReporter(Arc<AtomicU8>);
+
+// `u8` milestone encoding for [`PhaseReporter`]. Only the phases a
+// leader can linger in are represented; the default (`0`) is DNS.
+const PHASE_DNS: u8 = 0;
+const PHASE_CONNECT: u8 = 1;
+const PHASE_TLS: u8 = 2;
+const PHASE_KE_RECORD_IO: u8 = 3;
+
+impl PhaseReporter {
+    /// Create a reporter initialised to the DNS milestone. A leader
+    /// that has not yet crossed its first phase boundary — or is
+    /// genuinely stuck in resolution — is correctly attributed
+    /// `DnsTimeout` by a waiter reading this initial value.
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicU8::new(PHASE_DNS)))
+    }
+
+    /// Record that the leader has entered `phase`. Called at each phase
+    /// boundary inside [`perform_handshake`] and
+    /// [`connect_with_deadline_using`]. `Relaxed` because the value is
+    /// advisory (see the type-level docs). `DnsSaturation` and
+    /// `DnsTimeout` both fold onto the DNS milestone — neither is a
+    /// distinct lingering state a waiter must disambiguate from the
+    /// default.
+    pub fn enter(&self, phase: KeTimeoutPhase) {
+        let code = match phase {
+            KeTimeoutPhase::DnsSaturation | KeTimeoutPhase::DnsTimeout => PHASE_DNS,
+            KeTimeoutPhase::Connect => PHASE_CONNECT,
+            KeTimeoutPhase::Tls => PHASE_TLS,
+            KeTimeoutPhase::KeRecordIo => PHASE_KE_RECORD_IO,
+        };
+        self.0.store(code, Ordering::Relaxed);
+    }
+
+    /// Read the leader's most recently recorded milestone, for a parked
+    /// waiter attributing its `Timeout`. An unrecognised encoding (not
+    /// reachable through [`enter`](Self::enter)) conservatively maps to
+    /// `DnsTimeout`.
+    #[must_use]
+    pub fn current(&self) -> KeTimeoutPhase {
+        match self.0.load(Ordering::Relaxed) {
+            PHASE_CONNECT => KeTimeoutPhase::Connect,
+            PHASE_TLS => KeTimeoutPhase::Tls,
+            PHASE_KE_RECORD_IO => KeTimeoutPhase::KeRecordIo,
+            _ => KeTimeoutPhase::DnsTimeout,
+        }
+    }
+}
+
+impl Default for PhaseReporter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Microsecond-resolution wall-clock breakdown of a successful
@@ -1523,6 +1617,13 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
     #[cfg(target_os = "android")]
     let pre_fallback = build.hybrid.as_ref().map(|h| h.fallback_count());
     let initial_backend = build.initial_backend;
+    // Advisory live-phase channel to any singleflight waiters parked on
+    // this leader's slot (`None` for direct/non-singleflight callers).
+    // Updated at each phase boundary below so a waiter that times out
+    // reports the phase this handshake is actually in. The reporter is
+    // created in DNS state, so the pre-connect window is already
+    // attributed correctly without an explicit `enter` here.
+    let reporter = req.phase_reporter.as_ref();
 
     // Closure that resolves the trust-backend attribution given the
     // handshake's current observable state. Called both in the success
@@ -1577,6 +1678,7 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
         req.port,
         deadline,
         req.dns_concurrency_cap,
+        reporter,
         system_lookup,
     )
     .map_err(attribute)?;
@@ -1585,6 +1687,12 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
         dns_micros,
         connect_micros,
     } = connected;
+    // Connect succeeded; the next blocking phase is the TLS handshake
+    // (folded into the first `write_all`/`flush` under rustls' lazy
+    // model). A waiter timing out from here on attributes to `Tls`.
+    if let Some(r) = reporter {
+        r.enter(KeTimeoutPhase::Tls);
+    }
     if let Some(d) = deadline.as_ref() {
         d.apply_to_with_phase(&tcp, KeTimeoutPhase::Tls)
             .map_err(attribute)?;
@@ -1629,6 +1737,12 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
         // `read_to_end_capped` and the failure would surface as a
         // less-specific record-parse error.
         check_negotiated_alpn(stream.conn.alpn_protocol()).map_err(attribute)?;
+        // TLS handshake + request write complete; the remaining blocking
+        // work is the record-read loop. A waiter timing out from here on
+        // attributes to `KeRecordIo`.
+        if let Some(r) = reporter {
+            r.enter(KeTimeoutPhase::KeRecordIo);
+        }
         let record_started = Instant::now();
         let response = read_to_end_capped(&mut stream, deadline.as_ref()).map_err(attribute)?;
         let ke_record_io_micros = record_started.elapsed().as_micros() as i64;
@@ -1760,6 +1874,7 @@ where
         port,
         timeout.map(Deadline::new),
         dns_concurrency_cap,
+        None,
         lookup,
     )
 }
@@ -1785,17 +1900,29 @@ where
 /// site. When `deadline` is `None` (unbounded path) both fields are
 /// reported as `0` since the unbounded `TcpStream::connect` does its
 /// own internal lookup that is not separately measurable.
+///
+/// `reporter`, when `Some`, advances to the `Connect` milestone once
+/// DNS resolution completes so a singleflight waiter can distinguish a
+/// leader stuck in DNS from one stuck in the per-address connect loop.
 fn connect_with_deadline_using<F>(
     host: &str,
     port: u16,
     deadline: Option<Deadline>,
     dns_concurrency_cap: usize,
+    reporter: Option<&PhaseReporter>,
     lookup: F,
 ) -> Result<ConnectedTcp, KeError>
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
     let Some(deadline) = deadline else {
+        // Unbounded path: a single blocking `connect` that does its own
+        // internal lookup we cannot split. Best-effort advance to
+        // `Connect` so a waiter (in the unlikely event one is parked on
+        // an unbounded leader) is not pinned at the DNS default.
+        if let Some(r) = reporter {
+            r.enter(KeTimeoutPhase::Connect);
+        }
         let stream = TcpStream::connect((host, port))?;
         return Ok(ConnectedTcp {
             stream,
@@ -1812,6 +1939,12 @@ where
     let addrs = resolve_with_global(host, port, initial, dns_concurrency_cap, lookup)
         .map_err(dns_error_to_ke)?;
     let dns_micros = dns_started.elapsed().as_micros() as i64;
+    // DNS resolved; entering the per-address connect loop. A waiter
+    // timing out from here on attributes to `Connect` rather than the
+    // DNS default.
+    if let Some(r) = reporter {
+        r.enter(KeTimeoutPhase::Connect);
+    }
     let connect_started = Instant::now();
     let mut last_err: Option<std::io::Error> = None;
     for addr in addrs {
