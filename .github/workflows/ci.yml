@@ -155,7 +155,7 @@ jobs:
       # restore when only the pubspec changed: pub reuses the bulk of
       # the existing cache and only fetches the deltas.
       - name: Cache pub
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.pub-cache
           key: pub-${{ runner.os }}-${{ matrix.flutter }}-${{ hashFiles('**/pubspec.yaml') }}
@@ -411,7 +411,7 @@ jobs:
       # cold miss would silently change CI behaviour.
       - name: Cache cargo-tarpaulin binary
         id: tarpaulin-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cargo/bin/cargo-tarpaulin
           key: cargo-tarpaulin-${{ runner.os }}-0.35.2
@@ -510,7 +510,7 @@ jobs:
 
       - name: Cache flutter_rust_bridge_codegen binary
         id: frb-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cargo/bin/flutter_rust_bridge_codegen
           key: frb-codegen-2.12.0-${{ runner.os }}
