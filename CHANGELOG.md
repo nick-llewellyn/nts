@@ -34,6 +34,17 @@
   domain keeps each CA scoped to the hosts it should authenticate rather
   than widening every server's trusted-issuer set to the union. (NTS-48)
 
+- Documented the asymmetric starvation behaviour of `dnsConcurrencyCap` on
+  the Dart-side public API. The cap is a per-call ceiling, but admission is
+  gated against a single process-wide in-flight counter, so a low-cap caller
+  can be refused immediately (`NtsError.timeout` /
+  `TimeoutPhase.dnsSaturation`) when the pool is already filled by a
+  higher-cap caller's workers, even though it has started no lookups of its
+  own; the reverse cannot happen. Added a concrete mixed-cap example to the
+  `ntsQuery` dartdoc, inherited by `ntsWarmCookies` and `NtsClient.query` /
+  `warmCookies` through their existing cross-references. Comment-only; no
+  behaviour change. (NTS-44)
+
 ### Fixed
 
 - Singleflight waiters now attribute a timeout to the phase the leader

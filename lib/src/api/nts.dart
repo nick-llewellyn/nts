@@ -81,9 +81,18 @@ const int kDefaultDnsConcurrencyCap = 4;
 /// Defaults to [kDefaultDnsConcurrencyCap] when omitted, which inherits
 /// the package's built-in default. Because admission is gated against a
 /// single process-wide counter, every admitted worker counts toward
-/// every caller's threshold — see `ARCHITECTURE.md`'s "Timeout budget
-/// and bounded DNS" section for the full mechanic and the asymmetric
-/// starvation behaviour between mixed-cap callers.
+/// every caller's threshold, and admission for a given call compares the
+/// live pool size against that call's own cap with no awareness of which
+/// caller's workers fill the pool. Starvation between mixed-cap callers
+/// is therefore **asymmetric**. Concretely: if a `dnsConcurrencyCap: 32`
+/// caller already has 4 lookups in flight, a concurrent
+/// `dnsConcurrencyCap: 4` caller is refused immediately with
+/// `NtsError.timeout` ([TimeoutPhase.dnsSaturation]) even though it has
+/// started no lookups of its own — its cap is already met by the other
+/// caller's workers. The reverse cannot happen: the low-cap caller's own
+/// workers can never push the pool past 4, so they cannot by themselves
+/// block the high-cap caller. See `ARCHITECTURE.md`'s "Timeout budget
+/// and bounded DNS" section for the full mechanic.
 ///
 /// The returned [NtsTimeSample] exposes the raw protocol primitives,
 /// not a finished synchronized clock. `utcUnixMicros` is the server
