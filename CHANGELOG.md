@@ -60,6 +60,31 @@
 
 ### Security
 
+- Investigated a code-level mitigation for the relative-`ioDirectory`
+  library-hijack surface that the README's "Non-Flutter Dart callers must
+  pass `externalLibrary` explicitly" subsection documents. The
+  `flutter_rust_bridge`-generated `kDefaultExternalLibraryLoaderConfig`
+  pins `ioDirectory: 'rust/target/release/'`, which FRB's loader resolves
+  against the process working directory, so a bare `NtsRustLib.init()`
+  outside a Flutter host loads whatever native library has been planted
+  there. Findings against the pinned FRB `2.12.0`: (1)
+  `flutter_rust_bridge_codegen generate` exposes only
+  `--default-external-library-loader-web-prefix` and `--wasm-bindgen-name`
+  — there is no codegen knob to suppress the relative fallback, require an
+  absolute path, or detect a non-Flutter context; (2) the generated file
+  is marked do-not-edit and is overwritten on every regen, so editing
+  `ioDirectory` by hand is not durable; (3) the closest upstream thread,
+  `fzyzcjy/flutter_rust_bridge#2168`, tracks adding a YAML `ioDirectory`
+  override but is path-correctness-motivated (it proposes `cargo metadata`
+  auto-detection), not a refuse-relative security mode. A runtime
+  mitigation does exist — build an `ExternalLibraryLoaderConfig` with
+  `ioDirectory: null`, load it via the public `loadExternalLibrary`, and
+  pass the result to `NtsRustLib.init(externalLibrary: …)` — but that is a
+  package-owned behaviour change beyond this investigation's scope and is
+  filed as a follow-up. Outcome: the documentation mitigation remains the
+  supported guidance and NTS-11 converts to an upstream-watch tracker
+  against #2168. No code or behaviour change. (NTS-11)
+
 - Hardened the per-request nonce contract at the NTPv4 codec boundary.
   `build_client_request` and the `ClientRequest::nonce` field now document
   that the nonce MUST be CSPRNG-sourced and unique per request under a given
