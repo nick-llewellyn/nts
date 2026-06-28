@@ -42,7 +42,7 @@
   higher-cap caller's workers, even though it has started no lookups of its
   own; the reverse cannot happen. Added a concrete mixed-cap example to the
   `ntsQuery` dartdoc, inherited by `ntsWarmCookies` and `NtsClient.query` /
-  `warmCookies` through their existing cross-references. Comment-only; no
+  `NtsClient.warmCookies` through their existing cross-references. Comment-only; no
   behaviour change. (NTS-44)
 
 ### Fixed
