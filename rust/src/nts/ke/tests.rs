@@ -1007,6 +1007,7 @@ mod connect {
             4460,
             deadline,
             crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+            None,
             system_lookup,
         );
         let elapsed = started.elapsed();
@@ -1343,6 +1344,7 @@ mod live_integration {
             dns_concurrency_cap: crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
             trust_mode: KeTrustMode::PlatformWithFallback,
             verification_time_override: None,
+            phase_reporter: None,
         };
         let outcome = perform_handshake(&req).expect("handshake");
         assert_eq!(outcome.aead_id, aead::AES_SIV_CMAC_256);
@@ -1686,5 +1688,43 @@ mod ke_outcome_partial {
             rendered.contains("ntp.example.test"),
             "non-secret host field must remain visible: {rendered}",
         );
+    }
+
+    /// `PhaseReporter` round-trips the live-leader milestones a waiter
+    /// reads on timeout (NTS-43). The default is the DNS milestone, the
+    /// three explicit boundaries map 1:1, and `DnsSaturation` /
+    /// `DnsTimeout` both fold onto DNS (neither is a distinct lingering
+    /// state — see the type-level docs).
+    #[test]
+    fn phase_reporter_roundtrips_leader_milestones() {
+        // A fresh reporter (and its `Default`) report DNS: a leader that
+        // has not crossed its first boundary, or is stuck in resolution,
+        // is attributed `DnsTimeout` by a waiter.
+        assert_eq!(PhaseReporter::new().current(), KeTimeoutPhase::DnsTimeout);
+        assert_eq!(
+            PhaseReporter::default().current(),
+            KeTimeoutPhase::DnsTimeout,
+        );
+
+        let reporter = PhaseReporter::new();
+        reporter.enter(KeTimeoutPhase::Connect);
+        assert_eq!(reporter.current(), KeTimeoutPhase::Connect);
+        reporter.enter(KeTimeoutPhase::Tls);
+        assert_eq!(reporter.current(), KeTimeoutPhase::Tls);
+        reporter.enter(KeTimeoutPhase::KeRecordIo);
+        assert_eq!(reporter.current(), KeTimeoutPhase::KeRecordIo);
+
+        // Both DNS-flavoured inputs fold onto the DNS milestone.
+        reporter.enter(KeTimeoutPhase::DnsSaturation);
+        assert_eq!(reporter.current(), KeTimeoutPhase::DnsTimeout);
+        reporter.enter(KeTimeoutPhase::Tls);
+        reporter.enter(KeTimeoutPhase::DnsTimeout);
+        assert_eq!(reporter.current(), KeTimeoutPhase::DnsTimeout);
+
+        // A clone shares the same cell — the mechanism a leader uses to
+        // publish to a waiter holding another handle.
+        let clone = reporter.clone();
+        reporter.enter(KeTimeoutPhase::Tls);
+        assert_eq!(clone.current(), KeTimeoutPhase::Tls);
     }
 }

@@ -46,7 +46,7 @@ use crate::nts::cookies::CookieJar;
 use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
 use crate::nts::ke::{
     perform_handshake, KeError, KeFailure, KeOutcome, KePhaseTimings, KeRequest, KeTimeoutPhase,
-    KeTrustMode, OFFERED_AEAD_IDS,
+    KeTrustMode, PhaseReporter, OFFERED_AEAD_IDS,
 };
 use crate::nts::ntp::{build_client_request, parse_server_response, ClientRequest, NtpError};
 
@@ -1091,6 +1091,14 @@ struct HandshakeSlot {
     /// non-empty or their per-call deadline elapses.
     result: Mutex<Option<Result<HandshakeSlotOk, NtsError>>>,
     cv: Condvar,
+    /// Advisory live-phase the leader is currently inside, shared with
+    /// the leader's handshake via a [`PhaseReporter`] clone. A waiter
+    /// that times out parked on this slot reads it (via
+    /// [`waiter_timeout_phase`](Self::waiter_timeout_phase)) to
+    /// attribute its `Timeout` to the phase the leader was actually in,
+    /// rather than a blanket `KeRecordIo`. See [`PhaseReporter`] for the
+    /// `Relaxed`, monotonic, advisory semantics.
+    phase: PhaseReporter,
 }
 
 impl HandshakeSlot {
@@ -1098,6 +1106,7 @@ impl HandshakeSlot {
         Self {
             result: Mutex::new(None),
             cv: Condvar::new(),
+            phase: PhaseReporter::new(),
         }
     }
 
@@ -1133,6 +1142,18 @@ impl HandshakeSlot {
             *g = Some(result);
             self.cv.notify_all();
         }
+    }
+
+    /// The phase the leader was most recently observed in, mapped onto
+    /// the public [`TimeoutPhase`] taxonomy, for a waiter whose per-call
+    /// deadline expired while parked on this slot. Reads the leader's
+    /// advisory [`PhaseReporter`] (`Relaxed`, monotonic) and routes it
+    /// through the existing `KeTimeoutPhase → TimeoutPhase` mapping. A
+    /// leader still in (or stuck on) DNS yields `DnsTimeout`; one in the
+    /// connect loop yields `Connect`; in the TLS handshake `Tls`; in the
+    /// record exchange `KeRecordIo`.
+    fn waiter_timeout_phase(&self) -> TimeoutPhase {
+        self.phase.current().into()
     }
 }
 
@@ -1769,6 +1790,7 @@ fn establish_session(
     dns_concurrency_cap: usize,
     trust_mode: KeTrustMode,
     verification_time_ms: Option<i64>,
+    reporter: Option<&PhaseReporter>,
 ) -> Result<(Session, KePhaseTimings), NtsError> {
     // Convert the optional caller-supplied epoch-ms override into the
     // `UnixTime` the TLS verifier expects. Negative values are rejected
@@ -1788,6 +1810,7 @@ fn establish_session(
         dns_concurrency_cap,
         trust_mode,
         verification_time_override,
+        phase_reporter: reporter.cloned(),
     };
     let outcome: KeOutcome = perform_handshake(&req)?;
     let trust_backend: TrustBackend = outcome.trust_backend.into();
@@ -1862,8 +1885,19 @@ enum Role {
 /// closure (count invocations, block until released, fail
 /// deterministically) so the singleflight role-election state machine
 /// is exercisable without a faux NTS-KE responder.
-type HandshakeFn =
-    dyn Fn(&NtsServerSpec, Duration, usize) -> Result<(Session, KePhaseTimings), NtsError>;
+///
+/// The trailing `Option<&PhaseReporter>` is the leader's live-phase
+/// channel to its parked waiters: the leader path passes
+/// `Some(&slot.phase)`, the production `establish_session` forwards it
+/// into the `KeRequest`, and a waiter reads the reported phase on
+/// timeout. Tests that drive the leader path can advance it to assert
+/// the waiter observes a specific phase.
+type HandshakeFn = dyn Fn(
+    &NtsServerSpec,
+    Duration,
+    usize,
+    Option<&PhaseReporter>,
+) -> Result<(Session, KePhaseTimings), NtsError>;
 
 /// Build a [`QueryContext`] from a session and a freshly-popped cookie.
 /// Extracted so both the cache-hit and post-handshake branches in
@@ -1917,9 +1951,14 @@ impl SessionTable {
         trust_mode: KeTrustMode,
         verification_time_ms: Option<i64>,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
-        self.checkout_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
-            establish_session(s, t, c, trust_mode.clone(), verification_time_ms)
-        })
+        self.checkout_with(
+            spec,
+            timeout,
+            dns_concurrency_cap,
+            &move |s, t, c, reporter| {
+                establish_session(s, t, c, trust_mode.clone(), verification_time_ms, reporter)
+            },
+        )
     }
 
     /// Singleflight-aware checkout parameterised over the handshake
@@ -2017,14 +2056,14 @@ impl SessionTable {
                     // next phase that *would* have run is DNS. This
                     // matches the convention
                     // [`UdpDeadline::remaining_or_timeout`] uses for
-                    // pre-DNS budget exhaustion on the UDP path —
-                    // tagging this as `KeRecordIo` would conflate
-                    // pre-handshake budget exhaustion (operator
-                    // remediation: raise `dnsConcurrencyCap` or
-                    // `timeoutMs`) with the parked-waiter case below
-                    // at line ~1766 (operator remediation:
-                    // investigate why a leader's record I/O is the
-                    // syscall blocking us). Provenance: bd nts-r54.
+                    // pre-DNS budget exhaustion on the UDP path. This is
+                    // the leader's *own* pre-handshake exhaustion
+                    // (operator remediation: raise `dnsConcurrencyCap`
+                    // or `timeoutMs`); it is distinct from the
+                    // parked-waiter case below, which now reports the
+                    // phase the leader was actually in via the slot's
+                    // `PhaseReporter` (NTS-43). Provenance: bd nts-r54,
+                    // nts-tk2t.
                     let remaining = match timeout.checked_sub(started.elapsed()) {
                         Some(d) if !d.is_zero() => d,
                         _ => {
@@ -2038,7 +2077,12 @@ impl SessionTable {
                             });
                         }
                     };
-                    let outcome = do_handshake(spec, remaining, dns_concurrency_cap);
+                    let outcome = do_handshake(
+                        spec,
+                        remaining,
+                        dns_concurrency_cap,
+                        Some(&guard.slot.phase),
+                    );
                     match outcome {
                         Ok((session, ke_timings)) => {
                             // Capture the freshly-resolved backend before
@@ -2125,18 +2169,17 @@ impl SessionTable {
                     // budget. `started` was captured at the top of this
                     // checkout call, so even if a slow leader runs longer
                     // than `timeout`, the waiter unparks once *its own*
-                    // budget elapses and surfaces a Timeout against the
-                    // KE record-IO phase (the most accurate single
-                    // taxonomy bucket for "stuck waiting on a KE
-                    // handshake we did not run ourselves"). Distinct
-                    // from the leader's pre-handshake budget-exhaustion
-                    // path above (line ~1640), which surfaces
-                    // `DnsTimeout` because no record I/O has happened
-                    // on the leader thread either — the two cases need
-                    // separate operator remediations (parked-waiter:
-                    // investigate slow leader; pre-handshake-exhausted:
-                    // raise `dnsConcurrencyCap`/`timeoutMs`). See
-                    // bd nts-r54.
+                    // budget elapses and surfaces a Timeout. The phase it
+                    // reports is read from the leader's advisory
+                    // `PhaseReporter` at timeout time (see the `None` arm
+                    // below), so a leader and a waiter now agree on the
+                    // phase for the same slow operation instead of the
+                    // waiter always guessing `KeRecordIo` (NTS-43).
+                    // Distinct from the leader's pre-handshake
+                    // budget-exhaustion path above, which surfaces
+                    // `DnsTimeout` directly because no handshake has
+                    // started on that thread. Provenance: bd nts-r54,
+                    // nts-tk2t.
                     let deadline = started + timeout;
                     match slot.wait_until(deadline) {
                         // Leader installed a session; loop back to phase
@@ -2155,8 +2198,19 @@ impl SessionTable {
                         Some(Ok(_)) => {}
                         Some(Err(e)) => return Err(e),
                         None => {
+                            // Our own per-call budget elapsed while the
+                            // leader is still handshaking. Attribute the
+                            // timeout to the phase the leader is actually
+                            // in (read from the slot's advisory
+                            // `PhaseReporter`) rather than a blanket
+                            // `KeRecordIo` guess (NTS-43). A leader stuck
+                            // in DNS yields `DnsTimeout`, in connect
+                            // `Connect`, in TLS `Tls`, in the record
+                            // exchange `KeRecordIo` — so leader and
+                            // waiter agree on the phase for the same slow
+                            // operation.
                             return Err(NtsError::Timeout {
-                                phase: TimeoutPhase::KeRecordIo,
+                                phase: slot.waiter_timeout_phase(),
                                 trust_backend: None,
                             });
                         }
@@ -2238,12 +2292,12 @@ impl SessionTable {
                 // not `KeRecordIo`: no record I/O has happened on this
                 // thread yet, and the next phase that *would* have run
                 // is DNS. Mirrors the matching site in `checkout_with`
-                // (see comment around line ~1640) and the convention
+                // and the convention
                 // [`UdpDeadline::remaining_or_timeout`] uses for
-                // pre-DNS budget exhaustion. The waiter case below at
-                // line ~1929 keeps `KeRecordIo` because that path *is*
-                // genuinely "stuck waiting on a leader's record I/O".
-                // Provenance: bd nts-r54.
+                // pre-DNS budget exhaustion. The waiter case below now
+                // reports the phase the leader was actually in via the
+                // slot's `PhaseReporter` (NTS-43), rather than a blanket
+                // `KeRecordIo`. Provenance: bd nts-r54, nts-tk2t.
                 let remaining = match timeout.checked_sub(started.elapsed()) {
                     Some(d) if !d.is_zero() => d,
                     _ => {
@@ -2255,7 +2309,12 @@ impl SessionTable {
                         return Err(err);
                     }
                 };
-                match do_handshake(spec, remaining, dns_concurrency_cap) {
+                match do_handshake(
+                    spec,
+                    remaining,
+                    dns_concurrency_cap,
+                    Some(&guard.slot.phase),
+                ) {
                     Ok((session, ke_timings)) => {
                         let session_backend = session.trust_backend;
                         // Refuse to install a 0-cookie session;
@@ -2323,17 +2382,17 @@ impl SessionTable {
                         ))
                     }
                     Some(Err(e)) => Err(e),
-                    // Parked-waiter timeout: keeps `KeRecordIo` because
-                    // the waiter is genuinely stuck on a leader's
-                    // record I/O syscall. Distinct from the leader's
-                    // pre-handshake budget-exhaustion path above (line
-                    // ~1862), which surfaces `DnsTimeout` because no
-                    // record I/O has happened on the leader thread
-                    // either. Same taxonomy as the matching
-                    // `checkout_with` waiter site (line ~1765). See
-                    // bd nts-r54.
+                    // Parked-waiter timeout: attribute to the phase the
+                    // leader is actually in (read from the slot's
+                    // advisory `PhaseReporter`) rather than a blanket
+                    // `KeRecordIo` guess (NTS-43). Distinct from the
+                    // leader's pre-handshake budget-exhaustion path
+                    // above, which surfaces `DnsTimeout` directly because
+                    // no handshake has started on that thread. Mirrors
+                    // the matching `checkout_with` waiter site.
+                    // Provenance: bd nts-r54, nts-tk2t.
                     None => Err(NtsError::Timeout {
-                        phase: TimeoutPhase::KeRecordIo,
+                        phase: slot.waiter_timeout_phase(),
                         trust_backend: None,
                     }),
                 }
@@ -2351,9 +2410,14 @@ impl SessionTable {
         trust_mode: KeTrustMode,
         verification_time_ms: Option<i64>,
     ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
-        self.warm_cookies_with(spec, timeout, dns_concurrency_cap, &move |s, t, c| {
-            establish_session(s, t, c, trust_mode.clone(), verification_time_ms)
-        })
+        self.warm_cookies_with(
+            spec,
+            timeout,
+            dns_concurrency_cap,
+            &move |s, t, c, reporter| {
+                establish_session(s, t, c, trust_mode.clone(), verification_time_ms, reporter)
+            },
+        )
     }
 
     /// Record the Unique Identifier echoed by an accepted server

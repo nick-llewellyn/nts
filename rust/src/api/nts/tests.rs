@@ -2037,7 +2037,7 @@ fn checkout_collapses_concurrent_cold_queries_onto_one_handshake() {
     let release_handle = release.handle();
     let do_handshake = {
         let handshake_count = handshake_count.clone();
-        move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             handshake_count.fetch_add(1, Ordering::SeqCst);
             release_handle
                 .wait_release(Duration::from_secs(10))
@@ -2123,7 +2123,7 @@ fn checkout_does_not_serialize_handshakes_across_distinct_hosts() {
     let arrived_count = Arc::new(AtomicUsize::new(0));
     let do_handshake = {
         let arrived_count = arrived_count.clone();
-        move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             // Prove both handshakes are in flight at the same
             // time: each leader announces its arrival, then
             // polls until the partner has also announced.
@@ -2175,9 +2175,12 @@ fn checkout_does_not_serialize_handshakes_across_distinct_hosts() {
 
 /// Acceptance criterion 3: a waiter whose per-call deadline expires
 /// before the leader finishes returns `NtsError::Timeout`, *not*
-/// `NtsError::Internal` and not an indefinite block. The leader
-/// here parks against a release channel so the test owns when (or
-/// whether) it ever completes.
+/// `NtsError::Internal` and not an indefinite block. The leader here
+/// advances its `PhaseReporter` to the TLS milestone and then parks
+/// against a release channel, so the waiter must attribute its timeout
+/// to `TimeoutPhase::Tls` — the phase the leader was actually in —
+/// rather than the blanket `KeRecordIo` it used to report regardless of
+/// the leader's position (NTS-43).
 #[test]
 fn checkout_waiter_returns_timeout_when_leader_outlasts_deadline() {
     let table = Arc::new(SessionTable::new());
@@ -2187,15 +2190,25 @@ fn checkout_waiter_returns_timeout_when_leader_outlasts_deadline() {
     };
     let leader_release = BoundedRelease::new();
     let leader_release_handle = leader_release.handle();
-    let do_handshake = move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
-        leader_release_handle
-            .wait_release(Duration::from_secs(10))
-            .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
-        Ok((
-            make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
-            KePhaseTimings::default(),
-        ))
-    };
+    let do_handshake =
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, reporter: Option<&PhaseReporter>| {
+            // Advance the leader to the TLS milestone before parking. A
+            // waiter that times out while we hold here must read `Tls` from
+            // the slot's `PhaseReporter` rather than the old blanket
+            // `KeRecordIo` (NTS-43). Because the waiter only observes a
+            // timeout when this thread is still parked in `wait_release`,
+            // this `enter` is guaranteed to have run first.
+            if let Some(r) = reporter {
+                r.enter(KeTimeoutPhase::Tls);
+            }
+            leader_release_handle
+                .wait_release(Duration::from_secs(10))
+                .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                KePhaseTimings::default(),
+            ))
+        };
 
     // Spawn the leader. It will park inside `do_handshake` until
     // we release `leader_release` at the end of the test.
@@ -2223,7 +2236,7 @@ fn checkout_waiter_returns_timeout_when_leader_outlasts_deadline() {
         &spec,
         Duration::from_millis(100),
         4,
-        &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+        &|_: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             panic!("waiter should never run a handshake; it must park on the leader's slot")
         },
     );
@@ -2231,10 +2244,10 @@ fn checkout_waiter_returns_timeout_when_leader_outlasts_deadline() {
 
     match waiter_outcome {
         Err(NtsError::Timeout {
-            phase: TimeoutPhase::KeRecordIo,
+            phase: TimeoutPhase::Tls,
             trust_backend: None,
         }) => {}
-        Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
+        Err(other) => panic!("expected Timeout(Tls); got {other:?}"),
         Ok(_) => panic!("waiter returned Ok despite a parked leader"),
     }
     assert!(
@@ -2272,7 +2285,7 @@ fn checkout_propagates_leader_failure_to_every_waiter() {
     let release_handle = release.handle();
     let do_handshake = {
         let handshake_count = handshake_count.clone();
-        move |_: &NtsServerSpec, _t: Duration, _c: usize| {
+        move |_: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             handshake_count.fetch_add(1, Ordering::SeqCst);
             release_handle
                 .wait_release(Duration::from_secs(10))
@@ -2348,12 +2361,13 @@ fn checkout_consecutive_handshakes_get_distinct_generations() {
     };
     // Each handshake delivers exactly 1 cookie, so the next caller
     // re-enters phase B and triggers another handshake.
-    let do_handshake = move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
-        Ok((
-            make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 1),
-            KePhaseTimings::default(),
-        ))
-    };
+    let do_handshake =
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 1),
+                KePhaseTimings::default(),
+            ))
+        };
 
     let mut generations = Vec::with_capacity(3);
     for _ in 0..3 {
@@ -2594,7 +2608,7 @@ fn warm_cookies_collapses_concurrent_forced_refreshes_onto_one_handshake() {
     };
     let do_handshake = {
         let handshake_count = handshake_count.clone();
-        move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             handshake_count.fetch_add(1, Ordering::SeqCst);
             release_handle
                 .wait_release(Duration::from_secs(10))
@@ -2677,7 +2691,7 @@ fn warm_cookies_propagates_leader_failure_to_every_waiter() {
     let release_handle = release.handle();
     let do_handshake = {
         let handshake_count = handshake_count.clone();
-        move |_: &NtsServerSpec, _t: Duration, _c: usize| {
+        move |_: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             handshake_count.fetch_add(1, Ordering::SeqCst);
             release_handle
                 .wait_release(Duration::from_secs(10))
@@ -2743,7 +2757,7 @@ fn warm_cookies_collapses_with_concurrent_query_against_same_host() {
     let release_handle = release.handle();
     let do_handshake = {
         let handshake_count = handshake_count.clone();
-        move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             handshake_count.fetch_add(1, Ordering::SeqCst);
             release_handle
                 .wait_release(Duration::from_secs(10))
@@ -2837,7 +2851,7 @@ fn warm_cookies_waiter_reports_delivered_count_when_query_leader_pops_first() {
     let release_handle = release.handle();
     let do_handshake = {
         let handshake_count = handshake_count.clone();
-        move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             handshake_count.fetch_add(1, Ordering::SeqCst);
             release_handle
                 .wait_release(Duration::from_secs(10))
@@ -2939,7 +2953,7 @@ fn warm_cookies_does_not_serialize_across_distinct_hosts() {
     let arrived_count = Arc::new(AtomicUsize::new(0));
     let do_handshake = {
         let arrived_count = arrived_count.clone();
-        move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             arrived_count.fetch_add(1, Ordering::SeqCst);
             let deadline = Instant::now() + Duration::from_secs(2);
             while arrived_count.load(Ordering::SeqCst) < 2 {
@@ -2982,11 +2996,13 @@ fn warm_cookies_does_not_serialize_across_distinct_hosts() {
         .expect("warm_b returned Err — singleflight is serialising distinct hosts");
 }
 
-/// Waiter timeout: when the leader's handshake outlasts the
-/// waiter's per-call deadline, the waiter must surface
-/// `Timeout(KeRecordIo)` — same `phase` taxonomy
-/// `checkout_with`'s waiter path uses for the same shape.
-/// Mirror of `checkout_waiter_returns_timeout_when_leader_outlasts_deadline`.
+/// Waiter timeout: when the leader's handshake outlasts the waiter's
+/// per-call deadline, the waiter surfaces `Timeout` attributed to the
+/// phase the leader was actually in. Here the leader advances its
+/// `PhaseReporter` to the TLS milestone before parking, so the waiter
+/// must report `TimeoutPhase::Tls` rather than the blanket `KeRecordIo`
+/// it used to guess (NTS-43). Mirror of
+/// `checkout_waiter_returns_timeout_when_leader_outlasts_deadline`.
 #[test]
 fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
     let table = Arc::new(SessionTable::new());
@@ -2996,15 +3012,21 @@ fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
     };
     let leader_release = BoundedRelease::new();
     let leader_release_handle = leader_release.handle();
-    let do_handshake = move |spec: &NtsServerSpec, _t: Duration, _c: usize| {
-        leader_release_handle
-            .wait_release(Duration::from_secs(10))
-            .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
-        Ok((
-            make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
-            KePhaseTimings::default(),
-        ))
-    };
+    let do_handshake =
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, reporter: Option<&PhaseReporter>| {
+            // Advance the leader to the TLS milestone before parking; see
+            // the mirror test for the no-race rationale (NTS-43).
+            if let Some(r) = reporter {
+                r.enter(KeTimeoutPhase::Tls);
+            }
+            leader_release_handle
+                .wait_release(Duration::from_secs(10))
+                .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                KePhaseTimings::default(),
+            ))
+        };
 
     let leader = {
         let table = table.clone();
@@ -3026,7 +3048,7 @@ fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
         &spec,
         Duration::from_millis(100),
         4,
-        &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+        &|_: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             panic!("waiter should never run a handshake; it must park on the leader's slot")
         },
     );
@@ -3034,10 +3056,10 @@ fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
 
     match waiter_outcome {
         Err(NtsError::Timeout {
-            phase: TimeoutPhase::KeRecordIo,
+            phase: TimeoutPhase::Tls,
             trust_backend: None,
         }) => {}
-        Err(other) => panic!("expected Timeout(KeRecordIo); got {other:?}"),
+        Err(other) => panic!("expected Timeout(Tls); got {other:?}"),
         Ok(_) => panic!("waiter returned Ok despite a parked leader"),
     }
     assert!(
@@ -3083,14 +3105,14 @@ fn warm_cookies_leader_budget_exhausted_before_handshake_returns_dns_timeout() {
         host: "warm-singleflight-budget-exhausted.test".into(),
         port: 4460,
     };
-    let outcome = table.warm_cookies_with(
-        &spec,
-        Duration::ZERO,
-        4,
-        &|_: &NtsServerSpec, _t: Duration, _c: usize| {
-            panic!("do_handshake must not be invoked when the per-call budget is exhausted")
-        },
-    );
+    let outcome = table.warm_cookies_with(&spec, Duration::ZERO, 4, &|_: &NtsServerSpec,
+                                                                      _t: Duration,
+                                                                      _c: usize,
+                                                                      _r: Option<
+        &PhaseReporter,
+    >| {
+        panic!("do_handshake must not be invoked when the per-call budget is exhausted")
+    });
     match outcome {
         Err(NtsError::Timeout {
             phase: TimeoutPhase::DnsTimeout,
@@ -3147,7 +3169,7 @@ fn checkout_leader_budget_exhausted_before_handshake_returns_dns_timeout() {
         &spec,
         Duration::ZERO,
         4,
-        &|_: &NtsServerSpec, _t: Duration, _c: usize| {
+        &|_: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
             panic!("do_handshake must not be invoked when the per-call budget is exhausted")
         },
     );
@@ -3187,13 +3209,14 @@ fn warm_cookies_leader_refuses_zero_cookie_session() {
         host: "warm-singleflight-zero-cookie.test".into(),
         port: 4460,
     };
-    let do_handshake = |spec: &NtsServerSpec, _t: Duration, _c: usize| {
-        // `make_test_session` returns a session whose `jar` has
-        // no cookies in it (cookie_count == 0); install would
-        // otherwise have written a useless session into the map.
-        let session = make_test_session(&spec.host, 123, next_session_generation());
-        Ok((session, KePhaseTimings::default()))
-    };
+    let do_handshake =
+        |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
+            // `make_test_session` returns a session whose `jar` has
+            // no cookies in it (cookie_count == 0); install would
+            // otherwise have written a useless session into the map.
+            let session = make_test_session(&spec.host, 123, next_session_generation());
+            Ok((session, KePhaseTimings::default()))
+        };
     match table.warm_cookies_with(&spec, Duration::from_secs(5), 4, &do_handshake) {
         Err(NtsError::NoCookies {
             trust_backend: Some(_),

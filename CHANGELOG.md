@@ -34,6 +34,19 @@
   domain keeps each CA scoped to the hosts it should authenticate rather
   than widening every server's trusted-issuer set to the union. (NTS-48)
 
+### Fixed
+
+- Singleflight waiters now attribute a timeout to the phase the leader
+  was actually in (DNS, Connect, TLS, or KE record I/O) instead of a
+  blanket `KeRecordIo`. The leader publishes its live phase to its
+  singleflight slot via an advisory `Relaxed` atomic (`PhaseReporter`)
+  at each handshake boundary; a waiter whose per-call deadline expires
+  reads it and emits the matching `TimeoutPhase`, so a leader and its
+  parked waiters now report the same phase for the same slow operation
+  rather than telling two different stories. Reuses the existing
+  `TimeoutPhase` variants — no public API or FRB binding change.
+  (NTS-43)
+
 ### Security
 
 - Hardened the per-request nonce contract at the NTPv4 codec boundary.
