@@ -2,7 +2,7 @@ name: nts
 description: >-
   Authenticated network time for Flutter apps, secured by Network
   Time Security (NTS).
-version: 5.2.1
+version: 5.2.2
 homepage: https://github.com/nick-llewellyn/nts
 repository: https://github.com/nick-llewellyn/nts
 issue_tracker: https://github.com/nick-llewellyn/nts/issues

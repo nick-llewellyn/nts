@@ -1,7 +1,7 @@
 # Changelog
 
 
-## 5.2
+## 5.2.2
 
 ### Documentation
 
@@ -110,10 +110,6 @@
   reusing a UID together with a transmit timestamp). Behaviour change on the
   replayed-UID path only — the happy path mints a fresh CSPRNG UID per
   request and never trips the guard. (NTS-40)
-
-## 5.2.2
-
-### Security
 
 - Hardened the `verificationTimeMs` clock-skew override with a defensive
   upper bound. Values above `9999-12-31T23:59:59Z`
