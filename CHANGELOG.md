@@ -79,11 +79,12 @@
   auto-detection), not a refuse-relative security mode. A runtime
   mitigation does exist — build an `ExternalLibraryLoaderConfig` with
   `ioDirectory: null`, load it via the public `loadExternalLibrary`, and
-  pass the result to `NtsRustLib.init(externalLibrary: …)` — but that is a
-  package-owned behaviour change beyond this investigation's scope and is
-  filed as a follow-up. Outcome: the documentation mitigation remains the
-  supported guidance and NTS-11 converts to an upstream-watch tracker
-  against #2168. No code or behaviour change. (NTS-11)
+  pass the resulting library to `NtsRustLib.init(externalLibrary: lib)` —
+  but that is a package-owned behaviour change beyond this investigation's
+  scope and is filed as a follow-up. Outcome: the documentation mitigation
+  remains the supported guidance and NTS-11 converts to an upstream-watch
+  tracker against `fzyzcjy/flutter_rust_bridge#2168`. No code or behaviour
+  change. (NTS-11)
 
 - Hardened the per-request nonce contract at the NTPv4 codec boundary.
   `build_client_request` and the `ClientRequest::nonce` field now document
