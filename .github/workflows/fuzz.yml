@@ -139,7 +139,7 @@ jobs:
       # CI behaviour.
       - name: Cache cargo-fuzz binary
         id: cargo-fuzz-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cargo/bin/cargo-fuzz
           key: cargo-fuzz-${{ runner.os }}-${{ env.CARGO_FUZZ_VERSION }}
