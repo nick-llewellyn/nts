@@ -77,7 +77,7 @@ const int kDefaultDnsConcurrencyCap = 4;
 /// `dnsConcurrencyCap` is a per-call ceiling on the process-wide bounded
 /// DNS resolver: if the global in-flight counter has already reached
 /// this value when the call attempts a lookup, the call short-circuits
-/// with `NtsError.timeout` instead of spawning another worker thread.
+/// with [NtsError.timeout] instead of spawning another worker thread.
 /// Defaults to [kDefaultDnsConcurrencyCap] when omitted, which inherits
 /// the package's built-in default. Because admission is gated against a
 /// single process-wide counter, every admitted worker counts toward
@@ -87,7 +87,7 @@ const int kDefaultDnsConcurrencyCap = 4;
 /// is therefore **asymmetric**. Concretely: if a `dnsConcurrencyCap: 32`
 /// caller already has 4 lookups in flight, a concurrent
 /// `dnsConcurrencyCap: 4` caller is refused immediately with
-/// `NtsError.timeout` ([TimeoutPhase.dnsSaturation]) even though it has
+/// [NtsError.timeout] ([TimeoutPhase.dnsSaturation]) even though it has
 /// started no lookups of its own — its cap is already met by the other
 /// caller's workers. The reverse cannot happen: the low-cap caller's own
 /// workers can never push the pool past 4, so they cannot by themselves
