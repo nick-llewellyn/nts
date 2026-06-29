@@ -223,7 +223,10 @@ void main() {
     test('healthy hosts are ranked by ascending median RTT', () {
       final out = renderTextReport(mixed());
       expect(out, contains('Healthy (2), ranked by median RTT:'));
-      expect(out.indexOf('fast.example'), lessThan(out.indexOf('slow.example')));
+      expect(
+        out.indexOf('fast.example'),
+        lessThan(out.indexOf('slow.example')),
+      );
     });
 
     test('one section per bucket with the right counts', () {
@@ -247,17 +250,20 @@ void main() {
       );
     });
 
-    test('suggested removals list the drops, excluding healthy + exhausted', () {
-      final out = renderTextReport(mixed());
-      final removals = out.substring(out.indexOf('Suggested removals'));
-      expect(removals, startsWith('Suggested removals (3):'));
-      for (final h in ['bad.example', 'dead.example', 'odd.example']) {
-        expect(removals, contains(h));
-      }
-      for (final h in ['fast.example', 'slow.example', 'sat.example']) {
-        expect(removals, isNot(contains(h)));
-      }
-    });
+    test(
+      'suggested removals list the drops, excluding healthy + exhausted',
+      () {
+        final out = renderTextReport(mixed());
+        final removals = out.substring(out.indexOf('Suggested removals'));
+        expect(removals, startsWith('Suggested removals (3):'));
+        for (final h in ['bad.example', 'dead.example', 'odd.example']) {
+          expect(removals, contains(h));
+        }
+        for (final h in ['fast.example', 'slow.example', 'sat.example']) {
+          expect(removals, isNot(contains(h)));
+        }
+      },
+    );
 
     test('empty batch renders (none) placeholders and zeroed summary', () {
       final out = renderTextReport(const []);
