@@ -27,7 +27,8 @@ import 'dart:io';
 import 'dart:math' show min;
 
 import 'package:args/args.dart';
-import 'package:nts/nts.dart' show NtsError, NtsServerSpec, ntsQuery;
+import 'package:nts/nts.dart'
+    show NtsError, NtsServerSpec, kDefaultDnsConcurrencyCap, ntsQuery;
 
 import 'package:nts_example/src/cli/bridge_loader.dart' show initBridge;
 import 'package:nts_example/src/data/server_catalog.dart' show parseServerYaml;
@@ -178,12 +179,24 @@ Future<void> main(List<String> argv) async {
   );
 
   final thresholds = HealthThresholds(offsetThresholdMicros: offsetMs! * 1000);
+  // Size the package's process-wide DNS resolver cap to the host
+  // fan-out so a concurrent probe wave can never self-saturate it: with
+  // the mobile-sized default (kDefaultDnsConcurrencyCap = 4) a `-c 8`
+  // run starves its own excess workers, which fast-fail with
+  // TimeoutPhase.dnsSaturation and get mis-bucketed as `notReplying`.
+  // Each host worker holds at most one in-flight lookup, so a cap equal
+  // to the worker count guarantees every worker a slot; the lower bound
+  // keeps the package default for small `-c`.
+  final dnsCap = concurrency! > kDefaultDnsConcurrencyCap
+      ? concurrency
+      : kDefaultDnsConcurrencyCap;
   final report = await _probeAll(
     entries,
     port: port!,
     timeoutMs: timeoutMs!,
     samples: samples!,
-    concurrency: concurrency!,
+    concurrency: concurrency,
+    dnsConcurrencyCap: dnsCap,
     thresholds: thresholds,
   );
 
@@ -211,6 +224,7 @@ Future<List<ServerHealth>> _probeAll(
   required int timeoutMs,
   required int samples,
   required int concurrency,
+  required int dnsConcurrencyCap,
   required HealthThresholds thresholds,
 }) async {
   final pending = List<NtsServerEntry>.of(entries);
@@ -226,6 +240,7 @@ Future<List<ServerHealth>> _probeAll(
         port: port,
         timeoutMs: timeoutMs,
         samples: samples,
+        dnsConcurrencyCap: dnsConcurrencyCap,
         thresholds: thresholds,
       );
       out.add(health);
@@ -248,13 +263,18 @@ Future<ServerHealth> _probeHost(
   required int port,
   required int timeoutMs,
   required int samples,
+  required int dnsConcurrencyCap,
   required HealthThresholds thresholds,
 }) async {
   final spec = NtsServerSpec(host: entry.hostname, port: port);
   final results = <ProbeResult>[];
   for (var i = 0; i < samples; i++) {
     try {
-      final s = await ntsQuery(spec: spec, timeoutMs: timeoutMs);
+      final s = await ntsQuery(
+        spec: spec,
+        timeoutMs: timeoutMs,
+        dnsConcurrencyCap: dnsConcurrencyCap,
+      );
       final localMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
       final serverEstimate = s.utcUnixMicros + s.roundTripMicros ~/ 2;
       results.add(
