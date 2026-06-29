@@ -138,11 +138,21 @@ Future<void> main(List<String> argv) async {
   final samples = _posInt(args['samples'] as String);
   final concurrency = _posInt(args['concurrency'] as String);
   final offsetMs = _posInt(args['offset-threshold-ms'] as String, min: 0);
-  if (port == null || port > 65535) _usageError('--port must be 1..65535', parser);
-  if (timeoutMs == null) _usageError('--timeout must be a positive int', parser);
-  if (samples == null) _usageError('--samples must be >= 1', parser);
-  if (concurrency == null) _usageError('--concurrency must be >= 1', parser);
-  if (offsetMs == null) _usageError('--offset-threshold-ms must be >= 0', parser);
+  if (port == null || port > 65535) {
+    _usageError('--port must be 1..65535', parser);
+  }
+  if (timeoutMs == null) {
+    _usageError('--timeout must be a positive int', parser);
+  }
+  if (samples == null) {
+    _usageError('--samples must be >= 1', parser);
+  }
+  if (concurrency == null) {
+    _usageError('--concurrency must be >= 1', parser);
+  }
+  if (offsetMs == null) {
+    _usageError('--offset-threshold-ms must be >= 0', parser);
+  }
 
   final path = args.rest.single;
   final file = File(path);
@@ -179,15 +189,16 @@ Future<void> main(List<String> argv) async {
 
   switch (args['format'] as String) {
     case 'json':
-      stdout.writeln(const JsonEncoder.withIndent('  ').convert(jsonReport(report)));
+      stdout.writeln(
+        const JsonEncoder.withIndent('  ').convert(jsonReport(report)),
+      );
     case 'csv':
       stdout.write(csvReport(report));
     default:
       stdout.write(renderTextReport(report, source: path, samples: samples));
   }
 
-  if ((args['fail-on-drops'] as bool) &&
-      report.any((h) => h.isDropCandidate)) {
+  if ((args['fail-on-drops'] as bool) && report.any((h) => h.isDropCandidate)) {
     exit(_kExitDrops);
   }
 }
@@ -219,7 +230,9 @@ Future<List<ServerHealth>> _probeAll(
       );
       out.add(health);
       done++;
-      stderr.writeln('[$done/$total] ${entry.hostname}: ${health.verdict.name}');
+      stderr.writeln(
+        '[$done/$total] ${entry.hostname}: ${health.verdict.name}',
+      );
     }
   }
 
