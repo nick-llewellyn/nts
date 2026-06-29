@@ -50,12 +50,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show ExternalLibrary;
 import 'package:nts/nts.dart'
-    show NtsError, NtsServerSpec, NtsRustLib, ntsQuery, ntsWarmCookies;
+    show NtsError, NtsServerSpec, ntsQuery, ntsWarmCookies;
 
-import 'package:nts_example/src/mock_api.dart';
+import 'package:nts_example/src/cli/bridge_loader.dart' show initBridge;
 import 'package:nts_example/src/state/nts_format.dart';
 
 const int _kDefaultPort = 4460;
@@ -142,7 +140,7 @@ Future<void> main(List<String> argv) async {
     exit(64);
   }
 
-  await _initBridge(
+  await initBridge(
     useMock: args['mock'] as bool,
     libraryPath: args['library'] as String?,
   );
@@ -167,61 +165,6 @@ Future<void> main(List<String> argv) async {
   if ((args['exit-on-error'] as bool) && ctx.anyFailed) {
     exit(_kExitHostFailure);
   }
-}
-
-Future<void> _initBridge({
-  required bool useMock,
-  required String? libraryPath,
-}) async {
-  if (useMock) {
-    NtsRustLib.initMock(api: MockNtsApi());
-    return;
-  }
-  final resolved = libraryPath ?? _autoLocateDylib();
-  if (resolved == null) {
-    stderr.writeln(
-      'error: no nts_rust dylib found.\n'
-      '       Build it with `cargo build --release` from the rust/\n'
-      '       directory, pass --library <path>, or run with --mock.',
-    );
-    exit(70);
-  }
-  if (!File(resolved).existsSync()) {
-    stderr.writeln('error: dylib not found at $resolved');
-    exit(70);
-  }
-  try {
-    await NtsRustLib.init(externalLibrary: ExternalLibrary.open(resolved));
-  } catch (e) {
-    stderr.writeln('error: failed to initialize Rust bridge: $e');
-    exit(70);
-  }
-}
-
-/// Walk the well-known build locations for a host-arch dylib. Returns
-/// the first match or null. Mirrors the Native Assets pipeline's
-/// stem (`nts_rust`) and the `rust/target/release/`
-/// convention encoded in `NtsRustLib.kDefaultExternalLibraryLoaderConfig`.
-String? _autoLocateDylib() {
-  final ext = Platform.isMacOS
-      ? 'dylib'
-      : Platform.isWindows
-      ? 'dll'
-      : 'so';
-  final prefix = Platform.isWindows ? '' : 'lib';
-  final filename = '${prefix}nts_rust.$ext';
-  // Search relative to (1) the example directory (`example/`), and
-  // (2) the repo root — covers both `dart run bin/nts_cli.dart` from
-  // the example dir and `dart run example/bin/nts_cli.dart` from the
-  // repo root.
-  final candidates = <String>[
-    '${Directory.current.path}/../rust/target/release/$filename',
-    '${Directory.current.path}/rust/target/release/$filename',
-  ];
-  for (final c in candidates) {
-    if (File(c).existsSync()) return c;
-  }
-  return null;
 }
 
 Future<void> _runQuery(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
