@@ -6,6 +6,34 @@ servers:
   notes: Anycast
   vm: false
 
+- hostname: 1.ntp.ubuntu.com
+  stratum: 2
+  location: Distro
+  owner: Ubuntu
+  notes: Distro use only
+  vm: false
+
+- hostname: 2.ntp.ubuntu.com
+  stratum: 2
+  location: Distro
+  owner: Ubuntu
+  notes: Distro use only
+  vm: false
+
+- hostname: 3.ntp.ubuntu.com
+  stratum: 2
+  location: Distro
+  owner: Ubuntu
+  notes: Distro use only
+  vm: false
+
+- hostname: 4.ntp.ubuntu.com
+  stratum: 2
+  location: Distro
+  owner: Ubuntu
+  notes: Distro use only
+  vm: false
+
 - hostname: '[nts.teambelgium.net](https://ntp.teambelgium.net)'
   stratum: 1
   location: Belgium
@@ -79,6 +107,18 @@ servers:
   stratum: 1
   location: Canada
   owner: Community
+  vm: false
+
+- hostname: ntp.neu.edu.cn
+  stratum: 1
+  location: China
+  owner: '[Northeastern University](https://www.neu.edu.cn)'
+  vm: false
+
+- hostname: ntp1.neu.edu.cn
+  stratum: 1
+  location: China
+  owner: '[Northeastern University](https://www.neu.edu.cn)'
   vm: false
 
 - hostname: '[nts1.ntp.hr](http://www.ntp.hr)'
@@ -293,6 +333,12 @@ servers:
   owner: Rick Betting
   vm: false
 
+- hostname: '[0.ntp.bksp.in](https://0.ntp.bksp.in)'
+  stratum: 1
+  location: Russia
+  owner: '[B4CKSP4CE](https://bksp.in)'
+  vm: false
+
 - hostname: '[ntpmon.dcs1.biz](https://ntpmon.dcs1.biz)'
   stratum: 3
   location: Singapore
@@ -376,6 +422,12 @@ servers:
   notes: For users near Sundsvall
   vm: false
 
+- hostname: mirror.mdapi.ch
+  stratum: 1
+  location: Switzerland
+  owner: Martino Dell'Ambrogio
+  vm: false
+
 - hostname: '[ntp.3eck.net](https://ntp.3eck.net)'
   stratum: 3
   location: Switzerland
@@ -417,6 +469,12 @@ servers:
   location: Switzerland
   owner: Attilio Signorini
   vm: false
+
+- hostname: solarium.stellata.ch
+  stratum: 2
+  location: Switzerland
+  owner: stellata.ch
+  vm: true
 
 - hostname: ntp2.glypnod.com
   stratum: 2
@@ -465,6 +523,13 @@ servers:
   location: UK
   owner: University of Cambridge, University Information Services (UIS)
   notes: IPv4 and IPv6
+  vm: false
+
+- hostname: nts.amethyst.name
+  stratum: 2
+  location: US
+  owner: Naomi Persephone Amethyst (AS53546)
+  notes: Raleigh, NC
   vm: false
 
 - hostname: ntp1.glypnod.com

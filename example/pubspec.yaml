@@ -36,9 +36,9 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   # Bundled at build time and read at app startup by `ServerLoader`
-  # (lib/src/data/server_loader.dart). The file is a verbatim copy of
+  # (lib/src/data/server_loader.dart). The file is a YAML rendering of
   # the public NTS-KE server list curated at
-  # https://gist.github.com/mutin-sa/eea1c396b1e610a2da1e5550d94b0453,
+  # https://github.com/jauderho/nts-servers (nts-sources.yml),
   # republished as YAML so the example can ship a meaningful catalog
   # without hard-coding entries into Dart source. Refresh by replacing
   # the file in-tree; no codegen step is involved.

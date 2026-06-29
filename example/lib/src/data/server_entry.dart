@@ -5,7 +5,7 @@
 // fixed schema (`hostname`, `stratum`, `location`, `owner`, `notes`,
 // `vm`). Two of those fields — `hostname` and `owner` — sometimes
 // arrive wrapped in Markdown link syntax (`[label](url)`) because the
-// upstream gist renders to HTML. We split that form into a clean
+// upstream list renders to HTML. We split that form into a clean
 // `hostname` / `owner` plus an optional `*Url` so the UI can render
 // either a tappable link or plain text without re-parsing on every
 // build.

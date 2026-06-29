@@ -1,6 +1,6 @@
 // Unit tests for the YAML parser in `lib/src/data/server_loader.dart`.
 //
-// Focuses on the parser's tolerance for the upstream gist's quirks:
+// Focuses on the parser's tolerance for the upstream list's quirks:
 // Markdown-link-wrapped hostnames / owner attributions, missing
 // optional fields, and outright malformed rows.
 
