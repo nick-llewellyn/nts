@@ -119,4 +119,50 @@ void main() {
       expect(h.reasons, contains(contains('unusable stratum 0')));
     });
   });
+
+  group('summarizeServer — multi-sample aggregation', () {
+    ProbeOk ok({
+      int rtt = 1000,
+      int stratum = 1,
+      int aeadId = 15,
+      int offset = 0,
+    }) => ProbeOk(
+      rttMicros: rtt,
+      stratum: stratum,
+      aeadId: aeadId,
+      offsetMicros: offset,
+    );
+
+    test('clock offset beyond the threshold -> nonStandard', () {
+      final h = _summarize([ok(offset: 2000000)]);
+      expect(h.verdict, HealthVerdict.nonStandard);
+      expect(h.reasons, contains(contains('clock offset')));
+      expect(h.offsetMicros, 2000000);
+    });
+
+    test('unusable high stratum (>= 16) -> nonStandard', () {
+      final h = _summarize([ok(stratum: 16)]);
+      expect(h.verdict, HealthVerdict.nonStandard);
+      expect(h.reasons, contains(contains('unusable stratum 16')));
+    });
+
+    test('even-length RTT list averages the two middle samples', () {
+      final h = _summarize([ok(rtt: 1000), ok(rtt: 2000)]);
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.medianRttMicros, 1500);
+      expect(h.successes, 2);
+    });
+
+    test('median offset is the middle sample across probes', () {
+      final h = _summarize([ok(offset: -50), ok(offset: 30), ok(offset: 30)]);
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.offsetMicros, 30);
+    });
+
+    test('stratum is the mode across successful samples', () {
+      final h = _summarize([ok(stratum: 16), ok(stratum: 1), ok(stratum: 1)]);
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.stratum, 1);
+    });
+  });
 }
