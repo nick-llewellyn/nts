@@ -13,7 +13,7 @@ import '../state/nts_format.dart' show aeadLabel;
 /// other verdict is a drop candidate (see [ServerHealth.isDropCandidate]).
 ///
 /// [dnsExhausted] is deliberately *not* a drop candidate: it means every
-/// probe fast-failed with [TimeoutPhase.dnsSaturation] — the process-wide
+/// probe fast-failed with `dnsSaturation` — the process-wide
 /// DNS resolver pool was full on the probe side and the server was never
 /// contacted. That is a measurement artifact of our own concurrency, not
 /// evidence the server is unhealthy, so condemning it would wrongly weed
