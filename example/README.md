@@ -1,6 +1,6 @@
 # nts_example
 
-Showcase surfaces for the [`nts`](../) RFC 8915 package. Three
+Showcase surfaces for the [`nts`](../) RFC 8915 package. Four
 entry points share the same Rust-backed bridge and the same formatting
 layer:
 
@@ -9,12 +9,60 @@ layer:
 - a Flutter GUI (`lib/`) — the visual showcase, with a server catalog,
   favourites, region filtering, and a unified terminal-style live log;
 - a Dart CLI (`bin/nts_cli.dart`) — a scriptable companion for batched
-  probing, cron jobs, and CI smoke checks.
+  probing, cron jobs, and CI smoke checks;
+- a Dart CLI (`bin/nts_health.dart`) — a catalog health auditor that
+  probes every entry in a server-list file and prints an aggregated,
+  removal-oriented report (usage in
+  [CLI: `bin/nts_health.dart`](#cli-binnts_healthdart); placement in
+  [Project layout](#project-layout)).
 
-The GUI and CLI render identical multi-line output for `ntsQuery`
+The GUI and both CLIs render identical multi-line output for `ntsQuery`
 results because the format helpers live in
 `lib/src/state/nts_format.dart` and are imported by the GUI controller
-and the CLI alike (see [Shared formatting](#shared-formatting)).
+and the CLIs alike (see [Shared formatting](#shared-formatting)).
+
+## Project layout
+
+A single Dart package (`nts_example`) backs every surface, so the GUI,
+both CLIs, and their tests share one formatting layer, one mock bridge,
+and one catalog parser without duplication. Two constraints explain why
+the CLI tools are not a separate package and why their logic lives
+*beside* the GUI's rather than next to the `bin/` scripts:
+
+- A `bin/` entry point can only import support code via
+  `package:nts_example/…`, which resolves to `lib/`. Logic shared by two
+  binaries and the test suite therefore has to live under `lib/`, not in
+  `bin/`.
+- pub.dev renders exactly one `example/` per package. Splitting the CLIs
+  out would drop them from the package page (or force the shared core
+  into a third package both sides depend on).
+
+The Dart code (asset, native-build, and platform-runner directories
+omitted) sorts into CLI-only, GUI-only, and shared:
+
+```text
+bin/
+  nts_cli.dart      — CLI entry: probe hosts passed on the command line
+  nts_health.dart   — CLI entry: audit a server-list file, rank by health
+lib/
+  main.dart         — GUI entry (flutter run -t lib/main.dart)
+  src/
+    cli/            — CLI-only:  bridge_loader (dylib / mock wiring)
+    health/         — CLI-only:  server_health + health_report (nts_health)
+    data/           — shared:    server_entry, server_catalog (parseServerYaml)
+                      GUI-only:  server_loader (Flutter asset wrapper)
+    state/          — GUI state; nts_format.dart is the shared format layer
+    mock_api.dart   — shared:    in-memory bridge (GUI + both CLIs)
+    theme/  widgets/  home_page.dart  — GUI-only
+main.dart           — top-level minimal single-call sample (example.md)
+```
+
+Read CLI-first, `bin/nts_health.dart` pulls in `lib/src/health/` and
+`lib/src/cli/bridge_loader.dart`, reusing the shared
+`lib/src/data/server_catalog.dart` and `lib/src/state/nts_format.dart`;
+nothing under `theme/`, `widgets/`, or `home_page.dart` is on the CLI
+path. `bin/nts_cli.dart` is the same minus `health/` and the catalog
+parser.
 
 ## User Documentation
 
@@ -297,6 +345,164 @@ fields. `success` events for `nts_query` carry the parsed sample;
 {"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"start"}
 {"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"success","utc_unix_micros":…,"utc":"…","rtt_micros":68570,"stratum":1,"aead_id":15,"aead_label":"AES-SIV-CMAC-256(15)","cookies":2}
 ```
+
+---
+
+## CLI: `bin/nts_health.dart`
+
+A catalog **health auditor**. Where `nts_cli` probes hosts you name on
+the command line and streams a per-host log, `nts_health` is pointed at
+a *server-list file* — the same YAML schema as
+`assets/nts-sources.yml` — probes **every** entry, and prints one
+aggregated report designed to weed the catalog. Servers that don't
+reply, fail the NTS/NTP protocol checks, or answer with non-standard
+parameters (a non-baseline AEAD, an unusable stratum, or a wildly-off
+clock) are bucketed and surfaced as a **Suggested removals** list;
+healthy servers are ranked by median round-trip time.
+
+The core `nts` library ships no server list — this is example-app
+tooling only. It only *reads* the file it is given and never mutates the
+curated catalog.
+
+### Prerequisite — build the host-arch dylib
+
+Identical to `nts_cli`: plain `dart run` does not trigger the Native
+Assets build hook, so the dylib must exist on disk before the first
+non-mock invocation. Build it once with `cargo build --release` from
+`rust/` (full detail in the
+[`nts_cli` prerequisite](#prerequisite--build-the-host-arch-dylib)
+above), or pass `--mock` to skip dylib loading entirely.
+
+### Usage
+
+```text
+Usage: nts_health [options] <path-to-server-list.yml>
+-p, --port                  TCP port for NTS-KE on every host.
+                            (default: 4460)
+-t, --timeout               Per-request timeout in milliseconds (one
+                            global deadline). (default: 5000)
+-n, --samples               Probes per host; the median RTT is reported.
+                            (default: 3)
+-c, --concurrency           Max hosts probed in parallel. (default: 8)
+    --offset-threshold-ms   Flag a host as non-standard if |clock offset|
+                            exceeds this. (default: 1000)
+-f, --format                Output format. [text (default), json, csv]
+-l, --library               Path to a prebuilt nts_rust dylib (default:
+                            rust/target/release).
+    --mock                  Use the in-memory mock bridge (no native
+                            dylib required).
+    --fail-on-drops         Exit 1 if any host is a drop candidate.
+-h, --help                  Show this help.
+```
+
+Exactly one positional argument is required: the path to the server-list
+YAML. `--port` must be `1..65535`; `--timeout`, `--samples`, and
+`--concurrency` must be `>= 1`; `--offset-threshold-ms` must be `>= 0`.
+Per-host progress (`[done/total] host: verdict`) streams to stderr so a
+long run shows liveness without polluting the report on stdout.
+
+### Examples
+
+All examples assume the working directory is `example/` at the repo
+root.
+
+Audit the bundled catalog against the real bridge:
+
+```bash
+fvm dart run bin/nts_health.dart assets/nts-sources.yml
+```
+
+Five probes per host, machine-readable JSON:
+
+```bash
+fvm dart run bin/nts_health.dart --samples 5 --format json assets/nts-sources.yml
+```
+
+CSV for a spreadsheet or `awk` pipeline:
+
+```bash
+fvm dart run bin/nts_health.dart --format csv assets/nts-sources.yml > health.csv
+```
+
+No Rust toolchain available — drive the in-memory mock:
+
+```bash
+fvm dart run bin/nts_health.dart --mock assets/nts-sources.yml
+```
+
+Tighter clock-offset tolerance (flag anything off by more than 250 ms):
+
+```bash
+fvm dart run bin/nts_health.dart --offset-threshold-ms 250 assets/nts-sources.yml
+```
+
+CI gate — non-zero exit if any server is a drop candidate:
+
+```bash
+fvm dart run bin/nts_health.dart --fail-on-drops assets/nts-sources.yml
+```
+
+### Verdict buckets
+
+Each host is reduced to one verdict across all its probes:
+
+| Verdict          | Kept? | Meaning                                                                                 |
+| ---------------- | ----- | --------------------------------------------------------------------------------------- |
+| `healthy`        | ✅    | Replied and every parameter is in range.                                                |
+| `nonStandard`    | ❌    | Replied, but non-baseline AEAD, unusable stratum, or median clock offset over threshold. |
+| `notReplying`    | ❌    | No successful sample; only timeouts / no-reply (no protocol-level error).                |
+| `nonConforming`  | ❌    | No successful sample, with at least one error-severity failure (auth / KE / NTP).        |
+| `dnsExhausted`   | ✅    | Every probe fast-failed on the *local* DNS resolver cap — a probe-side artifact, so the server was never contacted and is **not** condemned. |
+
+The default thresholds are ±1 s clock offset, the two RFC 8915 AEADs
+(15 = AES-SIV-CMAC-256 baseline, 30 = AES-128-GCM-SIV), and a usable
+stratum window of `1..15`. Aggregation across `--samples` probes uses
+the **median** RTT and offset and the **mode** stratum / AEAD, so a
+single outlier sample does not flip a verdict. **Suggested removals** is
+every drop candidate (`❌` above) — i.e. all verdicts except `healthy`
+and `dnsExhausted`.
+
+### Sample output
+
+```text
+NTS server health report
+========================
+source: assets/nts-sources.yml   probed: 4 host(s) × 3 sample(s)
+
+Healthy (2), ranked by median RTT:
+    35.65ms  stratum=3   AES-SIV-CMAC-256(15)     +1.2ms  time.cloudflare.com
+    68.57ms  stratum=1   AES-SIV-CMAC-256(15)     -0.4ms  nts.netnod.se
+
+Non-standard (1):
+  nts.skewed.test  clock offset +3.41s
+
+Not replying (1):
+  nts.dead.test    Timeout
+
+Non-conforming (0):
+  (none)
+
+DNS-exhausted (local cap; not a server fault) (0):
+  (none)
+
+Summary: 2 healthy, 1 non-standard, 1 not replying, 0 non-conforming, 0 dns-exhausted (4 total)
+
+Suggested removals (2):
+  nts.dead.test
+  nts.skewed.test
+```
+
+### Exit codes
+
+| Code | Meaning                                                                       |
+| ---- | ----------------------------------------------------------------------------- |
+| `0`  | Report produced (default — per-host verdicts do not affect the code)          |
+| `1`  | `--fail-on-drops` was passed and at least one host is a drop candidate        |
+| `64` | Usage error (bad option, file not found, parse failure, or zero servers)      |
+
+Unlike `nts_cli`, the exit code never reflects individual host outcomes
+unless you opt in with `--fail-on-drops`, which makes the auditor usable
+as a CI gate that fails the build when the catalog has decayed.
 
 ---
 
