@@ -166,6 +166,18 @@ String describeError(NtsError err) => switch (err) {
   NtsErrorInternal(:final message) => 'Internal: $message',
 };
 
+/// Structured timeout-phase tag for an [NtsError], or `null` for any
+/// shape other than [NtsErrorTimeout].
+///
+/// Mirrors the `phase` key emitted by [jsonError] (`dnsSaturation`,
+/// `dnsTimeout`, `connect`, `tls`, `keRecordIo`, `ntp`). The health
+/// classifier uses it to tell a *local* DNS-pool exhaustion
+/// (`dnsSaturation`, a probe-side resolver-cap artifact) apart from a
+/// genuine server-side no-reply, instead of collapsing every timeout
+/// onto the bare `Timeout` tag from [errorTypeName].
+String? timeoutPhaseName(NtsError err) =>
+    err is NtsErrorTimeout ? err.phase.name : null;
+
 /// Stable variant tag for an [NtsError], used as the `error_type`
 /// field in machine-readable output. Mirrors the Rust enum names so
 /// downstream consumers can switch on a single short string.

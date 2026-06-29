@@ -9,9 +9,22 @@
 
 import '../state/nts_format.dart' show aeadLabel;
 
-/// Coarse health buckets. Anything other than [healthy] is a drop
-/// candidate (see [ServerHealth.isDropCandidate]).
-enum HealthVerdict { healthy, nonStandard, notReplying, nonConforming }
+/// Coarse health buckets. [healthy] and [dnsExhausted] are kept; every
+/// other verdict is a drop candidate (see [ServerHealth.isDropCandidate]).
+///
+/// [dnsExhausted] is deliberately *not* a drop candidate: it means every
+/// probe fast-failed with [TimeoutPhase.dnsSaturation] — the process-wide
+/// DNS resolver pool was full on the probe side and the server was never
+/// contacted. That is a measurement artifact of our own concurrency, not
+/// evidence the server is unhealthy, so condemning it would wrongly weed
+/// a server we never actually reached.
+enum HealthVerdict {
+  healthy,
+  nonStandard,
+  notReplying,
+  nonConforming,
+  dnsExhausted,
+}
 
 /// Tunable classification limits. Defaults: ±1s clock offset, the two
 /// RFC 8915 AEADs (15 = AES-SIV-CMAC-256 baseline, 30 = AES-128-GCM-SIV),
@@ -53,10 +66,21 @@ class ProbeOk extends ProbeResult {
 /// A failed probe, carrying the `errorTypeName` tag and whether it is
 /// error-severity (`isErrorSeverity`) — the latter distinguishes a
 /// non-conforming server from a merely-unreachable one.
+///
+/// [phase] holds the `timeoutPhaseName` tag for an `NtsError.timeout`
+/// (`dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`,
+/// `ntp`) and is `null` for every non-timeout shape. The classifier
+/// uses it to surface a local DNS-pool exhaustion distinctly from a
+/// server-side no-reply rather than collapsing both onto `Timeout`.
 class ProbeFailure extends ProbeResult {
   final String errorType;
   final bool errorSeverity;
-  const ProbeFailure({required this.errorType, required this.errorSeverity});
+  final String? phase;
+  const ProbeFailure({
+    required this.errorType,
+    required this.errorSeverity,
+    this.phase,
+  });
 }
 
 /// Aggregated verdict for one host across all its probes.
@@ -86,8 +110,13 @@ class ServerHealth {
     this.dominantErrorType,
   });
 
-  /// True for anything that should be suggested for removal.
-  bool get isDropCandidate => verdict != HealthVerdict.healthy;
+  /// True for anything that should be suggested for removal. Both
+  /// [HealthVerdict.healthy] and [HealthVerdict.dnsExhausted] are
+  /// excluded: the latter is a probe-side measurement artifact (the
+  /// server was never contacted), so it carries no signal that the
+  /// server should be weeded.
+  bool get isDropCandidate =>
+      verdict != HealthVerdict.healthy && verdict != HealthVerdict.dnsExhausted;
 }
 
 /// Reduce a host's [results] to a single [ServerHealth].
@@ -102,8 +131,34 @@ ServerHealth summarizeServer({
   final successes = oks.length;
 
   if (oks.isEmpty) {
+    // Phase-aware dominant tag: a timeout's phase is part of its
+    // identity, so `Timeout(dnsSaturation)` is distinguishable from a
+    // bare `Network` no-reply in the dominant-error column.
+    final dominant = _mode(fails.map(_failureTag));
+    // Every probe fast-failed on the local DNS-pool cap and the server
+    // was never reached — a probe-side artifact, not a server fault.
+    // Stronger than "dnsSaturation was the mode": a single non-
+    // saturation outcome means we got *some* signal, so we fall back to
+    // the ordinary no-reply / non-conforming split below.
+    final allSaturated =
+        fails.isNotEmpty &&
+        fails.every(
+          (f) => f.errorType == 'Timeout' && f.phase == 'dnsSaturation',
+        );
+    if (allSaturated) {
+      return ServerHealth(
+        hostname: hostname,
+        verdict: HealthVerdict.dnsExhausted,
+        reasons: const [
+          'local DNS resolver pool exhausted; probe throttled before '
+              'the server was contacted (not a server fault)',
+        ],
+        probes: probes,
+        successes: successes,
+        dominantErrorType: dominant,
+      );
+    }
     final anyError = fails.any((f) => f.errorSeverity);
-    final dominant = _mode(fails.map((f) => f.errorType));
     return ServerHealth(
       hostname: hostname,
       verdict: anyError
@@ -157,6 +212,14 @@ int _median(List<int> sorted) {
   final mid = n ~/ 2;
   return n.isOdd ? sorted[mid] : ((sorted[mid - 1] + sorted[mid]) / 2).round();
 }
+
+/// Phase-aware display tag for a failed probe. A timeout carries its
+/// phase (`Timeout(dnsSaturation)`) so the dominant-error column and
+/// the report distinguish a local resolver-cap fast-fail from a
+/// server-side no-reply; every non-timeout failure renders as its bare
+/// variant tag.
+String _failureTag(ProbeFailure f) =>
+    f.phase == null ? f.errorType : '${f.errorType}(${f.phase})';
 
 /// Most frequently occurring element, or null for an empty input.
 /// First-seen wins ties (insertion order through the iterable).

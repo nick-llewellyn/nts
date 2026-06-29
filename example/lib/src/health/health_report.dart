@@ -88,6 +88,7 @@ String renderTextReport(
   final nonStd = _byHost(all, HealthVerdict.nonStandard);
   final noReply = _byHost(all, HealthVerdict.notReplying);
   final nonConf = _byHost(all, HealthVerdict.nonConforming);
+  final dnsExhausted = _byHost(all, HealthVerdict.dnsExhausted);
 
   final b = StringBuffer()
     ..writeln('NTS server health report')
@@ -127,11 +128,19 @@ String renderTextReport(
     nonConf,
     (h) => h.dominantErrorType ?? 'protocol error',
   );
+  // Probe-side artifact, not a server fault: kept out of the drop-list
+  // and reported separately so it never reads as a server no-reply.
+  _writeIssueSection(
+    b,
+    'DNS-exhausted (local cap; not a server fault)',
+    dnsExhausted,
+    (h) => h.reasons.isEmpty ? 'dns saturation' : h.reasons.join('; '),
+  );
 
   b.writeln(
     'Summary: ${healthy.length} healthy, ${nonStd.length} non-standard, '
-    '${noReply.length} not replying, ${nonConf.length} non-conforming '
-    '(${all.length} total)',
+    '${noReply.length} not replying, ${nonConf.length} non-conforming, '
+    '${dnsExhausted.length} dns-exhausted (${all.length} total)',
   );
 
   final drops = dropList(all);
