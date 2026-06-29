@@ -208,6 +208,29 @@ void main() {
     });
   });
 
+  group('timeoutPhaseName', () {
+    test('returns the phase name for every Timeout phase', () {
+      for (final phase in TimeoutPhase.values) {
+        expect(timeoutPhaseName(NtsError.timeout(phase: phase)), phase.name);
+      }
+    });
+
+    test('returns null for every non-Timeout shape', () {
+      for (final err in <NtsError>[
+        const NtsError.network(message: 'x'),
+        const NtsError.noCookies(),
+        const NtsError.invalidSpec(message: 'x'),
+        const NtsError.authentication(message: 'x'),
+        const NtsError.keProtocol(message: 'x'),
+        const NtsError.ntpProtocol(message: 'x'),
+        const NtsError.trustBackendUnavailable(message: 'x'),
+        const NtsError.internal(message: 'x'),
+      ]) {
+        expect(timeoutPhaseName(err), isNull);
+      }
+    });
+  });
+
   group('jsonQuerySuccess', () {
     test('exposes the raw NtsTimeSample fields plus aead label / utc', () {
       // utc_unix_micros chosen so the ISO rendering is exact and stable;

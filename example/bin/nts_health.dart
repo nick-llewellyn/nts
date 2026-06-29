@@ -36,7 +36,7 @@ import 'package:nts_example/src/data/server_entry.dart' show NtsServerEntry;
 import 'package:nts_example/src/health/health_report.dart';
 import 'package:nts_example/src/health/server_health.dart';
 import 'package:nts_example/src/state/nts_format.dart'
-    show errorTypeName, isErrorSeverity;
+    show errorTypeName, isErrorSeverity, timeoutPhaseName;
 
 const int _kDefaultPort = 4460;
 const int _kDefaultTimeoutMs = 5000;
@@ -290,6 +290,7 @@ Future<ServerHealth> _probeHost(
         ProbeFailure(
           errorType: errorTypeName(err),
           errorSeverity: isErrorSeverity(err),
+          phase: timeoutPhaseName(err),
         ),
       );
     } catch (_) {
