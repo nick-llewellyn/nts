@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-06-30T16:15:14.215594Z",
+  "source": "assets/nts-sources.yml",
+  "criteria": {
+    "verdict": "healthy",
+    "samples": 5,
+    "offset_threshold_ms": 1000,
+    "max_per_region": 3,
+    "selection": "operator-diversity first, then lowest median RTT"
+  },
+  "totals": {
+    "regions": 4,
+    "servers": 9
+  },
+  "regions": {
+    "Global": [
+      {
+        "hostname": "time.cloudflare.com",
+        "port": 4460,
+        "region": "Global",
+        "location": "All",
+        "owner": "Cloudflare",
+        "stratum": 3,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 38913,
+        "offset_micros": 60189,
+        "vm": false
+      }
+    ],
+    "North America": [
+      {
+        "hostname": "time.txryan.com",
+        "port": 4460,
+        "region": "North America",
+        "location": "US",
+        "owner": "Tanner Ryan",
+        "stratum": 2,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 112700,
+        "offset_micros": 59534,
+        "vm": false
+      },
+      {
+        "hostname": "time.web-clock.ca",
+        "port": 4460,
+        "region": "North America",
+        "location": "Canada",
+        "owner": "Community",
+        "stratum": 1,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 123467,
+        "offset_micros": 59100,
+        "vm": false
+      },
+      {
+        "hostname": "virginia.time.system76.com",
+        "port": 4460,
+        "region": "North America",
+        "location": "US",
+        "owner": "System76",
+        "stratum": 2,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 124053,
+        "offset_micros": 57976,
+        "vm": false
+      }
+    ],
+    "South America": [
+      {
+        "hostname": "brazil.time.system76.com",
+        "port": 4460,
+        "region": "South America",
+        "location": "Brazil",
+        "owner": "System76",
+        "stratum": 2,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 241522,
+        "offset_micros": 58662,
+        "vm": false
+      },
+      {
+        "hostname": "d.st1.ntp.br",
+        "port": 4460,
+        "region": "South America",
+        "location": "Brazil",
+        "owner": "ntp.br",
+        "owner_url": "https://ntp.br",
+        "stratum": 1,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 247259,
+        "offset_micros": 58797,
+        "vm": false
+      }
+    ],
+    "Europe": [
+      {
+        "hostname": "ntp2.cam.ac.uk",
+        "port": 4460,
+        "region": "Europe",
+        "location": "UK",
+        "owner": "University of Cambridge, Department of Engineering",
+        "stratum": 2,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 36762,
+        "offset_micros": 59022,
+        "vm": false
+      },
+      {
+        "hostname": "ntp3.cam.ac.uk",
+        "port": 4460,
+        "region": "Europe",
+        "location": "UK",
+        "owner": "University of Cambridge, University Information Services (UIS)",
+        "stratum": 2,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 37841,
+        "offset_micros": 60534,
+        "vm": false
+      },
+      {
+        "hostname": "ntppool1.time.nl",
+        "port": 4460,
+        "region": "Europe",
+        "location": "Netherlands",
+        "owner": "TimeNL",
+        "stratum": 1,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 38113,
+        "offset_micros": 60412,
+        "vm": false
+      }
+    ]
+  }
+}

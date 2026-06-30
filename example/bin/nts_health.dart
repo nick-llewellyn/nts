@@ -24,19 +24,16 @@
 
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' show min;
 
 import 'package:args/args.dart';
-import 'package:nts/nts.dart'
-    show NtsError, NtsServerSpec, kDefaultDnsConcurrencyCap, ntsQuery;
+import 'package:nts/nts.dart' show kDefaultDnsConcurrencyCap;
 
 import 'package:nts_example/src/cli/bridge_loader.dart' show initBridge;
 import 'package:nts_example/src/data/server_catalog.dart' show parseServerYaml;
 import 'package:nts_example/src/data/server_entry.dart' show NtsServerEntry;
 import 'package:nts_example/src/health/health_report.dart';
+import 'package:nts_example/src/health/probe.dart' show probeAll;
 import 'package:nts_example/src/health/server_health.dart';
-import 'package:nts_example/src/state/nts_format.dart'
-    show errorTypeName, isErrorSeverity, timeoutPhaseName;
 
 const int _kDefaultPort = 4460;
 const int _kDefaultTimeoutMs = 5000;
@@ -192,7 +189,7 @@ Future<void> main(List<String> argv) async {
   final dnsCap = concurrency! > kDefaultDnsConcurrencyCap
       ? concurrency
       : kDefaultDnsConcurrencyCap;
-  final report = await _probeAll(
+  final report = await probeAll(
     entries,
     port: port!,
     timeoutMs: timeoutMs!,
@@ -200,6 +197,11 @@ Future<void> main(List<String> argv) async {
     concurrency: concurrency,
     dnsConcurrencyCap: dnsCap,
     thresholds: thresholds,
+    // Per-host progress to stderr so a long run shows liveness without
+    // polluting the stdout report.
+    onProgress: (done, total, health) => stderr.writeln(
+      '[$done/$total] ${health.hostname}: ${health.verdict.name}',
+    ),
   );
 
   switch (args['format'] as String) {
@@ -216,94 +218,4 @@ Future<void> main(List<String> argv) async {
   if ((args['fail-on-drops'] as bool) && report.any((h) => h.isDropCandidate)) {
     exit(_kExitDrops);
   }
-}
-
-/// Probe every entry with bounded fan-out, emitting per-host progress
-/// to stderr so a long run shows liveness without polluting stdout.
-Future<List<ServerHealth>> _probeAll(
-  List<NtsServerEntry> entries, {
-  required int port,
-  required int timeoutMs,
-  required int samples,
-  required int concurrency,
-  required int dnsConcurrencyCap,
-  required HealthThresholds thresholds,
-}) async {
-  final pending = List<NtsServerEntry>.of(entries);
-  final out = <ServerHealth>[];
-  final total = entries.length;
-  var done = 0;
-
-  Future<void> worker() async {
-    while (pending.isNotEmpty) {
-      final entry = pending.removeLast();
-      final health = await _probeHost(
-        entry,
-        port: port,
-        timeoutMs: timeoutMs,
-        samples: samples,
-        dnsConcurrencyCap: dnsConcurrencyCap,
-        thresholds: thresholds,
-      );
-      out.add(health);
-      done++;
-      stderr.writeln(
-        '[$done/$total] ${entry.hostname}: ${health.verdict.name}',
-      );
-    }
-  }
-
-  await Future.wait([
-    for (var i = 0; i < min(concurrency, total); i++) worker(),
-  ]);
-  return out;
-}
-
-/// Run [samples] sequential probes against one host and classify them.
-Future<ServerHealth> _probeHost(
-  NtsServerEntry entry, {
-  required int port,
-  required int timeoutMs,
-  required int samples,
-  required int dnsConcurrencyCap,
-  required HealthThresholds thresholds,
-}) async {
-  final spec = NtsServerSpec(host: entry.hostname, port: port);
-  final results = <ProbeResult>[];
-  for (var i = 0; i < samples; i++) {
-    try {
-      final s = await ntsQuery(
-        spec: spec,
-        timeoutMs: timeoutMs,
-        dnsConcurrencyCap: dnsConcurrencyCap,
-      );
-      final localMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
-      final serverEstimate = s.utcUnixMicros + s.roundTripMicros ~/ 2;
-      results.add(
-        ProbeOk(
-          rttMicros: s.roundTripMicros,
-          stratum: s.serverStratum,
-          aeadId: s.aeadId,
-          offsetMicros: serverEstimate - localMicros,
-        ),
-      );
-    } on NtsError catch (err) {
-      results.add(
-        ProbeFailure(
-          errorType: errorTypeName(err),
-          errorSeverity: isErrorSeverity(err),
-          phase: timeoutPhaseName(err),
-        ),
-      );
-    } catch (_) {
-      results.add(
-        const ProbeFailure(errorType: 'Unhandled', errorSeverity: true),
-      );
-    }
-  }
-  return summarizeServer(
-    hostname: entry.hostname,
-    results: results,
-    thresholds: thresholds,
-  );
 }
