@@ -87,7 +87,9 @@ ArgParser _buildParser() => ArgParser()
   ..addOption(
     'library',
     abbr: 'l',
-    help: 'Path to a prebuilt nts_rust dylib (default: rust/target/release).',
+    help:
+        'Path to a prebuilt nts_rust dylib file. If omitted, '
+        'auto-locates one under rust/target/release/.',
   )
   ..addFlag(
     'mock',
