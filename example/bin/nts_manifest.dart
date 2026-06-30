@@ -129,14 +129,24 @@ Future<void> main(List<String> argv) async {
   final concurrency = _posInt(args['concurrency'] as String);
   final offsetMs = _posInt(args['offset-threshold-ms'] as String, min: 0);
   final perRegion = _posInt(args['per-region'] as String);
-  if (port == null || port > 65535)
+  if (port == null || port > 65535) {
     _usageError('--port must be 1..65535', parser);
-  if (timeoutMs == null) _usageError('--timeout must be positive', parser);
-  if (samples == null) _usageError('--samples must be >= 1', parser);
-  if (concurrency == null) _usageError('--concurrency must be >= 1', parser);
-  if (offsetMs == null)
+  }
+  if (timeoutMs == null) {
+    _usageError('--timeout must be positive', parser);
+  }
+  if (samples == null) {
+    _usageError('--samples must be >= 1', parser);
+  }
+  if (concurrency == null) {
+    _usageError('--concurrency must be >= 1', parser);
+  }
+  if (offsetMs == null) {
     _usageError('--offset-threshold-ms must be >= 0', parser);
-  if (perRegion == null) _usageError('--per-region must be >= 1', parser);
+  }
+  if (perRegion == null) {
+    _usageError('--per-region must be >= 1', parser);
+  }
 
   final path = args.rest.single;
   final file = File(path);
