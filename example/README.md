@@ -59,7 +59,7 @@ lib/
 main.dart           — top-level minimal single-call sample (example.md)
 ```
 
-Read CLI-first, `bin/nts_health.dart` pulls in `lib/src/health/` and
+Reading CLI-first: `bin/nts_health.dart` pulls in `lib/src/health/` and
 `lib/src/cli/bridge_loader.dart`, reusing the shared
 `lib/src/data/server_catalog.dart` and `lib/src/state/nts_format.dart`;
 nothing under `theme/`, `widgets/`, or `home_page.dart` is on the CLI
