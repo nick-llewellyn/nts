@@ -364,7 +364,7 @@ The core `nts` library ships no server list — this is example-app
 tooling only. It only *reads* the file it is given and never mutates the
 curated catalog.
 
-### Prerequisite — build the host-arch dylib
+### Prerequisite — the host-arch dylib (same as `nts_cli`)
 
 Identical to `nts_cli`: plain `dart run` does not trigger the Native
 Assets build hook, so the dylib must exist on disk before the first
