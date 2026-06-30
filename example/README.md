@@ -389,8 +389,9 @@ Usage: nts_health [options] <path-to-server-list.yml>
     --offset-threshold-ms   Flag a host as non-standard if |clock offset|
                             exceeds this. (default: 1000)
 -f, --format                Output format. [text (default), json, csv]
--l, --library               Path to a prebuilt nts_rust dylib (default:
-                            rust/target/release).
+-l, --library               Path to a prebuilt nts_rust dylib file. If
+                            omitted, auto-locates one under
+                            rust/target/release/.
     --mock                  Use the in-memory mock bridge (no native
                             dylib required).
     --fail-on-drops         Exit 1 if any host is a drop candidate.
@@ -465,7 +466,7 @@ Each host is reduced to one verdict across all its probes:
 | `healthy`        | ✅    | Replied and every parameter is in range.                                                |
 | `nonStandard`    | ❌    | Replied, but non-baseline AEAD, unusable stratum, or median clock offset over threshold. |
 | `notReplying`    | ❌    | No successful sample; only timeouts / no-reply (no protocol-level error).                |
-| `nonConforming`  | ❌    | No successful sample, with at least one error-severity failure (auth / KE / NTP).        |
+| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, or trust-backend-unavailable. |
 | `dnsExhausted`   | ✅    | Every probe fast-failed on the *local* DNS resolver cap — a probe-side artifact, so the server was never contacted and is **not** condemned. |
 
 The default thresholds are ±1 s clock offset, the two RFC 8915 AEADs
