@@ -401,6 +401,13 @@ YAML. `--port` must be `1..65535`; `--timeout`, `--samples`, and
 Per-host progress (`[done/total] host: verdict`) streams to stderr so a
 long run shows liveness without polluting the report on stdout.
 
+`--library` is the **full path to the dylib file** (e.g.
+`rust/target/release/libnts_rust.dylib`), not its directory — the loader
+checks the path with `File(path).existsSync()`, so pointing it at
+`rust/target/release/` fails with a "dylib not found" error. Omit it to
+auto-locate the host-arch `libnts_rust` dylib under
+`rust/target/release/`, or pass `--mock` to skip dylib loading entirely.
+
 ### Examples
 
 All examples assume the working directory is `example/` at the repo
@@ -499,10 +506,13 @@ Suggested removals (2):
 | `0`  | Report produced (default — per-host verdicts do not affect the code)          |
 | `1`  | `--fail-on-drops` was passed and at least one host is a drop candidate        |
 | `64` | Usage error (bad option, file not found, parse failure, or zero servers)      |
+| `70` | Bridge-load failure (no dylib found, `--library` path missing, or Rust init threw) — non-`--mock` runs only, before any probing |
 
 Unlike `nts_cli`, the exit code never reflects individual host outcomes
 unless you opt in with `--fail-on-drops`, which makes the auditor usable
-as a CI gate that fails the build when the catalog has decayed.
+as a CI gate that fails the build when the catalog has decayed. The `70`
+bridge-load failure is shared with `nts_cli` (both route dylib loading
+through `initBridge`) and fires before any host is probed.
 
 ---
 
