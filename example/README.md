@@ -1,8 +1,10 @@
 # nts_example
 
 Showcase surfaces for the [`nts`](../) RFC 8915 package. Four
-entry points share the same Rust-backed bridge and the same formatting
-layer:
+entry points share the same Rust-backed bridge; the GUI and both CLIs
+also render through the same formatting layer
+(`lib/src/state/nts_format.dart`), while `example/main.dart` prints its
+own minimal output:
 
 - `example/main.dart` — the minimal single-file usage snippet: one
   authenticated NTPv4 query plus an exhaustive `NtsError` switch.
@@ -401,12 +403,17 @@ YAML. `--port` must be `1..65535`; `--timeout`, `--samples`, and
 Per-host progress (`[done/total] host: verdict`) streams to stderr so a
 long run shows liveness without polluting the report on stdout.
 
-`--library` is the **full path to the dylib file** (e.g.
-`rust/target/release/libnts_rust.dylib`), not its directory — the loader
-checks the path with `File(path).existsSync()`, so pointing it at
-`rust/target/release/` fails with a "dylib not found" error. Omit it to
-auto-locate the host-arch `libnts_rust` dylib under
-`rust/target/release/`, or pass `--mock` to skip dylib loading entirely.
+`--library` is the **full path to the dylib file**, not its directory —
+the loader checks the path with `File(path).existsSync()`, so pointing it
+at `rust/target/release/` fails with a "dylib not found" error. The value
+is resolved relative to your working directory: from `example/` (the
+working dir these examples assume) pass
+`../rust/target/release/libnts_rust.dylib`; from the repo root pass
+`rust/target/release/libnts_rust.dylib`. Omit `--library` to auto-locate
+the host-arch `libnts_rust` dylib — the loader probes both
+`rust/target/release/` and `../rust/target/release/`, so auto-location
+works from either directory — or pass `--mock` to skip dylib loading
+entirely.
 
 ### Examples
 
