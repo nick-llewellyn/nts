@@ -3,14 +3,18 @@
 // Extracted from `bin/nts_health.dart` so both the catalog health
 // auditor and the reliable-server manifest generator
 // (`bin/nts_manifest.dart`) drive the *same* probing and classification
-// pipeline rather than duplicating the `ntsQuery` -> `summarizeServer`
-// loop. This module is pure orchestration over the FRB bridge: the only
-// side effect is an optional progress callback, so each CLI owns its own
-// stderr formatting.
+// pipeline. Each host is probed the way a real client uses one: a single
+// NTS-KE handshake (`ntsWarmCookies`) to establish the session and
+// harvest a cookie pool, then a burst of NTPv4 queries (`ntsQuery`)
+// spent against that pool rather than a fresh handshake per sample. This
+// module is pure orchestration over the FRB bridge: the only side effect
+// is an optional progress callback, so each CLI owns its own stderr
+// formatting.
 
 import 'dart:math' show min;
 
-import 'package:nts/nts.dart' show NtsError, NtsServerSpec, ntsQuery;
+import 'package:nts/nts.dart'
+    show NtsError, NtsServerSpec, ntsQuery, ntsWarmCookies;
 
 import '../data/server_entry.dart' show NtsServerEntry;
 import '../state/nts_format.dart'
@@ -67,10 +71,17 @@ Future<List<ServerHealth>> probeAll(
   return out;
 }
 
-/// Run [samples] sequential probes against one host and reduce them to a
-/// single [ServerHealth] verdict. A successful `ntsQuery` becomes a
-/// [ProbeOk] (with a signed server-minus-local clock offset estimated at
-/// reply receipt); an [NtsError] becomes a typed [ProbeFailure]; any
+/// Probe one host the way a client would: warm a single NTS-KE
+/// handshake, then fire a burst of [samples] NTPv4 queries against the
+/// delivered cookie pool, and reduce the whole run to one [ServerHealth].
+///
+/// The warm (`ntsWarmCookies`) is measured on its own so a broken
+/// handshake is attributed as a [ProbeStage.ke] failure — distinct from
+/// a flaky NTP query. A KE that fails, or completes but delivers zero
+/// cookies, short-circuits the burst and classifies from the handshake
+/// alone. Otherwise each successful `ntsQuery` becomes a [ProbeOk] (with
+/// a signed server-minus-local clock offset estimated at reply receipt);
+/// an [NtsError] becomes a typed [ProbeStage.ntp] [ProbeFailure]; any
 /// other throwable is bucketed as a severe `Unhandled` failure.
 Future<ServerHealth> probeHost(
   NtsServerEntry entry, {
@@ -81,6 +92,60 @@ Future<ServerHealth> probeHost(
   required HealthThresholds thresholds,
 }) async {
   final spec = NtsServerSpec(host: entry.hostname, port: port);
+
+  // Stage 1: one NTS-KE handshake to establish the session and harvest
+  // the cookie pool the burst will spend. Failures here are KE-stage.
+  try {
+    final warm = await ntsWarmCookies(
+      spec: spec,
+      timeoutMs: timeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+    );
+    if (warm.freshCookies < 1) {
+      // KE completed but issued no cookies: the burst cannot run as a
+      // client would, so treat it as a severe (non-conforming) fault.
+      return summarizeServer(
+        hostname: entry.hostname,
+        results: const [
+          ProbeFailure(
+            errorType: 'NoCookies',
+            errorSeverity: true,
+            stage: ProbeStage.ke,
+          ),
+        ],
+        thresholds: thresholds,
+      );
+    }
+  } on NtsError catch (err) {
+    return summarizeServer(
+      hostname: entry.hostname,
+      results: [
+        ProbeFailure(
+          errorType: errorTypeName(err),
+          errorSeverity: isErrorSeverity(err),
+          phase: timeoutPhaseName(err),
+          stage: ProbeStage.ke,
+        ),
+      ],
+      thresholds: thresholds,
+    );
+  } catch (_) {
+    return summarizeServer(
+      hostname: entry.hostname,
+      results: const [
+        ProbeFailure(
+          errorType: 'Unhandled',
+          errorSeverity: true,
+          stage: ProbeStage.ke,
+        ),
+      ],
+      thresholds: thresholds,
+    );
+  }
+
+  // Stage 2: burst [samples] NTPv4 queries against the warmed pool. The
+  // cached session means these reuse the AEAD keys and spend a stored
+  // cookie apiece rather than re-handshaking; failures here are NTP-stage.
   final results = <ProbeResult>[];
   for (var i = 0; i < samples; i++) {
     try {

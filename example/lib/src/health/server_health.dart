@@ -63,6 +63,16 @@ class ProbeOk extends ProbeResult {
   });
 }
 
+/// Which protocol stage a [ProbeFailure] originated in. Each host is
+/// probed the way a client uses one: a single NTS-KE handshake
+/// (`ntsWarmCookies`) to harvest a cookie pool, then a burst of NTPv4
+/// queries (`ntsQuery`) spent against it. [ke] marks a failure in that
+/// handshake (TLS, KE records, zero cookies); [ntp] marks a failure in
+/// one of the post-warm UDP queries. Separating the two keeps a broken
+/// handshake from reading as a flaky NTP server (and vice-versa) in the
+/// dominant-error column.
+enum ProbeStage { ke, ntp }
+
 /// A failed probe, carrying the `errorTypeName` tag and whether it is
 /// error-severity (`isErrorSeverity`) — the latter distinguishes a
 /// non-conforming server from a merely-unreachable one.
@@ -72,14 +82,20 @@ class ProbeOk extends ProbeResult {
 /// `ntp`) and is `null` for every non-timeout shape. The classifier
 /// uses it to surface a local DNS-pool exhaustion distinctly from a
 /// server-side no-reply rather than collapsing both onto `Timeout`.
+///
+/// [stage] attributes the failure to the KE handshake or the NTP burst;
+/// it defaults to [ProbeStage.ntp] (the post-warm queries) since the
+/// single per-host warm is the only [ProbeStage.ke] source.
 class ProbeFailure extends ProbeResult {
   final String errorType;
   final bool errorSeverity;
   final String? phase;
+  final ProbeStage stage;
   const ProbeFailure({
     required this.errorType,
     required this.errorSeverity,
     this.phase,
+    this.stage = ProbeStage.ntp,
   });
 }
 
@@ -217,9 +233,13 @@ int _median(List<int> sorted) {
 /// phase (`Timeout(dnsSaturation)`) so the dominant-error column and
 /// the report distinguish a local resolver-cap fast-fail from a
 /// server-side no-reply; every non-timeout failure renders as its bare
-/// variant tag.
-String _failureTag(ProbeFailure f) =>
-    f.phase == null ? f.errorType : '${f.errorType}(${f.phase})';
+/// variant tag. A KE-stage failure is prefixed `ke:` (`ke:KeProtocol`,
+/// `ke:Timeout(tls)`) so a broken handshake is distinguishable from a
+/// flaky NTP query in the same column.
+String _failureTag(ProbeFailure f) {
+  final base = f.phase == null ? f.errorType : '${f.errorType}(${f.phase})';
+  return f.stage == ProbeStage.ke ? 'ke:$base' : base;
+}
 
 /// Most frequently occurring element, or null for an empty input.
 /// First-seen wins ties (insertion order through the iterable).
