@@ -94,6 +94,24 @@ const int kDefaultDnsConcurrencyCap = 4;
 /// block the high-cap caller. See `ARCHITECTURE.md`'s "Timeout budget
 /// and bounded DNS" section for the full mechanic.
 ///
+/// **Worker-pool occupancy.** Although this wrapper is `async`, the
+/// underlying Rust call is a blocking network exchange dispatched to
+/// the `flutter_rust_bridge` worker pool: each in-flight call pins one
+/// pool thread for its full duration — up to `timeoutMs` in the worst
+/// case. The default pool holds one thread per logical CPU, so a burst
+/// of concurrent cold queries against many *distinct* hosts can occupy
+/// every worker and stall unrelated bridge calls behind them until a
+/// thread frees. Concurrent calls against the *same* `host:port` are
+/// less of a concern: a per-key singleflight on the Rust side collapses
+/// them onto one NTS-KE handshake, so their combined wall-clock is
+/// bounded by a single exchange (each waiting call still holds its own
+/// worker thread while parked, but only until the shared handshake
+/// resolves). When fanning out to many distinct hosts, bound the
+/// client-side concurrency — e.g. drain the host list through a small
+/// fixed pool of 2–4 in-flight futures — rather than launching every
+/// query at once. This is independent of `dnsConcurrencyCap`, which
+/// bounds DNS resolver threads, not bridge workers.
+///
 /// The returned [NtsTimeSample] exposes the raw protocol primitives,
 /// not a finished synchronized clock. `utcUnixMicros` is the server
 /// transmit timestamp exactly as it appeared on the wire; it does not
@@ -166,6 +184,11 @@ Future<NtsTimeSample> ntsQuery({
 /// `timeoutMs` and `dnsConcurrencyCap` carry the same semantics as on
 /// [ntsQuery] and default to [kDefaultTimeoutMs] /
 /// [kDefaultDnsConcurrencyCap] when omitted.
+///
+/// The worker-pool occupancy guideline documented on [ntsQuery]
+/// applies here on identical terms: each in-flight call pins one
+/// `flutter_rust_bridge` worker thread for up to `timeoutMs`, so bound
+/// the fan-out when warming many distinct hosts concurrently.
 ///
 /// The returned [NtsWarmCookiesOutcome.phaseTimings] only covers the
 /// KE pipeline (DNS, connect, TLS, KE record I/O); there is no UDP
@@ -458,7 +481,9 @@ class NtsClient {
   /// behaviour documented on [ntsQuery]. The [NtsTimeSample] return
   /// shape is identical too — see [ntsQuery]'s dartdoc for the raw
   /// protocol primitives the sample exposes and how to apply the
-  /// one-way-delay correction.
+  /// one-way-delay correction, and for the worker-pool occupancy
+  /// guideline, which applies to this method unchanged (per-client
+  /// tables do not change which FRB worker pool the call blocks on).
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsTimeSample> query({
@@ -498,7 +523,9 @@ class NtsClient {
   /// [ntsWarmCookies]; out-of-range values cause the returned `Future`
   /// to complete with [NtsError.invalidSpec] without reaching the
   /// Rust boundary. `verificationTimeMs` carries the same cold-start
-  /// clock-skew-rescue behaviour documented on [ntsQuery].
+  /// clock-skew-rescue behaviour documented on [ntsQuery], and the
+  /// worker-pool occupancy guideline on [ntsQuery] applies to this
+  /// method unchanged.
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsWarmCookiesOutcome> warmCookies({

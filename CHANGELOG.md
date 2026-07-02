@@ -79,6 +79,21 @@
   `NtsClient.warmCookies` through their existing cross-references.
   Comment-only; no behaviour change. (NTS-44)
 
+- Documented FRB worker-pool occupancy of the blocking bridge calls.
+  `ntsQuery` / `ntsWarmCookies` (and the `NtsClient` equivalents) are
+  `async` on the Dart side, but each in-flight call pins one
+  `flutter_rust_bridge` worker thread for its full blocking duration —
+  up to `timeoutMs` — and the default pool holds one thread per
+  logical CPU, so an unbounded burst of cold queries against many
+  distinct hosts can occupy every worker and stall unrelated bridge
+  calls. Same-host storms are already collapsed onto one handshake by
+  the Rust-side per-key singleflight. Added a worker-pool-occupancy
+  note with a bounded fan-out recommendation to the `ntsQuery`
+  dartdoc, cross-referenced from `ntsWarmCookies` and
+  `NtsClient.query` / `NtsClient.warmCookies`, plus a matching
+  module-doc note in `rust/src/api/nts.rs`. Comment-only; no
+  behaviour change. (NTS-64)
+
 ### Fixed
 
 - The FRB drift gate (`tool/check_bindings.dart`, run locally and by

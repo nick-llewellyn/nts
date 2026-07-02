@@ -11,6 +11,18 @@
 //!   fresh NTS-KE handshake and ingests the delivered cookie pool
 //!   without sending any NTP traffic.
 //!
+//! Neither function is `#[frb(sync)]` — `sync` is reserved for
+//! atomic reads, constructors, and cache mutators — so neither can
+//! jank the UI isolate. Each call does, however, occupy one FRB
+//! worker-pool thread for its full blocking duration (up to
+//! `timeout_ms`). The default pool holds one thread per logical CPU,
+//! so distinct-host fan-out wide enough to fill the pool delays
+//! other bridge calls until a worker frees; same-host storms are
+//! collapsed onto one handshake by the per-key singleflight in
+//! `SessionTable::checkout`. The caller-facing guideline for
+//! bounding distinct-host fan-out lives on the public Dart wrappers
+//! (`lib/src/api/nts.dart`, `ntsQuery`'s dartdoc).
+//!
 //! Both convenience functions delegate to a process-wide default
 //! `NtsClient` via a private `default_nts_client()` accessor; callers
 //! that need scoped session ownership construct their own `NtsClient`
