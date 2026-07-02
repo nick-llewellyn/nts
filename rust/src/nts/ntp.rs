@@ -628,7 +628,13 @@ pub fn parse_server_response(
             .map(|ext| EXT_HEADER_LEN + ext.body.len())
             .sum::<usize>();
     let aad = &bytes[..aad_end];
-    let plaintext = s2c_key.open_packet(aad, auth_body.nonce, auth_body.ciphertext)?;
+    // Wrap the AEAD-decrypted body immediately: it carries the fresh
+    // cookies (and any other encrypted extensions), so it must be wiped
+    // when this function returns rather than freed as a naked `Vec<u8>`.
+    // Allocations the AEAD crate makes internally while producing this
+    // buffer are upstream-owned and out of reach here.
+    let plaintext =
+        Zeroizing::new(s2c_key.open_packet(aad, auth_body.nonce, auth_body.ciphertext)?);
 
     if header.origin_timestamp != expected_origin_timestamp {
         return Err(NtpError::OriginTimestampMismatch {
@@ -673,15 +679,18 @@ pub fn parse_server_response(
     }
 
     let encrypted_exts = parse_extensions(&plaintext)?;
-    // Wrap each cookie in `Zeroizing` at the earliest point it exists
-    // as a standalone allocation. `ext.body` was allocated exactly via
+    // Wrap every encrypted-extension body in `Zeroizing` *before* the
+    // cookie filter: each body is a copy of AEAD-protected plaintext,
+    // so non-cookie extensions must be wiped on discard too, not
+    // dropped as naked `Vec<u8>`s. `ext.body` was allocated exactly via
     // `to_vec()` in `parse_extensions` (no growth history) and is moved
     // — not copied — into the wrapper, so the growth-free construction
     // discipline holds and no unwiped intermediate is left behind.
     let fresh_cookies = encrypted_exts
         .into_iter()
-        .filter(|ext| ext.field_type == ext_type::NTS_COOKIE)
-        .map(|ext| Zeroizing::new(ext.body))
+        .map(|ext| (ext.field_type, Zeroizing::new(ext.body)))
+        .filter(|(field_type, _)| *field_type == ext_type::NTS_COOKIE)
+        .map(|(_, body)| body)
         .collect();
 
     Ok(ServerResponse {

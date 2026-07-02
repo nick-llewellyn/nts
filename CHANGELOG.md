@@ -67,6 +67,10 @@
   unwrapping. Previously the transit collection held naked `Vec<u8>` values
   until the jar boundary, so the deposit-side discard paths (stale session
   generation, evicted session) freed cookie bytes without wiping them.
+  The AEAD-decrypted extension body inside `parse_server_response` is also
+  `Zeroizing`-wrapped now, as is every encrypted-extension body copied out
+  of it (cookie or not), so the decrypted plaintext and its non-cookie
+  discards are wiped on drop as well.
   `ServerResponse` also gains a manual redacted `Debug`
   (`<redacted; N cookies>`) matching the existing `ClientRequest` /
   `CookieJar` discipline, plus a compile-time type pin and a Debug-redaction
