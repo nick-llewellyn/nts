@@ -60,8 +60,8 @@ Operational notes:
 - The PR template under `.github/pull_request_template.md` carries
   the canonical checklist. Tick the boxes you actually ran; do not
   blanket-check items you skipped.
-- The `dependency-review` job runs PR-only and fails on `high`-
-  severity advisories; if it fires on a transitive bump, prefer
+- The `dependency-review` job runs PR-only and fails on `moderate`-
+  or-higher advisories; if it fires on a transitive bump, prefer
   pinning the offending dep over disabling the gate.
 - Branch-protection details (required checks, status-check names,
   linear history, etc.) live in

@@ -567,8 +567,10 @@ jobs:
     # Security required). Covers both pubspec (Dart) and Cargo.toml
     # (Rust) via GitHub's dependency graph.
     #
-    # `fail-on-severity: high` is the starting floor; tighten to
-    # `moderate` once we observe real signal volume. License policy
+    # `fail-on-severity: moderate` (tightened from the `high` starting
+    # floor now that the daily `audit.yml` cargo-audit job provides a
+    # second net). If the gate fires on a transitive bump, prefer
+    # pinning the offending dep over loosening the gate. License policy
     # (`allow-licenses` / `deny-licenses`) is intentionally not
     # configured yet -- add it here when the policy is decided.
     name: Dependency review
@@ -589,7 +591,7 @@ jobs:
         # versions). `fail-on-severity` semantics unchanged.
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
-          fail-on-severity: high
+          fail-on-severity: moderate
 
   hooks-syntax:
     # POSIX-shell syntax + presence + exec-bit check for the repo-tracked

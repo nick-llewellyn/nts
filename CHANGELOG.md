@@ -25,6 +25,18 @@
   through the `__internal-fuzz`-gated `__internal_fuzz` module; no
   production API change. (NTS-60)
 
+### Changed
+
+- Tightened the PR-time `dependency-review` CI gate from
+  `fail-on-severity: high` to `moderate`, so moderate-severity
+  advisories on newly-introduced dependencies now block the merge
+  instead of passing silently. The `high` setting was always framed as
+  a starting floor; with the daily `audit.yml` cargo-audit job in place
+  as a second net, the tighter PR-time floor costs nothing extra. Per
+  the established policy, if the gate fires on a transitive bump the
+  fix is to pin the offending dependency, not loosen the gate.
+  CI-only; no runtime change. (NTS-62)
+
 ### Documentation
 
 - Fixed three broken intra-doc links in the
