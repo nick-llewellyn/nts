@@ -946,14 +946,16 @@ neither the liveness surface nor the capacity surface remains
 exposed.
 
 The NTP-response cookie path
-(`ServerResponse::fresh_cookies: Vec<Vec<u8>>` →
-`SessionTable::deposit_cookies` → `CookieJar::put_many`) still
-carries plain `Vec<u8>` values until they cross the jar boundary;
-`CookieJar::put_many` wraps each one in `Zeroizing` on insertion
-via its `T: Into<Zeroizing<Vec<u8>>>` bound, so the in-jar bytes
-are wiped on drop, but the intermediate `Vec<Vec<u8>>` collection
-remains a residual liveness surface for that path. File a separate
-issue before tightening this path; the KE side is closed.
+(`ServerResponse::fresh_cookies: Vec<Zeroizing<Vec<u8>>>` →
+`SessionTable::deposit_cookies` → `CookieJar::put_many`) is also
+closed (bd nts-wpvd / NTS-61): each cookie is wrapped in
+`Zeroizing` at the parse site in `parse_server_response`
+(`rust/src/nts/ntp.rs`), so the transit collection — including the
+deposit-side discard paths (stale generation, evicted session)
+that never reach the jar — wipes the bytes on drop instead of
+freeing naked `Vec<u8>` allocations. `ServerResponse` carries a
+manual redacted `Debug` (`<redacted; N cookies>`) per the
+convention above.
 
 ### Custom roots parsing pipeline
 

@@ -481,12 +481,42 @@ pub fn build_client_request(req: &ClientRequest, c2s_key: &AeadKey) -> Result<Ve
 }
 
 /// Successfully verified server reply.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is implemented manually below to redact the
+/// `fresh_cookies` field — same threat model as [`ClientRequest`]:
+/// RFC 8915 §6 treats cookies as authentication material, and
+/// `Zeroizing<Vec<u8>>`'s derived `Debug` would delegate to the
+/// inner `Vec<u8>` and print the raw bytes through any `{:?}` site.
+#[derive(Clone)]
 pub struct ServerResponse {
     pub header: NtpHeader,
     pub unique_id: Vec<u8>,
     /// Fresh NTS cookies recovered from the encrypted extension fields.
-    pub fresh_cookies: Vec<Vec<u8>>,
+    /// Each cookie is wrapped in [`Zeroizing`] at the parse site so the
+    /// bytes are wiped from RAM wherever the response is dropped —
+    /// including the deposit-side discard paths (stale generation,
+    /// evicted session) that never reach the
+    /// [`crate::nts::cookies::CookieJar`], which previously dropped
+    /// naked `Vec<u8>` allocations (bd nts-wpvd / NTS-61).
+    pub fresh_cookies: Vec<Zeroizing<Vec<u8>>>,
+}
+
+impl std::fmt::Debug for ServerResponse {
+    /// Manual `Debug` that redacts `fresh_cookies`; renders it as
+    /// `<redacted; N cookies>` so the harvested count stays observable
+    /// for diagnostics without leaking the underlying authentication
+    /// material. Non-secret fields pass through verbatim. See the
+    /// type-level rustdoc for the threat model.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerResponse")
+            .field("header", &self.header)
+            .field("unique_id", &self.unique_id)
+            .field(
+                "fresh_cookies",
+                &format_args!("<redacted; {} cookies>", self.fresh_cookies.len()),
+            )
+            .finish()
+    }
 }
 
 /// Parse and authenticate a server reply against the request's `expected_uid`
@@ -643,10 +673,15 @@ pub fn parse_server_response(
     }
 
     let encrypted_exts = parse_extensions(&plaintext)?;
+    // Wrap each cookie in `Zeroizing` at the earliest point it exists
+    // as a standalone allocation. `ext.body` was allocated exactly via
+    // `to_vec()` in `parse_extensions` (no growth history) and is moved
+    // — not copied — into the wrapper, so the growth-free construction
+    // discipline holds and no unwiped intermediate is left behind.
     let fresh_cookies = encrypted_exts
         .into_iter()
         .filter(|ext| ext.field_type == ext_type::NTS_COOKIE)
-        .map(|ext| ext.body)
+        .map(|ext| Zeroizing::new(ext.body))
         .collect();
 
     Ok(ServerResponse {

@@ -2455,7 +2455,20 @@ impl SessionTable {
     /// another KE handshake. Drop the cookies on the floor in that case;
     /// the next query will simply re-handshake and refill the jar from
     /// scratch, which is strictly cheaper than poisoning the cache.
-    fn deposit_cookies(&self, spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8>>) {
+    ///
+    /// The cookies arrive pre-wrapped in [`Zeroizing`] from the parse
+    /// site ([`crate::nts::ntp::ServerResponse::fresh_cookies`]), so
+    /// both discard paths — stale generation here and the missing-entry
+    /// fall-through below — wipe the bytes on drop instead of leaving
+    /// them recoverable in freed `Vec<u8>` allocations (bd nts-wpvd /
+    /// NTS-61). This closes the last plain-bytes transit the KE-side
+    /// end-to-end wrap (bd nts-8ey) left open.
+    fn deposit_cookies(
+        &self,
+        spec_key: &str,
+        expected_generation: u64,
+        cookies: Vec<Zeroizing<Vec<u8>>>,
+    ) {
         if cookies.is_empty() {
             return;
         }
@@ -2537,7 +2550,7 @@ impl SessionTable {
 /// table so the test bodies stay untouched. Gated to `#[cfg(test)]`
 /// so they are dead-stripped from release builds.
 #[cfg(test)]
-fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Vec<u8>>) {
+fn deposit_cookies(spec_key: &str, expected_generation: u64, cookies: Vec<Zeroizing<Vec<u8>>>) {
     default_session_table().deposit_cookies(spec_key, expected_generation, cookies);
 }
 

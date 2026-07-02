@@ -208,10 +208,49 @@ mod parse_response {
         let parsed = parse_server_response(&packet, &UID, CLIENT_TX, &s2c).unwrap();
         assert_eq!(parsed.unique_id, UID);
         assert_eq!(parsed.fresh_cookies.len(), 3);
-        assert_eq!(parsed.fresh_cookies[0], cookies[0]);
-        assert_eq!(parsed.fresh_cookies[2], cookies[2]);
+        assert_eq!(*parsed.fresh_cookies[0], cookies[0]);
+        assert_eq!(*parsed.fresh_cookies[2], cookies[2]);
         assert_eq!(parsed.header.mode(), mode::SERVER);
         assert_eq!(parsed.header.origin_timestamp, CLIENT_TX);
+    }
+
+    /// Compile-time pin that `ServerResponse::fresh_cookies` carries
+    /// `Zeroizing<Vec<u8>>` elements so the harvested cookies are
+    /// wiped from RAM wherever the response drops — including the
+    /// `deposit_cookies` discard paths (stale generation, evicted
+    /// session) that never reach the `CookieJar`. A regression that
+    /// reverted the element type to `Vec<u8>` would re-open the
+    /// residual-memory-scrape surface bd nts-wpvd / NTS-61 closed;
+    /// the helper accepts only `&Zeroizing<Vec<u8>>` so this test
+    /// fails at compile time on that regression. Mirrors the pin on
+    /// `CookieJar::take` in `cookies.rs`.
+    ///
+    /// Also pins the redacted `Debug`: the rendered form must expose
+    /// the cookie *count* but never the cookie *bytes*.
+    #[test]
+    fn fresh_cookies_are_zeroizing_wrapped_and_debug_redacted() {
+        fn assert_zeroizing_vec(_: &Zeroizing<Vec<u8>>) {}
+        let (_, s2c) = fresh_keys();
+        let packet = craft_response(&UID, &[&[0xAB; 64]], &s2c);
+        let parsed = parse_server_response(&packet, &UID, CLIENT_TX, &s2c).unwrap();
+        assert_zeroizing_vec(&parsed.fresh_cookies[0]);
+
+        let rendered = format!("{parsed:?}");
+        assert!(
+            rendered.contains("<redacted; 1 cookies>"),
+            "Debug output must render the redaction placeholder \
+             (full output: {rendered})",
+        );
+        // A leaked cookie would render as `[171, 171, 171, ...]`
+        // (0xAB = 171). Match on three consecutive elements rather
+        // than a bare "171" so a header timestamp whose decimal
+        // rendering happens to contain that substring cannot
+        // false-positive the pin.
+        assert!(
+            !rendered.contains("171, 171, 171"),
+            "Debug output must not leak cookie bytes \
+             (full output: {rendered})",
+        );
     }
 
     /// `nts-3eu` acceptance criterion (RFC 8915 §5.5): new cookies
@@ -261,7 +300,7 @@ mod parse_response {
             parsed.fresh_cookies,
         );
         assert_eq!(
-            parsed.fresh_cookies[0],
+            *parsed.fresh_cookies[0],
             aead_cookie.to_vec(),
             "fresh cookie is not the AEAD-internal one; \
              observed {:?}, expected the AEAD body and never the AAD-only \
@@ -672,7 +711,7 @@ mod alt_aead {
         let response = craft_response(&UID, cookies, &s2c);
         let parsed = parse_server_response(&response, &UID, CLIENT_TX, &s2c).unwrap();
         assert_eq!(parsed.fresh_cookies.len(), 2);
-        assert_eq!(parsed.fresh_cookies[0], cookies[0]);
+        assert_eq!(*parsed.fresh_cookies[0], cookies[0]);
     }
 
     /// Cross-algorithm key confusion must fail closed: a packet sealed under

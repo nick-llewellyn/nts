@@ -259,7 +259,11 @@ fn deposit_cookies_writes_when_generation_matches() {
         .expect("session table poisoned")
         .insert(key.to_owned(), session);
 
-    deposit_cookies(key, gen, vec![vec![1, 2, 3], vec![4, 5, 6]]);
+    deposit_cookies(
+        key,
+        gen,
+        vec![Zeroizing::new(vec![1, 2, 3]), Zeroizing::new(vec![4, 5, 6])],
+    );
 
     let guard = sessions().lock().expect("session table poisoned");
     let s = guard.get(key).expect("session present");
@@ -312,7 +316,11 @@ fn deposit_cookies_drops_when_session_replaced() {
         .insert(key.to_owned(), fresh);
 
     // Deposit with the *stale* generation — must be a no-op.
-    deposit_cookies(key, stale_generation, vec![vec![0xAA; 16]; 4]);
+    deposit_cookies(
+        key,
+        stale_generation,
+        vec![Zeroizing::new(vec![0xAA; 16]); 4],
+    );
 
     let guard = sessions().lock().expect("session table poisoned");
     let s = guard.get(key).expect("session present");
@@ -346,7 +354,7 @@ fn deposit_cookies_is_noop_when_session_missing() {
         .expect("session table poisoned")
         .remove(key);
     // Any generation ID will do — the entry is absent.
-    deposit_cookies(key, 1, vec![vec![1, 2, 3]]);
+    deposit_cookies(key, 1, vec![Zeroizing::new(vec![1, 2, 3])]);
     // No assertion needed beyond "did not panic"; verify the table
     // really is empty for this key.
     let guard = sessions().lock().expect("session table poisoned");
