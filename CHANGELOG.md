@@ -81,6 +81,18 @@
 
 ### Fixed
 
+- The FRB drift gate (`tool/check_bindings.dart`, run locally and by
+  CI's `Verify FRB bindings are in sync` job) now fails when codegen
+  *creates* a generated file the repo does not yet track. The gate
+  previously relied on `git diff --exit-code`, which reports only
+  tracked-file changes, so a brand-new FRB-emitted module was caught
+  only indirectly (via the tracked dispatcher's import-list change). A
+  `git status --porcelain --untracked-files=all` check scoped to the
+  watched paths (`lib/src/ffi/`, `rust/src/frb_generated.rs`) now fails
+  the gate outright with a dedicated diagnostic naming each untracked
+  file. Complements the existing orphaned-module check, which covers
+  the removal direction. Tooling-only; no runtime change. (NTS-63)
+
 - Singleflight waiters now attribute a timeout to the phase the leader
   was actually in (DNS, Connect, TLS, or KE record I/O) instead of a
   blanket `KeRecordIo`. The leader publishes its live phase to its

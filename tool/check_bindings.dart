@@ -4,7 +4,9 @@
 // the regenerated Dart bindings, checks for orphaned generated modules
 // (see `_checkForOrphanedApiModules`), and fails non-zero if
 // `lib/src/ffi/` or `rust/src/frb_generated.rs` differ from the committed
-// state.
+// state -- including when codegen *creates* a file the repo does not yet
+// track (see `_findUntrackedGeneratedFiles`; `git diff` alone reports
+// only tracked-file changes).
 //
 // Usage:
 //
@@ -12,8 +14,9 @@
 //
 // Exit codes:
 //   0  bindings are in sync
-//   1  drift detected, an orphaned generated module was found, or a
-//      precondition failed (missing tool / wrong version)
+//   1  drift detected, an untracked generated file was found, an
+//      orphaned generated module was found, or a precondition failed
+//      (missing tool / wrong version)
 //
 // The pinned FRB version is read from `pubspec.yaml` so this script and the
 // CI workflow stay in lockstep with the runtime crate.
@@ -141,6 +144,28 @@ Future<void> main(List<String> args) async {
   // dedicated orphan message rather than a generic "files differ".
   _checkForOrphanedApiModules();
 
+  // Detect brand-new generated files the repo does not yet track. `git
+  // diff` below only reports changes to tracked files, so without this
+  // check a codegen run that *creates* a file (e.g. a new Rust source
+  // under `rust/src/api/` emitting a new Dart module) would pass the
+  // gate silently unless a tracked file happened to change alongside it.
+  final untracked = await _findUntrackedGeneratedFiles();
+  if (untracked.isNotEmpty) {
+    stderr.writeln(
+      '${_errorPrefix}codegen produced generated file(s) not tracked '
+      'by git:',
+    );
+    for (final path in untracked) {
+      stderr.writeln('       $path');
+    }
+    stderr.writeln(
+      "       Run 'flutter_rust_bridge_codegen generate' locally, then\n"
+      '       `git add` the new file(s) and commit them alongside the\n'
+      '       Rust change that introduced them.',
+    );
+    exit(1);
+  }
+
   if (await _hasDrift()) {
     stderr.writeln(
       "${_errorPrefix}FRB bindings drifted from rust/src/api/. Run "
@@ -266,6 +291,35 @@ Future<void> _run(String executable, List<String> args) async {
     stderr.writeln('$_errorPrefix`$executable ${args.join(' ')}` exited $code');
     exit(code);
   }
+}
+
+// Lists files under the watched paths that exist on disk but are not
+// tracked by git, sorted for deterministic output. `git status
+// --porcelain` prefixes untracked entries with `?? `;
+// `--untracked-files=all` makes git list individual files rather than
+// collapsing a wholly-untracked directory into a single `dir/` entry,
+// so the diagnostic names every offending file. Errors out on a git
+// failure rather than treating "status unavailable" as "no untracked
+// files".
+Future<List<String>> _findUntrackedGeneratedFiles() async {
+  final status = await Process.run('git', [
+    'status',
+    '--porcelain',
+    '--untracked-files=all',
+    '--',
+    ..._watchedPaths,
+  ]);
+  if (status.exitCode != 0) {
+    stderr.writeln(
+      '$_errorPrefix`git status --porcelain` exited ${status.exitCode} '
+      '(untracked-file check cannot run)',
+    );
+    exit(1);
+  }
+  return <String>[
+    for (final line in '${status.stdout}'.split('\n'))
+      if (line.startsWith('?? ')) line.substring(3),
+  ]..sort();
 }
 
 Future<bool> _hasDrift() async {

@@ -35,11 +35,14 @@ dart run tool/check_bindings.dart
 
 Mirrors CI's drift check: regenerates bindings, applies the lint-suppression
 patches that FRB cannot emit on its own (see `_lintIgnorePatches` in the
-script), runs `dart format` on the output, then `git diff --exit-code`
-against the watched paths. Exits non-zero with the same error message CI
-emits when `lib/src/ffi/` or `rust/src/frb_generated.rs` differ from the
-committed state. The pinned codegen version is read from `pubspec.yaml`
-so the script and CI stay in lockstep.
+script), runs `dart format` on the output, then checks the watched paths
+two ways -- `git status --porcelain` for generated files that exist on
+disk but are not yet tracked by git (a bare `git diff` cannot see
+those), and `git diff --exit-code` for changes to tracked files. Exits
+non-zero with the same error message CI emits when `lib/src/ffi/` or
+`rust/src/frb_generated.rs` differ from the committed state. The pinned
+codegen version is read from `pubspec.yaml` so the script and CI stay
+in lockstep.
 
 #### Post-codegen lint-suppression patches
 
