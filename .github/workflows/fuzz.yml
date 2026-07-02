@@ -20,8 +20,9 @@ name: Nightly fuzz
 #     stays at the six entries from `ci.yml` plus `Detect changed
 #     paths`.
 #
-# Workflow runs the three fuzz targets under `rust/fuzz/`
-# (`parse_extensions`, `parse_message`, `validate_response`) in a
+# Workflow runs the five fuzz targets under `rust/fuzz/`
+# (`parse_extensions`, `parse_message`, `validate_response`,
+# `parse_authenticator_body`, `parse_server_response`) in a
 # per-target matrix so a crash on one target does not short-circuit
 # the others. New crash reproducers are uploaded as artefacts so a
 # red run is actionable without re-running locally.
@@ -35,7 +36,7 @@ name: Nightly fuzz
 
 on:
   # Daily at 06:00 UTC. Adjustable; the only constraint is finishing
-  # within the GHA per-step 6h timeout, which 60 s/target × 3 targets
+  # within the GHA per-step 6h timeout, which 60 s/target × 5 targets
   # comfortably clears even with cold-cache build time included.
   schedule:
     - cron: '0 6 * * *'
@@ -90,7 +91,7 @@ jobs:
       CARGO_FUZZ_VERSION: '0.13.1'
     strategy:
       # A crash on one target should surface alongside the green
-      # signal from the other two, not pre-empt them. Each leg is
+      # signal from the other legs, not pre-empt them. Each leg is
       # independent: separate cache key, separate artefact bundle,
       # separate runner.
       fail-fast: false
@@ -99,6 +100,8 @@ jobs:
           - parse_extensions
           - parse_message
           - validate_response
+          - parse_authenticator_body
+          - parse_server_response
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

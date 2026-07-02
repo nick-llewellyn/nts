@@ -153,8 +153,9 @@ regardless of the path selector.
 
 The Rust crate ships a `cargo-fuzz` workspace under `rust/fuzz/` that
 targets the parser surfaces directly exposed to attacker-controlled
-network bytes (`parse_extensions`, `parse_message`, and
-`validate_response`). The workspace is a
+network bytes (`parse_extensions`, `parse_message`,
+`validate_response`, `parse_authenticator_body`, and
+`parse_server_response`). The workspace is a
 separate Cargo workspace so the parent `cargo test` / `cargo clippy`
 invocations remain on stable toolchain — `libfuzzer-sys` itself
 builds on stable, but `cargo fuzz {build,run}` enables sanitizer
@@ -176,12 +177,14 @@ cd rust/fuzz
 cargo +nightly fuzz run parse_extensions -- -max_total_time=300
 ```
 
-The seed corpus under `rust/fuzz/corpus/parse_extensions/` is committed
-and contains three minimised reproducers ported from `ntpd-rs`'s
-`should_not_crash` tests (see PR #45 / bd nts-1qb). New crashes land in
-`rust/fuzz/artifacts/<target>/` (gitignored); promote any minimised
-crash into the seed corpus or pin it as a unit-test fixture in the
-parent crate's regression module.
+Each target has a committed seed corpus under
+`rust/fuzz/corpus/<target>/` (e.g. `parse_extensions/` contains three
+minimised reproducers ported from `ntpd-rs`'s `should_not_crash` tests
+— see PR #45 / bd nts-1qb; `parse_server_response/` contains a fully
+authenticated canonical reply sealed under the harness's fixed key).
+New crashes land in `rust/fuzz/artifacts/<target>/` (gitignored);
+promote any minimised crash into the seed corpus or pin it as a
+unit-test fixture in the parent crate's regression module.
 
 The `nts_rust` crate exposes the parsers to the harness via the
 `__internal-fuzz` Cargo feature (re-exports under
@@ -193,7 +196,7 @@ fuzz / coverage crates that are themselves excluded from the
 published artefact (see `.pubignore`). Never enable it from
 `hook/build.dart` or the FRB codegen.
 
-CI integration: `.github/workflows/fuzz.yml` runs each of the three
+CI integration: `.github/workflows/fuzz.yml` runs each of the five
 targets nightly (06:00 UTC) for a 60-second wall-clock budget per
 target, in a per-target matrix so a crash on one target does not
 short-circuit the others. Crash reproducers from a red run are
