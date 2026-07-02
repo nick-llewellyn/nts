@@ -12,7 +12,7 @@
 //!   without sending any NTP traffic.
 //!
 //! Neither function is `#[frb(sync)]` — `sync` is reserved for
-//! atomics reads, constructors, and cache mutators — so neither can
+//! atomic reads, constructors, and cache mutators — so neither can
 //! jank the UI isolate. Each call does, however, occupy one FRB
 //! worker-pool thread for its full blocking duration (up to
 //! `timeout_ms`). The default pool holds one thread per logical CPU,
