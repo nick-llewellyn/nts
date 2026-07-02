@@ -8,10 +8,20 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts_example/src/health/server_health.dart';
 
-ProbeFailure _fail(String type, {bool severe = false, String? phase}) =>
-    ProbeFailure(errorType: type, errorSeverity: severe, phase: phase);
+ProbeFailure _fail(
+  String type, {
+  bool severe = false,
+  String? phase,
+  ProbeStage stage = ProbeStage.ntp,
+}) => ProbeFailure(
+  errorType: type,
+  errorSeverity: severe,
+  phase: phase,
+  stage: stage,
+);
 
-ProbeFailure _timeout(String phase) => _fail('Timeout', phase: phase);
+ProbeFailure _timeout(String phase, {ProbeStage stage = ProbeStage.ntp}) =>
+    _fail('Timeout', phase: phase, stage: stage);
 
 ServerHealth _summarize(List<ProbeResult> results) =>
     summarizeServer(hostname: 'h.example', results: results);
@@ -77,6 +87,39 @@ void main() {
       expect(h.dominantErrorType, isNull);
       expect(h.reasons, isEmpty);
     });
+  });
+
+  group('summarizeServer — KE-stage failures (warm short-circuit)', () {
+    test('severe KE handshake failure -> nonConforming, dominant tag ke:', () {
+      final h = _summarize([
+        _fail('KeProtocol', severe: true, stage: ProbeStage.ke),
+      ]);
+      expect(h.verdict, HealthVerdict.nonConforming);
+      expect(h.isDropCandidate, isTrue);
+      // The `ke:` prefix keeps a broken handshake distinguishable from a
+      // flaky NTP query in the dominant-error column.
+      expect(h.dominantErrorType, 'ke:KeProtocol');
+    });
+
+    test('KE completed but delivered zero cookies -> nonConforming', () {
+      // probeHost synthesizes this severe KE-stage failure when the warm
+      // succeeds with freshCookies < 1: the burst cannot run.
+      final h = _summarize([
+        _fail('NoCookies', severe: true, stage: ProbeStage.ke),
+      ]);
+      expect(h.verdict, HealthVerdict.nonConforming);
+      expect(h.dominantErrorType, 'ke:NoCookies');
+    });
+
+    test(
+      'KE-stage dnsSaturation -> dnsExhausted (local artifact, not a drop)',
+      () {
+        final h = _summarize([_timeout('dnsSaturation', stage: ProbeStage.ke)]);
+        expect(h.verdict, HealthVerdict.dnsExhausted);
+        expect(h.isDropCandidate, isFalse);
+        expect(h.dominantErrorType, 'ke:Timeout(dnsSaturation)');
+      },
+    );
   });
 
   group('summarizeServer — at least one successful sample', () {
