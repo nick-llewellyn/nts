@@ -322,8 +322,13 @@ Future<List<String>> _findUntrackedGeneratedFiles() async {
     exit(1);
   }
   return <String>[
+    // Split on LF and strip a trailing CR so CRLF output (e.g. git on
+    // Windows with autocrlf) does not leave a stray `\r` on each path.
     for (final line in '${status.stdout}'.split('\n'))
-      if (line.startsWith('?? ')) line.substring(3),
+      if (line.startsWith('?? '))
+        line.endsWith('\r')
+            ? line.substring(3, line.length - 1)
+            : line.substring(3),
   ]..sort();
 }
 
