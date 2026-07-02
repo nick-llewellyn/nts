@@ -152,16 +152,16 @@ Future<void> main(List<String> args) async {
   final untracked = await _findUntrackedGeneratedFiles();
   if (untracked.isNotEmpty) {
     stderr.writeln(
-      '${_errorPrefix}codegen produced generated file(s) not tracked '
-      'by git:',
+      '${_errorPrefix}found untracked file(s) under FRB bindings '
+      'output paths:',
     );
     for (final path in untracked) {
       stderr.writeln('       $path');
     }
     stderr.writeln(
-      "       Run 'flutter_rust_bridge_codegen generate' locally, then\n"
-      '       `git add` the new file(s) and commit them alongside the\n'
-      '       Rust change that introduced them.',
+      '       If codegen produced them, `git add` and commit them\n'
+      '       alongside the Rust change that introduced them.\n'
+      '       Otherwise remove the stray file(s) and rerun this script.',
     );
     exit(1);
   }
@@ -302,18 +302,23 @@ Future<void> _run(String executable, List<String> args) async {
 // failure rather than treating "status unavailable" as "no untracked
 // files".
 Future<List<String>> _findUntrackedGeneratedFiles() async {
-  final status = await Process.run('git', [
+  final args = [
     'status',
     '--porcelain',
     '--untracked-files=all',
     '--',
     ..._watchedPaths,
-  ]);
+  ];
+  final status = await Process.run('git', args);
   if (status.exitCode != 0) {
     stderr.writeln(
-      '$_errorPrefix`git status --porcelain` exited ${status.exitCode} '
+      '$_errorPrefix`git ${args.join(' ')}` exited ${status.exitCode} '
       '(untracked-file check cannot run)',
     );
+    final detail = '${status.stderr}'.trim();
+    if (detail.isNotEmpty) {
+      stderr.writeln('       $detail');
+    }
     exit(1);
   }
   return <String>[
