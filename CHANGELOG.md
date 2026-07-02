@@ -60,6 +60,23 @@
 
 ### Security
 
+- Closed the last plain-bytes cookie transit: fresh NTS cookies recovered
+  from the encrypted NTPv4 reply are now wrapped in `Zeroizing<Vec<u8>>` at
+  the parse site (`ServerResponse::fresh_cookies`), carried through
+  `SessionTable::deposit_cookies`, and moved into the `CookieJar` without
+  unwrapping. Previously the transit collection held naked `Vec<u8>` values
+  until the jar boundary, so the deposit-side discard paths (stale session
+  generation, evicted session) freed cookie bytes without wiping them.
+  The AEAD-decrypted extension body inside `parse_server_response` is also
+  `Zeroizing`-wrapped now, as is every encrypted-extension body copied out
+  of it (cookie or not), so the decrypted plaintext and its non-cookie
+  discards are wiped on drop as well.
+  `ServerResponse` also gains a manual redacted `Debug`
+  (`<redacted; N cookies>`) matching the existing `ClientRequest` /
+  `CookieJar` discipline, plus a compile-time type pin and a Debug-redaction
+  regression test. Internal type change only — no public API or FRB binding
+  change. (NTS-61)
+
 - Investigated a code-level mitigation for the relative-`ioDirectory`
   library-hijack surface that the README's "Non-Flutter Dart callers must
   pass `externalLibrary` explicitly" subsection documents. The
