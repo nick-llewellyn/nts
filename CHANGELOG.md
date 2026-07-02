@@ -3,6 +3,28 @@
 
 ## 5.2.2
 
+### Added
+
+- Added two cargo-fuzz targets covering the unauthenticated UDP parse
+  surface (`rust/fuzz/fuzz_targets/`): `parse_authenticator_body`
+  drives the Authenticator body's length arithmetic (`nonce_len` /
+  `ct_len` prefixes, `div_ceil` padding, slice bounds) directly, and
+  `parse_server_response` drives the full receive entry end-to-end
+  under a fixed real AES-SIV-CMAC-256 key — modelling the off-path
+  attacker, who cannot forge AEAD tags, so every pre-AEAD arm (header
+  checks, extension sweep, unauthenticated-NTSN, duplicate-UID,
+  Authenticator parse, AAD-offset arithmetic) is fuzzed exactly as
+  exposed. `IdentityAead` was deliberately not plumbed in: it is
+  `#[cfg(test)]`-only and would require extending the `AeadKey`
+  dispatch enum, which its docs pin as intentionally not extended.
+  Both targets ship committed seed corpora (including a fully
+  authenticated canonical reply that parses `Ok` under the harness
+  key) and are wired into the nightly `.github/workflows/fuzz.yml`
+  matrix, which now runs five targets. Enabled by re-exporting
+  `parse_authenticator_body`, `parse_server_response`, and `AeadKey`
+  through the `__internal-fuzz`-gated `__internal_fuzz` module; no
+  production API change. (NTS-60)
+
 ### Documentation
 
 - Fixed three broken intra-doc links in the

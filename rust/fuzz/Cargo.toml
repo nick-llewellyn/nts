@@ -20,7 +20,9 @@
 #   rustup toolchain install nightly
 #   cd rust/fuzz && cargo +nightly fuzz run parse_extensions
 #
-# Not wired into CI yet; that is tracked separately.
+# CI: `.github/workflows/fuzz.yml` runs every target nightly in a
+# per-target matrix. A new `[[bin]]` below must also be added to that
+# workflow's `matrix.target` list.
 
 [package]
 name = "nts_rust-fuzz"
@@ -62,6 +64,20 @@ bench = false
 [[bin]]
 name = "validate_response"
 path = "fuzz_targets/validate_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_authenticator_body"
+path = "fuzz_targets/parse_authenticator_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_server_response"
+path = "fuzz_targets/parse_server_response.rs"
 test = false
 doc = false
 bench = false

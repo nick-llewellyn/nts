@@ -49,8 +49,11 @@ pub(crate) mod nts;
 // cannot contain hyphens (bd nts-b6m sub-item B).
 #[cfg(feature = "__internal-fuzz")]
 pub mod __internal_fuzz {
+    pub use crate::nts::aead::AeadKey;
     pub use crate::nts::ke::KeError;
-    pub use crate::nts::ntp::{parse_extensions, NtpError};
+    pub use crate::nts::ntp::{
+        parse_authenticator_body, parse_extensions, parse_server_response, NtpError,
+    };
     pub use crate::nts::records::aead::AES_SIV_CMAC_256;
     pub use crate::nts::records::{parse_message, CodecError, Record};
 
