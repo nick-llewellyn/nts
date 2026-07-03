@@ -1,7 +1,7 @@
 # Changelog
 
 
-## 5.2.2
+## 5.2.3
 
 ### Added
 
@@ -36,6 +36,58 @@
   the established policy, if the gate fires on a transitive bump the
   fix is to pin the offending dependency, not loosen the gate.
   CI-only; no runtime change. (NTS-62)
+
+### Documentation
+
+- Documented FRB worker-pool occupancy of the blocking bridge calls.
+  `ntsQuery` / `ntsWarmCookies` (and the `NtsClient` equivalents) are
+  `async` on the Dart side, but each in-flight call pins one
+  `flutter_rust_bridge` worker thread for its full blocking duration —
+  up to `timeoutMs` — and the default pool holds one thread per
+  logical CPU, so an unbounded burst of cold queries against many
+  distinct hosts can occupy every worker and stall unrelated bridge
+  calls. Same-host storms are already collapsed onto one handshake by
+  the Rust-side per-key singleflight. Added a worker-pool-occupancy
+  note with a bounded fan-out recommendation to the `ntsQuery`
+  dartdoc, cross-referenced from `ntsWarmCookies` and
+  `NtsClient.query` / `NtsClient.warmCookies`, plus a matching
+  module-doc note in `rust/src/api/nts.rs`. Comment-only; no
+  behaviour change. (NTS-64)
+
+### Fixed
+
+- The FRB drift gate (`tool/check_bindings.dart`, run locally and by
+  CI's `Verify FRB bindings are in sync` job) now fails when codegen
+  *creates* a generated file the repo does not yet track. The gate
+  previously relied on `git diff --exit-code`, which reports only
+  tracked-file changes, so a brand-new FRB-emitted module was caught
+  only indirectly (via the tracked dispatcher's import-list change). A
+  `git status --porcelain --untracked-files=all` check scoped to the
+  watched paths (`lib/src/ffi/`, `rust/src/frb_generated.rs`) now fails
+  the gate outright with a dedicated diagnostic naming each untracked
+  file. Complements the existing orphaned-module check, which covers
+  the removal direction. Tooling-only; no runtime change. (NTS-63)
+
+### Security
+
+- Closed the last plain-bytes cookie transit: fresh NTS cookies recovered
+  from the encrypted NTPv4 reply are now wrapped in `Zeroizing<Vec<u8>>` at
+  the parse site (`ServerResponse::fresh_cookies`), carried through
+  `SessionTable::deposit_cookies`, and moved into the `CookieJar` without
+  unwrapping. Previously the transit collection held naked `Vec<u8>` values
+  until the jar boundary, so the deposit-side discard paths (stale session
+  generation, evicted session) freed cookie bytes without wiping them.
+  The AEAD-decrypted extension body inside `parse_server_response` is also
+  `Zeroizing`-wrapped now, as is every encrypted-extension body copied out
+  of it (cookie or not), so the decrypted plaintext and its non-cookie
+  discards are wiped on drop as well.
+  `ServerResponse` also gains a manual redacted `Debug`
+  (`<redacted; N cookies>`) matching the existing `ClientRequest` /
+  `CookieJar` discipline, plus a compile-time type pin and a Debug-redaction
+  regression test. Internal type change only — no public API or FRB binding
+  change. (NTS-61)
+
+## 5.2.2
 
 ### Documentation
 
@@ -79,34 +131,7 @@
   `NtsClient.warmCookies` through their existing cross-references.
   Comment-only; no behaviour change. (NTS-44)
 
-- Documented FRB worker-pool occupancy of the blocking bridge calls.
-  `ntsQuery` / `ntsWarmCookies` (and the `NtsClient` equivalents) are
-  `async` on the Dart side, but each in-flight call pins one
-  `flutter_rust_bridge` worker thread for its full blocking duration —
-  up to `timeoutMs` — and the default pool holds one thread per
-  logical CPU, so an unbounded burst of cold queries against many
-  distinct hosts can occupy every worker and stall unrelated bridge
-  calls. Same-host storms are already collapsed onto one handshake by
-  the Rust-side per-key singleflight. Added a worker-pool-occupancy
-  note with a bounded fan-out recommendation to the `ntsQuery`
-  dartdoc, cross-referenced from `ntsWarmCookies` and
-  `NtsClient.query` / `NtsClient.warmCookies`, plus a matching
-  module-doc note in `rust/src/api/nts.rs`. Comment-only; no
-  behaviour change. (NTS-64)
-
 ### Fixed
-
-- The FRB drift gate (`tool/check_bindings.dart`, run locally and by
-  CI's `Verify FRB bindings are in sync` job) now fails when codegen
-  *creates* a generated file the repo does not yet track. The gate
-  previously relied on `git diff --exit-code`, which reports only
-  tracked-file changes, so a brand-new FRB-emitted module was caught
-  only indirectly (via the tracked dispatcher's import-list change). A
-  `git status --porcelain --untracked-files=all` check scoped to the
-  watched paths (`lib/src/ffi/`, `rust/src/frb_generated.rs`) now fails
-  the gate outright with a dedicated diagnostic naming each untracked
-  file. Complements the existing orphaned-module check, which covers
-  the removal direction. Tooling-only; no runtime change. (NTS-63)
 
 - Singleflight waiters now attribute a timeout to the phase the leader
   was actually in (DNS, Connect, TLS, or KE record I/O) instead of a
@@ -120,23 +145,6 @@
   (NTS-43)
 
 ### Security
-
-- Closed the last plain-bytes cookie transit: fresh NTS cookies recovered
-  from the encrypted NTPv4 reply are now wrapped in `Zeroizing<Vec<u8>>` at
-  the parse site (`ServerResponse::fresh_cookies`), carried through
-  `SessionTable::deposit_cookies`, and moved into the `CookieJar` without
-  unwrapping. Previously the transit collection held naked `Vec<u8>` values
-  until the jar boundary, so the deposit-side discard paths (stale session
-  generation, evicted session) freed cookie bytes without wiping them.
-  The AEAD-decrypted extension body inside `parse_server_response` is also
-  `Zeroizing`-wrapped now, as is every encrypted-extension body copied out
-  of it (cookie or not), so the decrypted plaintext and its non-cookie
-  discards are wiped on drop as well.
-  `ServerResponse` also gains a manual redacted `Debug`
-  (`<redacted; N cookies>`) matching the existing `ClientRequest` /
-  `CookieJar` discipline, plus a compile-time type pin and a Debug-redaction
-  regression test. Internal type change only — no public API or FRB binding
-  change. (NTS-61)
 
 - Investigated a code-level mitigation for the relative-`ioDirectory`
   library-hijack surface that the README's "Non-Flutter Dart callers must
