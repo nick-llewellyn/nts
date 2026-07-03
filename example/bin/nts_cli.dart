@@ -90,6 +90,16 @@ ArgParser _buildParser() => ArgParser()
         'Path to a prebuilt nts_rust dylib. If '
         'omitted, falls back to rust/target/release/.',
   )
+  ..addOption(
+    'dns-cap',
+    help:
+        'Ceiling on the package\'s process-wide pool of in-flight '
+        'DNS resolver workers (package default: '
+        '$kDefaultDnsConcurrencyCap, sized for mobile). If omitted, '
+        'sized up to the host fan-out so a multi-host run cannot '
+        'self-saturate the pool; values below the fan-out can '
+        'surface dnsSaturation fast-fails.',
+  )
   ..addFlag(
     'warm',
     abbr: 'w',
@@ -145,6 +155,15 @@ Future<void> main(List<String> argv) async {
     stderr.writeln('argument error: --timeout must be a positive integer');
     exit(64);
   }
+  final dnsCapRaw = args['dns-cap'] as String?;
+  int? dnsCapOverride;
+  if (dnsCapRaw != null) {
+    dnsCapOverride = int.tryParse(dnsCapRaw);
+    if (dnsCapOverride == null || dnsCapOverride <= 0) {
+      stderr.writeln('argument error: --dns-cap must be a positive integer');
+      exit(64);
+    }
+  }
 
   await initBridge(
     useMock: args['mock'] as bool,
@@ -161,11 +180,15 @@ Future<void> main(List<String> argv) async {
   // against each host's `--timeout` budget. The caps are raised
   // *together* because a bridge cap above the DNS cap re-exposes
   // TimeoutPhase.dnsSaturation fast-fails to synchronized
-  // distinct-host bursts.
+  // distinct-host bursts. An explicit `--dns-cap` overrides the
+  // DNS-side auto-sizing only; the help text flags the fast-fail
+  // exposure a below-fan-out value re-opens.
   final hostCount = args.rest.length;
-  final dnsCap = hostCount > kDefaultDnsConcurrencyCap
-      ? hostCount
-      : kDefaultDnsConcurrencyCap;
+  final dnsCap =
+      dnsCapOverride ??
+      (hostCount > kDefaultDnsConcurrencyCap
+          ? hostCount
+          : kDefaultDnsConcurrencyCap);
   final bridgeCap = hostCount > kDefaultBridgeConcurrencyCap
       ? hostCount
       : kDefaultBridgeConcurrencyCap;

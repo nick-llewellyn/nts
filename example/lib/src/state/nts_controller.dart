@@ -32,7 +32,8 @@ import 'package:nts/nts.dart'
         NtsErrorTimeout,
         NtsErrorTrustBackendUnavailable,
         TrustBackend,
-        TrustMode;
+        TrustMode,
+        kDefaultDnsConcurrencyCap;
 
 import '../data/server_entry.dart';
 import 'app_state.dart';
@@ -211,6 +212,10 @@ class NtsController {
       final sample = await clientAtStart.query(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
+        // Explicit at its package default (4) to surface the
+        // Rust-side bounded DNS resolver pool; refusals when the
+        // pool is full fail fast as TimeoutPhase.dnsSaturation.
+        dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       );
       final stale = !identical(clientAtStart, _client);
       state.log.info(
@@ -256,6 +261,8 @@ class NtsController {
       final outcome = await clientAtStart.warmCookies(
         spec: entry.spec,
         timeoutMs: _kTimeoutMs,
+        // Same bounded-DNS demonstration as `runQuery` above.
+        dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       );
       final stale = !identical(clientAtStart, _client);
       state.log.info(

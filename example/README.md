@@ -77,9 +77,9 @@ detail out and walk through the user-facing behaviour:
   **Warm Cookies** actions, reading the live log, and interpreting the
   status banners.
 - [CLI User Manual](CLI_GUIDE.md) — invoking `bin/nts_cli.dart`, the
-  positional host arguments, the `--port` / `--timeout` / `--warm` /
-  `--mock` / `--json` / `--exit-on-error` flags, and how to read the
-  round-trip and AEAD fields in the terminal output.
+  positional host arguments, the `--port` / `--timeout` / `--dns-cap` /
+  `--warm` / `--mock` / `--json` / `--exit-on-error` flags, and how to
+  read the round-trip and AEAD fields in the terminal output.
 
 The remainder of this README is the developer-facing reference:
 architecture, bridge modes, dylib loading, and toolchain notes.
@@ -144,7 +144,12 @@ palette is deliberate.
 The Rust dylib is built and bundled automatically by the package's
 Native Assets build hook (`../hook/build.dart`), which invokes `cargo
 build --release` for the active target via `native_toolchain_rust`.
-No manual `cargo build` is required when running through `flutter run`.
+The hook resolves the toolchain through rustup from the pin in
+`rust/rust-toolchain.toml` (currently Rust 1.96.1), auto-installing
+it and the platform's cross-compile target on first use — so the
+only setup is having `rustup` on your `PATH`, per the root README's
+[Prerequisites](../README.md#prerequisites). No manual `cargo build`
+is required when running through `flutter run`.
 
 Default boot is the **real bridge** — `NtsRustLib.init()` resolves
 `libnts_rust` through the bundled native asset and the
@@ -170,10 +175,26 @@ fake via the `NTS_BRIDGE` dart-define:
 fvm flutter run -d macos -t lib/main.dart --dart-define=NTS_BRIDGE=mock
 ```
 
-If `NtsRustLib.init()` cannot locate the dylib (typically because the
-build hook was skipped or the target isn't pinned), the app prints a
-banner explaining what went wrong and silently falls back to the mock
-so the rest of the UI stays usable.
+If `NtsRustLib.init()` throws at startup (typically because rustup is
+missing, the build hook was skipped — `dart run` instead of
+`flutter run` — or the host triple isn't pinned in
+`rust-toolchain.toml`), the app falls back to the mock so the rest of
+the UI stays usable: a banner reports the load error and the header
+label switches to `mock (load failed)`. Passing
+`--dart-define=NTS_BRIDGE=mock` selects the mock up front instead —
+no banner, plain `mock` label.
+
+### Verbose Rust logs
+
+By default the build hook compiles the crate in release mode with the
+`log-strip` Cargo feature active, so only `warn!` / `error!` events
+survive in the binary. To see `rustls` handshake traces and the
+crate's `info!` / `debug!` events, flip the `verbose_logs` Native
+Assets user-define in this app's `pubspec.yaml` to `true`, run
+`flutter clean`, and rebuild; restore `false` before committing. The
+full mechanics — the profile / feature matrix and per-platform log
+sinks — live in
+[DEVELOPMENT.md](../DEVELOPMENT.md#rust-log-verbosity).
 
 ### Tests
 
@@ -212,6 +233,11 @@ cd ../rust
 cargo build --release
 ```
 
+Run it from inside `rust/` so cargo picks up the
+`rust-toolchain.toml` pin — rustup resolves and auto-installs the
+pinned toolchain (currently Rust 1.96.1), so no manual toolchain
+selection is needed, the same as the GUI path.
+
 The build drops `libnts_rust.{dylib|so|dll}` into
 `rust/target/release/`. The CLI auto-locates that path when invoked
 either from `example/` or from the repo root; pass `--library
@@ -230,6 +256,12 @@ Usage: nts_cli [options] <host> [<host>...]
                       (default: 5000)
 -l, --library         Path to a prebuilt nts_rust dylib. If
                       omitted, falls back to rust/target/release/.
+    --dns-cap         Ceiling on the package's process-wide pool of
+                      in-flight DNS resolver workers (package default:
+                      4, sized for mobile). If omitted, sized up to the
+                      host fan-out so a multi-host run cannot
+                      self-saturate the pool; values below the fan-out
+                      can surface dnsSaturation fast-fails.
 -w, --warm            Run ntsWarmCookies instead of ntsQuery.
     --mock            Use the in-memory mock bridge (no native dylib required).
     --json            Emit NDJSON (one JSON object per line) instead of
@@ -265,8 +297,11 @@ Cookie-warming pass instead of a time query:
 fvm dart run bin/nts_cli.dart --warm nts.netnod.se
 ```
 
-Tighter per-leg timeout (default `5000` ms), useful when you want a
-fast-fail probe in CI:
+Tighter timeout budget (default `5000` ms) — a single shrinking
+wall-clock deadline across DNS, NTS-KE, and the NTP exchange (see
+["Timeout budget and bounded
+DNS"](../ARCHITECTURE.md#timeout-budget-and-bounded-dns)) — useful
+when you want a fast-fail probe in CI:
 
 ```bash
 fvm dart run bin/nts_cli.dart --timeout 2000 time.cloudflare.com
@@ -388,6 +423,13 @@ Usage: nts_health [options] <path-to-server-list.yml>
 -c, --concurrency           Max hosts probed in parallel. (default: 8)
     --offset-threshold-ms   Flag a host as non-standard if |clock offset|
                             exceeds this. (default: 1000)
+    --dns-cap               Ceiling on the package's process-wide pool
+                            of in-flight DNS resolver workers (package
+                            default: 4, sized for mobile). If omitted,
+                            sized up to --concurrency so a probe wave
+                            cannot self-saturate the pool; values below
+                            --concurrency can surface dnsSaturation
+                            fast-fails.
 -f, --format                Output format. [text (default), json, csv]
 -l, --library               Path to a prebuilt nts_rust dylib file. If
                             omitted, auto-locates one under
@@ -400,7 +442,8 @@ Usage: nts_health [options] <path-to-server-list.yml>
 
 Exactly one positional argument is required: the path to the server-list
 YAML. `--port` must be `1..65535`; `--timeout`, `--samples`, and
-`--concurrency` must be `>= 1`; `--offset-threshold-ms` must be `>= 0`.
+`--concurrency` must be `>= 1`; `--offset-threshold-ms` must be `>= 0`;
+`--dns-cap`, when given, must be `>= 1`.
 Per-host progress (`[done/total] host: verdict`) streams to stderr so a
 long run shows liveness without polluting the report on stdout.
 

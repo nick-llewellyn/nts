@@ -61,6 +61,16 @@ void addCommonProbeOptions(ArgParser parser) {
       'offset-threshold-ms',
       defaultsTo: '$kDefaultOffsetThresholdMs',
       help: 'Flag a host non-standard if |clock offset| exceeds this.',
+    )
+    ..addOption(
+      'dns-cap',
+      help:
+          'Ceiling on the package\'s process-wide pool of in-flight '
+          'DNS resolver workers (package default: '
+          '$kDefaultDnsConcurrencyCap, sized for mobile). If omitted, '
+          'sized up to --concurrency so a probe wave cannot '
+          'self-saturate the pool; values below --concurrency can '
+          'surface dnsSaturation fast-fails.',
     );
 }
 
@@ -102,6 +112,10 @@ class CommonProbeArgs {
   final int samples;
   final int concurrency;
   final int offsetThresholdMs;
+
+  /// Explicit `--dns-cap` override, or null to auto-size the DNS
+  /// resolver cap to `--concurrency` in [loadAndProbeCatalog].
+  final int? dnsCap;
   final bool useMock;
   final String? libraryPath;
   final String path;
@@ -111,6 +125,7 @@ class CommonProbeArgs {
     required this.samples,
     required this.concurrency,
     required this.offsetThresholdMs,
+    required this.dnsCap,
     required this.useMock,
     required this.libraryPath,
     required this.path,
@@ -143,12 +158,21 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
   if (offsetMs == null) {
     usageError('--offset-threshold-ms must be >= 0', usage: usage);
   }
+  final dnsCapRaw = args['dns-cap'] as String?;
+  int? dnsCap;
+  if (dnsCapRaw != null) {
+    dnsCap = posInt(dnsCapRaw);
+    if (dnsCap == null) {
+      usageError('--dns-cap must be >= 1', usage: usage);
+    }
+  }
   return CommonProbeArgs(
     port: port,
     timeoutMs: timeoutMs,
     samples: samples,
     concurrency: concurrency,
     offsetThresholdMs: offsetMs,
+    dnsCap: dnsCap,
     useMock: args['mock'] as bool,
     libraryPath: args['library'] as String?,
     path: args.rest.single,
@@ -198,10 +222,14 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   // TimeoutPhase.dnsSaturation and get mis-bucketed as `notReplying`.
   // Each host worker holds at most one in-flight lookup, so a cap equal
   // to the worker count guarantees every worker a slot; the lower bound
-  // keeps the package default for small `-c`.
-  final dnsCap = common.concurrency > kDefaultDnsConcurrencyCap
-      ? common.concurrency
-      : kDefaultDnsConcurrencyCap;
+  // keeps the package default for small `-c`. An explicit `--dns-cap`
+  // overrides the auto-sizing; the help text flags the fast-fail
+  // exposure a below-`-c` value re-opens.
+  final dnsCap =
+      common.dnsCap ??
+      (common.concurrency > kDefaultDnsConcurrencyCap
+          ? common.concurrency
+          : kDefaultDnsConcurrencyCap);
   // Same sizing for the Dart-side bridge admission gate
   // (kDefaultBridgeConcurrencyCap = 4): a `-c 8` run would otherwise
   // queue its excess workers at the gate, charging the queue wait
