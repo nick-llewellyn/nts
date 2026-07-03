@@ -78,8 +78,9 @@ enum ProbeStage { ke, ntp }
 /// non-conforming server from a merely-unreachable one.
 ///
 /// [phase] holds the `timeoutPhaseName` tag for an `NtsError.timeout`
-/// (`dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`,
-/// `ntp`) and is `null` for every non-timeout shape. The classifier
+/// (`bridgeSaturation`, `dnsSaturation`, `dnsTimeout`, `connect`,
+/// `tls`, `keRecordIo`, `ntp`) and is `null` for every non-timeout
+/// shape. The classifier
 /// uses it to surface a local DNS-pool exhaustion distinctly from a
 /// server-side no-reply rather than collapsing both onto `Timeout`.
 ///

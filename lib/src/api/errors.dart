@@ -41,12 +41,29 @@ import 'models.dart' show TrustBackend;
 /// Carried as the payload of [NtsError]'s `timeout` variant so callers
 /// can attribute a failure to a specific pre-NTP step instead of
 /// inspecting free-form diagnostic strings. The Rust-side KE-pipeline
-/// taxonomy maps onto this enum; the [ntp] variant covers the UDP
+/// taxonomy maps onto this enum, with one Dart-authored addition:
+/// [bridgeSaturation] fires in the wrapper's bridge admission gate
+/// before any FFI dispatch. The [ntp] variant covers the UDP
 /// send/recv phase, and the two `dns*` variants distinguish saturation
 /// (cap full) from timeout (resolver slow). See `ARCHITECTURE.md`'s
 /// "Phase attribution and timings" section for the full diagnostic
 /// shape.
 enum TimeoutPhase {
+  /// Wall-clock budget elapsed while the call was queued at the
+  /// Dart-side bridge admission gate, before any FFI dispatch: the
+  /// calling isolate's in-flight bridge-call count stayed at or above
+  /// the call's `bridgeConcurrencyCap` for the whole budget. The gate
+  /// state is isolate-local, so this phase reflects saturation by the
+  /// calling isolate's own calls; other isolates share the same FRB
+  /// worker pool but are not observed by this counter. Raising the
+  /// cap or lowering the burst's fan-out is the appropriate
+  /// remediation, not lengthening `timeoutMs` — a longer budget only
+  /// waits longer behind the same saturated worker pool. Unlike every
+  /// other phase, this one fires before the Rust pipeline starts, so
+  /// the carrying [NtsError.timeout]'s `trustBackend` is always
+  /// `null`.
+  bridgeSaturation,
+
   /// Bounded DNS resolver pool was already at capacity when the call
   /// arrived, so admission was refused without spawning a worker.
   /// Distinct from [dnsTimeout]: raising `dnsConcurrencyCap` or
@@ -153,7 +170,7 @@ sealed class NtsError implements Exception {
   ///
   /// `trustBackend` is typed as nullable to keep the Rust `KeFailure`
   /// attribution contract honest at the FFI boundary, but in
-  /// practice every timeout-shaped phase fires after
+  /// practice every Rust-authored phase fires after
   /// `build_tls_config` returned `Ok` and therefore carries the
   /// resolved backend. Rust `perform_handshake` calls
   /// `build_tls_config` before any DNS, connect, or TLS I/O begins,
@@ -166,7 +183,10 @@ sealed class NtsError implements Exception {
   /// post-handshake UDP-leg `ntp` phase. The Android per-instance
   /// hybrid-fallback upgrade is reflected when the
   /// `HybridVerifier`'s fallback counter incremented during the TLS
-  /// write/flush window.
+  /// write/flush window. The one exception is the Dart-authored
+  /// [TimeoutPhase.bridgeSaturation], which fires in the wrapper's
+  /// bridge admission gate before any FFI dispatch and therefore
+  /// always carries a `null` backend.
   const factory NtsError.timeout({
     required TimeoutPhase phase,
     TrustBackend? trustBackend,
@@ -379,12 +399,13 @@ final class NtsErrorTimeout extends NtsError {
   /// Per-handshake trust-anchor backend resolved before the timeout
   /// fired. Typed as nullable to keep the Rust `KeFailure`
   /// attribution contract honest at the FFI boundary, but in
-  /// practice every `TimeoutPhase` value (`dnsSaturation`,
-  /// `dnsTimeout`, `connect`, `tls`, `keRecordIo`, post-handshake
-  /// `ntp`) fires after `build_tls_config` returned `Ok` and
-  /// therefore carries the resolved backend — see the
+  /// practice every Rust-authored `TimeoutPhase` value
+  /// (`dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`,
+  /// post-handshake `ntp`) fires after `build_tls_config` returned
+  /// `Ok` and therefore carries the resolved backend — see the
   /// constructor-level [NtsError.timeout] dartdoc above for the
-  /// per-phase attribution map.
+  /// per-phase attribution map. The Dart-authored `bridgeSaturation`
+  /// phase fires before any FFI dispatch and always carries `null`.
   final TrustBackend? trustBackend;
 
   /// Construct a `Timeout` variant.

@@ -36,6 +36,39 @@
   fuzz target under `rust/fuzz/**`, or a matrix edit to the workflow
   file). CI-only; no runtime change. (NTS-68)
 
+- Added a Dart-side **bridge admission gate** bounding how many of the
+  package's blocking bridge calls occupy `flutter_rust_bridge` worker
+  threads at once. Each in-flight `ntsQuery` / `ntsWarmCookies` /
+  `NtsClient.query` / `NtsClient.warmCookies` call pins one FRB worker
+  (a fixed pool of one thread per logical CPU) for up to `timeoutMs`,
+  so an unbounded distinct-host fan-out could previously exhaust the
+  pool and stall unrelated bridge calls — a hazard 5.2.2 documented
+  but did not enforce. The four wrappers now accept a
+  `bridgeConcurrencyCap` parameter (default
+  `kDefaultBridgeConcurrencyCap = 4`, validated `1..4294967295` for
+  symmetry with `dnsConcurrencyCap` even though the value never
+  crosses the FFI boundary) enforced by one FIFO gate per isolate
+  (gate state is Dart-side and isolate-local; the FRB worker pool it
+  bounds is shared process-wide): calls beyond the cap queue on the
+  Dart side holding no worker
+  thread, queue wait is charged against `timeoutMs` (only the
+  remainder crosses the FFI boundary; uncontended calls forward the
+  budget verbatim), and a budget that expires while queued fails with
+  `NtsError.timeout` carrying the new `TimeoutPhase.bridgeSaturation`
+  value — Dart-authored, fired before any FFI dispatch, so its
+  `trustBackend` is always `null`. Mixed-cap bursts get the same
+  asymmetric admission semantics as the Rust-side DNS resolver pool,
+  with one FIFO refinement: a queued call is only overtaken by a
+  later call whose larger cap admits it while the queued call's own
+  cap does not. **Behavioural change for existing callers:** a
+  more-than-4-distinct-host burst now runs 4-at-a-time instead of
+  pool-width-at-a-time, and the tail of a burst against slow servers
+  can surface `bridgeSaturation` where it previously competed for
+  pool threads. **Source-compat note:** exhaustive `switch`es over
+  `TimeoutPhase` gain a new case. The example catalog tools raise the
+  cap to their `-c` fan-out (mirroring the existing DNS-cap sizing)
+  so probe measurements stay self-saturation-free. (NTS-69)
+
 ### Changed
 
 - The `parse_server_response` fuzz harness now consumes the canned

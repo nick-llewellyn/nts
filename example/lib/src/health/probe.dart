@@ -40,6 +40,7 @@ Future<List<ServerHealth>> probeAll(
   required int samples,
   required int concurrency,
   required int dnsConcurrencyCap,
+  required int bridgeConcurrencyCap,
   required HealthThresholds thresholds,
   ProbeProgress? onProgress,
 }) async {
@@ -57,6 +58,7 @@ Future<List<ServerHealth>> probeAll(
         timeoutMs: timeoutMs,
         samples: samples,
         dnsConcurrencyCap: dnsConcurrencyCap,
+        bridgeConcurrencyCap: bridgeConcurrencyCap,
         thresholds: thresholds,
       );
       out.add(health);
@@ -89,6 +91,7 @@ Future<ServerHealth> probeHost(
   required int timeoutMs,
   required int samples,
   required int dnsConcurrencyCap,
+  required int bridgeConcurrencyCap,
   required HealthThresholds thresholds,
 }) async {
   final spec = NtsServerSpec(host: entry.hostname, port: port);
@@ -100,6 +103,7 @@ Future<ServerHealth> probeHost(
       spec: spec,
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
+      bridgeConcurrencyCap: bridgeConcurrencyCap,
     );
     if (warm.freshCookies < 1) {
       // KE completed but issued no cookies: the burst cannot run as a
@@ -153,6 +157,7 @@ Future<ServerHealth> probeHost(
         spec: spec,
         timeoutMs: timeoutMs,
         dnsConcurrencyCap: dnsConcurrencyCap,
+        bridgeConcurrencyCap: bridgeConcurrencyCap,
       );
       final localMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
       final serverEstimate = s.utcUnixMicros + s.roundTripMicros ~/ 2;

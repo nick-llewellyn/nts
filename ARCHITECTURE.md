@@ -226,6 +226,55 @@ is the deliberate exception: it routes through the production
 but its assertion is on the zero-budget error shape rather than on
 pool state, so global-pool saturation has no effect on its outcome.
 
+### Bridge admission gate (Dart side)
+
+The DNS pool bounds resolver threads, but the *whole* blocking call —
+DNS wait, TCP connect, TLS handshake, KE record I/O, UDP exchange —
+runs on a `flutter_rust_bridge` worker thread from a separate fixed
+pool (one thread per logical CPU by default), and each in-flight call
+pins its worker for up to `timeoutMs`. Concurrent calls against the
+same `host:port` are collapsed by the per-key singleflight (see "Warm
+cookies and singleflight" below), but each *distinct* host needs its
+own handshake, so an unbounded distinct-host fan-out could occupy
+every worker and stall unrelated bridge calls behind it.
+
+The public wrapper (`lib/src/api/nts.dart`) closes that gap with a
+pure-Dart admission gate in front of all four async entry points.
+`bridgeConcurrencyCap` (default `kDefaultBridgeConcurrencyCap = 4`,
+per-call overridable like `dnsConcurrencyCap`) bounds how many of the
+package's calls occupy bridge workers at once; excess calls queue on
+the Dart side holding no worker thread. Admission compares the live
+isolate-wide in-flight count against each call's own cap, giving
+mixed-cap bursts the same asymmetric semantics as the DNS pool, with
+one FIFO refinement: the queue is walked in arrival order on every
+release and a waiter is only overtaken by a later arrival whose
+larger cap admits it while the waiter's own cap does not.
+
+Queue wait is charged against the call's `timeoutMs` — only the
+remainder crosses the FFI boundary, so the caller's total wall-clock
+budget holds regardless of queueing (uncontended calls forward the
+budget verbatim, bit-for-bit identical to the pre-gate behaviour). A
+budget that expires while queued surfaces as `NtsError.timeout` with
+the Dart-authored `TimeoutPhase.bridgeSaturation` — the one
+`TimeoutPhase` value that fires before any FFI dispatch and therefore
+always carries a `null` `trustBackend`. Gate state is confined to the
+calling isolate and every mutation is synchronous between suspension
+points, so no locking is involved. Each isolate therefore gates only
+its own calls; the FRB worker pool being bounded is shared
+process-wide, so a multi-isolate app's combined occupancy is bounded
+by the sum of each isolate's cap, not by one cap.
+
+The gate composes with, and does not replace, the DNS pool cap: the
+two bounds guard different resources with different lifetimes and
+failure modes (Dart-side queueing versus Rust-side fail-fast
+refusal). A bridge cap at or below the DNS cap means live calls
+alone cannot saturate the resolver pool, leaving the DNS cap to its
+real job — bounding detached lookups that outlive their calls. A
+bridge cap above the DNS cap is legitimate for same-host-heavy
+traffic (singleflight collapses the lookups) but re-exposes
+`dnsSaturation` refusals to synchronized distinct-host bursts, so
+high-fan-out callers should raise both caps together.
+
 ## Phase attribution and timings
 
 The shared deadline accounts for *when* a budget elapses but not for

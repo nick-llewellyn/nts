@@ -46,8 +46,14 @@ Future<void> main() async {
     // amortized away from a time-critical path. `timeoutMs` and
     // `dnsConcurrencyCap` are omitted here so the package's tuned
     // defaults (`kDefaultTimeoutMs`, `kDefaultDnsConcurrencyCap`)
-    // apply.
-    final warmed = await ntsWarmCookies(spec: spec);
+    // apply; `bridgeConcurrencyCap` is passed explicitly (at its
+    // default value) to surface the Dart-side admission gate that
+    // bounds how many of the package's calls occupy
+    // `flutter_rust_bridge` worker threads at once.
+    final warmed = await ntsWarmCookies(
+      spec: spec,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
+    );
     print('warmed   = ${warmed.freshCookies} cookies');
 
     // Phase 2 — spend the warmed cookies on authenticated NTPv4
@@ -56,7 +62,12 @@ Future<void> main() async {
     // sample so we can score them against each other below.
     final samples = <NtsTimeSample>[];
     for (var i = 0; i < warmed.freshCookies; i++) {
-      samples.add(await ntsQuery(spec: spec));
+      samples.add(
+        await ntsQuery(
+          spec: spec,
+          bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
+        ),
+      );
     }
 
     // Pick the sample with the smallest measured round-trip. NTP's
