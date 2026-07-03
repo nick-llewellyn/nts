@@ -420,18 +420,19 @@ before the relative fallback can fire.
 | Symbol | Purpose |
 |--------|---------|
 | `NtsRustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
-| `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, verificationTimeMs})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTimeMs` (optional, non-negative epoch-ms) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. |
-| `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, verificationTimeMs})` | Force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTimeMs` carries the same clock-skew-rescue semantics as on `ntsQuery`. |
+| `ntsQuery({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTimeMs})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTimeMs` (optional, non-negative epoch-ms) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. |
+| `ntsWarmCookies({required spec, timeoutMs = kDefaultTimeoutMs, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTimeMs})` | Force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTimeMs` carries the same clock-skew-rescue semantics as on `ntsQuery`. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
 | `ntsTrustStatus()` | Synchronous snapshot (`NtsTrustStatus`) of the process-global trust-anchor diagnostic state. Seven observables: `defaultClientBackend` (most-recently resolved backend for the default singleton; `null` until the first singleton handshake runs), four cumulative counters partitioning the singleton's resolution history by backend (`defaultBackendPlatformCount`, `defaultBackendHybridCount`, `defaultBackendWebpkiCount`, `defaultBackendCustomCount`), `androidPlatformInitSucceeded` (static JNI bootstrap flag), and `androidHybridFallbackCount` (Android-only). Platform-irrelevant fields report sentinel values (`null` / `false` / `0`). Cheap enough for a UI poll loop. |
 | `NtsClient({trustMode = TrustMode.platformWithFallback, customRoots})` | Owned client with its own per-host session table — cookies, AEAD keys, and KE sessions are isolated from the default singleton and from other clients. Methods: `query` / `warmCookies` (per-client equivalents of the top-level functions, same parameters including `verificationTimeMs`), `invalidate(spec)` (drop one cached session) / `clear()` (drop all), and the `trustMode` getter. `customRoots` is required (and only valid) when `trustMode` is `TrustMode.custom`. |
 | `kDefaultTimeoutMs` | Package default for `timeoutMs` (5000). |
 | `kDefaultDnsConcurrencyCap` | Package default for `dnsConcurrencyCap` (`4`, sized for mobile pthread-stack budgets — see the constant's dartdoc). |
+| `kDefaultBridgeConcurrencyCap` | Package default for `bridgeConcurrencyCap` (`4`, sized to the smallest common mobile FRB worker pool — see the constant's dartdoc). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
 | `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`, `trustBackend`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`; `trustBackend` records which trust-anchor backend the post-handshake TLS verification chose. |
 | `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`, `trustBackend`. The UDP phase does not run on this path, so only KE-pipeline timings are populated; `trustBackend` carries the same per-handshake attribution as on `NtsTimeSample`. |
 | `PhaseTimings` | `dnsMicros`, `connectMicros`, `tlsHandshakeMicros`, `keRecordIoMicros`. Microsecond-resolution wall-clock breakdown of the four pre-NTP phases of an `ntsQuery` / `ntsWarmCookies` call. Phases that did not run report `0`. See ARCHITECTURE.md's "Phase attribution and timings" section. |
-| `TimeoutPhase` | `dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`, `ntp`. Carried as the payload of `NtsError.timeout` so callers can attribute a budget exhaustion to a specific phase without parsing diagnostic strings. |
+| `TimeoutPhase` | `bridgeSaturation`, `dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`, `ntp`. Carried as the payload of `NtsError.timeout` so callers can attribute a budget exhaustion to a specific phase without parsing diagnostic strings. `bridgeSaturation` is Dart-authored (budget elapsed while queued at the bridge admission gate, before any FFI dispatch) and always carries a `null` `trustBackend`. |
 | `NtsDnsPoolStats` | `inFlight`, `highWaterMark`, `recovered`, `refused`. Process-wide pool counters; relaxed-atomic snapshot. |
 | `NtsTrustStatus` | `defaultClientBackend`, `defaultBackendPlatformCount`, `defaultBackendHybridCount`, `defaultBackendWebpkiCount`, `defaultBackendCustomCount`, `androidPlatformInitSucceeded`, `androidHybridFallbackCount`. Returned by `ntsTrustStatus()`; the four `defaultBackend*Count` fields partition the default singleton's resolution history by backend. Per-counter monotonic across consecutive snapshots. |
 | `TrustMode` | `platformWithFallback` (default; build-time fallback to the `webpki-roots` static bundle on `build_with_native_verifier` failure), `platformOnly` (refuses the build-time silent fallback; `build_with_native_verifier` failure surfaces as `NtsError.trustBackendUnavailable`), `bundledOnly` (validates only against the bundled `webpki-roots` static set — no platform-store consultation, eliminating TLS-inspection exposure at the cost of rejecting private/enterprise-CA certificates), `custom` (validates only against caller-supplied roots passed as `customRoots` on the `NtsClient` constructor, PEM or DER). Caller-selected at `NtsClient` construction; immutable for the life of the client. See the per-variant dartdoc for the Android `HybridVerifier`'s separate per-chain interaction. |
@@ -440,9 +441,10 @@ before the relative fallback can fire.
 
 `ntsQuery` and `ntsWarmCookies` ship as a hand-written wrapper around
 the bundled FFI surface; consumers can omit `timeoutMs`,
-`dnsConcurrencyCap`, and `verificationTimeMs` to inherit the package
-defaults, and future internal-only Rust signature changes do not
-propagate as breaking call-site edits. See [ARCHITECTURE.md](ARCHITECTURE.md)'s "Public API
+`dnsConcurrencyCap`, `bridgeConcurrencyCap`, and `verificationTimeMs`
+to inherit the package defaults, and future internal-only Rust
+signature changes do not propagate as breaking call-site edits. See
+[ARCHITECTURE.md](ARCHITECTURE.md)'s "Public API
 stability layer" section for the contract.
 
 `timeoutMs` is a global wall-clock budget anchored at the start of
@@ -472,6 +474,25 @@ against the *global* counter, so two concurrent callers passing
 different values share the same in-flight pool: the effective ceiling
 at any moment is whichever caller is currently being admitted.
 Saturation surfaces as `NtsError.timeout`.
+
+`bridgeConcurrencyCap` is the analogous per-call ceiling for the
+*bridge* worker pool: every `ntsQuery` / `ntsWarmCookies` /
+`NtsClient.query` / `NtsClient.warmCookies` call runs its blocking
+network exchange on a `flutter_rust_bridge` worker thread (a fixed
+pool of one thread per logical CPU) and pins that thread for up to
+`timeoutMs`, so an unbounded distinct-host fan-out could otherwise
+exhaust the pool and stall unrelated bridge calls. Calls beyond the
+cap queue on the Dart side holding no worker thread; queue wait is
+charged against `timeoutMs` (uncontended calls forward the budget
+verbatim), and a budget that expires while queued fails with
+`NtsError.timeout` carrying `TimeoutPhase.bridgeSaturation` without
+ever dispatching. Omit the parameter (or pass
+`kDefaultBridgeConcurrencyCap`) to inherit the built-in default of
+**4**; hosts with wider pools can raise it per call on the same
+`1..4294967295` validation terms as `dnsConcurrencyCap`. Like the DNS
+cap, admission is compared against a process-wide count, with FIFO
+ordering refined so a queued call is only overtaken by a later call
+whose larger cap admits it while the queued call's own cap does not.
 
 ## Demos & Examples
 

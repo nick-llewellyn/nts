@@ -12,7 +12,8 @@
 import 'dart:io';
 
 import 'package:args/args.dart';
-import 'package:nts/nts.dart' show kDefaultDnsConcurrencyCap;
+import 'package:nts/nts.dart'
+    show kDefaultBridgeConcurrencyCap, kDefaultDnsConcurrencyCap;
 
 import '../data/server_catalog.dart' show parseServerYaml;
 import '../data/server_entry.dart' show NtsServerEntry;
@@ -201,6 +202,16 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   final dnsCap = common.concurrency > kDefaultDnsConcurrencyCap
       ? common.concurrency
       : kDefaultDnsConcurrencyCap;
+  // Same sizing for the Dart-side bridge admission gate
+  // (kDefaultBridgeConcurrencyCap = 4): a `-c 8` run would otherwise
+  // queue its excess workers at the gate, charging the queue wait
+  // against each host's probe budget and skewing (or timing out with
+  // TimeoutPhase.bridgeSaturation) measurements the tool would then
+  // mis-attribute to the server. A cap equal to the worker count
+  // guarantees every worker immediate admission.
+  final bridgeCap = common.concurrency > kDefaultBridgeConcurrencyCap
+      ? common.concurrency
+      : kDefaultBridgeConcurrencyCap;
   final report = await probeAll(
     entries,
     port: common.port,
@@ -208,6 +219,7 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
     samples: common.samples,
     concurrency: common.concurrency,
     dnsConcurrencyCap: dnsCap,
+    bridgeConcurrencyCap: bridgeCap,
     thresholds: HealthThresholds(
       offsetThresholdMicros: common.offsetThresholdMs * 1000,
     ),

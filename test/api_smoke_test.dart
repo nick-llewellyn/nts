@@ -19,6 +19,7 @@
 //
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
@@ -42,6 +43,20 @@ class _RecordingApi implements NtsRustLibApi {
   ffi.NtsWarmCookiesOutcome nextWarm = _ffiWarm(0);
   ffi.NtsDnsPoolStats nextDnsPoolStats = _zeroFfiDnsPoolStats();
   Object? nextThrow;
+
+  // --- bridge-gate observation hooks --------------------------------
+  //
+  // `asyncGate`, when non-null, is awaited by all four async endpoint
+  // mocks after they record their arguments, letting a test hold FFI
+  // calls open to observe the public wrapper's bridge admission gate.
+  // `asyncInFlight` / `asyncMaxInFlight` count how many of those mock
+  // bodies are simultaneously open — i.e. how many calls the gate has
+  // admitted — and `queryDispatches` counts `crateApiNtsNtsQuery`
+  // entries so a test can assert a queued call never dispatched.
+  Future<void> Function()? asyncGate;
+  int asyncInFlight = 0;
+  int asyncMaxInFlight = 0;
+  int queryDispatches = 0;
 
   // Per-`NtsClient`-method recording. Distinct from the top-level
   // `lastQuery*` / `lastWarm*` fields above so a test that exercises
@@ -98,6 +113,10 @@ class _RecordingApi implements NtsRustLibApi {
     nextWarm = _ffiWarm(0);
     nextDnsPoolStats = _zeroFfiDnsPoolStats();
     nextThrow = null;
+    asyncGate = null;
+    asyncInFlight = 0;
+    asyncMaxInFlight = 0;
+    queryDispatches = 0;
     lastClientQueryThat = null;
     lastClientQueryTimeoutMs = null;
     lastClientQueryDnsCap = null;
@@ -120,19 +139,35 @@ class _RecordingApi implements NtsRustLibApi {
     nextTrustStatus = _zeroFfiTrustStatus();
   }
 
+  // Shared body for the four async endpoint mocks: bump the in-flight
+  // gauges, optionally park on `asyncGate`, then produce `nextThrow` /
+  // `result` exactly as the pre-gate mocks did.
+  Future<T> _asyncEndpoint<T>(T Function() result) async {
+    asyncInFlight++;
+    if (asyncInFlight > asyncMaxInFlight) asyncMaxInFlight = asyncInFlight;
+    try {
+      final g = asyncGate;
+      if (g != null) await g();
+      final t = nextThrow;
+      if (t != null) throw t;
+      return result();
+    } finally {
+      asyncInFlight--;
+    }
+  }
+
   @override
   Future<ffi.NtsTimeSample> crateApiNtsNtsQuery({
     required ffi.NtsServerSpec spec,
     required int timeoutMs,
     required int dnsConcurrencyCap,
     int? verificationTimeMs,
-  }) async {
+  }) {
+    queryDispatches++;
     lastQueryTimeoutMs = timeoutMs;
     lastQueryDnsCap = dnsConcurrencyCap;
     lastQueryVerificationTimeMs = verificationTimeMs;
-    final t = nextThrow;
-    if (t != null) throw t;
-    return nextSample;
+    return _asyncEndpoint(() => nextSample);
   }
 
   @override
@@ -141,13 +176,11 @@ class _RecordingApi implements NtsRustLibApi {
     required int timeoutMs,
     required int dnsConcurrencyCap,
     int? verificationTimeMs,
-  }) async {
+  }) {
     lastWarmTimeoutMs = timeoutMs;
     lastWarmDnsCap = dnsConcurrencyCap;
     lastWarmVerificationTimeMs = verificationTimeMs;
-    final t = nextThrow;
-    if (t != null) throw t;
-    return nextWarm;
+    return _asyncEndpoint(() => nextWarm);
   }
 
   @override
@@ -209,14 +242,12 @@ class _RecordingApi implements NtsRustLibApi {
     required int timeoutMs,
     required int dnsConcurrencyCap,
     int? verificationTimeMs,
-  }) async {
+  }) {
     lastClientQueryThat = that;
     lastClientQueryTimeoutMs = timeoutMs;
     lastClientQueryDnsCap = dnsConcurrencyCap;
     lastClientQueryVerificationTimeMs = verificationTimeMs;
-    final t = nextThrow;
-    if (t != null) throw t;
-    return nextSample;
+    return _asyncEndpoint(() => nextSample);
   }
 
   @override
@@ -226,14 +257,12 @@ class _RecordingApi implements NtsRustLibApi {
     required int timeoutMs,
     required int dnsConcurrencyCap,
     int? verificationTimeMs,
-  }) async {
+  }) {
     lastClientWarmThat = that;
     lastClientWarmTimeoutMs = timeoutMs;
     lastClientWarmDnsCap = dnsConcurrencyCap;
     lastClientWarmVerificationTimeMs = verificationTimeMs;
-    final t = nextThrow;
-    if (t != null) throw t;
-    return nextWarm;
+    return _asyncEndpoint(() => nextWarm);
   }
 
   @override
@@ -1723,5 +1752,171 @@ void main() {
         );
       },
     );
+  });
+
+  group('bridge admission gate', () {
+    const spec = NtsServerSpec(host: 'time.example', port: 4460);
+
+    // The gate's `_bridgeInFlight` / `_bridgeQueue` state is
+    // process-global, so every test below drains all its futures
+    // before returning; a leaked slot would silently shrink the cap
+    // for whichever test runs next.
+
+    test('exported default exposes the actual numeric value', () {
+      expect(kDefaultBridgeConcurrencyCap, 4);
+    });
+
+    test('rejects bridgeConcurrencyCap outside 1..0xFFFFFFFF with '
+        'NtsError.invalidSpec on all four wrappers', () async {
+      final client = NtsClient();
+      // Each rejected future is minted inside its own `expectLater`
+      // so a listener is attached before the next event-loop turn —
+      // a batch of pre-created failed futures would surface as
+      // unhandled async errors while the first one is awaited.
+      final rejected = <Future<Object?> Function()>[
+        () => ntsQuery(spec: spec, bridgeConcurrencyCap: 0),
+        () => ntsQuery(spec: spec, bridgeConcurrencyCap: 0x1_0000_0000),
+        () => ntsWarmCookies(spec: spec, bridgeConcurrencyCap: 0),
+        () => client.query(spec: spec, bridgeConcurrencyCap: 0),
+        () => client.warmCookies(spec: spec, bridgeConcurrencyCap: 0),
+      ];
+      for (final mint in rejected) {
+        await expectLater(
+          mint(),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('bridgeConcurrencyCap'),
+            ),
+          ),
+        );
+      }
+      // All five rejected before any FFI dispatch.
+      expect(api.queryDispatches, 0);
+      expect(api.lastWarmTimeoutMs, isNull);
+      expect(api.lastClientQueryTimeoutMs, isNull);
+      expect(api.lastClientWarmTimeoutMs, isNull);
+    });
+
+    test('uncontended calls forward timeoutMs verbatim', () async {
+      // The queue-wait deduction must not apply to calls that never
+      // queued: bit-for-bit forwarding is the pre-gate behaviour.
+      await ntsQuery(spec: spec, timeoutMs: 1234);
+      expect(api.lastQueryTimeoutMs, 1234);
+    });
+
+    test('default cap admits at most 4 concurrent dispatches', () async {
+      final gate = Completer<void>();
+      api.asyncGate = () => gate.future;
+      final futures = <Future<NtsTimeSample>>[
+        for (var i = 0; i < 6; i++) ntsQuery(spec: spec),
+      ];
+      // Admission and mock entry are synchronous up to the gate await,
+      // so the first four calls are already in-flight and the other
+      // two are queued holding no slot.
+      expect(api.asyncInFlight, 4);
+      expect(api.queryDispatches, 4);
+      api.asyncGate = null;
+      gate.complete();
+      await Future.wait(futures);
+      expect(api.asyncMaxInFlight, 4);
+      expect(api.queryDispatches, 6);
+    });
+
+    test('a queued call dispatches after a slot frees', () async {
+      final gate = Completer<void>();
+      api.asyncGate = () => gate.future;
+      final first = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      final second = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      expect(api.queryDispatches, 1);
+      api.asyncGate = null;
+      gate.complete();
+      await Future.wait([first, second]);
+      expect(api.queryDispatches, 2);
+      expect(api.asyncMaxInFlight, 1);
+    });
+
+    test('budget elapsing while queued fails with bridgeSaturation and '
+        'never dispatches', () async {
+      final gate = Completer<void>();
+      api.asyncGate = () => gate.future;
+      final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      await expectLater(
+        ntsQuery(spec: spec, bridgeConcurrencyCap: 1, timeoutMs: 40),
+        throwsA(
+          isA<NtsErrorTimeout>()
+              .having((e) => e.phase, 'phase', TimeoutPhase.bridgeSaturation)
+              .having((e) => e.trustBackend, 'trustBackend', isNull),
+        ),
+      );
+      expect(api.queryDispatches, 1);
+      api.asyncGate = null;
+      gate.complete();
+      await holder;
+      // The timed-out waiter left no queue residue: a follow-up call
+      // is admitted immediately.
+      await ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      expect(api.queryDispatches, 2);
+    });
+
+    test('queue wait is charged against the forwarded timeoutMs', () async {
+      final gate = Completer<void>();
+      api.asyncGate = () => gate.future;
+      final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      final queued = ntsQuery(
+        spec: spec,
+        bridgeConcurrencyCap: 1,
+        timeoutMs: 5000,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      api.asyncGate = null;
+      gate.complete();
+      await Future.wait([holder, queued]);
+      // `queued` dispatched last, so `lastQueryTimeoutMs` carries its
+      // forwarded budget: the original 5000 minus ~60ms of queue wait.
+      // The bounds are deliberately loose to stay timer-slop-proof.
+      expect(api.lastQueryTimeoutMs, lessThan(5000));
+      expect(api.lastQueryTimeoutMs, greaterThanOrEqualTo(4000));
+    });
+
+    test('gate is shared across top-level and client entry points', () async {
+      final gate = Completer<void>();
+      api.asyncGate = () => gate.future;
+      final client = NtsClient();
+      final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      final queued = client.query(spec: spec, bridgeConcurrencyCap: 1);
+      // The client call queued behind the top-level call: its FFI
+      // dispatch has not happened.
+      expect(api.lastClientQueryTimeoutMs, isNull);
+      api.asyncGate = null;
+      gate.complete();
+      await Future.wait([holder, queued]);
+      expect(api.lastClientQueryTimeoutMs, isNotNull);
+      expect(api.asyncMaxInFlight, 1);
+    });
+
+    test('a larger-cap arrival overtakes only waiters its own cap '
+        'strands', () async {
+      final gates = [Completer<void>(), Completer<void>()];
+      var next = 0;
+      api.asyncGate = () => gates[next++].future;
+      final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      final stranded = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      final wide = ntsQuery(spec: spec, bridgeConcurrencyCap: 3);
+      // `wide`'s cap (3) clears the in-flight count (1), so it is
+      // admitted immediately; `stranded`'s cap (1) keeps it queued
+      // regardless, so no unfair overtake occurred.
+      expect(api.queryDispatches, 2);
+      gates[1].complete();
+      await wide;
+      // `wide` finishing brings in-flight back to 1, which still
+      // does not clear `stranded`'s cap.
+      expect(api.queryDispatches, 2);
+      api.asyncGate = null;
+      gates[0].complete();
+      await Future.wait([holder, stranded]);
+      expect(api.queryDispatches, 3);
+    });
   });
 }

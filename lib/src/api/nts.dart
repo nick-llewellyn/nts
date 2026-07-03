@@ -23,6 +23,7 @@
 // See `ARCHITECTURE.md`'s "Public API stability layer" section for
 // the full rationale.
 
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64, PlatformInt64Util;
@@ -62,6 +63,28 @@ const int kDefaultTimeoutMs = 5000;
 /// wrapper boundary).
 const int kDefaultDnsConcurrencyCap = 4;
 
+/// Default per-call ceiling on concurrently dispatched bridge calls,
+/// applied process-wide by [ntsQuery] / [ntsWarmCookies] /
+/// [NtsClient.query] / [NtsClient.warmCookies].
+///
+/// Each in-flight call pins one `flutter_rust_bridge` worker thread
+/// (a fixed pool of one thread per logical CPU by default) for its
+/// full duration — up to `timeoutMs` in the worst case — so an
+/// unbounded distinct-host fan-out could occupy every worker and
+/// stall unrelated bridge calls behind it. The cap bounds how many of
+/// this package's calls occupy workers at once; calls beyond it queue
+/// on the Dart side (holding no worker thread) and fail with
+/// [NtsError.timeout] ([TimeoutPhase.bridgeSaturation]) if the whole
+/// `timeoutMs` budget elapses before a slot frees. Sized to the
+/// smallest common mobile pool (4 logical CPUs) so even a saturating
+/// burst cannot occupy more workers than the smallest pool holds.
+/// Raise per-call on hosts with more headroom by passing an explicit
+/// `bridgeConcurrencyCap` argument; values must lie in
+/// `1..4294967295`, validated at the wrapper boundary for symmetry
+/// with `dnsConcurrencyCap` even though this cap never crosses the
+/// FFI boundary.
+const int kDefaultBridgeConcurrencyCap = 4;
+
 /// Run a complete authenticated NTPv4 exchange against `spec`.
 ///
 /// On the first call (or after the cookie pool is exhausted) this
@@ -94,23 +117,37 @@ const int kDefaultDnsConcurrencyCap = 4;
 /// block the high-cap caller. See `ARCHITECTURE.md`'s "Timeout budget
 /// and bounded DNS" section for the full mechanic.
 ///
-/// **Worker-pool occupancy.** Although this wrapper is `async`, the
-/// underlying Rust call is a blocking network exchange dispatched to
-/// the `flutter_rust_bridge` worker pool: each in-flight call pins one
-/// pool thread for its full duration — up to `timeoutMs` in the worst
-/// case. The default pool holds one thread per logical CPU, so a burst
-/// of concurrent cold queries against many *distinct* hosts can occupy
-/// every worker and stall unrelated bridge calls behind them until a
-/// thread frees. Concurrent calls against the *same* `host:port` are
-/// less of a concern: a per-key singleflight on the Rust side collapses
-/// them onto one NTS-KE handshake, so their combined wall-clock is
-/// bounded by a single exchange (each waiting call still holds its own
-/// worker thread while parked, but only until the shared handshake
-/// resolves). When fanning out to many distinct hosts, bound the
-/// client-side concurrency — e.g. drain the host list through a small
-/// fixed pool of 2–4 in-flight futures — rather than launching every
-/// query at once. This is independent of `dnsConcurrencyCap`, which
-/// bounds DNS resolver threads, not bridge workers.
+/// **Worker-pool occupancy and the bridge admission gate.** Although
+/// this wrapper is `async`, the underlying Rust call is a blocking
+/// network exchange dispatched to the `flutter_rust_bridge` worker
+/// pool: each in-flight call pins one pool thread for its full
+/// duration — up to `timeoutMs` in the worst case. The default pool
+/// holds one thread per logical CPU, so a burst of concurrent cold
+/// queries against many *distinct* hosts could otherwise occupy every
+/// worker and stall unrelated bridge calls behind them until a thread
+/// frees. To bound that burst, dispatch runs behind a process-wide
+/// FIFO admission gate: `bridgeConcurrencyCap` (default
+/// [kDefaultBridgeConcurrencyCap]) caps how many of this package's
+/// calls occupy bridge workers at once, and calls beyond the cap
+/// queue on the Dart side — holding no worker thread — until a slot
+/// frees. Queue wait is charged against `timeoutMs`: the budget
+/// forwarded to the Rust pipeline shrinks by the time spent queued,
+/// so the caller's total wall-clock budget stays honest, and a call
+/// whose whole budget elapses while queued fails with
+/// [NtsError.timeout] ([TimeoutPhase.bridgeSaturation]) without ever
+/// dispatching. Admission compares the live in-flight count against
+/// each call's own cap — the same asymmetric mixed-cap semantics
+/// documented for `dnsConcurrencyCap` above — with one FIFO
+/// refinement: a queued call is only overtaken by a later call whose
+/// larger cap admits it while the queued call's own cap does not.
+/// Concurrent calls against the *same* `host:port` are less of a
+/// concern even at the cap: a per-key singleflight on the Rust side
+/// collapses them onto one NTS-KE handshake, so their combined
+/// wall-clock is bounded by a single exchange (each admitted call
+/// still holds its own worker thread while parked, but only until the
+/// shared handshake resolves). The gate is independent of
+/// `dnsConcurrencyCap`, which bounds DNS resolver threads, not bridge
+/// workers.
 ///
 /// The returned [NtsTimeSample] exposes the raw protocol primitives,
 /// not a finished synchronized clock. `utcUnixMicros` is the server
@@ -123,9 +160,11 @@ const int kDefaultDnsConcurrencyCap = 4;
 /// and pick the one with the smallest `roundTripMicros` before applying
 /// that adjustment.
 ///
-/// All integer arguments (`spec.port`, `timeoutMs`, `dnsConcurrencyCap`)
-/// are validated against the FFI encoding range (`1..65535` for the
-/// port, `1..4294967295` for the two `u32` parameters) before any FFI
+/// All integer arguments (`spec.port`, `timeoutMs`, `dnsConcurrencyCap`,
+/// `bridgeConcurrencyCap`) are validated against the FFI encoding range
+/// (`1..65535` for the port, `1..4294967295` for the `u32`-shaped
+/// parameters; `bridgeConcurrencyCap` never crosses the FFI boundary
+/// but is held to the same range for symmetry) before any FFI
 /// dispatch; out-of-range values cause the returned `Future` to
 /// complete with [NtsError.invalidSpec] without reaching the Rust
 /// boundary, on the same `await`/`catch` shape as every other failure
@@ -153,42 +192,54 @@ Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   int timeoutMs = kDefaultTimeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+  int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
   int? verificationTimeMs,
 }) async {
   _validateRanges(
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
     verificationTimeMs: verificationTimeMs,
   );
-  try {
-    final ffiSample = await ffi.ntsQuery(
-      spec: _ffiSpec(spec),
-      timeoutMs: timeoutMs,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
-    );
-    return _publicSample(ffiSample);
-  } on ffi.NtsError catch (err, stack) {
-    // Preserve the original FFI-side stack trace through the
-    // conversion so debuggers point at the FRB dispatcher / Rust
-    // boundary where the error originated, not at this catch site.
-    Error.throwWithStackTrace(_publicError(err), stack);
-  }
+  return _withBridgeSlot(
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    timeoutMs: timeoutMs,
+    body: (remainingTimeoutMs) async {
+      try {
+        final ffiSample = await ffi.ntsQuery(
+          spec: _ffiSpec(spec),
+          timeoutMs: remainingTimeoutMs,
+          dnsConcurrencyCap: dnsConcurrencyCap,
+          verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
+        );
+        return _publicSample(ffiSample);
+      } on ffi.NtsError catch (err, stack) {
+        // Preserve the original FFI-side stack trace through the
+        // conversion so debuggers point at the FRB dispatcher / Rust
+        // boundary where the error originated, not at this catch site.
+        Error.throwWithStackTrace(_publicError(err), stack);
+      }
+    },
+  );
 }
 
 /// Force a fresh NTS-KE handshake against `spec` and return the cookie
 /// count along with the per-phase wall-clock breakdown of the handshake.
 /// Replaces any cached session for that spec.
 ///
-/// `timeoutMs` and `dnsConcurrencyCap` carry the same semantics as on
-/// [ntsQuery] and default to [kDefaultTimeoutMs] /
-/// [kDefaultDnsConcurrencyCap] when omitted.
+/// `timeoutMs`, `dnsConcurrencyCap`, and `bridgeConcurrencyCap` carry
+/// the same semantics as on [ntsQuery] and default to
+/// [kDefaultTimeoutMs] / [kDefaultDnsConcurrencyCap] /
+/// [kDefaultBridgeConcurrencyCap] when omitted.
 ///
-/// The worker-pool occupancy guideline documented on [ntsQuery]
-/// applies here on identical terms: each in-flight call pins one
-/// `flutter_rust_bridge` worker thread for up to `timeoutMs`, so bound
-/// the fan-out when warming many distinct hosts concurrently.
+/// The worker-pool occupancy mechanics and bridge admission gate
+/// documented on [ntsQuery] apply here on identical terms: each
+/// dispatched call pins one `flutter_rust_bridge` worker thread for up
+/// to `timeoutMs`, and the same process-wide gate bounds concurrent
+/// dispatch (queue wait charged against `timeoutMs`, saturation
+/// surfaced as [TimeoutPhase.bridgeSaturation]) when warming many
+/// distinct hosts concurrently.
 ///
 /// The returned [NtsWarmCookiesOutcome.phaseTimings] only covers the
 /// KE pipeline (DNS, connect, TLS, KE record I/O); there is no UDP
@@ -214,27 +265,35 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   int timeoutMs = kDefaultTimeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+  int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
   int? verificationTimeMs,
 }) async {
   _validateRanges(
     spec: spec,
     timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
     verificationTimeMs: verificationTimeMs,
   );
-  try {
-    final ffiOutcome = await ffi.ntsWarmCookies(
-      spec: _ffiSpec(spec),
-      timeoutMs: timeoutMs,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
-    );
-    return _publicWarm(ffiOutcome);
-  } on ffi.NtsError catch (err, stack) {
-    // Preserve the original FFI-side stack trace; see the comment in
-    // `ntsQuery` above.
-    Error.throwWithStackTrace(_publicError(err), stack);
-  }
+  return _withBridgeSlot(
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    timeoutMs: timeoutMs,
+    body: (remainingTimeoutMs) async {
+      try {
+        final ffiOutcome = await ffi.ntsWarmCookies(
+          spec: _ffiSpec(spec),
+          timeoutMs: remainingTimeoutMs,
+          dnsConcurrencyCap: dnsConcurrencyCap,
+          verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
+        );
+        return _publicWarm(ffiOutcome);
+      } on ffi.NtsError catch (err, stack) {
+        // Preserve the original FFI-side stack trace; see the comment
+        // in `ntsQuery` above.
+        Error.throwWithStackTrace(_publicError(err), stack);
+      }
+    },
+  );
 }
 
 /// Snapshot the bounded DNS resolver pool counters. Synchronous (no
@@ -472,45 +531,57 @@ class NtsClient {
   /// NTS-KE handshake runs, then subsequent calls reuse the cached
   /// session.
   ///
-  /// Parameter semantics for `timeoutMs`, `dnsConcurrencyCap`, and
-  /// `verificationTimeMs` are identical to [ntsQuery]; defaults come
-  /// from [kDefaultTimeoutMs] and [kDefaultDnsConcurrencyCap], and
-  /// out-of-range values cause the returned `Future` to complete with
-  /// [NtsError.invalidSpec] on the same terms as the top-level wrapper.
+  /// Parameter semantics for `timeoutMs`, `dnsConcurrencyCap`,
+  /// `bridgeConcurrencyCap`, and `verificationTimeMs` are identical
+  /// to [ntsQuery]; defaults come from [kDefaultTimeoutMs],
+  /// [kDefaultDnsConcurrencyCap], and [kDefaultBridgeConcurrencyCap],
+  /// and out-of-range values cause the returned `Future` to complete
+  /// with [NtsError.invalidSpec] on the same terms as the top-level
+  /// wrapper.
   /// `verificationTimeMs` carries the same cold-start clock-skew-rescue
   /// behaviour documented on [ntsQuery]. The [NtsTimeSample] return
   /// shape is identical too — see [ntsQuery]'s dartdoc for the raw
   /// protocol primitives the sample exposes and how to apply the
-  /// one-way-delay correction, and for the worker-pool occupancy
-  /// guideline, which applies to this method unchanged (per-client
-  /// tables do not change which FRB worker pool the call blocks on).
+  /// one-way-delay correction, and for the bridge admission gate,
+  /// which applies to this method unchanged: the gate is process-wide
+  /// and shared with the top-level wrappers and every other client
+  /// (per-client tables do not change which FRB worker pool the call
+  /// blocks on).
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsTimeSample> query({
     required NtsServerSpec spec,
     int timeoutMs = kDefaultTimeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+    int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
     int? verificationTimeMs,
   }) async {
     _validateRanges(
       spec: spec,
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
+      bridgeConcurrencyCap: bridgeConcurrencyCap,
       verificationTimeMs: verificationTimeMs,
     );
-    try {
-      final ffiSample = await _inner.query(
-        spec: _ffiSpec(spec),
-        timeoutMs: timeoutMs,
-        dnsConcurrencyCap: dnsConcurrencyCap,
-        verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
-      );
-      return _publicSample(ffiSample);
-    } on ffi.NtsError catch (err, stack) {
-      // Preserve the original FFI-side stack trace through the
-      // conversion; see the comment in the top-level `ntsQuery`.
-      Error.throwWithStackTrace(_publicError(err), stack);
-    }
+    return _withBridgeSlot(
+      bridgeConcurrencyCap: bridgeConcurrencyCap,
+      timeoutMs: timeoutMs,
+      body: (remainingTimeoutMs) async {
+        try {
+          final ffiSample = await _inner.query(
+            spec: _ffiSpec(spec),
+            timeoutMs: remainingTimeoutMs,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
+          );
+          return _publicSample(ffiSample);
+        } on ffi.NtsError catch (err, stack) {
+          // Preserve the original FFI-side stack trace through the
+          // conversion; see the comment in the top-level `ntsQuery`.
+          Error.throwWithStackTrace(_publicError(err), stack);
+        }
+      },
+    );
   }
 
   /// Per-client equivalent of the top-level [ntsWarmCookies]. Forces
@@ -524,33 +595,42 @@ class NtsClient {
   /// to complete with [NtsError.invalidSpec] without reaching the
   /// Rust boundary. `verificationTimeMs` carries the same cold-start
   /// clock-skew-rescue behaviour documented on [ntsQuery], and the
-  /// worker-pool occupancy guideline on [ntsQuery] applies to this
-  /// method unchanged.
+  /// bridge admission gate on [ntsQuery] applies to this method
+  /// unchanged (process-wide, shared with the top-level wrappers and
+  /// every other client).
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsWarmCookiesOutcome> warmCookies({
     required NtsServerSpec spec,
     int timeoutMs = kDefaultTimeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
+    int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
     int? verificationTimeMs,
   }) async {
     _validateRanges(
       spec: spec,
       timeoutMs: timeoutMs,
       dnsConcurrencyCap: dnsConcurrencyCap,
+      bridgeConcurrencyCap: bridgeConcurrencyCap,
       verificationTimeMs: verificationTimeMs,
     );
-    try {
-      final ffiOutcome = await _inner.warmCookies(
-        spec: _ffiSpec(spec),
-        timeoutMs: timeoutMs,
-        dnsConcurrencyCap: dnsConcurrencyCap,
-        verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
-      );
-      return _publicWarm(ffiOutcome);
-    } on ffi.NtsError catch (err, stack) {
-      Error.throwWithStackTrace(_publicError(err), stack);
-    }
+    return _withBridgeSlot(
+      bridgeConcurrencyCap: bridgeConcurrencyCap,
+      timeoutMs: timeoutMs,
+      body: (remainingTimeoutMs) async {
+        try {
+          final ffiOutcome = await _inner.warmCookies(
+            spec: _ffiSpec(spec),
+            timeoutMs: remainingTimeoutMs,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
+          );
+          return _publicWarm(ffiOutcome);
+        } on ffi.NtsError catch (err, stack) {
+          Error.throwWithStackTrace(_publicError(err), stack);
+        }
+      },
+    );
   }
 
   /// Drop this client's cached session for `spec`'s `host:port`, if
@@ -603,7 +683,7 @@ class NtsClient {
 // --- input validation -----------------------------------------------
 //
 // Run before every wrapper dispatches into the FFI layer. The three
-// integer arguments hit FRB-generated `sse_encode_u_16` /
+// FFI-bound integer arguments hit FRB-generated `sse_encode_u_16` /
 // `sse_encode_u_32` codecs that `RangeError` on out-of-range values
 // before the Rust code ever runs, which would escape the wrapper's
 // `on ffi.NtsError catch` contract and surface to consumers as a
@@ -622,7 +702,10 @@ class NtsClient {
 // to `1..0xFFFFFFFF`: zero used to be a sentinel for "inherit the
 // Rust-side default" in 1.x and 3.0.x, but consumers are now steered
 // toward the named `kDefault*` constants which expose the actual
-// numeric values.
+// numeric values. `bridgeConcurrencyCap` never crosses the FFI
+// boundary (the gate is pure Dart), but it is held to the same
+// `1..0xFFFFFFFF` range so the three cap/budget parameters share one
+// validation contract.
 
 const int _kU32Max = 0xFFFFFFFF;
 
@@ -638,6 +721,7 @@ void _validateRanges({
   required NtsServerSpec spec,
   required int timeoutMs,
   required int dnsConcurrencyCap,
+  required int bridgeConcurrencyCap,
   int? verificationTimeMs,
 }) {
   _validatePort(spec);
@@ -657,6 +741,14 @@ void _validateRanges({
           '($kDefaultDnsConcurrencyCap) to inherit the package default',
     );
   }
+  if (bridgeConcurrencyCap < 1 || bridgeConcurrencyCap > _kU32Max) {
+    throw NtsError.invalidSpec(
+      message:
+          'bridgeConcurrencyCap $bridgeConcurrencyCap is outside the valid '
+          'range 1..$_kU32Max; pass kDefaultBridgeConcurrencyCap '
+          '($kDefaultBridgeConcurrencyCap) to inherit the package default',
+    );
+  }
   // `verificationTimeMs` is an epoch-milliseconds instant: the Rust
   // side maps it to a `UnixTime` via `Duration::from_millis(u64)`, so a
   // negative value cannot encode a real instant. Reject it here with the
@@ -668,6 +760,104 @@ void _validateRanges({
           'verificationTimeMs $verificationTimeMs is negative; it must be '
           'a non-negative count of milliseconds since the Unix epoch',
     );
+  }
+}
+
+// --- bridge admission gate --------------------------------------------
+//
+// The four async wrappers dispatch blocking Rust network exchanges to
+// the `flutter_rust_bridge` worker pool (a fixed pool of one thread
+// per logical CPU by default), and each in-flight call pins one pool
+// thread for its full duration — up to `timeoutMs`. This gate bounds
+// how many of this package's calls occupy pool threads at once so a
+// distinct-host fan-out burst cannot exhaust the pool and stall
+// unrelated bridge calls behind it. Waiters queue on the Dart side
+// (holding no pool thread) in arrival order; admission compares the
+// live in-flight count against each waiter's own
+// `bridgeConcurrencyCap`, giving mixed-cap bursts the same asymmetric
+// semantics as the Rust-side DNS resolver pool. `_admitBridgeWaiters`
+// walks the queue in FIFO order and admits every waiter whose cap
+// clears the count, so at rest every queued waiter's cap is <= the
+// in-flight count; a new arrival that is admissible therefore never
+// jumps a waiter that is also admissible — it only overtakes waiters
+// whose smaller caps keep them queued regardless.
+//
+// Queue wait is charged against the call's `timeoutMs` and only the
+// remainder crosses the FFI boundary, keeping the caller's total
+// wall-clock budget honest; a budget that expires while queued
+// surfaces as `NtsError.timeout(phase: TimeoutPhase.bridgeSaturation)`
+// without any FFI dispatch. All state below is confined to the
+// calling isolate (the same isolate FRB dispatches from), and every
+// mutation happens synchronously between suspension points, so no
+// further synchronisation is needed.
+
+class _BridgeWaiter {
+  final int cap;
+  final Completer<void> admitted = Completer<void>();
+  _BridgeWaiter(this.cap);
+}
+
+int _bridgeInFlight = 0;
+final List<_BridgeWaiter> _bridgeQueue = <_BridgeWaiter>[];
+
+Future<T> _withBridgeSlot<T>({
+  required int bridgeConcurrencyCap,
+  required int timeoutMs,
+  required Future<T> Function(int remainingTimeoutMs) body,
+}) async {
+  // Uncontended calls take the slot synchronously and forward
+  // `timeoutMs` verbatim; the queue-wait deduction below only applies
+  // to calls that actually queued.
+  var remainingTimeoutMs = timeoutMs;
+  if (_bridgeInFlight < bridgeConcurrencyCap) {
+    _bridgeInFlight++;
+  } else {
+    final queueWait = Stopwatch()..start();
+    final waiter = _BridgeWaiter(bridgeConcurrencyCap);
+    _bridgeQueue.add(waiter);
+    final deadline = Timer(Duration(milliseconds: timeoutMs), () {
+      if (!waiter.admitted.isCompleted) {
+        _bridgeQueue.remove(waiter);
+        waiter.admitted.completeError(
+          const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation),
+        );
+      }
+    });
+    try {
+      // `_admitBridgeWaiters` increments `_bridgeInFlight` on this
+      // call's behalf before completing the future, so both branches
+      // converge holding exactly one slot.
+      await waiter.admitted.future;
+    } finally {
+      deadline.cancel();
+    }
+    remainingTimeoutMs = timeoutMs - queueWait.elapsedMilliseconds;
+  }
+  try {
+    if (remainingTimeoutMs < 1) {
+      // The slot was granted at (or a scheduling beat past) the exact
+      // moment the budget ran out; dispatching with a zero budget is
+      // indistinguishable from having timed out while queued.
+      throw const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation);
+    }
+    return await body(remainingTimeoutMs);
+  } finally {
+    _bridgeInFlight--;
+    _admitBridgeWaiters();
+  }
+}
+
+void _admitBridgeWaiters() {
+  var i = 0;
+  while (i < _bridgeQueue.length) {
+    final waiter = _bridgeQueue[i];
+    if (_bridgeInFlight < waiter.cap) {
+      _bridgeQueue.removeAt(i);
+      _bridgeInFlight++;
+      waiter.admitted.complete();
+    } else {
+      i++;
+    }
   }
 }
 
