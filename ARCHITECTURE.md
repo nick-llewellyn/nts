@@ -244,7 +244,7 @@ pure-Dart admission gate in front of all four async entry points.
 per-call overridable like `dnsConcurrencyCap`) bounds how many of the
 package's calls occupy bridge workers at once; excess calls queue on
 the Dart side holding no worker thread. Admission compares the live
-process-wide in-flight count against each call's own cap, giving
+isolate-wide in-flight count against each call's own cap, giving
 mixed-cap bursts the same asymmetric semantics as the DNS pool, with
 one FIFO refinement: the queue is walked in arrival order on every
 release and a waiter is only overtaken by a later arrival whose
@@ -259,7 +259,10 @@ the Dart-authored `TimeoutPhase.bridgeSaturation` — the one
 `TimeoutPhase` value that fires before any FFI dispatch and therefore
 always carries a `null` `trustBackend`. Gate state is confined to the
 calling isolate and every mutation is synchronous between suspension
-points, so no locking is involved.
+points, so no locking is involved. Each isolate therefore gates only
+its own calls; the FRB worker pool being bounded is shared
+process-wide, so a multi-isolate app's combined occupancy is bounded
+by the sum of each isolate's cap, not by one cap.
 
 The gate composes with, and does not replace, the DNS pool cap: the
 two bounds guard different resources with different lifetimes and

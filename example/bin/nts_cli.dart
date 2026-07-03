@@ -154,7 +154,7 @@ Future<void> main(List<String> argv) async {
   final ctx = _Ctx(json: args['json'] as bool);
 
   // Every positional host is distinct and the loop below fans out one
-  // concurrent call per host, so size both process-wide concurrency
+  // concurrent call per host, so size both shared concurrency
   // caps to that fan-out (mirroring the catalog tools): with the
   // mobile-sized defaults (both 4), a >4-host invocation would
   // otherwise queue at the bridge admission gate, charging queue wait

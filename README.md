@@ -361,7 +361,7 @@ Future<void> main() async {
   // root or the private CA above cannot authenticate these hosts.
   final publicClient = NtsClient(trustMode: TrustMode.bundledOnly);
 
-  // Both clients share one process-wide bridge admission gate, so the
+  // Both clients share one isolate-wide bridge admission gate, so the
   // explicit `bridgeConcurrencyCap` (the built-in default of 4) bounds
   // their combined worker occupancy, not each client's separately.
   final internal = await internalClient.query(
@@ -502,10 +502,15 @@ verbatim), and a budget that expires while queued fails with
 ever dispatching. Omit the parameter (or pass
 `kDefaultBridgeConcurrencyCap`) to inherit the built-in default of
 **4**; hosts with wider pools can raise it per call on the same
-`1..4294967295` validation terms as `dnsConcurrencyCap`. Like the DNS
-cap, admission is compared against a process-wide count, with FIFO
-ordering refined so a queued call is only overtaken by a later call
-whose larger cap admits it while the queued call's own cap does not.
+`1..4294967295` validation terms as `dnsConcurrencyCap`. Admission is
+compared against a shared count with the same asymmetric mixed-cap
+semantics as the DNS cap, but the gate's scope differs: its state
+lives in Dart and is isolate-local, so each isolate gates its own
+calls independently over the shared process-wide FRB worker pool
+(the DNS counter, by contrast, is a Rust-side process-wide global).
+FIFO ordering is refined so a queued call is only overtaken by a
+later call whose larger cap admits it while the queued call's own
+cap does not.
 
 The two caps are independent and compose rather than conflict. With
 `bridgeConcurrencyCap` at or below `dnsConcurrencyCap` (the defaults

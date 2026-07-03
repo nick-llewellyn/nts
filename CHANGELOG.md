@@ -47,8 +47,10 @@
   `bridgeConcurrencyCap` parameter (default
   `kDefaultBridgeConcurrencyCap = 4`, validated `1..4294967295` for
   symmetry with `dnsConcurrencyCap` even though the value never
-  crosses the FFI boundary) enforced by one process-wide FIFO gate:
-  calls beyond the cap queue on the Dart side holding no worker
+  crosses the FFI boundary) enforced by one FIFO gate per isolate
+  (gate state is Dart-side and isolate-local; the FRB worker pool it
+  bounds is shared process-wide): calls beyond the cap queue on the
+  Dart side holding no worker
   thread, queue wait is charged against `timeoutMs` (only the
   remainder crosses the FFI boundary; uncontended calls forward the
   budget verbatim), and a budget that expires while queued fails with

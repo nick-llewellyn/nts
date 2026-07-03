@@ -64,8 +64,10 @@ const int kDefaultTimeoutMs = 5000;
 const int kDefaultDnsConcurrencyCap = 4;
 
 /// Default per-call ceiling on concurrently dispatched bridge calls,
-/// applied process-wide by [ntsQuery] / [ntsWarmCookies] /
-/// [NtsClient.query] / [NtsClient.warmCookies].
+/// applied isolate-wide by [ntsQuery] / [ntsWarmCookies] /
+/// [NtsClient.query] / [NtsClient.warmCookies] (the gate's state is
+/// Dart-side and isolate-local; each isolate gates its own calls over
+/// the shared process-wide `flutter_rust_bridge` worker pool).
 ///
 /// Each in-flight call pins one `flutter_rust_bridge` worker thread
 /// (a fixed pool of one thread per logical CPU by default) for its
@@ -125,12 +127,16 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// holds one thread per logical CPU, so a burst of concurrent cold
 /// queries against many *distinct* hosts could otherwise occupy every
 /// worker and stall unrelated bridge calls behind them until a thread
-/// frees. To bound that burst, dispatch runs behind a process-wide
+/// frees. To bound that burst, dispatch runs behind an isolate-wide
 /// FIFO admission gate: `bridgeConcurrencyCap` (default
 /// [kDefaultBridgeConcurrencyCap]) caps how many of this package's
 /// calls occupy bridge workers at once, and calls beyond the cap
 /// queue on the Dart side — holding no worker thread — until a slot
-/// frees. Queue wait is charged against `timeoutMs`: the budget
+/// frees. The gate's state is isolate-local: each isolate gates its
+/// own calls independently, while the FRB worker pool they land on
+/// is shared process-wide, so a multi-isolate app's combined
+/// occupancy is bounded by the sum of each isolate's cap, not by one
+/// cap. Queue wait is charged against `timeoutMs`: the budget
 /// forwarded to the Rust pipeline shrinks by the time spent queued,
 /// so the caller's total wall-clock budget stays honest, and a call
 /// whose whole budget elapses while queued fails with
@@ -249,7 +255,7 @@ Future<NtsTimeSample> ntsQuery({
 /// The worker-pool occupancy mechanics and bridge admission gate
 /// documented on [ntsQuery] apply here on identical terms: each
 /// dispatched call pins one `flutter_rust_bridge` worker thread for up
-/// to `timeoutMs`, and the same process-wide gate bounds concurrent
+/// to `timeoutMs`, and the same isolate-wide gate bounds concurrent
 /// dispatch (queue wait charged against `timeoutMs`, saturation
 /// surfaced as [TimeoutPhase.bridgeSaturation]) when warming many
 /// distinct hosts concurrently.
@@ -556,10 +562,10 @@ class NtsClient {
   /// shape is identical too — see [ntsQuery]'s dartdoc for the raw
   /// protocol primitives the sample exposes and how to apply the
   /// one-way-delay correction, and for the bridge admission gate,
-  /// which applies to this method unchanged: the gate is process-wide
-  /// and shared with the top-level wrappers and every other client
-  /// (per-client tables do not change which FRB worker pool the call
-  /// blocks on).
+  /// which applies to this method unchanged: the gate is isolate-wide
+  /// and shared with the top-level wrappers and every other client in
+  /// the calling isolate (per-client tables do not change which FRB
+  /// worker pool the call blocks on).
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsTimeSample> query({
@@ -609,8 +615,8 @@ class NtsClient {
   /// Rust boundary. `verificationTimeMs` carries the same cold-start
   /// clock-skew-rescue behaviour documented on [ntsQuery], and the
   /// bridge admission gate on [ntsQuery] applies to this method
-  /// unchanged (process-wide, shared with the top-level wrappers and
-  /// every other client).
+  /// unchanged (isolate-wide, shared with the top-level wrappers and
+  /// every other client in the calling isolate).
   ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsWarmCookiesOutcome> warmCookies({
@@ -861,17 +867,24 @@ Future<T> _withBridgeSlot<T>({
 }
 
 void _admitBridgeWaiters() {
-  var i = 0;
-  while (i < _bridgeQueue.length) {
+  // Single-pass in-place compaction keeps admission O(n): admitted
+  // waiters are completed and dropped, retained waiters shift down,
+  // and the tail is truncated once — versus the O(n²) element
+  // shifting a per-waiter `removeAt` would cost under a large queued
+  // burst. Mutating in place is safe: `complete()` only schedules
+  // microtasks and the loop has no suspension points, so no timer or
+  // waiter continuation can observe the queue mid-compaction.
+  var kept = 0;
+  for (var i = 0; i < _bridgeQueue.length; i++) {
     final waiter = _bridgeQueue[i];
     if (_bridgeInFlight < waiter.cap) {
-      _bridgeQueue.removeAt(i);
       _bridgeInFlight++;
       waiter.admitted.complete();
     } else {
-      i++;
+      _bridgeQueue[kept++] = waiter;
     }
   }
+  _bridgeQueue.length = kept;
 }
 
 // --- conversion layer (FFI <-> public) -------------------------------
