@@ -51,8 +51,11 @@ import 'models.dart' show TrustBackend;
 enum TimeoutPhase {
   /// Wall-clock budget elapsed while the call was queued at the
   /// Dart-side bridge admission gate, before any FFI dispatch: the
-  /// process-wide in-flight bridge-call count stayed at or above the
-  /// call's `bridgeConcurrencyCap` for the whole budget. Raising the
+  /// calling isolate's in-flight bridge-call count stayed at or above
+  /// the call's `bridgeConcurrencyCap` for the whole budget. The gate
+  /// state is isolate-local, so this phase reflects saturation by the
+  /// calling isolate's own calls; other isolates share the same FRB
+  /// worker pool but are not observed by this counter. Raising the
   /// cap or lowering the burst's fan-out is the appropriate
   /// remediation, not lengthening `timeoutMs` — a longer budget only
   /// waits longer behind the same saturated worker pool. Unlike every

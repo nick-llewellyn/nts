@@ -1758,9 +1758,10 @@ void main() {
     const spec = NtsServerSpec(host: 'time.example', port: 4460);
 
     // The gate's `_bridgeInFlight` / `_bridgeQueue` state is
-    // process-global, so every test below drains all its futures
-    // before returning; a leaked slot would silently shrink the cap
-    // for whichever test runs next.
+    // isolate-local and shared by every test in this suite's isolate,
+    // so every test below drains all its futures before returning; a
+    // leaked slot would silently shrink the cap for whichever test
+    // runs next.
 
     test('exported default exposes the actual numeric value', () {
       expect(kDefaultBridgeConcurrencyCap, 4);
