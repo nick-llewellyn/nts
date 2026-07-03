@@ -261,6 +261,17 @@ always carries a `null` `trustBackend`. Gate state is confined to the
 calling isolate and every mutation is synchronous between suspension
 points, so no locking is involved.
 
+The gate composes with, and does not replace, the DNS pool cap: the
+two bounds guard different resources with different lifetimes and
+failure modes (Dart-side queueing versus Rust-side fail-fast
+refusal). A bridge cap at or below the DNS cap means live calls
+alone cannot saturate the resolver pool, leaving the DNS cap to its
+real job — bounding detached lookups that outlive their calls. A
+bridge cap above the DNS cap is legitimate for same-host-heavy
+traffic (singleflight collapses the lookups) but re-exposes
+`dnsSaturation` refusals to synchronized distinct-host bursts, so
+high-fan-out callers should raise both caps together.
+
 ## Phase attribution and timings
 
 The shared deadline accounts for *when* a budget elapses but not for

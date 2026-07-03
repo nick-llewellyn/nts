@@ -494,6 +494,20 @@ cap, admission is compared against a process-wide count, with FIFO
 ordering refined so a queued call is only overtaken by a later call
 whose larger cap admits it while the queued call's own cap does not.
 
+The two caps are independent and compose rather than conflict. With
+`bridgeConcurrencyCap` at or below `dnsConcurrencyCap` (the defaults
+are both **4**), the package's live calls alone can never saturate
+the DNS pool — only detached lookups leaked by earlier timed-out
+calls still count toward it, which is exactly the accumulation the
+DNS cap exists to bound. Raising the bridge cap *above* the DNS cap
+re-exposes the DNS gate's fail-fast for synchronized distinct-host
+bursts: admitted calls beyond the DNS cap that overlap in their DNS
+phase are refused immediately with `TimeoutPhase.dnsSaturation`
+rather than queueing. That skew suits same-host-heavy workloads
+(singleflight collapses their lookups); for high distinct-host
+fan-out, raise both caps together. The inverse skew — bridge cap
+below DNS cap — is always safe; the extra DNS headroom goes unused.
+
 ## Demos & Examples
 
 The repository ships three reference surfaces, in increasing order of

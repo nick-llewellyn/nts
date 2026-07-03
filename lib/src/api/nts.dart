@@ -147,7 +147,20 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// still holds its own worker thread while parked, but only until the
 /// shared handshake resolves). The gate is independent of
 /// `dnsConcurrencyCap`, which bounds DNS resolver threads, not bridge
-/// workers.
+/// workers — and the two caps compose rather than conflict. With the
+/// bridge cap at or below the DNS cap (the defaults are both 4), the
+/// package's live calls alone can never saturate the DNS pool; only
+/// detached lookups leaked by earlier timed-out calls still consume
+/// DNS slots, which is exactly the accumulation the DNS cap exists
+/// to bound. Raising `bridgeConcurrencyCap` *above*
+/// `dnsConcurrencyCap` re-exposes the DNS gate's fail-fast: admitted
+/// distinct-host calls that overlap in their DNS phase beyond the
+/// DNS cap are refused immediately with
+/// [TimeoutPhase.dnsSaturation] rather than queueing. That skew
+/// suits same-host-heavy workloads (singleflight collapses their
+/// lookups); for high distinct-host fan-out, raise both caps
+/// together. The inverse skew — bridge cap below DNS cap — is always
+/// safe: the extra DNS headroom simply goes unused.
 ///
 /// The returned [NtsTimeSample] exposes the raw protocol primitives,
 /// not a finished synchronized clock. `utcUnixMicros` is the server
