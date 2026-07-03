@@ -834,6 +834,10 @@ Future<T> _withBridgeSlot<T>({
     final queueWait = Stopwatch()..start();
     final waiter = _BridgeWaiter(bridgeConcurrencyCap);
     _bridgeQueue.add(waiter);
+    // Captured at enqueue time so the timeout error's stack trace points
+    // at the wrapper call path that queued the waiter, not at the timer
+    // callback that fired the deadline.
+    final enqueueTrace = StackTrace.current;
     final deadline = Timer(Duration(milliseconds: timeoutMs), () {
       if (!waiter.admitted.isCompleted) {
         // Completing with the error is also the cancellation mark: the
@@ -845,6 +849,7 @@ Future<T> _withBridgeSlot<T>({
         // runs that pass, so cancelled entries cannot linger.
         waiter.admitted.completeError(
           const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation),
+          enqueueTrace,
         );
       }
     });
