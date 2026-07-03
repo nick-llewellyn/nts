@@ -194,6 +194,17 @@
 
 ### Security
 
+- Bumped `anyhow` from `1.0.102` to `1.0.103` to clear **RUSTSEC-2026-0190**
+  (Scorecard code-scanning alert #79): an unsoundness in
+  `anyhow::Error::downcast_mut()` where, after context is added via
+  `Error::context`, the returned `&mut T` is derived from a borrow chain that
+  includes a shared reference, so writing through it is a Stacked Borrows
+  violation (undefined behaviour). `anyhow` is a transitive dependency here
+  (via `flutter_rust_bridge` → `allo-isolate`), and the caret range
+  (`anyhow = "1.0"`) already permits the patched release, so the fix is a
+  `Cargo.lock`-only bump — applied to both `rust/Cargo.lock` and
+  `rust/fuzz/Cargo.lock` — with no manifest or source change. (NTS-71)
+
 - Closed the last plain-bytes cookie transit: fresh NTS cookies recovered
   from the encrypted NTPv4 reply are now wrapped in `Zeroizing<Vec<u8>>` at
   the parse site (`ServerResponse::fresh_cookies`), carried through
