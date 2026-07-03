@@ -30,15 +30,20 @@
 //! `Ok(ServerResponse)` and every typed `NtpError` arm are acceptable
 //! outcomes and discarded.
 //!
-//! Fixed inputs for the non-packet arguments — the values mirror the
-//! parent crate's `nts::test_helpers` constants so seeds crafted with
-//! those helpers authenticate here:
+//! Fixed inputs for the non-packet arguments — the parent crate's
+//! `nts::test_helpers` constants, re-exported through
+//! `__internal_fuzz` so seeds crafted with those helpers authenticate
+//! here. Using the re-exports (rather than hardcoded mirrors) means a
+//! helper-constant change either propagates to this harness or fails
+//! to compile, instead of silently de-authenticating the sealed seed
+//! and losing post-AEAD coverage (bd nts-jzh1 / NTS-67):
 //!
-//! - `expected_uid = [0x33; 32]` (`test_helpers::UID`)
-//! - `expected_origin_timestamp = 0xDEAD_BEEF_CAFE_F00D`
-//!   (`test_helpers::CLIENT_TX`)
-//! - `s2c_key` = AES-SIV-CMAC-256 from keying material `[0x22; 32]`
-//!   (`test_helpers::S2C`; IANA AEAD ID 15, the production default)
+//! - `expected_uid` = `test_helpers::UID` (`[0x33; 32]`)
+//! - `expected_origin_timestamp` = `test_helpers::CLIENT_TX`
+//!   (`0xDEAD_BEEF_CAFE_F00D`)
+//! - `s2c_key` = AES-SIV-CMAC-256 from keying material
+//!   `test_helpers::S2C` (`[0x22; 32]`; IANA AEAD ID 15
+//!   (`AES_SIV_CMAC_256`), the production default)
 //!
 //! Seed corpus (`corpus/parse_server_response/`, committed):
 //!
@@ -58,22 +63,20 @@
 use std::sync::LazyLock;
 
 use libfuzzer_sys::fuzz_target;
-use nts_rust::__internal_fuzz::{parse_server_response, AeadKey};
-
-/// Mirrors `nts::test_helpers::UID`.
-const EXPECTED_UID: [u8; 32] = [0x33; 32];
-/// Mirrors `nts::test_helpers::CLIENT_TX`.
-const EXPECTED_ORIGIN_TIMESTAMP: u64 = 0xDEAD_BEEF_CAFE_F00D;
+use nts_rust::__internal_fuzz::{
+    parse_server_response, AeadKey, AES_SIV_CMAC_256, CLIENT_TX, S2C, UID,
+};
 
 /// Fixed S2C key (AES-SIV-CMAC-256 over `test_helpers::S2C` bytes),
 /// constructed once — key derivation is deterministic and per-run
 /// state-free, so rebuilding it per input would only burn exec/s.
-static S2C_KEY: LazyLock<AeadKey> =
-    LazyLock::new(|| AeadKey::from_keying_material(15, &[0x22; 32]).expect("valid keying material"));
+static S2C_KEY: LazyLock<AeadKey> = LazyLock::new(|| {
+    AeadKey::from_keying_material(AES_SIV_CMAC_256, &S2C).expect("valid keying material")
+});
 
 fuzz_target!(|data: &[u8]| {
     // Discard the `Result`. The only failure mode the harness cares
     // about is a panic / abort / sanitizer trip inside the parser;
     // both `Ok` and `Err(NtpError::*)` are valid outcomes.
-    let _ = parse_server_response(data, &EXPECTED_UID, EXPECTED_ORIGIN_TIMESTAMP, &S2C_KEY);
+    let _ = parse_server_response(data, &UID, CLIENT_TX, &S2C_KEY);
 });

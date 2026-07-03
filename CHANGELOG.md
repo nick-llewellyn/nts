@@ -27,6 +27,18 @@
 
 ### Changed
 
+- The `parse_server_response` fuzz harness now consumes the canned
+  fixture constants (`UID`, `CLIENT_TX`, `S2C`) as re-exports through
+  the `__internal-fuzz`-gated `__internal_fuzz` module instead of
+  hardcoding mirrors of `nts::test_helpers`. Previously, a change to
+  the helper constants would silently de-authenticate the committed
+  `canonical-authenticated-response` seed — pre-AEAD arms would still
+  fuzz but post-AEAD coverage would vanish with no red signal. With
+  the re-exports, a helper change either propagates to the harness or
+  fails to compile. `test_helpers` is now additionally compiled under
+  the `__internal-fuzz` feature (still compiled out of release
+  builds); no production API change. (NTS-67)
+
 - Tightened the PR-time `dependency-review` CI gate from
   `fail-on-severity: high` to `moderate`, so moderate-severity
   advisories on newly-introduced dependencies now block the merge
