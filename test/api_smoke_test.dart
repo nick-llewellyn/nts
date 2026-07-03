@@ -1774,12 +1774,19 @@ void main() {
       // so a listener is attached before the next event-loop turn —
       // a batch of pre-created failed futures would surface as
       // unhandled async errors while the first one is awaited.
+      // Both invalid values (below-range 0 and above-range 2^32) are
+      // exercised on every wrapper, so a wrapper that skipped either
+      // bound check would fail this test.
       final rejected = <Future<Object?> Function()>[
         () => ntsQuery(spec: spec, bridgeConcurrencyCap: 0),
         () => ntsQuery(spec: spec, bridgeConcurrencyCap: 0x1_0000_0000),
         () => ntsWarmCookies(spec: spec, bridgeConcurrencyCap: 0),
+        () => ntsWarmCookies(spec: spec, bridgeConcurrencyCap: 0x1_0000_0000),
         () => client.query(spec: spec, bridgeConcurrencyCap: 0),
+        () => client.query(spec: spec, bridgeConcurrencyCap: 0x1_0000_0000),
         () => client.warmCookies(spec: spec, bridgeConcurrencyCap: 0),
+        () =>
+            client.warmCookies(spec: spec, bridgeConcurrencyCap: 0x1_0000_0000),
       ];
       for (final mint in rejected) {
         await expectLater(
@@ -1793,7 +1800,7 @@ void main() {
           ),
         );
       }
-      // All five rejected before any FFI dispatch.
+      // All eight rejected before any FFI dispatch.
       expect(api.queryDispatches, 0);
       expect(api.lastWarmTimeoutMs, isNull);
       expect(api.lastClientQueryTimeoutMs, isNull);
