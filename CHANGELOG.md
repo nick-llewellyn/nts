@@ -69,6 +69,36 @@
   cap to their `-c` fan-out (mirroring the existing DNS-cap sizing)
   so probe measurements stay self-saturation-free. (NTS-69)
 
+- Added two catalog CLIs to the example app alongside `nts_cli`:
+  `nts_health` probes every server in the bundled catalog with a
+  bounded fan-out and renders a per-server health report (text or
+  JSON), and `nts_manifest` distils those probe results into a
+  reliable-server manifest, with a committed snapshot at
+  `example/assets/reliable-servers.json`. Both tools share one
+  argument parser (`example/lib/src/cli/catalog_tool_args.dart`) and
+  one probe engine (`example/lib/src/health/probe.dart`). Probes that
+  fast-fail with `TimeoutPhase.dnsSaturation` are bucketed as a
+  local-saturation verdict rather than a server failure, so an
+  over-aggressive local fan-out cannot masquerade as server
+  unreliability; the renderers and aggregation logic are covered by
+  dedicated tests. Example-only; no package API change.
+  (NTS-58, NTS-59)
+
+- Exposed the Rust-side DNS resolver pool cap across the example
+  surfaces. The three catalog CLIs (`nts_cli`, `nts_health`,
+  `nts_manifest`) gain a `--dns-cap` flag: by default both
+  concurrency caps are auto-sized to the host fan-out
+  (`-c`/`--concurrency`) so probe runs stay self-saturation-free,
+  and an explicit `--dns-cap` overrides the auto-sizing — a value
+  below the fan-out deliberately re-exposes the
+  `TimeoutPhase.dnsSaturation` fast-fail for testing. The GUI
+  controller (`example/lib/src/state/nts_controller.dart`) now
+  passes `dnsConcurrencyCap` (package default
+  `kDefaultDnsConcurrencyCap = 4`) explicitly at its `ntsQuery` /
+  `ntsWarmCookies` call sites, mirroring the existing
+  `bridgeConcurrencyCap` threading. Example-only; no package API
+  change — the parameter itself has been public since 1.3.0.
+
 ### Changed
 
 - Bumped the pinned Rust toolchain (`rust/rust-toolchain.toml`) from
@@ -76,8 +106,15 @@
   in the same change: the `empty_enum` lint key in `rust/Cargo.toml`
   is renamed to its 1.95+ spelling `empty_enums`, and two
   `clippy::map_unwrap_or` sites are rewritten (`is_ok_and` in
-  `nts/ke.rs`, `map_or` in `api/nts/tests.rs`). No functional change;
-  MSRV declared in `rust/Cargo.toml` is unaffected. (NTS-51)
+  `nts/ke.rs`, `map_or` in `api/nts/tests.rs`). The FRB bindings were
+  regenerated under the new pin to absorb a comment-only drift in the
+  generated ignore-list header (`lib/src/ffi/api/nts.dart`): rustc
+  renamed the `Eq`-derive internal method
+  `assert_receiver_is_total_eq` to `assert_fields_are_eq` between
+  1.92 and 1.96, and `flutter_rust_bridge_codegen` echoes those names
+  — required to keep the `rust-bridge-sync` CI gate green. No
+  functional change; MSRV declared in `rust/Cargo.toml` is
+  unaffected. (NTS-51)
 
 - The `parse_server_response` fuzz harness now consumes the canned
   fixture constants (`UID`, `CLIENT_TX`, `S2C`) as re-exports through
@@ -117,6 +154,29 @@
   `NtsClient.query` / `NtsClient.warmCookies`, plus a matching
   module-doc note in `rust/src/api/nts.rs`. Comment-only; no
   behaviour change. (NTS-64)
+
+- Documented the `nts_health` catalog CLI in `example/README.md` —
+  prerequisites, usage, flag reference, and how its verdicts relate
+  to the probe outcomes. (NTS-58)
+
+- Realigned the root documentation set (`README.md`,
+  `ARCHITECTURE.md`, `DEVELOPMENT.md`) and the example docs
+  (`example/README.md`, `example/GUI_GUIDE.md`,
+  `example/CLI_GUIDE.md`) with the Native Assets build flow and the
+  1.96.1 toolchain pin. The build-hook path is documented once —
+  `hook/build.dart` resolves the toolchain through rustup from the
+  `rust/rust-toolchain.toml` pin, auto-installing it plus the
+  platform's cross-compile target on first use — and the example
+  docs cross-reference the root anchors (`#prerequisites`,
+  `#timeout-budget-and-bounded-dns`, `#rust-log-verbosity`) instead
+  of restating them. The root README's "Use" snippet now passes
+  `dnsConcurrencyCap` alongside `bridgeConcurrencyCap` so both
+  resource bounds are demonstrated, the `NTS_BRIDGE=mock` fallback
+  and `verbose_logs` user-define descriptions match the technical
+  detail in `DEVELOPMENT.md`, and the CLI usage blocks in
+  `example/README.md` / `example/CLI_GUIDE.md` are verified against
+  the live `--help` output of the tools. Documentation-only; no
+  behaviour change.
 
 ### Fixed
 

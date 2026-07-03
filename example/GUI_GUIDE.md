@@ -134,7 +134,10 @@ results as authoritative:
 - **mock fallback** — the app could not load the native Network Time
   Security engine on this device and is running against a built-in
   simulator instead. Time samples in this mode are synthesised, not real
-  measurements; treat them as UI placeholders only.
+  measurements; treat them as UI placeholders only. (Launching with
+  `--dart-define=NTS_BRIDGE=mock` selects the same simulator
+  deliberately — no banner appears and the header label reads `mock`
+  rather than `mock (load failed)`.)
 - **Server catalog is empty** / **Failed to load servers** — the bundled
   list of servers is missing or could not be parsed. The action buttons
   stay disabled because there is nothing to probe. The header label next

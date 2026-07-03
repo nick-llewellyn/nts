@@ -5,6 +5,35 @@ and integrators who want to understand how the Dart surface, the FFI
 bridge, and the Rust crate fit together. Day-to-day API users only need
 the [README](README.md).
 
+## Design principles
+
+Four properties shape every decision recorded below:
+
+1. **Protocol isolation.** All cryptographic and protocol work lives
+   in the Rust crate; the Dart side is a thin veneer that adds
+   ergonomics (defaults, sealed error types, the admission gate) but
+   never touches key material or wire bytes. The boundary is not a
+   style preference — it is forced by the TLS keying-material
+   exporter gap documented in "Why the Rust core" below.
+2. **Secrets are zeroized.** AEAD keys, NTS cookies, TLS exporter
+   outputs, and caller-supplied root-certificate bytes are held in
+   `Zeroizing` containers constructed growth-free (no reallocation
+   history), so dropping them — including on an early `?` or a
+   panic — wipes the backing allocation. Secret-bearing types carry
+   redacted `Debug` impls so accidental `{:?}` formatting cannot
+   leak bytes into logs or panic messages.
+3. **Bounded resource usage.** Every blocking path is governed by a
+   single per-call wall-clock budget (`timeoutMs`), and the two
+   thread pools a call can occupy — the OS DNS resolver workers and
+   the FRB bridge workers — are capped independently
+   (`dnsConcurrencyCap`, `bridgeConcurrencyCap`). This document is
+   the authoritative description of both mechanisms; see "Timeout
+   budget and bounded DNS" and "Bridge admission gate" below.
+4. **A stable public surface over regenerable internals.** The
+   hand-written stability layer in `lib/src/api/` insulates
+   consumers from FRB codegen churn; see "Public API stability
+   layer" below.
+
 ## Layering
 
 The Dart side is intentionally thin. All cryptographic work lives in a
@@ -13,14 +42,25 @@ Rust crate that implements the protocol directly across `records.rs`
 `aead.rs` (SIV-CMAC / GCM-SIV authenticators), `ntp.rs` (AEAD-protected
 NTPv4 packets), `cookies.rs` (cookie jar), `dns.rs` (bounded resolver
 shared by the KE TCP and NTPv4 UDP paths), and `hybrid_verifier.rs`
-(Android trust-store fallback). It is bridged to Dart through
-`flutter_rust_bridge` and bundled via the stable Native Assets API
-(`hook/build.dart`), so no manual `cargo` invocation is required from
-consumers.
+(Android trust-store fallback).
+
+Two mechanisms connect the halves:
+
+- **Native Assets (build time).** `hook/build.dart` compiles the
+  crate via `cargo` during `flutter run` / `flutter build` and hands
+  Flutter an absolute path to the resulting dynamic library. The
+  toolchain and cross-compile targets are pinned by
+  `rust/rust-toolchain.toml` and resolved through rustup, so no
+  manual `cargo` invocation is required from consumers.
+- **`flutter_rust_bridge` v2 (runtime).** `NtsRustLib.init()` loads
+  the dylib and wires the FRB v2 dispatch table on the calling
+  isolate; every subsequent call marshals through that table onto a
+  bounded FRB worker-thread pool.
 
 ```
 Dart  : ntsQuery() / ntsWarmCookies()
-        └─ FRB stub  (timeoutMs, dnsConcurrencyCap)
+        ├─ Admission gate (bridgeConcurrencyCap; Dart-side FIFO queue)
+        └─ FRB v2 stub  (timeoutMs, dnsConcurrencyCap)
 Rust  : nts_query()
         ├─ Bounded DNS resolver (timeout-respecting, configurable cap, default 4)
         ├─ NTS-KE handshake (rustls, TLS 1.3, ALPN ntske/1, port 4460)
@@ -233,8 +273,8 @@ DNS wait, TCP connect, TLS handshake, KE record I/O, UDP exchange —
 runs on a `flutter_rust_bridge` worker thread from a separate fixed
 pool (one thread per logical CPU by default), and each in-flight call
 pins its worker for up to `timeoutMs`. Concurrent calls against the
-same `host:port` are collapsed by the per-key singleflight (see "Warm
-cookies and singleflight" below), but each *distinct* host needs its
+same `host:port` are collapsed by the per-key singleflight (see
+"Singleflight: collapsing concurrent cold queries" below), but each *distinct* host needs its
 own handshake, so an unbounded distinct-host fan-out could occupy
 every worker and stall unrelated bridge calls behind it.
 

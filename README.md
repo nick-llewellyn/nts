@@ -39,48 +39,64 @@ and cryptographic specifics.
 
 ## Getting Started
 
+### Prerequisites
+
+- **Flutter ≥ 3.38.0** (Dart ≥ 3.10). The package depends on the
+  Flutter SDK and ships a Flutter plugin module on Android, so it
+  must be consumed from a Flutter app — `dart pub add nts` from a
+  pure-Dart project will not resolve.
+- **`rustup` on your `PATH`.** The protocol core ships as Rust
+  source and is compiled on your machine by the Flutter Native
+  Assets build hook the first time you run `flutter run` /
+  `flutter build`. The hook reads `rust/rust-toolchain.toml` via
+  rustup, which automatically installs the pinned toolchain
+  (currently Rust 1.96.1) and the cross-compile target for the
+  platform being built. No manual `cargo` invocation, dylib
+  copying, or build configuration is needed — but without rustup
+  installed the build fails at the hook step.
+
+  New to Rust? Installing rustup is a one-time step; see the
+  [official install page](https://rustup.rs/) (or the longer-form
+  [rust-lang.org guide](https://www.rust-lang.org/tools/install)):
+
+  - **macOS / Linux:** run the `curl … | sh` one-liner from
+    [rustup.rs](https://rustup.rs/), or `brew install rustup` on
+    Homebrew.
+  - **Windows:** download and run `rustup-init.exe` from
+    [rustup.rs](https://rustup.rs/). It will prompt you to install
+    the Visual Studio C++ Build Tools if they are missing —
+    accept, as the MSVC linker is required to build the crate.
+
+  Restart your terminal (or IDE) afterwards so the updated `PATH`
+  is picked up, and verify with `rustup --version`.
+
 ### Install
 
 ```bash
 flutter pub add nts
 ```
 
-The package depends on the Flutter SDK and ships a Flutter plugin
-module on Android (since `1.4.0`), so it must be consumed from a
-Flutter app — `dart pub add nts` from a pure-Dart project will not
-resolve.
-
 ### Platform support
 
-| Platform | Native bootstrap | Consumer action |
-|---|---|---|
-| Android | Auto via bundled `NtsPlugin` (since `1.4.0`) | None beyond `flutter pub add nts` on the default Flutter/Gradle setup. See the `FAIL_ON_PROJECT_REPOS` note below. |
-| iOS | None required | None. |
-| macOS | None required | None. |
-| Linux | None required | None. |
-| Windows | None required | None. |
+Supported on **Android, iOS, macOS, Linux, and Windows**. On every
+platform, integration is `flutter pub add nts` plus one
+`await NtsRustLib.init()` during application startup before the
+first `ntsQuery` / `ntsWarmCookies` call — no per-platform
+bootstrap code. See "Initialization has two layers" below for the
+rationale.
 
-The Android row assumes the standard Flutter/Gradle setup. Hosts that opt
-in to `dependencyResolutionManagement.repositoriesMode =
-RepositoriesMode.FAIL_ON_PROJECT_REPOS` in `settings.gradle.kts` (uncommon
-for Flutter apps; not the `flutter create` default) reject the
-project-level Maven injection the plugin performs from
-`android/build.gradle.kts`, and must declare the on-disk
-`rustls-platform-verifier-android` repository themselves under
-`dependencyResolutionManagement.repositories` in `settings.gradle.kts`.
-The file path is the one printed by `cargo metadata --format-version 1
---manifest-path <pub-cache>/nts-X.Y.Z/rust/Cargo.toml` and is stable for
-the lifetime of the resolved Cargo workspace; the rationale comment in
-`android/build.gradle.kts` documents the same constraint.
+On Android the native bootstrap is automatic via the bundled
+`NtsPlugin` on the default Flutter/Gradle setup. The one exception:
+hosts that opt in to `RepositoriesMode.FAIL_ON_PROJECT_REPOS` in
+`settings.gradle.kts` (not the `flutter create` default) reject the
+plugin's project-level Maven injection and must declare the on-disk
+`rustls-platform-verifier-android` repository themselves; the
+rationale comment in this package's `android/build.gradle.kts`
+documents the full recipe.
 
-Every platform additionally requires `await NtsRustLib.init()` once
-during application startup before the first `ntsQuery` /
-`ntsWarmCookies` call; see "Initialization has two layers" below
-for the rationale. Web and WebAssembly are unsupported: NTS-KE
-needs a raw TCP socket on `:4460` and NTPv4 needs a raw UDP
-socket on `:123`, neither of which is reachable from a browser
-tab, and the underlying `rustls` + `ring` stack has no
-`wasm32-unknown-unknown` target.
+Web and WebAssembly are unsupported: NTS-KE needs a raw TCP socket
+on `:4460` and NTPv4 needs a raw UDP socket on `:123`, neither of
+which is reachable from a browser tab.
 
 ### Use
 
@@ -102,12 +118,15 @@ Future<void> main() async {
   //    transmit timestamp plus the measured round-trip time. Production
   //    callers should burst, filter, and apply RTT/2 compensation; see
   //    "Production Considerations" below for the why.
-  //    `bridgeConcurrencyCap` bounds how many of this package's calls
-  //    occupy `flutter_rust_bridge` worker threads at once; 4 is also
-  //    the built-in default, passed explicitly here for visibility.
+  //    `dnsConcurrencyCap` bounds the Rust-side pool of in-flight DNS
+  //    resolver workers (process-wide); `bridgeConcurrencyCap` bounds
+  //    how many of this package's calls occupy `flutter_rust_bridge`
+  //    worker threads at once. Both default to 4, sized for mobile;
+  //    they are passed explicitly here for visibility.
   final sample = await ntsQuery(
     spec: spec,
     timeoutMs: 5000,
+    dnsConcurrencyCap: 4,
     bridgeConcurrencyCap: 4,
   );
 
@@ -129,15 +148,10 @@ what your host code needs to do.
    Dart `main()` executes, so adding `nts` to your `pubspec.yaml` is
    enough — there is no `MainActivity` shim, JNI symbol, or
    `app/build.gradle.kts` Maven entry to maintain on the default
-   Flutter/Gradle setup. (Hosts that enable
-   `dependencyResolutionManagement.repositoriesMode =
-   FAIL_ON_PROJECT_REPOS` in `settings.gradle.kts` are an exception:
-   that mode rejects the project-level Maven injection the plugin
-   does from its own `build.gradle.kts`, so those hosts must declare
-   the on-disk `rustls-platform-verifier-android` repository under
-   `dependencyResolutionManagement.repositories` themselves. See the
-   "Platform support" callout above.) iOS, macOS, Linux, and Windows
-   have no equivalent step. Hosts that bypass the standard Flutter
+   Flutter/Gradle setup. (The `FAIL_ON_PROJECT_REPOS` exception
+   described under "Platform support" above is the one deviation
+   from this.) iOS, macOS, Linux, and Windows have no equivalent
+   step. Hosts that bypass the standard Flutter
    activity lifecycle (custom embeddings, isolates spawned ahead of
    plugin registration, integration tests driving the dylib directly)
    can call `com.nllewellyn.nts.PlatformInit.init(context)` from
@@ -162,28 +176,12 @@ lives in [`example/main.dart`](example/main.dart). For valid hostnames
 to plug into `NtsServerSpec`, see the community-maintained
 [NTS server list](https://github.com/jauderho/nts-servers).
 
-### Upgrading from `1.3.x`
+### Upgrading
 
-`1.4.0` is a breaking-ABI release for the bundled Rust crate
-(`nts_rust 0.3.0`). The JNI symbol exported from
-`rust/src/android_init.rs` moved from
-`Java_com_nts_example_RustlsBootstrap_nativeInit` to
-`Java_com_nllewellyn_nts_PlatformInit_nativeInit`, and the auto-init
-plugin contributes the Android Maven repository, AAR dependency, and
-ProGuard / R8 keep rules itself. Hosts that hand-rolled the `1.3.x`
-bootstrap (an in-app `RustlsBootstrap.kt`-style JNI shim, a
-`MainActivity.onCreate` call into it, an `app/build.gradle.kts` Maven
-block, and matching keep rules) should drop that scaffolding when
-they bump `nts`; an unmodified shim's `external fun nativeInit` no
-longer resolves against the dylib's exports, so the first invocation
-crashes the host app with `UnsatisfiedLinkError`. In the documented
-`1.3.x` integration shape that bootstrap call runs from
-`MainActivity.onCreate` before `super.onCreate(...)`, so the failure
-fires at process start — well before any TLS handshake is attempted.
-See [CHANGELOG.md](CHANGELOG.md) under `1.4.0` → "Migrating from
-`1.3.x`" for the exhaustive deletion checklist and the
-`com.nllewellyn.nts.PlatformInit.init(context)` escape hatch for
-custom embeddings.
+Migration notes for breaking releases live in
+[CHANGELOG.md](CHANGELOG.md) under the relevant version header — in
+particular the `1.4.0` Android bootstrap rework (JNI symbol rename
+plus auto-init plugin) for anyone arriving from `1.3.x`.
 
 ## Production Considerations
 
@@ -273,10 +271,9 @@ controls include:
   port at the application layer before the call.
 
 The bounded DNS worker pool (`kDefaultDnsConcurrencyCap = 4`, see
-the [Production Considerations](#production-considerations)
-section) bounds the *amplification* exposure of a saturated
-hostname-resolution path, but does not gate *destinations* — that
-gate is the caller's responsibility.
+the [API summary](#api-summary) section) bounds the *amplification*
+exposure of a saturated hostname-resolution path, but does not gate
+*destinations* — that gate is the caller's responsibility.
 
 ### Trust-anchor selection
 
@@ -386,30 +383,37 @@ boundary.
 
 ### Non-Flutter Dart callers must pass `externalLibrary` explicitly
 
-The FRB-generated default loader
-(`NtsRustLib.kDefaultExternalLibraryLoaderConfig`) advertises
-`rust/target/release/` as the `ioDirectory` for the bundled dylib.
-Inside a Flutter host the Native Assets pipeline supplies a
-controlled absolute load path before that default ever runs, so the
-relative directory is unreachable. Outside Flutter — a `dart run`
-CLI, a Dart server runtime, an integration-test harness, anything
-else that imports `package:nts` directly — the relative directory
-*is* what the loader resolves against the current working
-directory.
+The automatic library resolution described under
+[Prerequisites](#prerequisites) is a Flutter-specific feature: the
+Native Assets build hook only runs inside `flutter run` /
+`flutter build`, where it compiles the Rust crate and hands
+`NtsRustLib.init()` a controlled absolute path to the resulting
+dynamic library.
 
-A non-Flutter call site that does `await NtsRustLib.init()` (no
-`externalLibrary:` argument) while running from a working directory
-an attacker can influence is therefore a library-hijack surface:
-dropping a malicious `rust/target/release/libnts_rust.dylib` (or
-`.so` / `.dll`) into that directory yields arbitrary code execution
-under the calling process's privileges. The hijack is independent
-of NTS itself — `NtsRustLib.init()` runs before any of this package's
-TLS / NTS code is reached — but the package is the vehicle.
+Pure Dart environments — a `dart run` CLI such as the bundled
+[`example/bin/nts_cli.dart`](example/bin/nts_cli.dart), a
+server-side script, an integration-test harness — never trigger
+that hook. Nothing compiles the crate for you (build it with
+`cargo build --release` in `rust/`), and nothing supplies a load
+path: without one, the FRB-generated default loader falls back to
+resolving the *relative* directory `rust/target/release/` against
+the current working directory.
 
-The mitigation is the pattern the bundled
-[`example/bin/nts_cli.dart`](example/bin/nts_cli.dart) already
-uses: resolve an absolute path to the dylib yourself (or accept one
-on the command line) and pass it through explicitly:
+That fallback is a security problem, not just a convenience gap.
+Calling `await NtsRustLib.init()` with no `externalLibrary:`
+argument from a working directory an attacker can influence is a
+library-hijack surface: a malicious
+`rust/target/release/libnts_rust.dylib` (or `.so` / `.dll`) dropped
+there yields arbitrary code execution under the calling process's
+privileges — before any of this package's TLS / NTS code is even
+reached.
+
+Outside Flutter, therefore, always resolve an absolute path to the
+compiled library (`.so` on Linux, `.dylib` on macOS, `.dll` on
+Windows) from a trusted source — a packaged install location, an
+environment variable owned by the deploying operator, a
+command-line argument — and pass it through the `externalLibrary`
+parameter:
 
 ```dart
 import 'package:nts/nts.dart';
@@ -421,12 +425,9 @@ await NtsRustLib.init(
 );
 ```
 
-The absolute path should come from a trusted source (a packaged
-install location, an environment variable owned by the deploying
-operator, etc.) — not from a relative lookup against the working
-directory. Flutter callers can keep using the bare
-`await NtsRustLib.init()` form: Native Assets supplies the load path
-before the relative fallback can fire.
+Flutter callers can keep using the bare `await NtsRustLib.init()`
+form: the Native Assets pipeline supplies the load path before the
+relative fallback can fire.
 
 ## API summary
 
@@ -460,94 +461,72 @@ signature changes do not propagate as breaking call-site edits. See
 [ARCHITECTURE.md](ARCHITECTURE.md)'s "Public API
 stability layer" section for the contract.
 
-`timeoutMs` is a global wall-clock budget anchored at the start of
-each call: it bounds DNS resolution, the NTS-KE TCP connect plus TLS
-handshake plus record I/O, and the AEAD-NTPv4 UDP exchange as a single
-shrinking deadline rather than rearming each phase independently. A
-stalled `getaddrinfo` therefore cannot stretch the total cost past the
-caller's budget, and the UDP recv inherits whatever portion of the
-budget the KE leg did not consume. Use a `switch` expression on
-`NtsError` for exhaustive failure handling; budget exhaustion at any
-phase surfaces as `NtsError.timeout`.
+Three tuning parameters deserve a short orientation here; the full
+mechanics live in [ARCHITECTURE.md](ARCHITECTURE.md) ("Timeout
+budget and bounded DNS", "Bridge admission gate") and in each
+constant's dartdoc.
 
-`dnsConcurrencyCap` is a per-call ceiling on the number of in-flight
-`getaddrinfo` worker threads the package will spawn process-wide. The
-resolver is bounded by design — `getaddrinfo` is non-cancellable, so a
-stalled lookup is detached and finishes in the background; this cap is
-the primary defense against thread-stack accumulation when a recursive
-resolver blackholes traffic. Omit the parameter (or pass
-`kDefaultDnsConcurrencyCap`) to inherit the built-in default of **4**,
-sized for the worst case on iOS / Android (~512 KB-1 MB of committed
-pthread stack per leaked worker). Server-side callers that
-legitimately need higher fan-out can override per call (`32`, `64`,
-etc.); values must lie in `1..4294967295`, with literal `0` rejected
-as `NtsError.invalidSpec` rather than silently substituting the
-default the way the pre-4.0.0 wrapper did. The cap is compared
-against the *global* counter, so two concurrent callers passing
-different values share the same in-flight pool: the effective ceiling
-at any moment is whichever caller is currently being admitted.
-Saturation surfaces as `NtsError.timeout`.
+- **`timeoutMs`** is a single wall-clock budget anchored at the
+  start of the call: DNS, TCP connect, TLS handshake, KE record
+  I/O, and the UDP exchange all draw from one shrinking deadline,
+  so no phase can stretch the total cost past the caller's budget.
+  Exhaustion at any phase surfaces as `NtsError.timeout` carrying
+  the `TimeoutPhase` that ran out; use a `switch` expression on
+  `NtsError` for exhaustive failure handling.
+- **`dnsConcurrencyCap`** (default **4**) bounds in-flight
+  `getaddrinfo` worker threads process-wide. `getaddrinfo` is
+  non-cancellable, so a stalled lookup is detached rather than
+  killed; the cap bounds thread-stack accumulation when a resolver
+  blackholes traffic. Values must lie in `1..4294967295` (`0` is
+  rejected as `NtsError.invalidSpec`); saturation surfaces as
+  `NtsError.timeout`.
+- **`bridgeConcurrencyCap`** (default **4**) bounds how many of
+  this package's calls occupy `flutter_rust_bridge` worker threads
+  at once. Excess calls queue on the Dart side holding no worker;
+  queue wait is charged against `timeoutMs`, and a budget that
+  expires while queued fails with `TimeoutPhase.bridgeSaturation`
+  without ever dispatching. Same validation range as the DNS cap;
+  the gate is isolate-local, while the DNS counter is process-wide.
 
-`bridgeConcurrencyCap` is the analogous per-call ceiling for the
-*bridge* worker pool: every `ntsQuery` / `ntsWarmCookies` /
-`NtsClient.query` / `NtsClient.warmCookies` call runs its blocking
-network exchange on a `flutter_rust_bridge` worker thread (a fixed
-pool of one thread per logical CPU) and pins that thread for up to
-`timeoutMs`, so an unbounded distinct-host fan-out could otherwise
-exhaust the pool and stall unrelated bridge calls. Calls beyond the
-cap queue on the Dart side holding no worker thread; queue wait is
-charged against `timeoutMs` (uncontended calls forward the budget
-verbatim), and a budget that expires while queued fails with
-`NtsError.timeout` carrying `TimeoutPhase.bridgeSaturation` without
-ever dispatching. Omit the parameter (or pass
-`kDefaultBridgeConcurrencyCap`) to inherit the built-in default of
-**4**; hosts with wider pools can raise it per call on the same
-`1..4294967295` validation terms as `dnsConcurrencyCap`. Admission is
-compared against a shared count with the same asymmetric mixed-cap
-semantics as the DNS cap, but the gate's scope differs: its state
-lives in Dart and is isolate-local, so each isolate gates its own
-calls independently over the shared process-wide FRB worker pool
-(the DNS counter, by contrast, is a Rust-side process-wide global).
-FIFO ordering is refined so a queued call is only overtaken by a
-later call whose larger cap admits it while the queued call's own
-cap does not.
+The two caps compose rather than conflict: with the bridge cap at or
+below the DNS cap (the defaults are both **4**), live calls alone
+can never saturate the DNS pool. For high distinct-host fan-out,
+raise both caps together; ARCHITECTURE.md covers the mixed-cap
+admission semantics and the skewed-cap trade-offs.
 
-The two caps are independent and compose rather than conflict. With
-`bridgeConcurrencyCap` at or below `dnsConcurrencyCap` (the defaults
-are both **4**), the package's live calls alone can never saturate
-the DNS pool — only detached lookups leaked by earlier timed-out
-calls still count toward it, which is exactly the accumulation the
-DNS cap exists to bound. Raising the bridge cap *above* the DNS cap
-re-exposes the DNS gate's fail-fast for synchronized distinct-host
-bursts: admitted calls beyond the DNS cap that overlap in their DNS
-phase are refused immediately with `TimeoutPhase.dnsSaturation`
-rather than queueing. That skew suits same-host-heavy workloads
-(singleflight collapses their lookups); for high distinct-host
-fan-out, raise both caps together. The inverse skew — bridge cap
-below DNS cap — is always safe; the extra DNS headroom goes unused.
+## Running the examples
 
-## Demos & Examples
-
-The repository ships three reference surfaces, in increasing order of
+Everything above covers integrating `nts` as a library dependency in
+your own app. The repository additionally ships runnable reference
+surfaces under [`example/`](example/), in increasing order of
 complexity:
 
 - **[`example/main.dart`](example/main.dart)** — the minimal
   single-file usage snippet: one authenticated NTPv4 query plus an
   exhaustive `NtsError` switch. Start here.
 - **Flutter GUI** (`example/lib/`) — visual showcase with a server
-  catalog, favourites, region filtering, and a unified live log. See
-  the [GUI User Manual](example/GUI_GUIDE.md) for navigation, the
-  **NTS Query** / **Warm Cookies** actions, and how to read the
-  status banners.
+  catalog, favourites, region filtering, and a unified live log:
+
+  ```bash
+  cd example
+  flutter run -d macos -t lib/main.dart
+  ```
+
+  The GUI drives the real Rust bridge by default and falls back to
+  an in-memory mock (with an explanatory banner) if the dylib cannot
+  be loaded; pass `--dart-define=NTS_BRIDGE=mock` to opt into the
+  mock explicitly. See the [GUI User Manual](example/GUI_GUIDE.md)
+  for navigation, the **NTS Query** / **Warm Cookies** actions, and
+  how to read the status banners.
 - **Dart CLI** (`example/bin/nts_cli.dart`) — scriptable companion
   for batched probing, cron jobs, and CI smoke checks. See the
   [CLI User Manual](example/CLI_GUIDE.md) for the positional host
   arguments and the `--port` / `--timeout` / `--warm` / `--mock` /
   `--json` / `--exit-on-error` flags.
 
-Both showcase surfaces share the same Rust-backed bridge and the same
-formatting helpers; see the [example README](example/README.md) for the
-internal wiring.
+All surfaces share the same Rust-backed bridge and the same
+formatting helpers; see the [example README](example/README.md) for
+the internal wiring.
 
 ## Technical reference
 

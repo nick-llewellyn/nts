@@ -6,9 +6,36 @@ plus the [Getting Started](README.md#getting-started) snippet is the
 full integration path. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
 layering this document operates on.
 
+## Toolchain
+
+Contributor setup is the consumer setup — rustup plus Flutter, per
+the README's [Prerequisites](README.md#prerequisites) — with nothing
+else mandatory. The load-bearing facts:
+
+- **Rust is pinned to 1.96.1** by `rust/rust-toolchain.toml`. Both
+  the Native Assets hook (`hook/build.dart`) and any `cargo`
+  invocation from inside `rust/` resolve the pin through rustup,
+  which auto-installs the toolchain and cross-compile targets on
+  first use — never install or select a toolchain manually. The pin
+  is distinct from two neighbouring version numbers: the MSRV in
+  `rust/Cargo.toml` (`rust-version = "1.87"`, the floor the crate
+  promises to compile on) and the nightly toolchain used only by
+  cargo-fuzz (see [Fuzzing the Rust
+  parsers](#fuzzing-the-rust-parsers-cargo-fuzz)). Toolchain bumps
+  follow the upgrade checklist in `rust-toolchain.toml`'s comments
+  and land as their own PR.
+- **Flutter tracks the `stable` channel** (see `.fvmrc`); CI also
+  runs the SDK floor (3.38.10) as a second matrix leg.
+- **Native dylib for local testing:** most Dart-side work needs no
+  manual build — the mock-mode suite runs without a dylib, and
+  `flutter run` builds one via the hook. The one manual step is the
+  opt-in live Dart suite, which needs
+  `(cd rust && cargo build --release -p nts_rust)` first; see
+  [Live Dart integration suite](#live-dart-integration-suite-testlive).
+
 ## Working with the Rust bridge
 
-Three tools, distinct roles.
+Five tools, distinct roles.
 
 | Tool | Purpose | When to run |
 |------|---------|-------------|
@@ -21,11 +48,17 @@ Three tools, distinct roles.
 
 ### Regenerate bindings
 
+Required after any change to `rust/src/api/*.rs`. The generator
+version must match the exact `flutter_rust_bridge` pin in
+`pubspec.yaml` (currently `2.12.0`) — codegen and runtime are
+version-locked:
+
 ```bash
 flutter_rust_bridge_codegen generate
 ```
 
-Commit the regenerated `lib/src/ffi/**` and `rust/src/frb_generated.rs`.
+Commit the regenerated `lib/src/ffi/**` and `rust/src/frb_generated.rs`,
+then run the drift gate below before pushing.
 
 ### Verify bindings are in sync
 
