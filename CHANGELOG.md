@@ -71,6 +71,14 @@
 
 ### Changed
 
+- Bumped the pinned Rust toolchain (`rust/rust-toolchain.toml`) from
+  1.92.0 to 1.96.1 and landed the clippy fixes deferred to this bump
+  in the same change: the `empty_enum` lint key in `rust/Cargo.toml`
+  is renamed to its 1.95+ spelling `empty_enums`, and two
+  `clippy::map_unwrap_or` sites are rewritten (`is_ok_and` in
+  `nts/ke.rs`, `map_or` in `api/nts/tests.rs`). No functional change;
+  MSRV declared in `rust/Cargo.toml` is unaffected. (NTS-51)
+
 - The `parse_server_response` fuzz harness now consumes the canned
   fixture constants (`UID`, `CLIENT_TX`, `S2C`) as re-exports through
   the `__internal-fuzz`-gated `__internal_fuzz` module instead of

@@ -9,7 +9,7 @@ description = "Rust client for RFC 8915 Network Time Security, bridged to Dart v
 # in by `rustls-platform-verifier`, which requires edition2024) plus
 # `usize::is_multiple_of` (stable in 1.87, used in `nts::ntp` and
 # `nts::records` for the extension-field length validators). The active
-# toolchain pin in `rust-toolchain.toml` is higher (currently 1.92.0);
+# toolchain pin in `rust-toolchain.toml` is higher (currently 1.96.1);
 # declaring the actual functional floor here keeps clippy's msrv-aware
 # suggestions accurate without over-constraining downstream consumers.
 # The matching `msrv` entry lives in `rust/clippy.toml`.
@@ -163,7 +163,7 @@ default_trait_access = "warn"
 doc_comment_double_space_linebreaks = "warn"
 doc_link_with_quotes = "warn"
 elidable_lifetime_names = "warn"
-empty_enum = "warn"
+empty_enums = "warn"
 expl_impl_clone_on_copy = "warn"
 explicit_deref_methods = "warn"
 flat_map_option = "warn"

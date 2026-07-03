@@ -1505,9 +1505,8 @@ fn build_with_custom_roots(
     // when the marker is present anywhere is sufficient. Fall back to
     // raw DER only when the input is not valid UTF-8, or is valid
     // UTF-8 but carries no BEGIN-CERTIFICATE marker at all.
-    let is_pem = std::str::from_utf8(bytes)
-        .map(|s| s.contains("-----BEGIN CERTIFICATE-----"))
-        .unwrap_or(false);
+    let is_pem =
+        std::str::from_utf8(bytes).is_ok_and(|s| s.contains("-----BEGIN CERTIFICATE-----"));
 
     // Stream-add certificates: each parsed `CertificateDer<'_>` is
     // handed to `RootCertStore::add` in the same iteration that
