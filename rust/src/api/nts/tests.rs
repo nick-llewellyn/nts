@@ -1687,8 +1687,7 @@ fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
     // Sanity: server time should be within ±5 minutes of local time.
     let now_us = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_micros() as i64);
     assert!(
         (sample.utc_unix_micros - now_us).abs() < 5 * 60 * 1_000_000,
         "server time {}us local time {}us",
