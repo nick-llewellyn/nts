@@ -10,11 +10,12 @@
   `anyhow::Error::downcast_mut()` where, after context is added via
   `Error::context`, the returned `&mut T` is derived from a borrow chain that
   includes a shared reference, so writing through it is a Stacked Borrows
-  violation (undefined behaviour). `anyhow` is a transitive dependency here
-  (via `flutter_rust_bridge` → `allo-isolate`), and the caret range
-  (`anyhow = "1.0"`) already permits the patched release, so the fix is a
-  `Cargo.lock`-only bump — applied to both `rust/Cargo.lock` and
-  `rust/fuzz/Cargo.lock` — with no manifest or source change. (NTS-71)
+  violation (undefined behaviour). `anyhow` is a purely transitive dependency
+  here (via `flutter_rust_bridge` → `allo-isolate`); no `Cargo.toml` in this
+  repo declares it. `allo-isolate`'s own caret constraint already permits the
+  patched release, so the fix is a `Cargo.lock`-only bump — applied to both
+  `rust/Cargo.lock` and `rust/fuzz/Cargo.lock` — with no manifest or source
+  change. (NTS-71)
 
 
 ## 5.2.3
