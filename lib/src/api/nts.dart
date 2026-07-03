@@ -836,7 +836,13 @@ Future<T> _withBridgeSlot<T>({
     _bridgeQueue.add(waiter);
     final deadline = Timer(Duration(milliseconds: timeoutMs), () {
       if (!waiter.admitted.isCompleted) {
-        _bridgeQueue.remove(waiter);
+        // Completing with the error is also the cancellation mark: the
+        // entry stays queued and `_admitBridgeWaiters` drops it during
+        // its next compaction pass, keeping a mass-timeout burst O(n)
+        // overall instead of the O(n²) a per-timeout `List.remove`
+        // (linear search + element shifting) would cost. A queued
+        // waiter implies at least one in-flight call, whose release
+        // runs that pass, so cancelled entries cannot linger.
         waiter.admitted.completeError(
           const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation),
         );
@@ -868,7 +874,7 @@ Future<T> _withBridgeSlot<T>({
 
 void _admitBridgeWaiters() {
   // Single-pass in-place compaction keeps admission O(n): admitted
-  // waiters are completed and dropped, retained waiters shift down,
+  // and timed-out waiters are dropped, retained waiters shift down,
   // and the tail is truncated once — versus the O(n²) element
   // shifting a per-waiter `removeAt` would cost under a large queued
   // burst. Mutating in place is safe: `complete()` only schedules
@@ -877,6 +883,12 @@ void _admitBridgeWaiters() {
   var kept = 0;
   for (var i = 0; i < _bridgeQueue.length; i++) {
     final waiter = _bridgeQueue[i];
+    if (waiter.admitted.isCompleted) {
+      // Timed out while queued: the deadline timer already completed
+      // the future with `bridgeSaturation` and left the entry here
+      // for this pass to sweep. Drop without admitting.
+      continue;
+    }
     if (_bridgeInFlight < waiter.cap) {
       _bridgeInFlight++;
       waiter.admitted.complete();
