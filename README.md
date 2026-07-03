@@ -102,7 +102,14 @@ Future<void> main() async {
   //    transmit timestamp plus the measured round-trip time. Production
   //    callers should burst, filter, and apply RTT/2 compensation; see
   //    "Production Considerations" below for the why.
-  final sample = await ntsQuery(spec: spec, timeoutMs: 5000);
+  //    `bridgeConcurrencyCap` bounds how many of this package's calls
+  //    occupy `flutter_rust_bridge` worker threads at once; 4 is also
+  //    the built-in default, passed explicitly here for visibility.
+  final sample = await ntsQuery(
+    spec: spec,
+    timeoutMs: 5000,
+    bridgeConcurrencyCap: 4,
+  );
 
   final utc = DateTime.fromMicrosecondsSinceEpoch(
     sample.utcUnixMicros,
@@ -299,6 +306,7 @@ Future<void> main() async {
   final client = NtsClient(trustMode: TrustMode.bundledOnly);
   final sample = await client.query(
     spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),
+    bridgeConcurrencyCap: 4, // built-in default, shown for visibility
   );
 }
 ```
@@ -353,11 +361,16 @@ Future<void> main() async {
   // root or the private CA above cannot authenticate these hosts.
   final publicClient = NtsClient(trustMode: TrustMode.bundledOnly);
 
+  // Both clients share one process-wide bridge admission gate, so the
+  // explicit `bridgeConcurrencyCap` (the built-in default of 4) bounds
+  // their combined worker occupancy, not each client's separately.
   final internal = await internalClient.query(
     spec: const NtsServerSpec(host: 'ntp.internal.example', port: 4460),
+    bridgeConcurrencyCap: 4,
   );
   final external = await publicClient.query(
     spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),
+    bridgeConcurrencyCap: 4,
   );
 }
 ```

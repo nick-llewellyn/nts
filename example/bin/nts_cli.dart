@@ -51,7 +51,13 @@ import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:nts/nts.dart'
-    show NtsError, NtsServerSpec, ntsQuery, ntsWarmCookies;
+    show
+        NtsError,
+        NtsServerSpec,
+        kDefaultBridgeConcurrencyCap,
+        kDefaultDnsConcurrencyCap,
+        ntsQuery,
+        ntsWarmCookies;
 
 import 'package:nts_example/src/cli/bridge_loader.dart' show initBridge;
 import 'package:nts_example/src/state/nts_format.dart';
@@ -147,6 +153,23 @@ Future<void> main(List<String> argv) async {
 
   final ctx = _Ctx(json: args['json'] as bool);
 
+  // Every positional host is distinct and the loop below fans out one
+  // concurrent call per host, so size both process-wide concurrency
+  // caps to that fan-out (mirroring the catalog tools): with the
+  // mobile-sized defaults (both 4), a >4-host invocation would
+  // otherwise queue at the bridge admission gate, charging queue wait
+  // against each host's `--timeout` budget. The caps are raised
+  // *together* because a bridge cap above the DNS cap re-exposes
+  // TimeoutPhase.dnsSaturation fast-fails to synchronized
+  // distinct-host bursts.
+  final hostCount = args.rest.length;
+  final dnsCap = hostCount > kDefaultDnsConcurrencyCap
+      ? hostCount
+      : kDefaultDnsConcurrencyCap;
+  final bridgeCap = hostCount > kDefaultBridgeConcurrencyCap
+      ? hostCount
+      : kDefaultBridgeConcurrencyCap;
+
   // Fan out one Future per host. We don't `Future.wait` directly —
   // instead each call's `.then` prints as soon as its individual
   // round-trip completes, so the user sees results in completion
@@ -156,8 +179,20 @@ Future<void> main(List<String> argv) async {
     final spec = NtsServerSpec(host: host, port: port);
     pending.add(
       (args['warm'] as bool)
-          ? _runWarm(spec, timeoutMs, ctx)
-          : _runQuery(spec, timeoutMs, ctx),
+          ? _runWarm(
+              spec,
+              timeoutMs,
+              ctx,
+              dnsConcurrencyCap: dnsCap,
+              bridgeConcurrencyCap: bridgeCap,
+            )
+          : _runQuery(
+              spec,
+              timeoutMs,
+              ctx,
+              dnsConcurrencyCap: dnsCap,
+              bridgeConcurrencyCap: bridgeCap,
+            ),
     );
   }
   await Future.wait(pending);
@@ -167,10 +202,21 @@ Future<void> main(List<String> argv) async {
   }
 }
 
-Future<void> _runQuery(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
+Future<void> _runQuery(
+  NtsServerSpec spec,
+  int timeoutMs,
+  _Ctx ctx, {
+  required int dnsConcurrencyCap,
+  required int bridgeConcurrencyCap,
+}) async {
   ctx.start('nts_query', spec.host, 'Starting query');
   try {
-    final sample = await ntsQuery(spec: spec, timeoutMs: timeoutMs);
+    final sample = await ntsQuery(
+      spec: spec,
+      timeoutMs: timeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+      bridgeConcurrencyCap: bridgeConcurrencyCap,
+    );
     ctx.success(
       'nts_query',
       spec.host,
@@ -184,10 +230,21 @@ Future<void> _runQuery(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
   }
 }
 
-Future<void> _runWarm(NtsServerSpec spec, int timeoutMs, _Ctx ctx) async {
+Future<void> _runWarm(
+  NtsServerSpec spec,
+  int timeoutMs,
+  _Ctx ctx, {
+  required int dnsConcurrencyCap,
+  required int bridgeConcurrencyCap,
+}) async {
   ctx.start('nts_warm_cookies', spec.host, 'Starting warm');
   try {
-    final outcome = await ntsWarmCookies(spec: spec, timeoutMs: timeoutMs);
+    final outcome = await ntsWarmCookies(
+      spec: spec,
+      timeoutMs: timeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+      bridgeConcurrencyCap: bridgeConcurrencyCap,
+    );
     ctx.success(
       'nts_warm_cookies',
       spec.host,
