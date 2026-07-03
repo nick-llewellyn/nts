@@ -1,8 +1,12 @@
-//! Shared test-only helpers for the `nts/` modules. Gated `#[cfg(test)]`
-//! at the module declaration in `nts/mod.rs` so the contents are
-//! compiled out of release builds; `pub(crate)` visibility lets sibling
-//! test modules in `ke.rs`, `ntp.rs`, and `records.rs` reach them
-//! without per-file private re-exports.
+//! Shared test-only helpers for the `nts/` modules. Gated
+//! `#[cfg(any(test, feature = "__internal-fuzz"))]` at the module
+//! declaration in `nts/mod.rs` so the contents are compiled out of
+//! release builds; `pub(crate)` visibility lets sibling test modules in
+//! `ke.rs`, `ntp.rs`, and `records.rs` reach them without per-file
+//! private re-exports. The `__internal-fuzz` arm exists solely so
+//! `crate::__internal_fuzz` can re-export the canned constants (`UID`,
+//! `CLIENT_TX`, `S2C`) to the fuzz harnesses in `rust/fuzz/`
+//! (bd nts-jzh1 / NTS-67).
 //!
 //! De-duplicates the `rec` helper that previously appeared verbatim in
 //! `records.rs::tests` and `ke.rs::tests`. The `craft_*` and
@@ -25,26 +29,31 @@ use crate::nts::ntp::{
 use crate::nts::records::{Record, RecordKind};
 
 const C2S: [u8; 32] = [0x11; 32];
-/// Canned server-to-client AEAD key bytes. `pub(crate)` so the
-/// alternate-AEAD tests in `ntp.rs::tests` can re-derive a
-/// cross-algorithm key from the same bytes (e.g. `&S2C[..16]` for
-/// `AES_128_GCM_SIV`'s 16-octet key length) without duplicating the
-/// constant.
-pub(crate) const S2C: [u8; 32] = [0x22; 32];
+/// Canned server-to-client AEAD key bytes. `pub` (within the
+/// `pub(crate)` module) so the alternate-AEAD tests in `ntp.rs::tests`
+/// can re-derive a cross-algorithm key from the same bytes (e.g.
+/// `&S2C[..16]` for `AES_128_GCM_SIV`'s 16-octet key length) without
+/// duplicating the constant, and so `crate::__internal_fuzz` can
+/// re-export it to the `parse_server_response` fuzz harness.
+pub const S2C: [u8; 32] = [0x22; 32];
 /// Canned client unique-id; mirrored back as the server's UID extension
-/// by [`craft_response_with`]. `pub(crate)` so individual test cases
-/// that compare against it can import it alongside the helper.
-pub(crate) const UID: [u8; 32] = [0x33; 32];
+/// by [`craft_response_with`]. `pub` (within the `pub(crate)` module) so
+/// individual test cases that compare against it can import it
+/// alongside the helper, and so `crate::__internal_fuzz` can re-export
+/// it to the `parse_server_response` fuzz harness.
+pub const UID: [u8; 32] = [0x33; 32];
 const NONCE: [u8; RECOMMENDED_NONCE_LEN] = [0x44; RECOMMENDED_NONCE_LEN];
 /// Canned cookie payload; `pub(crate)` so tests that build their own
 /// `ClientRequest` (rather than going through [`sample_request`]) can
 /// share the same value.
 pub(crate) const COOKIE: &[u8] = &[0x55; 64];
 /// Canned client `transmit_timestamp` mirrored back as the server's
-/// `origin_timestamp` in [`craft_response_with`]. `pub(crate)` so tests
-/// that drive `parse_server_response` directly can reference the same
-/// value the helper builds against.
-pub(crate) const CLIENT_TX: u64 = 0xDEAD_BEEF_CAFE_F00D;
+/// `origin_timestamp` in [`craft_response_with`]. `pub` (within the
+/// `pub(crate)` module) so tests that drive `parse_server_response`
+/// directly can reference the same value the helper builds against,
+/// and so `crate::__internal_fuzz` can re-export it to the
+/// `parse_server_response` fuzz harness.
+pub const CLIENT_TX: u64 = 0xDEAD_BEEF_CAFE_F00D;
 
 /// Build a [`Record`] with the given critical bit and kind. Replaces
 /// the `fn rec` helpers that previously lived verbatim in

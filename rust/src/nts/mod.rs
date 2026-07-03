@@ -29,9 +29,14 @@ pub mod records;
 pub mod trust_state;
 
 // Shared test-only helpers (rec record-builder, fresh_keys, sample_request,
-// craft_response{,_with}, craft_unauthenticated_ntsn). Gated `#[cfg(test)]`
-// so the contents are compiled out of release builds. See bd nts-wzg.
-#[cfg(test)]
+// craft_response{,_with}, craft_unauthenticated_ntsn). Gated so the
+// contents are compiled out of release builds: `test` for the unit-test
+// consumers, `__internal-fuzz` so `crate::__internal_fuzz` can re-export
+// the canned constants (`UID`, `CLIENT_TX`, `S2C`) to the fuzz harnesses
+// in `rust/fuzz/` — keeping the harness fixed inputs pinned to the same
+// source of truth the committed authenticated seeds were crafted with
+// (bd nts-jzh1 / NTS-67). See bd nts-wzg for the original lift.
+#[cfg(any(test, feature = "__internal-fuzz"))]
 pub(crate) mod test_helpers;
 
 // `HybridVerifier` runs on Android in production (it salvages NTS-KE

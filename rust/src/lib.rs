@@ -56,6 +56,14 @@ pub mod __internal_fuzz {
     };
     pub use crate::nts::records::aead::AES_SIV_CMAC_256;
     pub use crate::nts::records::{parse_message, CodecError, Record};
+    // Canned fixture constants shared with the unit tests. The
+    // `parse_server_response` harness uses these as its fixed non-packet
+    // arguments so the committed authenticated seeds (crafted with the
+    // `test_helpers` builders) keep authenticating; re-exporting the
+    // source-of-truth constants means a helper change either propagates
+    // to the harness or fails to compile, instead of silently degrading
+    // post-AEAD seed coverage (bd nts-jzh1 / NTS-67).
+    pub use crate::nts::test_helpers::{CLIENT_TX, S2C, UID};
 
     /// Thin shim over `crate::nts::ke::validate_response` for the
     /// cargo-fuzz harness in `rust/fuzz/`. Discards the
