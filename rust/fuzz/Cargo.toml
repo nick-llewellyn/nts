@@ -22,7 +22,10 @@
 #
 # CI: `.github/workflows/fuzz.yml` runs every target nightly in a
 # per-target matrix. A new `[[bin]]` below must also be added to that
-# workflow's `matrix.target` list.
+# workflow's `matrix.target` list — that workflow's `matrix-parity`
+# job enforces the pairing mechanically by diffing `cargo fuzz list`
+# against the matrix, so a missed mirror fails red instead of going
+# silently un-fuzzed (bd nts-o54o / NTS-68).
 
 [package]
 name = "nts_rust-fuzz"

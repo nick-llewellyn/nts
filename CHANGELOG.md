@@ -25,6 +25,17 @@
   through the `__internal-fuzz`-gated `__internal_fuzz` module; no
   production API change. (NTS-60)
 
+- Added a `matrix-parity` job to the nightly fuzz workflow
+  (`.github/workflows/fuzz.yml`) that diffs `cargo fuzz list` against
+  the workflow's `matrix.target` list and fails on any mismatch in
+  either direction. The requirement that every `[[bin]]` in
+  `rust/fuzz/Cargo.toml` is mirrored in the matrix was previously
+  comment-enforced only — a drifted entry manifested as a silently
+  un-fuzzed target with no red signal. The job shares the workflow's
+  triggers, so the PR paths filter covers both drift sources (a new
+  fuzz target under `rust/fuzz/**`, or a matrix edit to the workflow
+  file). CI-only; no runtime change. (NTS-68)
+
 ### Changed
 
 - The `parse_server_response` fuzz harness now consumes the canned

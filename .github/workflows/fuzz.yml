@@ -25,7 +25,11 @@ name: Nightly fuzz
 # `parse_authenticator_body`, `parse_server_response`) in a
 # per-target matrix so a crash on one target does not short-circuit
 # the others. New crash reproducers are uploaded as artefacts so a
-# red run is actionable without re-running locally.
+# red run is actionable without re-running locally. The
+# `matrix-parity` job cross-checks `cargo fuzz list` against the
+# `matrix.target` list so a `[[bin]]` in `rust/fuzz/Cargo.toml` that
+# is not mirrored here fails red instead of going silently un-fuzzed
+# (bd nts-o54o / NTS-68).
 #
 # Out of scope: surfacing fuzz coverage as a percentage, integrating
 # the corpus into Codecov, or feeding crashes back into the
@@ -75,20 +79,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# Single source of truth for the cargo-fuzz binary version consumed
+# by the cache steps (key segment) and install steps (`--version`
+# arg) in both jobs below. Bumping this env var propagates the new
+# pin to all sites in lockstep; the caches invalidate on the new
+# key, the install steps pick up the new version on the resulting
+# miss, and no manual multi-site edit is required. See the `fuzz`
+# job's `Install cargo-fuzz` step for the comment on why `--locked`
+# is deliberately omitted at this pin.
+env:
+  CARGO_FUZZ_VERSION: '0.13.1'
+
 jobs:
   fuzz:
     name: Fuzz ${{ matrix.target }}
     runs-on: ubuntu-latest
-    # Single source of truth for the cargo-fuzz binary version
-    # consumed by both the cache step (key segment) and the install
-    # step (`--version` arg). Bumping this env var propagates the new
-    # pin to both sites in lockstep; the cache invalidates on the new
-    # key, the install step picks up the new version on the resulting
-    # miss, and no manual two-site edit is required. See the
-    # `Install cargo-fuzz` step below for the comment on why
-    # `--locked` is deliberately omitted at this pin.
-    env:
-      CARGO_FUZZ_VERSION: '0.13.1'
     strategy:
       # A crash on one target should surface alongside the green
       # signal from the other legs, not pre-empt them. Each leg is
@@ -208,3 +213,74 @@ jobs:
           path: rust/fuzz/artifacts/${{ matrix.target }}/
           if-no-files-found: warn
           retention-days: 30
+
+  # Parity gate for the `fuzz` job's matrix. The requirement that
+  # every `[[bin]]` in `rust/fuzz/Cargo.toml` is mirrored in
+  # `matrix.target` above was previously comment-enforced only; a
+  # drifted entry manifested as a silently un-fuzzed target with no
+  # red signal. This job makes the parity mechanical: it compares
+  # `cargo fuzz list` (the same enumeration `cargo fuzz run`
+  # consumes) against the matrix parsed out of this workflow file,
+  # and fails on any difference in either direction. It shares the
+  # workflow's triggers, so the PR paths filter covers both drift
+  # sources: a new fuzz target under `rust/fuzz/**`, or a matrix
+  # edit to this file. Like the fuzz legs, it is intentionally NOT
+  # in branch protection's required status checks (bd nts-o54o /
+  # NTS-68).
+  matrix-parity:
+    name: Fuzz matrix parity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Explicit stable install (same pinned action as `ci.yml`)
+      # rather than relying on whatever toolchain happens to be
+      # preinstalled on ubuntu-latest. Stable, not nightly: `cargo
+      # fuzz list` only enumerates `[[bin]]` targets from the fuzz
+      # manifest — no build, so the sanitizer-instrumentation
+      # nightly requirement of the `fuzz` job never applies here.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      # Same key as the fuzz legs' cache step, so this restores the
+      # binary those legs (or a previous run of this job) already
+      # built; the install step below only pays the ~2-3 min source
+      # build on a cold miss.
+      - name: Cache cargo-fuzz binary
+        id: cargo-fuzz-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-${{ runner.os }}-${{ env.CARGO_FUZZ_VERSION }}
+
+      # No `--locked`, same rationale as the `fuzz` job's install
+      # step.
+      - name: Install cargo-fuzz
+        if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION"
+
+      # Sorted-set comparison, symmetric: an un-mirrored `[[bin]]`
+      # (silently un-fuzzed target) and a stale matrix entry (leg
+      # that fails at `cargo fuzz run` with "no bin target") both
+      # trip it. PyYAML is preinstalled on ubuntu-latest runners.
+      # Explicit `shell: bash` (which runs with `-o pipefail`) plus
+      # `set -euo pipefail` so a `cargo fuzz list` failure inside
+      # the command substitution cannot be masked by `sort`
+      # succeeding.
+      - name: Compare cargo fuzz list against the workflow matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(cd rust/fuzz && cargo fuzz list | sort)"
+          expected="$(python3 -c 'import yaml; print("\n".join(sorted(yaml.safe_load(open(".github/workflows/fuzz.yml"))["jobs"]["fuzz"]["strategy"]["matrix"]["target"])))')"
+          echo "matrix.target entries:"
+          printf '%s\n' "$expected"
+          echo "cargo fuzz list targets:"
+          printf '%s\n' "$actual"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error file=.github/workflows/fuzz.yml::fuzz-target/matrix drift: 'cargo fuzz list' and jobs.fuzz.strategy.matrix.target disagree (diff below; < matrix-only, > manifest-only)"
+            diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+            exit 1
+          fi
+          echo "parity OK: ${expected//$'\n'/, }"
