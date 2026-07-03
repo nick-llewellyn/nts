@@ -211,6 +211,12 @@ nightly fuzz signal is an actionable finding to triage, not a
 per-commit merge blocker. It is also a sibling workflow to
 `ci.yml`, not a job within it, so the per-toolchain split is
 clean: `ci.yml` stays on stable, `fuzz.yml` installs nightly.
+The workflow's `matrix-parity` job mechanically enforces that the
+`[[bin]]` targets in `rust/fuzz/Cargo.toml` and the workflow's
+`matrix.target` list stay in lockstep: it diffs `cargo fuzz list`
+against the matrix and fails on any mismatch, in either direction,
+so a new fuzz target that is not mirrored into the matrix (or a
+stale matrix entry) fails red instead of drifting silently.
 
 ## Rust log verbosity
 
