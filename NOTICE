@@ -1,0 +1,114 @@
+nts
+Copyright (c) 2026 Nicholas Llewellyn (https://github.com/nick-llewellyn)
+
+This software is distributed under the MIT License. See the LICENSE file
+for the full license text.
+
+---
+
+THIRD-PARTY NOTICES
+
+This package bundles a Rust core (compiled via the Native Assets pipeline)
+in addition to its Dart code, so the third-party libraries that ship in the
+final artefact span two ecosystems. Direct dependencies of each are listed
+below with their SPDX license expressions and upstream repositories.
+
+Transitive dependencies are not enumerated here; the authoritative,
+fully-resolved sets live in `pubspec.lock` (Dart) and `rust/Cargo.lock`
+(Rust). Every transitive crate and package in those lockfiles is licensed
+under one of the permissive licenses referenced in this file
+(MIT, Apache-2.0, BSD-3-Clause, ISC, Zlib, CDLA-Permissive-2.0).
+
+---
+
+DART DEPENDENCIES (direct, from pubspec.yaml)
+
+1. flutter (BSD-3-Clause)
+   https://github.com/flutter/flutter
+   Copyright 2014 The Flutter Authors. All rights reserved.
+
+2. flutter_rust_bridge (MIT)
+   https://pub.dev/packages/flutter_rust_bridge
+   Copyright (c) 2021 fzyzcjy
+
+3. freezed_annotation (MIT)
+   https://pub.dev/packages/freezed_annotation
+   Copyright (c) 2020 Remi Rousselet
+
+4. hooks (BSD-3-Clause)
+   https://pub.dev/packages/hooks
+   Copyright 2025 the Dart project authors. All rights reserved.
+
+5. native_toolchain_rust (MIT)
+   https://pub.dev/packages/native_toolchain_rust
+   Copyright (c) 2025 Gregory Conrad
+
+---
+
+RUST DEPENDENCIES (direct, from rust/Cargo.toml)
+
+The Rust core links the following crates. Where a crate is dual/tri-licensed
+(e.g. "MIT OR Apache-2.0"), this project takes it under the MIT term for
+consistency with the package license, except where MIT is not offered.
+
+ 1. aes-gcm-siv (MIT OR Apache-2.0)
+    https://github.com/RustCrypto/AEADs
+    Copyright (c) RustCrypto Developers
+
+ 2. aes-siv (MIT OR Apache-2.0)
+    https://github.com/RustCrypto/AEADs
+    Copyright (c) RustCrypto Developers
+
+ 3. flutter_rust_bridge (MIT)
+    https://github.com/fzyzcjy/flutter_rust_bridge
+    Copyright (c) 2021 fzyzcjy
+
+ 4. getrandom (MIT OR Apache-2.0)
+    https://github.com/rust-random/getrandom
+    Copyright (c) 2018-2024 The rust-random Project Developers
+
+ 5. log (MIT OR Apache-2.0)
+    https://github.com/rust-lang/log
+    Copyright (c) 2014 The Rust Project Developers
+
+ 6. rustls (Apache-2.0 OR ISC OR MIT)
+    https://github.com/rustls/rustls
+    Copyright (c) 2016 Joseph Birr-Pixton
+
+ 7. rustls-pki-types (MIT OR Apache-2.0)
+    https://github.com/rustls/pki-types
+    Copyright (c) The rustls Project Authors
+
+ 8. rustls-platform-verifier (MIT OR Apache-2.0)
+    https://github.com/rustls/rustls-platform-verifier
+    Copyright (c) 2023 1Password / The rustls Project Authors
+
+ 9. tracing (MIT)
+    https://github.com/tokio-rs/tracing
+    Copyright (c) 2019 Tokio Contributors
+
+10. tracing-subscriber (MIT)
+    https://github.com/tokio-rs/tracing
+    Copyright (c) 2019 Tokio Contributors
+
+11. tracing-log (MIT)
+    https://github.com/tokio-rs/tracing
+    Copyright (c) 2019 Tokio Contributors
+
+12. webpki-roots (CDLA-Permissive-2.0)
+    https://github.com/rustls/webpki-roots
+    Bundles Mozilla's CA certificate set (MPL-2.0 source data).
+
+13. zeroize (Apache-2.0 OR MIT)
+    https://github.com/RustCrypto/utils
+    Copyright (c) 2018-2024 The RustCrypto Project Developers
+
+Platform-gated Rust dependencies (compiled only for the named target):
+
+14. jni (MIT OR Apache-2.0) -- Android only
+    https://github.com/jni-rs/jni-rs
+    Copyright (c) 2016 Prevoty, Inc. and jni-rs contributors
+
+15. tracing-oslog (Zlib) -- iOS only
+    https://github.com/Absolucy/tracing-oslog
+    Copyright (c) Lucy (Absolucy)

@@ -74,6 +74,15 @@ CLAUDE.md
 ARCHITECTURE.md
 DEVELOPMENT.md
 
+# Third-party attribution notice. Enumerates the direct Dart and Rust
+# dependency licenses for the benefit of anyone doing license review
+# against the source repository. Tracked in git for that audience but
+# excluded from the published tarball: the package's own license travels
+# via the pub-recognised LICENSE file, and consumers who only pull the
+# tarball do their dependency-license review against pubspec.lock /
+# rust/Cargo.lock rather than this summary.
+NOTICE
+
 # flutter_rust_bridge codegen config. The generated bindings are
 # committed under lib/src/ffi/** and rust/src/frb_generated.rs and ship
 # pre-built; the FRB codegen CLI is only ever run by maintainers on
