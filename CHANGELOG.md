@@ -5,6 +5,18 @@
 
 ### Added
 
+- Defined explicit Codecov status checks in `.codecov.yml`, replacing
+  the default "auto" targets: project statuses for the merged report
+  (88%) and per-flag `dart` (94%) / `rust` (86%) baselines, each with a
+  1% threshold, plus a patch status (75%, 5% threshold) for PR-diff
+  coverage. Targets are calibrated ~1pt under the observed baselines
+  (dart 95.43%, rust 87.30%, overall 88.92%). All statuses start
+  `informational: true` — they report to GitHub without blocking —
+  and will be promoted to blocking once stable, per the same
+  advisory-first convention as new CI jobs. Flag statuses set
+  `flag_coverage_not_uploaded_behavior: include` so carried-forward
+  sessions are evaluated when a PR skips one coverage leg. Config-only;
+  no workflow changes. (NTS-73)
 - Added `rust/deny.toml` and a `cargo-deny` CI job (bans, licenses,
   sources) to `.github/workflows/ci.yml`, plus the shared narrow SPDX
   license allow-list wired into the `dependency-review` job's
