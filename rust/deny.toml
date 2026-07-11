@@ -9,9 +9,14 @@
 # second, independently-maintained ignore list.
 
 [graph]
-# Check the full target matrix the crate actually builds for rather
-# than only the host triple, so target-gated dependencies (e.g.
-# windows-sys, tracing-oslog) are covered by the policy.
+# No `targets` key is set deliberately: cargo-deny's default is to
+# evaluate the graph for *every* target, so target-gated dependencies
+# (e.g. windows-sys, tracing-oslog) are covered by the policy. Setting
+# `targets = [...]` would *restrict* evaluation to that list -- don't
+# add it without meaning to narrow the policy.
+#
+# `all-features` mirrors the feature dimension: enable every feature so
+# feature-gated dependencies are covered too.
 all-features = true
 
 [bans]
