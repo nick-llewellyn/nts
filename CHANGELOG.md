@@ -5,6 +5,28 @@
 
 ### Added
 
+- Added a one-call high-level convenience API: top-level `ntsGetTime`
+  and per-client `NtsClient.getTime`. Both compose the existing
+  wrappers — a fresh `warmCookies` handshake followed by a serial
+  burst of up to `min(profile.maxBurst, freshCookies)` `query` calls —
+  pick the lowest-RTT sample, apply the standard symmetric-path
+  compensation (`utc + roundTrip / 2`), and return the result as a new
+  `NtsSyncedTime` anchored to a process-local monotonic `Stopwatch`
+  (`utcNow` projects the authenticated instant forward immune to
+  system clock steps; `offsetMicros`, `roundTripMicros`,
+  `samplesUsed`, `trustBackend`, and `elapsedSinceSync` expose the
+  diagnostics). Tuning arrives via the new `NtsProfile` value type
+  (`maxBurst`, total-budget `timeoutMs` shared across the handshake
+  and every burst query, `dnsConcurrencyCap`, `bridgeConcurrencyCap`)
+  with `mobile` (default), `desktop`, and `embedded` presets. Error
+  posture is best-effort across the burst: individual query failures
+  are tolerated when at least one sample lands; an all-fail burst
+  rethrows the last query error, a zero-cookie handshake surfaces
+  `NtsError.noCookies`, and a budget exhausted before the first query
+  surfaces `NtsError.timeout(phase: ntp)`. Validation front-loads the
+  same range checks as `ntsQuery` plus a `maxBurst >= 1` floor before
+  any FFI dispatch. Dart-only wrapper layer; zero FFI/bridge changes.
+  (NTS-76)
 - Added `.github/workflows/advisory.yml` with two scheduled,
   non-blocking documentation-hygiene jobs (weekly, Wednesday 05:00
   UTC): a `typos` spell check over the whole tree (configured via the

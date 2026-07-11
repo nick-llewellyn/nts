@@ -44,6 +44,16 @@ class _RecordingApi implements NtsRustLibApi {
   ffi.NtsDnsPoolStats nextDnsPoolStats = _zeroFfiDnsPoolStats();
   Object? nextThrow;
 
+  // Per-call query scripting for the `getTime` burst tests. When
+  // non-null and non-empty, each query endpoint call (top-level and
+  // per-client alike) consumes the head entry: an `ffi.NtsTimeSample`
+  // is returned, anything else is thrown. Falls back to `nextThrow` /
+  // `nextSample` when exhausted. `queryTimeouts` records the
+  // `timeoutMs` each query call received, in dispatch order, so the
+  // shared-budget tests can assert the deadline shrinks.
+  List<Object>? queryScript;
+  final List<int> queryTimeouts = [];
+
   // --- bridge-gate observation hooks --------------------------------
   //
   // `asyncGate`, when non-null, is awaited by all four async endpoint
@@ -113,6 +123,8 @@ class _RecordingApi implements NtsRustLibApi {
     nextWarm = _ffiWarm(0);
     nextDnsPoolStats = _zeroFfiDnsPoolStats();
     nextThrow = null;
+    queryScript = null;
+    queryTimeouts.clear();
     asyncGate = null;
     asyncInFlight = 0;
     asyncMaxInFlight = 0;
@@ -156,6 +168,22 @@ class _RecordingApi implements NtsRustLibApi {
     }
   }
 
+  // Query-endpoint body shared by the top-level and per-client query
+  // mocks: consumes the head of `queryScript` when present (sample =>
+  // return, anything else => throw), otherwise defers to the plain
+  // `_asyncEndpoint` path.
+  Future<ffi.NtsTimeSample> _queryEndpoint() {
+    final script = queryScript;
+    if (script != null && script.isNotEmpty) {
+      final head = script.removeAt(0);
+      return _asyncEndpoint(() {
+        if (head is ffi.NtsTimeSample) return head;
+        throw head;
+      });
+    }
+    return _asyncEndpoint(() => nextSample);
+  }
+
   @override
   Future<ffi.NtsTimeSample> crateApiNtsNtsQuery({
     required ffi.NtsServerSpec spec,
@@ -167,7 +195,8 @@ class _RecordingApi implements NtsRustLibApi {
     lastQueryTimeoutMs = timeoutMs;
     lastQueryDnsCap = dnsConcurrencyCap;
     lastQueryVerificationTimeMs = verificationTimeMs;
-    return _asyncEndpoint(() => nextSample);
+    queryTimeouts.add(timeoutMs);
+    return _queryEndpoint();
   }
 
   @override
@@ -247,7 +276,8 @@ class _RecordingApi implements NtsRustLibApi {
     lastClientQueryTimeoutMs = timeoutMs;
     lastClientQueryDnsCap = dnsConcurrencyCap;
     lastClientQueryVerificationTimeMs = verificationTimeMs;
-    return _asyncEndpoint(() => nextSample);
+    queryTimeouts.add(timeoutMs);
+    return _queryEndpoint();
   }
 
   @override
@@ -1752,6 +1782,315 @@ void main() {
         );
       },
     );
+  });
+
+  group('getTime convenience layer', () {
+    const spec = NtsServerSpec(host: 'time.example', port: 4460);
+
+    test('warm + burst happy path picks the lowest-RTT sample and '
+        'applies roundTrip/2 compensation', () async {
+      api.nextWarm = _ffiWarm(8);
+      api.queryScript = [
+        _ffiSample(utcUnixMicros: 1_000_000, roundTripMicros: 9000),
+        _ffiSample(
+          utcUnixMicros: 2_000_000,
+          roundTripMicros: 4000,
+          trustBackend: ffi.TrustBackend.webpkiRoots,
+        ),
+        _ffiSample(utcUnixMicros: 3_000_000, roundTripMicros: 7000),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      // Default profile is mobile: maxBurst 3, all three script
+      // entries consumed.
+      expect(api.queryDispatches, 3);
+      expect(synced.utcUnixMicros, 2_000_000 + 4000 ~/ 2);
+      expect(synced.roundTripMicros, 4000);
+      expect(synced.samplesUsed, 3);
+      expect(synced.trustBackend, TrustBackend.webpkiRoots);
+    });
+
+    test('burst size is clamped to the handshake cookie count', () async {
+      api.nextWarm = _ffiWarm(2);
+      await ntsGetTime(spec: spec);
+      expect(api.queryDispatches, 2);
+    });
+
+    test('profile knobs are forwarded to the warm and every burst '
+        'query', () async {
+      api.nextWarm = _ffiWarm(8);
+      const profile = NtsProfile(
+        maxBurst: 2,
+        timeoutMs: 7000,
+        dnsConcurrencyCap: 6,
+        bridgeConcurrencyCap: 3,
+      );
+      await ntsGetTime(spec: spec, profile: profile, verificationTimeMs: 42);
+      expect(api.lastWarmTimeoutMs, 7000);
+      expect(api.lastWarmDnsCap, 6);
+      expect(api.lastWarmVerificationTimeMs, 42);
+      expect(api.queryDispatches, 2);
+      expect(api.lastQueryDnsCap, 6);
+      expect(api.lastQueryVerificationTimeMs, 42);
+    });
+
+    test('warm and burst draw down one shared total budget', () async {
+      api.nextWarm = _ffiWarm(8);
+      await ntsGetTime(spec: spec);
+      // The warm gets the whole budget; each query gets only what is
+      // left, so no forwarded deadline may exceed its predecessor.
+      expect(api.lastWarmTimeoutMs, NtsProfile.mobile.timeoutMs);
+      expect(api.queryTimeouts, hasLength(3));
+      var previous = NtsProfile.mobile.timeoutMs;
+      for (final t in api.queryTimeouts) {
+        expect(t, lessThanOrEqualTo(previous));
+        previous = t;
+      }
+    });
+
+    test('individual burst failures are tolerated when at least one '
+        'sample lands', () async {
+      api.nextWarm = _ffiWarm(8);
+      api.queryScript = [
+        const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.ntp),
+        _ffiSample(utcUnixMicros: 5_000_000, roundTripMicros: 2000),
+        const ffi.NtsError.network(message: 'eof'),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      expect(synced.samplesUsed, 1);
+      expect(synced.utcUnixMicros, 5_000_000 + 1000);
+      expect(api.queryDispatches, 3);
+    });
+
+    test('an all-fail burst rethrows the last query error as its '
+        'public twin', () async {
+      api.nextWarm = _ffiWarm(8);
+      api.queryScript = [
+        const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.ntp),
+        const ffi.NtsError.network(message: 'first'),
+        const ffi.NtsError.authentication(message: 'mac stripped'),
+      ];
+      await expectLater(
+        ntsGetTime(spec: spec),
+        throwsA(
+          predicate<Object>(
+            (e) =>
+                e is NtsError &&
+                e == const NtsError.authentication(message: 'mac stripped'),
+          ),
+        ),
+      );
+      expect(api.queryDispatches, 3);
+    });
+
+    test('a warm failure propagates as-is and dispatches no '
+        'queries', () async {
+      api.nextThrow = const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.tls);
+      await expectLater(
+        ntsGetTime(spec: spec),
+        throwsA(
+          predicate<Object>(
+            (e) =>
+                e is NtsError &&
+                e == const NtsError.timeout(phase: TimeoutPhase.tls),
+          ),
+        ),
+      );
+      expect(api.queryDispatches, 0);
+    });
+
+    test('a zero-cookie handshake fails with noCookies before any '
+        'query', () async {
+      api.nextWarm = _ffiWarm(0, trustBackend: ffi.TrustBackend.custom);
+      await expectLater(
+        ntsGetTime(spec: spec),
+        throwsA(
+          isA<NtsErrorNoCookies>().having(
+            (e) => e.trustBackend,
+            'trustBackend',
+            TrustBackend.custom,
+          ),
+        ),
+      );
+      expect(api.queryDispatches, 0);
+    });
+
+    test('budget exhausted by the warm surfaces as timeout(ntp)', () async {
+      api.nextWarm = _ffiWarm(8);
+      api.asyncGate = () =>
+          Future<void>.delayed(const Duration(milliseconds: 60));
+      const profile = NtsProfile(
+        maxBurst: 3,
+        timeoutMs: 20,
+        dnsConcurrencyCap: 4,
+        bridgeConcurrencyCap: 4,
+      );
+      await expectLater(
+        ntsGetTime(spec: spec, profile: profile),
+        throwsA(
+          isA<NtsErrorTimeout>()
+              .having((e) => e.phase, 'phase', TimeoutPhase.ntp)
+              .having(
+                (e) => e.trustBackend,
+                'trustBackend',
+                TrustBackend.platform,
+              ),
+        ),
+      );
+      // The warm completed (late); no query was ever dispatched.
+      expect(api.queryDispatches, 0);
+    });
+
+    test('maxBurst below 1 is rejected before any FFI dispatch on '
+        'both entry points', () async {
+      const broken = NtsProfile(
+        maxBurst: 0,
+        timeoutMs: 5000,
+        dnsConcurrencyCap: 4,
+        bridgeConcurrencyCap: 4,
+      );
+      final client = NtsClient();
+      for (final mint in <Future<Object?> Function()>[
+        () => ntsGetTime(spec: spec, profile: broken),
+        () => client.getTime(spec: spec, profile: broken),
+      ]) {
+        await expectLater(
+          mint(),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('maxBurst'),
+            ),
+          ),
+        );
+      }
+      expect(api.lastWarmTimeoutMs, isNull);
+      expect(api.lastClientWarmTimeoutMs, isNull);
+      expect(api.queryDispatches, 0);
+    });
+
+    test('out-of-range profile fields are rejected on the same terms '
+        'as ntsQuery', () async {
+      const broken = NtsProfile(
+        maxBurst: 3,
+        timeoutMs: 0,
+        dnsConcurrencyCap: 4,
+        bridgeConcurrencyCap: 4,
+      );
+      await expectLater(
+        ntsGetTime(spec: spec, profile: broken),
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains('timeoutMs'),
+          ),
+        ),
+      );
+      expect(api.lastWarmTimeoutMs, isNull);
+    });
+
+    test('NtsClient.getTime routes through the client endpoints and '
+        'leaves the default client untouched', () async {
+      api.nextWarm = _ffiWarm(8);
+      final client = NtsClient();
+      final synced = await client.getTime(spec: spec);
+      expect(synced.samplesUsed, 3);
+      expect(api.lastClientWarmThat, isNotNull);
+      expect(api.lastClientQueryThat, same(api.lastClientWarmThat));
+      // Top-level endpoints never fired.
+      expect(api.lastWarmTimeoutMs, isNull);
+      expect(api.lastQueryTimeoutMs, isNull);
+    });
+  });
+
+  group('NtsProfile / NtsSyncedTime models', () {
+    test('presets carry the documented values', () {
+      expect(NtsProfile.mobile.maxBurst, 3);
+      expect(NtsProfile.mobile.timeoutMs, 5000);
+      expect(NtsProfile.mobile.dnsConcurrencyCap, 4);
+      expect(NtsProfile.mobile.bridgeConcurrencyCap, 4);
+      expect(NtsProfile.desktop.maxBurst, 5);
+      expect(NtsProfile.desktop.timeoutMs, 5000);
+      expect(NtsProfile.desktop.dnsConcurrencyCap, 8);
+      expect(NtsProfile.desktop.bridgeConcurrencyCap, 8);
+      expect(NtsProfile.embedded.maxBurst, 2);
+      expect(NtsProfile.embedded.timeoutMs, 10000);
+      expect(NtsProfile.embedded.dnsConcurrencyCap, 2);
+      expect(NtsProfile.embedded.bridgeConcurrencyCap, 2);
+    });
+
+    test('NtsProfile equality and hashCode are value-based', () {
+      const a = NtsProfile(
+        maxBurst: 3,
+        timeoutMs: 5000,
+        dnsConcurrencyCap: 4,
+        bridgeConcurrencyCap: 4,
+      );
+      expect(a, NtsProfile.mobile);
+      expect(a.hashCode, NtsProfile.mobile.hashCode);
+      expect(a, isNot(NtsProfile.desktop));
+      expect(
+        a.toString(),
+        'NtsProfile(maxBurst: 3, timeoutMs: 5000, '
+        'dnsConcurrencyCap: 4, bridgeConcurrencyCap: 4)',
+      );
+    });
+
+    test('NtsSyncedTime projects utcNow via its monotonic anchor', () async {
+      final synced = NtsSyncedTime(
+        utcUnixMicros: 1_700_000_000_000_000,
+        roundTripMicros: 4000,
+        samplesUsed: 2,
+        trustBackend: TrustBackend.platform,
+      );
+      final first = synced.utcNow;
+      expect(first.isUtc, isTrue);
+      expect(
+        first.microsecondsSinceEpoch,
+        greaterThanOrEqualTo(1_700_000_000_000_000),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final second = synced.utcNow;
+      // Monotonic projection: time moved forward by at least the
+      // sleep (modulo timer slop, hence the loose lower bound).
+      expect(second.isAfter(first), isTrue);
+      expect(synced.elapsedSinceSync, greaterThan(Duration.zero));
+    });
+
+    test('NtsSyncedTime offsetMicros is anchored against the system '
+        'clock at construction', () {
+      final now = DateTime.now().microsecondsSinceEpoch;
+      final synced = NtsSyncedTime(
+        utcUnixMicros: now + 1_000_000,
+        roundTripMicros: 1000,
+        samplesUsed: 1,
+        trustBackend: TrustBackend.platform,
+      );
+      // The synced clock was constructed one second "ahead" of the
+      // system clock, so the offset is ~+1s. Generous slop absorbs
+      // scheduler delay between the two clock reads.
+      expect(synced.offsetMicros, greaterThan(900_000));
+      expect(synced.offsetMicros, lessThan(1_100_000));
+    });
+
+    test('NtsSyncedTime toString carries the diagnostic fields', () {
+      final synced = NtsSyncedTime(
+        utcUnixMicros: 123,
+        roundTripMicros: 456,
+        samplesUsed: 2,
+        trustBackend: TrustBackend.platformWithHybridFallback,
+      );
+      expect(
+        synced.toString(),
+        allOf(
+          contains('utcUnixMicros: 123'),
+          contains('roundTripMicros: 456'),
+          contains('samplesUsed: 2'),
+          contains('trustBackend: platformWithHybridFallback'),
+        ),
+      );
+    });
   });
 
   group('bridge admission gate', () {

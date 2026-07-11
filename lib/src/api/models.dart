@@ -545,6 +545,195 @@ class NtsTrustStatus {
       'androidHybridFallbackCount: $androidHybridFallbackCount)';
 }
 
+/// Tuning preset consumed by `ntsGetTime` / `NtsClient.getTime`.
+///
+/// Bundles the four knobs the high-level convenience path exposes so
+/// callers pick an environment-shaped preset instead of reasoning
+/// about burst sizing and concurrency caps individually. The three
+/// presets ([mobile], [desktop], [embedded]) cover the common cases;
+/// construct an explicit [NtsProfile] when none fits.
+///
+/// Unlike the per-call `timeoutMs` on `ntsQuery` / `ntsWarmCookies`,
+/// [timeoutMs] here is a **total** wall-clock budget spanning the
+/// entire `getTime` call: the cookie-warming handshake and every
+/// burst query draw down one shared deadline, so the call's overall
+/// wall-clock cost is bounded by this single number regardless of
+/// how many burst samples run.
+class NtsProfile {
+  /// Upper bound on the number of burst `ntsQuery` samples taken
+  /// after the warming handshake. The effective burst size is
+  /// `min(maxBurst, freshCookies)` where `freshCookies` is the cookie
+  /// count the handshake delivered — each query spends one cookie, so
+  /// the burst never exhausts the pool it just filled.
+  final int maxBurst;
+
+  /// Total wall-clock budget for the whole `getTime` call in
+  /// milliseconds, shared across the warming handshake and every
+  /// burst query as one shrinking deadline.
+  final int timeoutMs;
+
+  /// Per-call ceiling on in-flight DNS resolver workers, forwarded
+  /// to each underlying call. Same semantics as the
+  /// `dnsConcurrencyCap` parameter on `ntsQuery`.
+  final int dnsConcurrencyCap;
+
+  /// Per-call ceiling on concurrently dispatched bridge calls,
+  /// forwarded to each underlying call. Same semantics as the
+  /// `bridgeConcurrencyCap` parameter on `ntsQuery`. `getTime`'s
+  /// own calls run serially, so this only matters when other calls
+  /// from the same isolate contend for the shared admission gate.
+  final int bridgeConcurrencyCap;
+
+  /// Construct a custom profile. Prefer the named presets unless the
+  /// deployment needs different numbers.
+  const NtsProfile({
+    required this.maxBurst,
+    required this.timeoutMs,
+    required this.dnsConcurrencyCap,
+    required this.bridgeConcurrencyCap,
+  });
+
+  /// Preset for phones and tablets: modest burst, package-default
+  /// concurrency caps (sized for 4-logical-CPU devices), 5 s total
+  /// budget. The default profile when `getTime` is called without
+  /// an explicit one.
+  static const NtsProfile mobile = NtsProfile(
+    maxBurst: 3,
+    timeoutMs: 5000,
+    dnsConcurrencyCap: 4,
+    bridgeConcurrencyCap: 4,
+  );
+
+  /// Preset for desktop / server hosts: larger burst for tighter
+  /// RTT selection and raised concurrency caps to match the wider
+  /// worker pools those hosts run.
+  static const NtsProfile desktop = NtsProfile(
+    maxBurst: 5,
+    timeoutMs: 5000,
+    dnsConcurrencyCap: 8,
+    bridgeConcurrencyCap: 8,
+  );
+
+  /// Preset for constrained embedded targets: minimal burst, halved
+  /// concurrency caps, and a doubled total budget to tolerate the
+  /// slow first-boot networks such devices often sit on.
+  static const NtsProfile embedded = NtsProfile(
+    maxBurst: 2,
+    timeoutMs: 10000,
+    dnsConcurrencyCap: 2,
+    bridgeConcurrencyCap: 2,
+  );
+
+  @override
+  int get hashCode =>
+      Object.hash(maxBurst, timeoutMs, dnsConcurrencyCap, bridgeConcurrencyCap);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NtsProfile &&
+          maxBurst == other.maxBurst &&
+          timeoutMs == other.timeoutMs &&
+          dnsConcurrencyCap == other.dnsConcurrencyCap &&
+          bridgeConcurrencyCap == other.bridgeConcurrencyCap);
+
+  @override
+  String toString() =>
+      'NtsProfile(maxBurst: $maxBurst, timeoutMs: $timeoutMs, '
+      'dnsConcurrencyCap: $dnsConcurrencyCap, '
+      'bridgeConcurrencyCap: $bridgeConcurrencyCap)';
+}
+
+/// Synchronized clock produced by `ntsGetTime` / `NtsClient.getTime`.
+///
+/// Wraps the burst's lowest-RTT sample — already compensated for the
+/// one-way network delay (`utc + roundTrip / 2`) — and anchors it to
+/// a process-local monotonic [Stopwatch] started at construction.
+/// [utcNow] projects the authenticated instant forward using that
+/// monotonic elapsed time, so the projection is immune to system
+/// clock steps, slew, and user adjustment after the sync.
+///
+/// The projection does **not** correct for local oscillator drift:
+/// a typical crystal drifts on the order of tens of parts per
+/// million, so the projected time accumulates roughly a millisecond
+/// of error per minute-to-hour of wall-clock age depending on
+/// hardware. Re-run `getTime` when tighter bounds are needed;
+/// [elapsedSinceSync] exposes the age so callers can decide when.
+///
+/// Unlike the value-type DTOs in this library, [NtsSyncedTime] is a
+/// live clock with identity semantics: two instances are never equal
+/// even when constructed from identical samples, because each anchors
+/// its own stopwatch.
+class NtsSyncedTime {
+  /// One-way-delay-compensated server UTC as microseconds since the
+  /// Unix epoch, valid at the instant this object was constructed
+  /// (the monotonic anchor). Use [utcNow] for the projected current
+  /// time rather than reading this directly.
+  final int utcUnixMicros;
+
+  /// Signed difference between the synchronized clock and the local
+  /// system clock at the anchor instant, in microseconds
+  /// (`utcUnixMicros - DateTime.now()` at construction). Positive
+  /// means the system clock is behind true time. Callers can apply
+  /// this as a correction to other system-clock reads taken near the
+  /// anchor.
+  final int offsetMicros;
+
+  /// Round-trip time of the winning (lowest-RTT) burst sample, in
+  /// microseconds. Bounds the sample's worst-case one-way-delay
+  /// error: the true instant lies within `± roundTripMicros / 2` of
+  /// the compensated value.
+  final int roundTripMicros;
+
+  /// Number of burst samples that completed successfully and entered
+  /// the lowest-RTT selection. At least `1` (a `getTime` call with
+  /// zero successful samples throws instead of returning).
+  final int samplesUsed;
+
+  /// Trust-anchor backend that authenticated the winning sample's
+  /// TLS chain. Same per-handshake attribution semantics as
+  /// [NtsTimeSample.trustBackend].
+  final TrustBackend trustBackend;
+
+  final Stopwatch _anchor;
+
+  /// Construct a synchronized clock anchored at the current instant.
+  ///
+  /// [utcUnixMicros] must be the compensated UTC valid *now*: the
+  /// internal monotonic stopwatch starts inside this constructor, and
+  /// [offsetMicros] is computed against the system clock read here.
+  /// Intended for the wrapper layer and for test fixtures; production
+  /// code receives instances from `ntsGetTime`.
+  NtsSyncedTime({
+    required this.utcUnixMicros,
+    required this.roundTripMicros,
+    required this.samplesUsed,
+    required this.trustBackend,
+  }) : offsetMicros = utcUnixMicros - DateTime.now().microsecondsSinceEpoch,
+       _anchor = Stopwatch()..start();
+
+  /// Current authenticated UTC time, projected from the anchor via
+  /// the monotonic stopwatch. Unaffected by system clock changes
+  /// after the sync; subject to local oscillator drift as described
+  /// on the class doc.
+  DateTime get utcNow => DateTime.fromMicrosecondsSinceEpoch(
+    utcUnixMicros + _anchor.elapsedMicroseconds,
+    isUtc: true,
+  );
+
+  /// Monotonic wall-clock time elapsed since the anchor instant.
+  /// Use to decide when the projection has aged enough to warrant a
+  /// fresh `getTime` call.
+  Duration get elapsedSinceSync => _anchor.elapsed;
+
+  @override
+  String toString() =>
+      'NtsSyncedTime(utcUnixMicros: $utcUnixMicros, '
+      'offsetMicros: $offsetMicros, roundTripMicros: $roundTripMicros, '
+      'samplesUsed: $samplesUsed, trustBackend: ${trustBackend.name}, '
+      'elapsedSinceSync: $elapsedSinceSync)';
+}
+
 /// Snapshot of the bounded DNS resolver pool counters.
 ///
 /// All counters are process-wide and include workers spawned by every
