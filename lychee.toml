@@ -1,0 +1,31 @@
+# lychee link-checker configuration.
+#
+# Consumed by the advisory link-check job in
+# .github/workflows/advisory.yml (NTS-74). The job passes the input
+# globs on the command line; this file carries the exclusions and
+# request tuning so a local `lychee './**/*.md'` run matches CI.
+
+# Retry transient failures before reporting; rate-limited hosts
+# (crates.io, docs.rs) intermittently 429 under CI's shared egress IPs.
+max_retries = 3
+timeout = 30
+
+# Treat GitHub's 429 rate-limit responses as OK rather than broken.
+accept = ["200..=299", "429"]
+
+exclude_path = [
+    # Build artifacts: generated rustdoc/Flutter output is not
+    # hand-authored documentation and sweeps in vendored license files
+    # with dead links (e.g. SourceSerif4-LICENSE pointing at
+    # http://www.adobe.com/ which times out).
+    "rust/target",
+    "build",
+    "example/build",
+]
+
+exclude = [
+    # Dependabot dashboard badge target: GitHub serves 404 to
+    # unauthenticated clients (the page requires repo access), so it is
+    # a permanent false positive for a link checker.
+    "https://github\\.com/nick-llewellyn/nts/network/updates",
+]

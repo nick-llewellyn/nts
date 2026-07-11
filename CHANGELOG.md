@@ -5,6 +5,20 @@
 
 ### Added
 
+- Added `.github/workflows/advisory.yml` with two scheduled,
+  non-blocking documentation-hygiene jobs (weekly, Wednesday 05:00
+  UTC): a `typos` spell check over the whole tree (configured via the
+  new `_typos.toml`, whose suppressions are all verified false
+  positives — the `allo-isolate` crate name, hyphenated `mis-*` prose
+  prefixes, bead IDs, base64/PEM test fixtures, `PNGs`, and
+  Xcode-generated `*.pbxproj`/`*.xib`/`*.storyboard` files) and a
+  `lychee` link check over all Markdown (configured via the new
+  `lychee.toml`, which excludes build-artifact paths and the
+  auth-gated Dependabot dashboard URL, retries transient failures,
+  and accepts 429s). Both jobs stay off the required-checks list; the
+  workflow also runs on PRs that touch itself or its config files so
+  changes to the checks are exercised before merge. Both runs verified
+  clean locally against typos v1.48.0 and lychee v0.24.2. (NTS-74)
 - Defined explicit Codecov status checks in `.codecov.yml`, replacing
   the default "auto" targets: project statuses for the merged report
   (88%) and per-flag `dart` (94%) / `rust` (86%) baselines, each with a
