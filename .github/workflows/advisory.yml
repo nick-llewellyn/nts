@@ -1,0 +1,69 @@
+name: Advisory checks
+
+# Scheduled, non-blocking documentation hygiene: lychee link checking
+# and typos spell checking (NTS-74). Neither job is on the branch
+# protection required-checks list -- a failure here surfaces in the
+# Actions tab (and the run's summary) but never blocks a PR. The
+# pull_request trigger is deliberately narrowed to this workflow and
+# its config files so changes to the checks themselves get exercised
+# before merge; ordinary doc/code PRs do not run these jobs.
+
+on:
+  schedule:
+    # Weekly on Wednesday at 05:00 UTC (offset from the daily midnight
+    # cron in audit.yml, the Sunday cron in codeql.yml, and the Monday
+    # 04:00 cron in scorecard.yml to spread load across runners).
+    - cron: '0 5 * * 3'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/advisory.yml'
+      - '_typos.toml'
+      - 'lychee.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  typos:
+    name: Spell check (typos)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Config is auto-discovered from _typos.toml at the repo root;
+      # every suppression in that file is a verified false positive
+      # (crate names, bead IDs, base64 test fixtures, Xcode-generated
+      # files). Scans the whole tree, not just Markdown -- typos is
+      # source-aware and its comment/string coverage is the point.
+      - name: Run typos
+        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+
+  lychee:
+    name: Link check (lychee)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Exclusions and request tuning (retries, accepted status codes,
+      # build-artifact path excludes) live in lychee.toml so a local
+      # `lychee --config lychee.toml './**/*.md'` run matches CI. The
+      # action's `token` input defaults to the workflow's read-only
+      # github.token, which raises the rate limit for the many
+      # github.com links in the docs -- no explicit wiring needed.
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --no-progress --config lychee.toml './**/*.md'
+          fail: true

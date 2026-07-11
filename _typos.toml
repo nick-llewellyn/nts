@@ -1,0 +1,39 @@
+# typos (crate-ci/typos) configuration.
+#
+# Consumed by the advisory spell-check job in
+# .github/workflows/advisory.yml (NTS-74). Every entry below suppresses
+# a verified false positive from a full-repo run of typos v1.48.0;
+# nothing here hides a real misspelling.
+
+[files]
+# Xcode-generated project files: hex object IDs (`33CC111A2044C6BA...`)
+# and base64-ish attribute soup trip the tokenizer constantly, and the
+# files are machine-maintained anyway.
+extend-exclude = [
+    "*.pbxproj",
+    "*.xib",
+    "*.storyboard",
+]
+
+[default]
+# Long base64/PEM runs (test certificates and keys embedded in Rust
+# test fixtures) decompose into short tokens like `UE`, `ND`, `Wll`
+# that collide with the dictionary. 40+ chars of base64 alphabet
+# (including `\n` line-joins inside string literals) is never prose.
+extend-ignore-re = [
+    "[0-9A-Za-z+/=\\\\]{40,}",
+    # `PNGs` (plural of the file format) tokenizes as `PN` + `Gs` and
+    # the `PN` half hits the dictionary.
+    "PNGs",
+]
+
+[default.extend-words]
+# Crate name `allo-isolate` (flutter_rust_bridge dependency), which the
+# tokenizer splits at the hyphen.
+allo = "allo"
+# Hyphenated prefix in prose: mis-parse, mis-classify, mis-attribute.
+mis = "mis"
+# Bead ID `nts-otu` referenced in the CHANGELOG.
+otu = "otu"
+# Accepted variant spelling used deliberately in comments.
+unparseable = "unparseable"
