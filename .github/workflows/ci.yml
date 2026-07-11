@@ -570,9 +570,10 @@ jobs:
     # `fail-on-severity: moderate` (tightened from the `high` starting
     # floor now that the daily `audit.yml` cargo-audit job provides a
     # second net). If the gate fires on a transitive bump, prefer
-    # pinning the offending dep over loosening the gate. License policy
-    # (`allow-licenses` / `deny-licenses`) is intentionally not
-    # configured yet -- add it here when the policy is decided.
+    # pinning the offending dep over loosening the gate. License policy:
+    # `allow-licenses` carries the shared narrow SPDX allow-list decided
+    # on NTS-72 -- kept in lockstep with `[licenses].allow` in
+    # rust/deny.toml (see the comment on the input below).
     name: Dependency review
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -592,6 +593,71 @@ jobs:
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: moderate
+          # Shared license policy (NTS-72): the narrow SPDX allow-list
+          # below is the same policy as `[licenses].allow` in
+          # rust/deny.toml -- extend both together, never one alone.
+          # This action sees the full dependency graph (Dart pubspec +
+          # Rust Cargo) but only diffs *newly introduced* deps on the
+          # PR; the `cargo-deny` job re-checks the entire Rust tree on
+          # every relevant PR, so the two overlap deliberately: this
+          # one covers Dart, that one covers pre-existing Rust deps.
+          allow-licenses: >-
+            MIT,
+            Apache-2.0,
+            Apache-2.0 WITH LLVM-exception,
+            ISC,
+            BSD-3-Clause,
+            Zlib,
+            0BSD,
+            Unlicense,
+            Unicode-3.0,
+            CDLA-Permissive-2.0
+
+  cargo-deny:
+    # Rust supply-chain policy gate (NTS-72): runs the `bans`,
+    # `licenses`, and `sources` checks from rust/deny.toml against the
+    # full dependency tree. The `advisories` check is deliberately NOT
+    # run here -- RustSec coverage already comes from the daily
+    # cargo-audit job in audit.yml, and duplicating it would mean two
+    # independently-drifting ignore lists for the same advisories.
+    #
+    # Gated on the `rust` and `ci` path filters (deny.toml lives under
+    # rust/**, so config edits re-trigger via the `rust` filter).
+    # Advisory job for now: intentionally OFF the required-checks list
+    # until it has demonstrated stability; promote deliberately per
+    # the branch-protection table in DEVELOPMENT.md.
+    name: cargo-deny (bans, licenses, sources)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      needs.changes.outputs.rust == 'true'
+      || needs.changes.outputs.ci == 'true'
+      || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Run cargo-deny
+        # Pinned to the v2.0.20 release commit (ships cargo-deny
+        # 0.19.8; config validated locally against 0.20.2 -- the
+        # bans/licenses/sources schema is identical across the two).
+        # Docker-based action; `manifest-path` is repo-root-relative,
+        # and cargo-deny resolves its config relative to the manifest's
+        # directory, so rust/deny.toml is picked up without an explicit
+        # --config flag (verifiable: with no config found, the default
+        # empty license allow-list would fail the `licenses` check).
+        # `arguments` replaces the action's `--all-features` default,
+        # so restate it; `--locked` keeps the check deterministic
+        # against the committed Cargo.lock, matching the rest of the
+        # workflow's Rust invocations. `command` carries only the
+        # subcommand; the check names go in `command-arguments`, the
+        # input the action defines for subcommand args.
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+        with:
+          manifest-path: ./rust/Cargo.toml
+          arguments: --all-features --locked
+          command: check
+          command-arguments: bans licenses sources
 
   hooks-syntax:
     # POSIX-shell syntax + presence + exec-bit check for the repo-tracked
