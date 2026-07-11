@@ -3,6 +3,25 @@
 
 ## 5.2.4
 
+### Added
+
+- Added `rust/deny.toml` and a `cargo-deny` CI job (bans, licenses,
+  sources) to `.github/workflows/ci.yml`, plus the shared narrow SPDX
+  license allow-list wired into the `dependency-review` job's
+  `allow-licenses` input. The allow-list is exactly the set of licenses
+  the current dependency tree needs (MIT, Apache-2.0,
+  Apache-2.0 WITH LLVM-exception, ISC, BSD-3-Clause, Zlib, 0BSD,
+  Unlicense, Unicode-3.0, CDLA-Permissive-2.0); any new license
+  reaching the tree fails CI and becomes a deliberate PR decision made
+  by extending `[licenses].allow` in `rust/deny.toml` and the
+  `allow-licenses` input together. The `bans` check denies duplicate
+  crate versions (two known duplicates — `getrandom` 0.2.x and
+  `windows-sys` 0.52 — are version-pinned skips that expire naturally),
+  and `sources` restricts all crates to crates.io. The `advisories`
+  check is deliberately not run: RustSec coverage already comes from
+  the daily cargo-audit job in `audit.yml`. CI-only; the new job stays
+  off the required-checks list initially. (NTS-72)
+
 ### Security
 
 - Bumped `anyhow` from `1.0.102` to `1.0.103` to clear **RUSTSEC-2026-0190**

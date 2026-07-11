@@ -1,0 +1,73 @@
+# cargo-deny configuration (checked by the `cargo-deny` CI job in
+# .github/workflows/ci.yml and locally via `cargo deny check bans
+# licenses sources` from the rust/ directory).
+#
+# Scope: bans, licenses, and sources only. The `advisories` check is
+# deliberately not run -- RustSec advisory coverage is already provided
+# by the daily cargo-audit job in .github/workflows/audit.yml, and
+# running it here would double-report the same advisories with a
+# second, independently-maintained ignore list.
+
+[graph]
+# Check the full target matrix the crate actually builds for rather
+# than only the host triple, so target-gated dependencies (e.g.
+# windows-sys, tracing-oslog) are covered by the policy.
+all-features = true
+
+[bans]
+# Duplicate crate versions bloat builds and widen the audit surface.
+# Deny by default; known, currently-unavoidable duplicates are listed
+# in `skip` below (each pinned to the exact older version so the skip
+# expires naturally when the duplication resolves).
+multiple-versions = "deny"
+wildcards = "deny"
+
+skip = [
+    # getrandom 0.2.x is still pulled in via the older `rand` line used
+    # by transitive deps; 0.4.x is the current line.
+    { name = "getrandom", version = "=0.2.17" },
+    # windows-sys 0.52 rides along with older windows-targets users;
+    # 0.61 is the current line.
+    { name = "windows-sys", version = "=0.52.0" },
+]
+
+[licenses]
+# Narrow allow-list policy (decided on NTS-72): exactly the SPDX
+# licenses the dependency tree needs today, nothing speculative.
+# Any new license reaching the tree fails this check and becomes a
+# deliberate PR decision -- extend this list *and* the matching
+# `allow-licenses` input on the `dependency-review` job in
+# .github/workflows/ci.yml together.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-3-Clause",
+    "Zlib",
+    "0BSD",
+    "Unlicense",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+# askalono match confidence required to accept a LICENSE file text as
+# the claimed license. 0.8 is the cargo-deny default, restated here so
+# a future default change upstream doesn't silently loosen the policy.
+#
+# Known metadata gap: allo-isolate (via flutter_rust_bridge) publishes
+# no `license` field, only a bundled LICENSE file. cargo-deny emits a
+# `no-license-field` *warning* for it and then identifies the file as
+# verbatim Apache-2.0 text via askalono (confidence ~1.0), which the
+# allow-list accepts -- so the warning is expected and harmless. If a
+# future allo-isolate release changes its LICENSE text below the
+# confidence threshold, this check fails and a `[[licenses.clarify]]`
+# entry becomes the fix.
+confidence-threshold = 0.8
+
+[sources]
+# Everything must come from crates.io. No git dependencies, no
+# alternate registries -- a dependency that needs either is a
+# deliberate policy change, not a routine bump.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
