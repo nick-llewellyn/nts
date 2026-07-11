@@ -24,8 +24,9 @@
   rethrows the last query error, a zero-cookie handshake surfaces
   `NtsError.noCookies`, and a budget exhausted before the first query
   surfaces `NtsError.timeout(phase: ntp)`. Validation front-loads the
-  same range checks as `ntsQuery` plus a `maxBurst >= 1` floor before
-  any FFI dispatch. Dart-only wrapper layer; zero FFI/bridge changes.
+  same range checks as `ntsQuery` plus a `maxBurst` check against the
+  shared `1..0xFFFFFFFF` range before any FFI dispatch. Dart-only
+  wrapper layer; zero FFI/bridge changes.
   (NTS-76)
 - Added `.github/workflows/advisory.yml` with two scheduled,
   non-blocking documentation-hygiene jobs (weekly, Wednesday 05:00

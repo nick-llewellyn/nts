@@ -153,15 +153,22 @@ class _RecordingApi implements NtsRustLibApi {
 
   // Shared body for the four async endpoint mocks: bump the in-flight
   // gauges, optionally park on `asyncGate`, then produce `nextThrow` /
-  // `result` exactly as the pre-gate mocks did.
-  Future<T> _asyncEndpoint<T>(T Function() result) async {
+  // `result` exactly as the pre-gate mocks did. Scripted query calls
+  // pass `honorNextThrow: false` so a consumed `queryScript` head is
+  // authoritative and cannot be overridden by a stale `nextThrow`.
+  Future<T> _asyncEndpoint<T>(
+    T Function() result, {
+    bool honorNextThrow = true,
+  }) async {
     asyncInFlight++;
     if (asyncInFlight > asyncMaxInFlight) asyncMaxInFlight = asyncInFlight;
     try {
       final g = asyncGate;
       if (g != null) await g();
-      final t = nextThrow;
-      if (t != null) throw t;
+      if (honorNextThrow) {
+        final t = nextThrow;
+        if (t != null) throw t;
+      }
       return result();
     } finally {
       asyncInFlight--;
@@ -170,13 +177,14 @@ class _RecordingApi implements NtsRustLibApi {
 
   // Query-endpoint body shared by the top-level and per-client query
   // mocks: consumes the head of `queryScript` when present (sample =>
-  // return, anything else => throw), otherwise defers to the plain
-  // `_asyncEndpoint` path.
+  // return, anything else => throw) — bypassing `nextThrow`, which the
+  // script supersedes — otherwise defers to the plain `_asyncEndpoint`
+  // path.
   Future<ffi.NtsTimeSample> _queryEndpoint() {
     final script = queryScript;
     if (script != null && script.isNotEmpty) {
       final head = script.removeAt(0);
-      return _asyncEndpoint(() {
+      return _asyncEndpoint(honorNextThrow: false, () {
         if (head is ffi.NtsTimeSample) return head;
         throw head;
       });
@@ -1940,29 +1948,37 @@ void main() {
       expect(api.queryDispatches, 0);
     });
 
-    test('maxBurst below 1 is rejected before any FFI dispatch on '
+    test('out-of-range maxBurst is rejected before any FFI dispatch on '
         'both entry points', () async {
-      const broken = NtsProfile(
+      const belowFloor = NtsProfile(
         maxBurst: 0,
         timeoutMs: 5000,
         dnsConcurrencyCap: 4,
         bridgeConcurrencyCap: 4,
       );
+      const aboveCeiling = NtsProfile(
+        maxBurst: 0x100000000, // u32::MAX + 1
+        timeoutMs: 5000,
+        dnsConcurrencyCap: 4,
+        bridgeConcurrencyCap: 4,
+      );
       final client = NtsClient();
-      for (final mint in <Future<Object?> Function()>[
-        () => ntsGetTime(spec: spec, profile: broken),
-        () => client.getTime(spec: spec, profile: broken),
-      ]) {
-        await expectLater(
-          mint(),
-          throwsA(
-            isA<NtsErrorInvalidSpec>().having(
-              (e) => e.message,
-              'message',
-              contains('maxBurst'),
+      for (final broken in [belowFloor, aboveCeiling]) {
+        for (final mint in <Future<Object?> Function()>[
+          () => ntsGetTime(spec: spec, profile: broken),
+          () => client.getTime(spec: spec, profile: broken),
+        ]) {
+          await expectLater(
+            mint(),
+            throwsA(
+              isA<NtsErrorInvalidSpec>().having(
+                (e) => e.message,
+                'message',
+                contains('maxBurst'),
+              ),
             ),
-          ),
-        );
+          );
+        }
       }
       expect(api.lastWarmTimeoutMs, isNull);
       expect(api.lastClientWarmTimeoutMs, isNull);

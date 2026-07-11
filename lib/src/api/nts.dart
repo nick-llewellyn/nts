@@ -284,7 +284,8 @@ Future<NtsTimeSample> ntsQuery({
 /// underlying call. All arguments are validated up front on the same
 /// terms as [ntsQuery] (out-of-range values surface as
 /// [NtsError.invalidSpec] before any FFI dispatch), with one addition:
-/// `profile.maxBurst` must be at least `1`.
+/// `profile.maxBurst` is held to the same `1..0xFFFFFFFF` range as the
+/// other tuning knobs.
 ///
 /// State effects match calling the two lower-level functions yourself:
 /// the handshake replaces any cached session for `spec` in the
@@ -902,21 +903,25 @@ void _validateRanges({
 }
 
 // `getTime` validation front-loads the same checks its underlying
-// warm/query calls would run, plus the `maxBurst >= 1` floor that has
+// warm/query calls would run, plus the `maxBurst` range check that has
 // no lower-level equivalent, so an invalid profile surfaces as
 // `NtsError.invalidSpec` before the warming handshake ever dispatches
 // (rather than after a successful handshake has already replaced the
-// cached session).
+// cached session). `maxBurst` never crosses the FFI boundary (the
+// burst loop is pure Dart), but it is held to the same
+// `1..0xFFFFFFFF` range as the other tuning knobs so all four profile
+// fields share one validation contract.
 void _validateProfile({
   required NtsServerSpec spec,
   required NtsProfile profile,
   int? verificationTimeMs,
 }) {
-  if (profile.maxBurst < 1) {
+  if (profile.maxBurst < 1 || profile.maxBurst > _kU32Max) {
     throw NtsError.invalidSpec(
       message:
-          'profile.maxBurst ${profile.maxBurst} must be at least 1; '
-          'a getTime call needs at least one burst sample',
+          'profile.maxBurst ${profile.maxBurst} is outside the valid '
+          'range 1..$_kU32Max; a getTime call needs at least one burst '
+          'sample',
     );
   }
   _validateRanges(
