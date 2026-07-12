@@ -2074,22 +2074,6 @@ void main() {
       expect(synced.elapsedSinceSync, greaterThan(Duration.zero));
     });
 
-    test('NtsSyncedTime offsetMicros is anchored against the system '
-        'clock at construction', () {
-      final now = DateTime.now().microsecondsSinceEpoch;
-      final synced = NtsSyncedTime(
-        utcUnixMicros: now + 1_000_000,
-        roundTripMicros: 1000,
-        samplesUsed: 1,
-        trustBackend: TrustBackend.platform,
-      );
-      // The synced clock was constructed one second "ahead" of the
-      // system clock, so the offset is ~+1s. Generous slop absorbs
-      // scheduler delay between the two clock reads.
-      expect(synced.offsetMicros, greaterThan(900_000));
-      expect(synced.offsetMicros, lessThan(1_100_000));
-    });
-
     test('NtsSyncedTime toString carries the diagnostic fields', () {
       final synced = NtsSyncedTime(
         utcUnixMicros: 123,

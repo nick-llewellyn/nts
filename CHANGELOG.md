@@ -13,9 +13,9 @@
   compensation (`utc + roundTrip / 2`), and return the result as a new
   `NtsSyncedTime` anchored to a process-local monotonic `Stopwatch`
   (`utcNow` projects the authenticated instant forward immune to
-  system clock steps; `offsetMicros`, `roundTripMicros`,
-  `samplesUsed`, `trustBackend`, and `elapsedSinceSync` expose the
-  diagnostics). Tuning arrives via the new `NtsProfile` value type
+  system clock steps; `roundTripMicros`, `samplesUsed`,
+  `trustBackend`, and `elapsedSinceSync` expose the diagnostics).
+  Tuning arrives via the new `NtsProfile` value type
   (`maxBurst`, total-budget `timeoutMs` shared across the handshake
   and every burst query, `dnsConcurrencyCap`, `bridgeConcurrencyCap`)
   with `mobile` (default), `desktop`, and `embedded` presets. Error

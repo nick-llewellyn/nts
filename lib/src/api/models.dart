@@ -671,14 +671,6 @@ class NtsSyncedTime {
   /// time rather than reading this directly.
   final int utcUnixMicros;
 
-  /// Signed difference between the synchronized clock and the local
-  /// system clock at the anchor instant, in microseconds
-  /// (`utcUnixMicros - DateTime.now()` at construction). Positive
-  /// means the system clock is behind true time. Callers can apply
-  /// this as a correction to other system-clock reads taken near the
-  /// anchor.
-  final int offsetMicros;
-
   /// Round-trip time of the winning (lowest-RTT) burst sample, in
   /// microseconds. Bounds the sample's worst-case one-way-delay
   /// error: the true instant lies within `± roundTripMicros / 2` of
@@ -700,8 +692,7 @@ class NtsSyncedTime {
   /// Construct a synchronized clock anchored at the current instant.
   ///
   /// [utcUnixMicros] must be the compensated UTC valid *now*: the
-  /// internal monotonic stopwatch starts inside this constructor, and
-  /// [offsetMicros] is computed against the system clock read here.
+  /// internal monotonic stopwatch starts inside this constructor.
   /// Intended for the wrapper layer and for test fixtures; production
   /// code receives instances from `ntsGetTime`.
   NtsSyncedTime({
@@ -709,8 +700,7 @@ class NtsSyncedTime {
     required this.roundTripMicros,
     required this.samplesUsed,
     required this.trustBackend,
-  }) : offsetMicros = utcUnixMicros - DateTime.now().microsecondsSinceEpoch,
-       _anchor = Stopwatch()..start();
+  }) : _anchor = Stopwatch()..start();
 
   /// Current authenticated UTC time, projected from the anchor via
   /// the monotonic stopwatch. Unaffected by system clock changes
@@ -729,7 +719,7 @@ class NtsSyncedTime {
   @override
   String toString() =>
       'NtsSyncedTime(utcUnixMicros: $utcUnixMicros, '
-      'offsetMicros: $offsetMicros, roundTripMicros: $roundTripMicros, '
+      'roundTripMicros: $roundTripMicros, '
       'samplesUsed: $samplesUsed, trustBackend: ${trustBackend.name}, '
       'elapsedSinceSync: $elapsedSinceSync)';
 }
