@@ -71,11 +71,11 @@ the action buttons become enabled. Only one server is active at a time;
 tapping a different row reassigns the selection.
 
 If no server is selected (e.g. immediately after launch, or when filters
-hide every row), both action buttons are greyed out.
+hide every row), the action buttons are greyed out.
 
 ## Actions
 
-Two buttons sit between the server list and the log:
+Three buttons sit between the server list and the log:
 
 - **NTS Query** — performs a full RFC 8915 exchange against the selected
   server: a Network Time Security key-establishment handshake followed by
@@ -87,8 +87,15 @@ Two buttons sit between the server list and the log:
   (RFC 8915 §4) and is reported in the live log as the
   `recovered N fresh cookie(s)` count. Use this if you plan to make a
   burst of subsequent queries and want to amortise the handshake cost.
+- **Get Time** — runs the high-level `getTime` flow: a warming handshake
+  followed by a serial burst of authenticated queries (the mobile
+  profile's default of up to 3), keeping the lowest-RTT sample as a
+  synchronized clock. The log line reports the burst size, the projected
+  current UTC, and the worst-case one-way-delay error bound (`± RTT/2`).
+  This is the "do the whole thing for me" path; contrast a Get Time press
+  with a cold NTS Query press to see what the burst-and-select layer adds.
 
-Both actions are **re-entrant**: tap them as many times as you like, with
+All actions are **re-entrant**: tap them as many times as you like, with
 or without changing the selected server in between, and every request
 runs concurrently. Results land in the log in the order they complete,
 which usually reflects each server's response time.

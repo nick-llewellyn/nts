@@ -31,6 +31,7 @@ import 'package:nts/nts.dart'
         NtsErrorNtpProtocol,
         NtsErrorTimeout,
         NtsErrorTrustBackendUnavailable,
+        NtsProfile,
         TrustBackend,
         TrustMode,
         kDefaultDnsConcurrencyCap;
@@ -287,6 +288,54 @@ class NtsController {
     } catch (err, stack) {
       state.log.error(
         'nts_warm_cookies',
+        'Unhandled: $err\n$stack',
+        host: entry.hostname,
+      );
+    }
+  }
+
+  /// Run the high-level `getTime` flow against `entry`: one warming
+  /// handshake followed by a serial burst of authenticated queries,
+  /// returning the lowest-RTT sample as a monotonic synchronized
+  /// clock.
+  ///
+  /// Uses [NtsProfile.mobile] — the package default — so the demo
+  /// shows exactly what a caller gets out of the box: a 3-sample
+  /// burst under one shared 5 s budget. Contrast with [runQuery]
+  /// (one raw sample, no selection) and [warmCookies] (handshake
+  /// only); this button is the "do the whole thing for me" path the
+  /// high-level API exists for.
+  Future<void> getTime(NtsServerEntry entry) async {
+    state.log.info('nts_get_time', 'Starting getTime', host: entry.hostname);
+    final clientAtStart = _client;
+    try {
+      final synced = await clientAtStart.getTime(
+        spec: entry.spec,
+        profile: NtsProfile.mobile,
+      );
+      final stale = !identical(clientAtStart, _client);
+      state.log.info(
+        'nts_get_time',
+        stale
+            ? '${formatGetTimeSuccess(synced)}\n'
+                  '    \u2514\u2500 (from previous TrustMode; '
+                  'state intentionally not updated)'
+            : formatGetTimeSuccess(synced),
+        host: entry.hostname,
+        trustBackend: synced.trustBackend,
+      );
+      if (!stale) {
+        _setLastHandshakeBackend(
+          host: entry.hostname,
+          backend: synced.trustBackend,
+          source: 'nts_get_time',
+        );
+      }
+    } on NtsError catch (err) {
+      _logError('nts_get_time', err, entry.hostname);
+    } catch (err, stack) {
+      state.log.error(
+        'nts_get_time',
         'Unhandled: $err\n$stack',
         host: entry.hostname,
       );

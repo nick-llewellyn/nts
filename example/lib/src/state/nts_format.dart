@@ -21,6 +21,7 @@ import 'package:nts/nts.dart'
         NtsErrorNtpProtocol,
         NtsErrorTimeout,
         NtsErrorTrustBackendUnavailable,
+        NtsSyncedTime,
         NtsTimeSample,
         NtsWarmCookiesOutcome,
         TrustBackend,
@@ -103,6 +104,25 @@ String formatQuerySuccess(NtsTimeSample sample) {
 String formatWarmSuccess(NtsWarmCookiesOutcome outcome) =>
     'OK  recovered ${outcome.freshCookies} fresh cookie(s)  '
     'trust=${formatTrustBackend(outcome.trustBackend)}';
+
+/// Two-line success rendering of a `getTime` result.
+///
+/// Mirrors the [formatQuerySuccess] headline / continuation shape so
+/// the log stays visually uniform. The headline carries the winning
+/// sample's RTT, the burst size that fed the lowest-RTT selection,
+/// and the projected current UTC ([NtsSyncedTime.utcNow], not the
+/// anchored instant — reading it at format time demonstrates the
+/// monotonic projection the type exists for). The continuation
+/// carries the worst-case one-way-delay bound (`± RTT/2`) and the
+/// trust-backend attribution.
+String formatGetTimeSuccess(NtsSyncedTime time) {
+  final rtt = formatRtt(time.roundTripMicros).padLeft(8);
+  final bound = formatRtt((time.roundTripMicros / 2).round());
+  return 'OK  rtt=$rtt  samples=${time.samplesUsed}  '
+      'utc=${time.utcNow.toIso8601String()}\n'
+      '    \u2514\u2500 error\u2264\u00b1$bound (RTT/2)  '
+      'trust=${formatTrustBackend(time.trustBackend)}';
+}
 
 /// Severity classification for an [NtsError]. Network / timeout / spec
 /// errors are routine when probing arbitrary hosts and warrant warn;

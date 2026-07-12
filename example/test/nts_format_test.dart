@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show
         NtsError,
+        NtsSyncedTime,
         NtsTimeSample,
         NtsWarmCookiesOutcome,
         PhaseTimings,
@@ -115,6 +116,30 @@ void main() {
         formatWarmSuccess(outcome),
         'OK  recovered 8 fresh cookie(s)  trust=platform',
       );
+    });
+  });
+
+  group('formatGetTimeSuccess', () {
+    test('renders headline / continuation with samples, bound, trust', () {
+      final synced = NtsSyncedTime(
+        utcUnixMicros: 1_777_334_400 * 1000000,
+        roundTripMicros: 35_650,
+        samplesUsed: 3,
+        trustBackend: TrustBackend.platform,
+      );
+      final out = formatGetTimeSuccess(synced);
+      final lines = out.split('\n');
+      expect(lines, hasLength(2));
+      expect(lines[0], startsWith('OK '));
+      expect(lines[0], contains('rtt='));
+      expect(lines[0], contains('samples=3'));
+      // `utc=` renders `utcNow` (the monotonic projection), so pin
+      // the prefix rather than the exact instant.
+      expect(lines[0], contains('utc='));
+      expect(lines[1], startsWith('    └─ '));
+      // Worst-case one-way-delay bound is RTT/2 through formatRtt.
+      expect(lines[1], contains('error≤±17.82ms (RTT/2)'));
+      expect(lines[1], contains('trust=platform'));
     });
   });
 

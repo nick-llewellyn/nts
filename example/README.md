@@ -73,9 +73,9 @@ they're put together, two task-focused manuals strip the implementation
 detail out and walk through the user-facing behaviour:
 
 - [GUI User Manual](GUI_GUIDE.md) — navigating the server catalog,
-  searching / filtering / favouriting, driving the **NTS Query** and
-  **Warm Cookies** actions, reading the live log, and interpreting the
-  status banners.
+  searching / filtering / favouriting, driving the **NTS Query**,
+  **Warm Cookies**, and **Get Time** actions, reading the live log, and
+  interpreting the status banners.
 - [CLI User Manual](CLI_GUIDE.md) — invoking `bin/nts_cli.dart`, the
   positional host arguments, the `--port` / `--timeout` / `--dns-cap` /
   `--warm` / `--mock` / `--json` / `--exit-on-error` flags, and how to
@@ -125,9 +125,10 @@ src/widgets/     → ServerListView, ActionPanel, LogView, FilterBar
 State is mediated through the `signals` package: the log buffer, the
 filter chips, and the favourites set are all `Signal`s, so widgets
 rebuild reactively without any manual `setState` plumbing. The
-`NtsController` is re-entrant — concurrent `ntsQuery` / `ntsWarmCookies`
-calls overlap freely and stream results into the log as they complete,
-in completion order rather than dispatch order.
+`NtsController` is re-entrant — concurrent `ntsQuery` /
+`ntsWarmCookies` / `getTime` calls overlap freely and stream results
+into the log as they complete, in completion order rather than
+dispatch order.
 
 ### Visual identity
 

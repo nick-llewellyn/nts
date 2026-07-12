@@ -91,6 +91,7 @@ void main() {
     }
     expect(find.text('NTS Query'), findsOneWidget);
     expect(find.text('Warm Cookies'), findsOneWidget);
+    expect(find.text('Get Time'), findsOneWidget);
     expect(find.text('Latest result'), findsOneWidget);
 
     // The full live log moved to its own tab so it can claim a full
@@ -159,6 +160,39 @@ void main() {
     final exported = ok.formatForExport();
     expect(exported, contains('[host=time.cloudflare.com]'));
     expect(exported, contains('[backend=${ok.trustBackend!.name}]'));
+  });
+
+  testWidgets('tapping Get Time funnels start + OK lines into the log', (
+    tester,
+  ) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Get Time'));
+    // getTime = one mock warm + up to 3 serial mock queries, each
+    // sleeping 25-65 ms; pump generously to cover the worst case.
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump();
+
+    final lines = h.state.log.entries.value
+        .where((e) => e.source == 'nts_get_time')
+        .toList();
+    expect(lines, isNotEmpty);
+    expect(lines.any((e) => e.message.startsWith('Starting getTime')), isTrue);
+    final ok = lines.firstWhere((e) => e.message.startsWith('OK '));
+    // formatGetTimeSuccess carries the burst size, the projected UTC,
+    // the RTT/2 error bound, and the trust attribution.
+    expect(ok.message, contains('samples='));
+    expect(ok.message, contains('utc='));
+    expect(ok.message, contains('(RTT/2)'));
+    expect(ok.message, contains('trust='));
+    expect(ok.host, 'time.cloudflare.com');
+    expect(ok.trustBackend, isNotNull);
   });
 
   testWidgets('toggling favourites re-orders the list with pinned first', (
