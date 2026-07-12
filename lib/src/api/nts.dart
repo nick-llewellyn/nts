@@ -977,6 +977,12 @@ Future<NtsSyncedTime> _getTime({
 
   final burst = math.min(profile.maxBurst, outcome.freshCookies);
   NtsTimeSample? best;
+  // Monotonic instant (on `budget`'s timeline) at which the current
+  // `best` sample's reply arrived. Used below to advance the winning
+  // sample's compensated UTC across the remainder of the burst, so
+  // the constructed clock is anchored to "now" rather than to the
+  // (possibly much earlier) winning recv.
+  var bestArrivalMicros = 0;
   var samplesUsed = 0;
   Object? lastError;
   StackTrace? lastStack;
@@ -988,6 +994,7 @@ Future<NtsSyncedTime> _getTime({
       samplesUsed++;
       if (best == null || sample.roundTripMicros < best.roundTripMicros) {
         best = sample;
+        bestArrivalMicros = budget.elapsedMicroseconds;
       }
     } on NtsError catch (err, stack) {
       // Best-effort posture: tolerate individual burst failures as
@@ -1013,12 +1020,17 @@ Future<NtsSyncedTime> _getTime({
   // Symmetric-path compensation: the sample's `utcUnixMicros` is the
   // server transmit timestamp as of the reply's *send*; adding half
   // the round trip estimates the server clock at the moment the reply
-  // arrived. The constructor anchors the monotonic stopwatch "now",
-  // one await-free step after the winning reply was selected, so the
-  // anchor error is bounded by the burst-loop bookkeeping between the
-  // winning recv and this line (microseconds, not network-scale).
+  // arrived. That estimate is only valid at the winning recv instant,
+  // while `NtsSyncedTime` anchors its monotonic stopwatch at
+  // construction — which happens after the whole burst has run. Bridge
+  // the gap by advancing the compensated UTC across the time elapsed
+  // since the winning reply arrived (`anchorLagMicros`), so the value
+  // handed to the constructor is valid "now" even when the lowest-RTT
+  // sample was not the last query in the burst.
+  final anchorLagMicros = budget.elapsedMicroseconds - bestArrivalMicros;
   return NtsSyncedTime(
-    utcUnixMicros: best.utcUnixMicros + best.roundTripMicros ~/ 2,
+    utcUnixMicros:
+        best.utcUnixMicros + best.roundTripMicros ~/ 2 + anchorLagMicros,
     roundTripMicros: best.roundTripMicros,
     samplesUsed: samplesUsed,
     trustBackend: best.trustBackend,

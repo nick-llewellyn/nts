@@ -1812,10 +1812,44 @@ void main() {
       // Default profile is mobile: maxBurst 4, all four script
       // entries consumed.
       expect(api.queryDispatches, 4);
-      expect(synced.utcUnixMicros, 2_000_000 + 4000 ~/ 2);
+      // `utcUnixMicros` is the compensated winning sample plus the
+      // anchor-lag advance covering the two queries that ran after
+      // it. The mocks complete in microseconds, so bound the lag
+      // rather than pin an exact instant.
+      expect(synced.utcUnixMicros, greaterThanOrEqualTo(2_000_000 + 2000));
+      expect(synced.utcUnixMicros, lessThan(2_000_000 + 2000 + 1_000_000));
       expect(synced.roundTripMicros, 4000);
       expect(synced.samplesUsed, 4);
       expect(synced.trustBackend, TrustBackend.webpkiRoots);
+    });
+
+    test('the compensated UTC is advanced across the burst time that '
+        'elapses after the winning sample arrives', () async {
+      api.nextWarm = _ffiWarm(8);
+      // Every endpoint mock (warm + each query) parks 40ms on the
+      // gate. The winning (lowest-RTT) sample is the *first* query,
+      // so the three remaining gated queries put >= 120ms between the
+      // winning recv and NtsSyncedTime construction — the anchor-lag
+      // advance must surface in utcUnixMicros.
+      api.asyncGate = () =>
+          Future<void>.delayed(const Duration(milliseconds: 40));
+      api.queryScript = [
+        _ffiSample(utcUnixMicros: 1_000_000, roundTripMicros: 2000),
+        _ffiSample(utcUnixMicros: 2_000_000, roundTripMicros: 9000),
+        _ffiSample(utcUnixMicros: 3_000_000, roundTripMicros: 8000),
+        _ffiSample(utcUnixMicros: 4_000_000, roundTripMicros: 7000),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      expect(api.queryDispatches, 4);
+      expect(synced.roundTripMicros, 2000);
+      // Compensated base (1_000_000 + 1000) advanced by at least the
+      // three post-winner gate delays; upper bound stays loose to be
+      // timer-slop-proof.
+      expect(
+        synced.utcUnixMicros,
+        greaterThanOrEqualTo(1_000_000 + 1000 + 120_000),
+      );
+      expect(synced.utcUnixMicros, lessThan(1_000_000 + 1000 + 5_000_000));
     });
 
     test('burst size is clamped to the handshake cookie count', () async {
@@ -1867,7 +1901,10 @@ void main() {
       ];
       final synced = await ntsGetTime(spec: spec);
       expect(synced.samplesUsed, 1);
-      expect(synced.utcUnixMicros, 5_000_000 + 1000);
+      // Compensated sample plus a bounded anchor-lag advance for the
+      // two failing queries that ran after it.
+      expect(synced.utcUnixMicros, greaterThanOrEqualTo(5_000_000 + 1000));
+      expect(synced.utcUnixMicros, lessThan(5_000_000 + 1000 + 1_000_000));
       expect(api.queryDispatches, 4);
     });
 
