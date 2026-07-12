@@ -1,8 +1,10 @@
 // Action strip rendered on the Client tab between `ServerListView`
-// and the trust-status / latest-result panels: the two action
+// and the trust-status / latest-result panels: the three action
 // buttons that drive the underlying [NtsController] plus a
 // TrustMode dropdown that picks which trust-anchor policy the
-// next query / warm runs under. Buttons are disabled only when
+// next action (query, warm, or get time) runs under — all three
+// route through the same trust-mode-minted client. Buttons are
+// disabled only when
 // no server is selected — operations are intentionally re-entrant,
 // so the user can stack overlapping requests and watch them
 // complete asynchronously in the log on the sibling Log tab. All
@@ -60,6 +62,18 @@ class ActionPanel extends StatelessWidget {
                     : () => controller.warmCookies(selected),
                 icon: const Icon(Icons.cookie),
                 label: const Text('Warm Cookies'),
+              );
+            },
+          ),
+          SignalBuilder(
+            builder: (context) {
+              final selected = state.selected.value;
+              return FilledButton.tonalIcon(
+                onPressed: selected == null
+                    ? null
+                    : () => controller.getTime(selected),
+                icon: const Icon(Icons.schedule),
+                label: const Text('Get Time'),
               );
             },
           ),

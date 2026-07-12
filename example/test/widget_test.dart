@@ -11,7 +11,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:nts/nts.dart' show NtsRustLib, TrustMode;
+import 'package:nts/nts.dart' show NtsProfile, NtsRustLib, TrustMode;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
 import 'package:nts_example/src/mock_api.dart';
@@ -91,6 +91,7 @@ void main() {
     }
     expect(find.text('NTS Query'), findsOneWidget);
     expect(find.text('Warm Cookies'), findsOneWidget);
+    expect(find.text('Get Time'), findsOneWidget);
     expect(find.text('Latest result'), findsOneWidget);
 
     // The full live log moved to its own tab so it can claim a full
@@ -159,6 +160,64 @@ void main() {
     final exported = ok.formatForExport();
     expect(exported, contains('[host=time.cloudflare.com]'));
     expect(exported, contains('[backend=${ok.trustBackend!.name}]'));
+  });
+
+  testWidgets('tapping Get Time funnels start + OK lines into the log', (
+    tester,
+  ) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Get Time'));
+    // Under flutter_test, defaultTargetPlatform reports android, so
+    // profileForPlatform picks the mobile preset: getTime = one mock
+    // warm + up to 4 serial mock queries, each sleeping 25-65 ms;
+    // pump generously to cover the worst case.
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+
+    final lines = h.state.log.entries.value
+        .where((e) => e.source == 'nts_get_time')
+        .toList();
+    expect(lines, isNotEmpty);
+    expect(lines.any((e) => e.message.startsWith('Starting getTime')), isTrue);
+    final ok = lines.firstWhere((e) => e.message.startsWith('OK '));
+    // formatGetTimeSuccess carries the burst size, the projected UTC,
+    // the RTT/2 error bound, and the trust attribution.
+    expect(ok.message, contains('samples='));
+    expect(ok.message, contains('utc='));
+    expect(ok.message, contains('(RTT/2)'));
+    expect(ok.message, contains('trust='));
+    expect(ok.host, 'time.cloudflare.com');
+    expect(ok.trustBackend, isNotNull);
+  });
+
+  test('profileForPlatform maps every TargetPlatform to its preset', () {
+    // Exhaustive: mobile-class platforms get the mobile preset,
+    // desktop-class platforms get the desktop preset. The switch in
+    // profileForPlatform has no default arm, so a future
+    // TargetPlatform addition fails analysis rather than silently
+    // falling into one bucket.
+    for (final platform in TargetPlatform.values) {
+      final expected = switch (platform) {
+        TargetPlatform.android ||
+        TargetPlatform.iOS ||
+        TargetPlatform.fuchsia => NtsProfile.mobile,
+        TargetPlatform.linux ||
+        TargetPlatform.macOS ||
+        TargetPlatform.windows => NtsProfile.desktop,
+      };
+      expect(
+        profileForPlatform(platform),
+        same(expected),
+        reason: 'wrong preset for $platform',
+      );
+    }
   });
 
   testWidgets('toggling favourites re-orders the list with pinned first', (
