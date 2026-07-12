@@ -1806,14 +1806,15 @@ void main() {
           trustBackend: ffi.TrustBackend.webpkiRoots,
         ),
         _ffiSample(utcUnixMicros: 3_000_000, roundTripMicros: 7000),
+        _ffiSample(utcUnixMicros: 4_000_000, roundTripMicros: 6000),
       ];
       final synced = await ntsGetTime(spec: spec);
-      // Default profile is mobile: maxBurst 3, all three script
+      // Default profile is mobile: maxBurst 4, all four script
       // entries consumed.
-      expect(api.queryDispatches, 3);
+      expect(api.queryDispatches, 4);
       expect(synced.utcUnixMicros, 2_000_000 + 4000 ~/ 2);
       expect(synced.roundTripMicros, 4000);
-      expect(synced.samplesUsed, 3);
+      expect(synced.samplesUsed, 4);
       expect(synced.trustBackend, TrustBackend.webpkiRoots);
     });
 
@@ -1847,7 +1848,7 @@ void main() {
       // The warm gets the whole budget; each query gets only what is
       // left, so no forwarded deadline may exceed its predecessor.
       expect(api.lastWarmTimeoutMs, NtsProfile.mobile.timeoutMs);
-      expect(api.queryTimeouts, hasLength(3));
+      expect(api.queryTimeouts, hasLength(4));
       var previous = NtsProfile.mobile.timeoutMs;
       for (final t in api.queryTimeouts) {
         expect(t, lessThanOrEqualTo(previous));
@@ -1862,11 +1863,12 @@ void main() {
         const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.ntp),
         _ffiSample(utcUnixMicros: 5_000_000, roundTripMicros: 2000),
         const ffi.NtsError.network(message: 'eof'),
+        const ffi.NtsError.network(message: 'eof again'),
       ];
       final synced = await ntsGetTime(spec: spec);
       expect(synced.samplesUsed, 1);
       expect(synced.utcUnixMicros, 5_000_000 + 1000);
-      expect(api.queryDispatches, 3);
+      expect(api.queryDispatches, 4);
     });
 
     test('an all-fail burst rethrows the last query error as its '
@@ -1875,6 +1877,7 @@ void main() {
       api.queryScript = [
         const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.ntp),
         const ffi.NtsError.network(message: 'first'),
+        const ffi.NtsError.network(message: 'second'),
         const ffi.NtsError.authentication(message: 'mac stripped'),
       ];
       await expectLater(
@@ -1887,7 +1890,7 @@ void main() {
           ),
         ),
       );
-      expect(api.queryDispatches, 3);
+      expect(api.queryDispatches, 4);
     });
 
     test('a warm failure propagates as-is and dispatches no '
@@ -2011,7 +2014,7 @@ void main() {
       api.nextWarm = _ffiWarm(8);
       final client = NtsClient();
       final synced = await client.getTime(spec: spec);
-      expect(synced.samplesUsed, 3);
+      expect(synced.samplesUsed, 4);
       expect(api.lastClientWarmThat, isNotNull);
       expect(api.lastClientQueryThat, same(api.lastClientWarmThat));
       // Top-level endpoints never fired.
@@ -2022,12 +2025,12 @@ void main() {
 
   group('NtsProfile / NtsSyncedTime models', () {
     test('presets carry the documented values', () {
-      expect(NtsProfile.mobile.maxBurst, 3);
-      expect(NtsProfile.mobile.timeoutMs, 5000);
+      expect(NtsProfile.mobile.maxBurst, 4);
+      expect(NtsProfile.mobile.timeoutMs, 6000);
       expect(NtsProfile.mobile.dnsConcurrencyCap, 4);
       expect(NtsProfile.mobile.bridgeConcurrencyCap, 4);
-      expect(NtsProfile.desktop.maxBurst, 5);
-      expect(NtsProfile.desktop.timeoutMs, 5000);
+      expect(NtsProfile.desktop.maxBurst, 8);
+      expect(NtsProfile.desktop.timeoutMs, 7000);
       expect(NtsProfile.desktop.dnsConcurrencyCap, 8);
       expect(NtsProfile.desktop.bridgeConcurrencyCap, 8);
       expect(NtsProfile.embedded.maxBurst, 2);
@@ -2038,8 +2041,8 @@ void main() {
 
     test('NtsProfile equality and hashCode are value-based', () {
       const a = NtsProfile(
-        maxBurst: 3,
-        timeoutMs: 5000,
+        maxBurst: 4,
+        timeoutMs: 6000,
         dnsConcurrencyCap: 4,
         bridgeConcurrencyCap: 4,
       );
@@ -2048,7 +2051,7 @@ void main() {
       expect(a, isNot(NtsProfile.desktop));
       expect(
         a.toString(),
-        'NtsProfile(maxBurst: 3, timeoutMs: 5000, '
+        'NtsProfile(maxBurst: 4, timeoutMs: 6000, '
         'dnsConcurrencyCap: 4, bridgeConcurrencyCap: 4)',
       );
     });

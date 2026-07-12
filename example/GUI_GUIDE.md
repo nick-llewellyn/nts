@@ -90,8 +90,8 @@ Three buttons sit between the server list and the log:
 - **Get Time** — runs the high-level `getTime` flow: a warming handshake
   followed by a serial burst of authenticated queries, keeping the
   lowest-RTT sample as a synchronized clock. The profile is picked for
-  the running platform: up to 3 samples on phones and tablets (the
-  `mobile` preset), up to 5 on desktop hosts (the `desktop` preset).
+  the running platform: up to 4 samples on phones and tablets (the
+  `mobile` preset), up to 8 on desktop hosts (the `desktop` preset).
   The log line reports the burst size, the projected
   current UTC, and the worst-case one-way-delay error bound (`± RTT/2`).
   This is the "do the whole thing for me" path; contrast a Get Time press

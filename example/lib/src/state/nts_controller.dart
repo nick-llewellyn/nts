@@ -63,9 +63,9 @@ const int _kTimeoutMs = 5000;
 
 /// Maps a Flutter [TargetPlatform] onto the [NtsProfile] preset sized
 /// for that class of host: phones and tablets (Android, iOS, Fuchsia)
-/// get [NtsProfile.mobile]'s 3-sample burst and modest concurrency
+/// get [NtsProfile.mobile]'s 4-sample burst and modest concurrency
 /// caps, while desktop hosts (Linux, macOS, Windows) get
-/// [NtsProfile.desktop]'s 5-sample burst and raised caps. Split out
+/// [NtsProfile.desktop]'s 8-sample burst and raised caps. Split out
 /// from [NtsController.getTime] (which feeds it
 /// [defaultTargetPlatform]) so tests can pin the mapping per platform
 /// without overriding the ambient platform of the whole test binding.
@@ -320,8 +320,8 @@ class NtsController {
   /// clock.
   ///
   /// Picks the profile via [profileForPlatform] on the running
-  /// [defaultTargetPlatform] — [NtsProfile.mobile]'s 3-sample burst
-  /// on phones and tablets, [NtsProfile.desktop]'s 5-sample burst on
+  /// [defaultTargetPlatform] — [NtsProfile.mobile]'s 4-sample burst
+  /// on phones and tablets, [NtsProfile.desktop]'s 8-sample burst on
   /// desktop hosts — so the demo shows the preset the package sized
   /// for the machine it is actually running on. Contrast with
   /// [runQuery] (one raw sample, no selection) and [warmCookies]

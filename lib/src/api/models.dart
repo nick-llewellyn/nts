@@ -601,23 +601,27 @@ class NtsProfile {
     required this.bridgeConcurrencyCap,
   });
 
-  /// Preset for phones and tablets: modest burst, package-default
-  /// concurrency caps (sized for 4-logical-CPU devices), 5 s total
-  /// budget. The default profile when `getTime` is called without
-  /// an explicit one.
+  /// Preset for phones and tablets: a 4-sample burst — enough spread
+  /// for a meaningful lowest-RTT pick on jittery cellular / Wi-Fi
+  /// paths without holding the radio up — package-default concurrency
+  /// caps (sized for 4-logical-CPU devices), and a 6 s total budget
+  /// covering the handshake plus the four serial queries. The default
+  /// profile when `getTime` is called without an explicit one.
   static const NtsProfile mobile = NtsProfile(
-    maxBurst: 3,
-    timeoutMs: 5000,
+    maxBurst: 4,
+    timeoutMs: 6000,
     dnsConcurrencyCap: 4,
     bridgeConcurrencyCap: 4,
   );
 
-  /// Preset for desktop / server hosts: larger burst for tighter
-  /// RTT selection and raised concurrency caps to match the wider
-  /// worker pools those hosts run.
+  /// Preset for desktop / server hosts: an 8-sample burst for a
+  /// tighter lowest-RTT selection on the faster, steadier networks
+  /// those hosts sit on, raised concurrency caps to match their
+  /// wider worker pools, and a 7 s total budget sized for the longer
+  /// serial burst.
   static const NtsProfile desktop = NtsProfile(
-    maxBurst: 5,
-    timeoutMs: 5000,
+    maxBurst: 8,
+    timeoutMs: 7000,
     dnsConcurrencyCap: 8,
     bridgeConcurrencyCap: 8,
   );

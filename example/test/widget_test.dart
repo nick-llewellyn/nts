@@ -176,9 +176,9 @@ void main() {
     await tester.tap(find.text('Get Time'));
     // Under flutter_test, defaultTargetPlatform reports android, so
     // profileForPlatform picks the mobile preset: getTime = one mock
-    // warm + up to 3 serial mock queries, each sleeping 25-65 ms;
+    // warm + up to 4 serial mock queries, each sleeping 25-65 ms;
     // pump generously to cover the worst case.
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 600));
     await tester.pump();
 
     final lines = h.state.log.entries.value
