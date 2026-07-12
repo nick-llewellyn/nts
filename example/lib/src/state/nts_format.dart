@@ -114,10 +114,12 @@ String formatWarmSuccess(NtsWarmCookiesOutcome outcome) =>
 /// anchored instant — reading it at format time demonstrates the
 /// monotonic projection the type exists for). The continuation
 /// carries the worst-case one-way-delay bound (`± RTT/2`) and the
-/// trust-backend attribution.
+/// trust-backend attribution. The bound uses an integer ceiling
+/// (`(rtt + 1) ~/ 2`) so odd RTTs never understate the conservative
+/// half-RTT envelope.
 String formatGetTimeSuccess(NtsSyncedTime time) {
   final rtt = formatRtt(time.roundTripMicros).padLeft(8);
-  final bound = formatRtt((time.roundTripMicros / 2).round());
+  final bound = formatRtt((time.roundTripMicros + 1) ~/ 2);
   return 'OK  rtt=$rtt  samples=${time.samplesUsed}  '
       'utc=${time.utcNow.toIso8601String()}\n'
       '    \u2514\u2500 error\u2264\u00b1$bound (RTT/2)  '
