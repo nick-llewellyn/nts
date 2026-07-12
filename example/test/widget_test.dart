@@ -11,7 +11,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:nts/nts.dart' show NtsRustLib, TrustMode;
+import 'package:nts/nts.dart' show NtsProfile, NtsRustLib, TrustMode;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
 import 'package:nts_example/src/mock_api.dart';
@@ -174,8 +174,10 @@ void main() {
     await tester.pump();
 
     await tester.tap(find.text('Get Time'));
-    // getTime = one mock warm + up to 3 serial mock queries, each
-    // sleeping 25-65 ms; pump generously to cover the worst case.
+    // Under flutter_test, defaultTargetPlatform reports android, so
+    // profileForPlatform picks the mobile preset: getTime = one mock
+    // warm + up to 3 serial mock queries, each sleeping 25-65 ms;
+    // pump generously to cover the worst case.
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump();
 
@@ -193,6 +195,29 @@ void main() {
     expect(ok.message, contains('trust='));
     expect(ok.host, 'time.cloudflare.com');
     expect(ok.trustBackend, isNotNull);
+  });
+
+  test('profileForPlatform maps every TargetPlatform to its preset', () {
+    // Exhaustive: mobile-class platforms get the mobile preset,
+    // desktop-class platforms get the desktop preset. The switch in
+    // profileForPlatform has no default arm, so a future
+    // TargetPlatform addition fails analysis rather than silently
+    // falling into one bucket.
+    for (final platform in TargetPlatform.values) {
+      final expected = switch (platform) {
+        TargetPlatform.android ||
+        TargetPlatform.iOS ||
+        TargetPlatform.fuchsia => NtsProfile.mobile,
+        TargetPlatform.linux ||
+        TargetPlatform.macOS ||
+        TargetPlatform.windows => NtsProfile.desktop,
+      };
+      expect(
+        profileForPlatform(platform),
+        same(expected),
+        reason: 'wrong preset for $platform',
+      );
+    }
   });
 
   testWidgets('toggling favourites re-orders the list with pinned first', (

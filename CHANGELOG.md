@@ -28,8 +28,10 @@
   shared `1..0xFFFFFFFF` range before any FFI dispatch. Dart-only
   wrapper layer; zero FFI/bridge changes. The example app's GUI gains
   a matching **Get Time** action button alongside NTS Query / Warm
-  Cookies, with a `formatGetTimeSuccess` log rendering that reports
-  the burst size, projected UTC, and `± RTT/2` error bound.
+  Cookies, picking the preset for the running platform (`mobile` on
+  phones and tablets, `desktop` on desktop hosts), with a
+  `formatGetTimeSuccess` log rendering that reports the burst size,
+  projected UTC, and `± RTT/2` error bound.
   (NTS-76)
 - Added `.github/workflows/advisory.yml` with two scheduled,
   non-blocking documentation-hygiene jobs (weekly, Wednesday 05:00
