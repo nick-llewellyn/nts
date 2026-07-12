@@ -579,9 +579,17 @@ class NtsProfile {
 
   /// Per-call ceiling on concurrently dispatched bridge calls,
   /// forwarded to each underlying call. Same semantics as the
-  /// `bridgeConcurrencyCap` parameter on `ntsQuery`. `getTime`'s
-  /// own calls run serially, so this only matters when other calls
-  /// from the same isolate contend for the shared admission gate.
+  /// `bridgeConcurrencyCap` parameter on `ntsQuery`.
+  ///
+  /// A single `getTime` call never contends with itself: its burst
+  /// runs serially **by design** so each sample observes an
+  /// uncluttered network path (concurrent same-server samples would
+  /// share transient queue spikes and blunt the lowest-RTT
+  /// selection). The cap instead governs the legitimate parallelism
+  /// *across* calls — e.g. concurrent `getTime` calls against
+  /// distinct servers for redundancy or server selection, or other
+  /// wrapper calls from the same isolate — all of which contend for
+  /// the shared bridge admission gate documented on `ntsQuery`.
   final int bridgeConcurrencyCap;
 
   /// Construct a custom profile. Prefer the named presets unless the

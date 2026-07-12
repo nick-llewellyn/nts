@@ -257,6 +257,17 @@ Future<NtsTimeSample> ntsQuery({
 /// returned as an [NtsSyncedTime], whose [NtsSyncedTime.utcNow]
 /// projection is immune to later system clock changes.
 ///
+/// The burst is serial **by design**, not as an implementation
+/// shortcut: firing samples concurrently at one server would send
+/// them down the same path as a dense cluster sharing any transient
+/// queue spike, defeating the lowest-RTT selection. Sequential
+/// queries let the local interface queue drain between samples so
+/// each observes an independent snapshot of the path. Parallelism
+/// across *distinct servers* remains legitimate — concurrent
+/// `getTime` calls (e.g. for redundancy or server selection) run
+/// independently, bounded by the bridge admission gate via
+/// [NtsProfile.bridgeConcurrencyCap].
+///
 /// `profile` bundles the tuning knobs ([NtsProfile.maxBurst],
 /// [NtsProfile.timeoutMs], [NtsProfile.dnsConcurrencyCap],
 /// [NtsProfile.bridgeConcurrencyCap]) and defaults to
