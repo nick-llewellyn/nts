@@ -1868,7 +1868,10 @@ void main() {
         bridgeConcurrencyCap: 3,
       );
       await ntsGetTime(spec: spec, profile: profile, verificationTimeMs: 42);
-      expect(api.lastWarmTimeoutMs, 7000);
+      // The warm draws from the shared budget, so the forwarded
+      // deadline is the profile's timeoutMs minus the (tiny, ceilinged)
+      // pre-warm overhead.
+      expect(api.lastWarmTimeoutMs, inInclusiveRange(6900, 7000));
       expect(api.lastWarmDnsCap, 6);
       expect(api.lastWarmVerificationTimeMs, 42);
       expect(api.queryDispatches, 2);
@@ -1879,11 +1882,19 @@ void main() {
     test('warm and burst draw down one shared total budget', () async {
       api.nextWarm = _ffiWarm(8);
       await ntsGetTime(spec: spec);
-      // The warm gets the whole budget; each query gets only what is
-      // left, so no forwarded deadline may exceed its predecessor.
-      expect(api.lastWarmTimeoutMs, NtsProfile.mobile.timeoutMs);
+      // The warm gets the remaining balance (the whole budget minus
+      // the ceilinged pre-warm overhead); each query gets only what
+      // is left, so no forwarded deadline may exceed its predecessor.
+      final warmTimeout = api.lastWarmTimeoutMs!;
+      expect(
+        warmTimeout,
+        inInclusiveRange(
+          NtsProfile.mobile.timeoutMs - 100,
+          NtsProfile.mobile.timeoutMs,
+        ),
+      );
       expect(api.queryTimeouts, hasLength(4));
-      var previous = NtsProfile.mobile.timeoutMs;
+      var previous = warmTimeout;
       for (final t in api.queryTimeouts) {
         expect(t, lessThanOrEqualTo(previous));
         previous = t;

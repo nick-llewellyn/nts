@@ -981,7 +981,13 @@ Future<NtsSyncedTime> _getTime({
   // Warm phase: always a fresh handshake, so the burst below runs
   // against a full cookie pool and a known-fresh AEAD session. A
   // failure here is fatal by design — there is nothing to sample with.
-  final outcome = await warm(profile.timeoutMs);
+  // The handshake draws from the shared balance too (not a fresh
+  // `profile.timeoutMs`), so overhead accrued since `budget` started
+  // is charged against the total rather than silently extending it.
+  // The clamp keeps a fully depleted balance from tripping the
+  // lower-level `timeoutMs >= 1` validation; a 1ms warm then times
+  // out on its own terms and propagates per the posture above.
+  final outcome = await warm(math.max(1, remaining()));
   if (outcome.freshCookies < 1) {
     throw NtsError.noCookies(trustBackend: outcome.trustBackend);
   }
