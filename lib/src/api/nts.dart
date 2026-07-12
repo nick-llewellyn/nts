@@ -969,7 +969,14 @@ Future<NtsSyncedTime> _getTime({
   required Future<NtsTimeSample> Function(int timeoutMs) query,
 }) async {
   final budget = Stopwatch()..start();
-  int remaining() => profile.timeoutMs - budget.elapsedMilliseconds;
+  // Charge elapsed time at microsecond resolution, rounded *up* to
+  // whole milliseconds, so the returned balance is a floor. Deriving
+  // it from `elapsedMilliseconds` (which truncates) could report
+  // `1` with under a millisecond actually left, dispatching one more
+  // query and overshooting the documented total budget by up to
+  // ~1ms.
+  int remaining() =>
+      profile.timeoutMs - (budget.elapsedMicroseconds + 999) ~/ 1000;
 
   // Warm phase: always a fresh handshake, so the burst below runs
   // against a full cookie pool and a known-fresh AEAD session. A
