@@ -2,7 +2,9 @@
 // and the trust-status / latest-result panels: the three action
 // buttons that drive the underlying [NtsController] plus a
 // TrustMode dropdown that picks which trust-anchor policy the
-// next query / warm runs under. Buttons are disabled only when
+// next action (query, warm, or get time) runs under — all three
+// route through the same trust-mode-minted client. Buttons are
+// disabled only when
 // no server is selected — operations are intentionally re-entrant,
 // so the user can stack overlapping requests and watch them
 // complete asynchronously in the log on the sibling Log tab. All
