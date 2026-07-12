@@ -284,11 +284,15 @@ Future<NtsTimeSample> ntsQuery({
 ///
 /// - the warming handshake fails — its [NtsError] propagates as-is;
 /// - every burst query fails — the **last** query's [NtsError]
-///   propagates (with its original stack trace);
+///   propagates (with its original stack trace). This includes a
+///   query that dispatched and then timed out: its own
+///   [NtsError.timeout] is the error that surfaces, not the
+///   synthetic one below;
 /// - the handshake delivers zero cookies — [NtsError.noCookies];
-/// - the budget is exhausted after the handshake but before any
-///   query completes — [NtsError.timeout] with [TimeoutPhase.ntp]
-///   (the UDP exchange is the phase the budget ran out in front of).
+/// - the budget is exhausted after the handshake before the first
+///   query can even **dispatch** — a synthetic [NtsError.timeout]
+///   with [TimeoutPhase.ntp] (the UDP exchange is the phase the
+///   budget ran out in front of).
 ///
 /// `verificationTimeMs` carries the same cold-start clock-skew-rescue
 /// semantics documented on [ntsQuery] and is forwarded to every
