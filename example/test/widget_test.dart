@@ -417,6 +417,101 @@ void main() {
     );
   });
 
+  // ── TrustMode expansion tests ────────────────────────────────────────
+
+  testWidgets('dropdown contains all four TrustMode options', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Open the dropdown.
+    await tester.tap(find.text('Platform + fallback'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Platform + fallback'), findsWidgets);
+    expect(find.text('Platform only'), findsOneWidget);
+    expect(find.text('Bundled only'), findsOneWidget);
+    expect(find.text('Custom roots'), findsOneWidget);
+  });
+
+  testWidgets('CustomRootsPanel is hidden when TrustMode is not custom', (
+    tester,
+  ) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Default mode: panel must not be present.
+    expect(find.byKey(const Key('custom_roots_text_field')), findsNothing);
+
+    // Switch to bundled-only — panel still hidden.
+    h.state.trustMode.value = TrustMode.bundledOnly;
+    await tester.pump();
+    expect(find.byKey(const Key('custom_roots_text_field')), findsNothing);
+
+    // Switch to custom — panel must now appear.
+    h.state.trustMode.value = TrustMode.custom;
+    await tester.pump();
+    expect(find.byKey(const Key('custom_roots_text_field')), findsOneWidget);
+  });
+
+  testWidgets('tapping Apply without PEM text shows a validation error and '
+      'leaves customRoots null', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    h.state.trustMode.value = TrustMode.custom;
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('custom_roots_apply_button')));
+    await tester.pump();
+
+    expect(find.text('Paste a PEM certificate first.'), findsOneWidget);
+    expect(h.state.customRoots.value, isNull);
+  });
+
+  testWidgets('pasting PEM and tapping Apply populates customRoots and '
+      'customRootsLabel, and shows the status chip', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Switch to custom — client becomes null until roots are applied.
+    h.state.trustMode.value = TrustMode.custom;
+    await tester.pump();
+    expect(h.state.customRoots.value, isNull);
+
+    // Paste minimal PEM text and apply.
+    await tester.enterText(
+      find.byKey(const Key('custom_roots_text_field')),
+      '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----',
+    );
+    await tester.tap(find.byKey(const Key('custom_roots_apply_button')));
+    await tester.pump();
+
+    expect(h.state.customRoots.value, isNotNull);
+    expect(h.state.customRootsLabel.value, 'pasted PEM');
+    // Status chip should appear.
+    expect(find.byKey(const Key('custom_roots_status_chip')), findsOneWidget);
+  });
+
   testWidgets('compact ClientTab branch renders without a multiple-'
       'PrimaryScrollController assertion under a short body height', (
     tester,

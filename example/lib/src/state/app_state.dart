@@ -16,6 +16,8 @@
 // propagate through `filteredServers` automatically thanks to the
 // signals-core dependency tracking.
 
+import 'dart:typed_data' show Uint8List;
+
 import 'package:nts/nts.dart' show TrustBackend, TrustMode;
 import 'package:signals/signals.dart'
     show Computed, ReadonlySignal, Signal, computed, signal;
@@ -51,7 +53,9 @@ class AppState {
        regionFilter = signal<String>(kAllRegions),
        favoritesOnly = signal<bool>(false),
        trustMode = signal<TrustMode>(TrustMode.platformWithFallback),
-       lastHandshakeBackend = signal<TrustBackend?>(null) {
+       lastHandshakeBackend = signal<TrustBackend?>(null),
+       customRoots = signal<Uint8List?>(null),
+       customRootsLabel = signal<String>('') {
     filteredServers = computed<List<NtsServerEntry>>(_recomputeFiltered);
     regions = _collectRegions(catalog);
   }
@@ -100,6 +104,17 @@ class AppState {
   /// to [TrustMode.platformWithFallback] to mirror the package's
   /// pre-3.0.0 behaviour.
   final Signal<TrustMode> trustMode;
+
+  /// Raw PEM or DER bytes for the custom trust anchor, or `null` when
+  /// [TrustMode.custom] is not yet configured with a root certificate.
+  /// Writing this signal causes [NtsController] to re-mint its client
+  /// so the new roots take effect on the next handshake.
+  final Signal<Uint8List?> customRoots;
+
+  /// Human-readable label shown in [CustomRootsPanel] to describe the
+  /// currently-loaded root (filename or "pasted PEM"). Empty when
+  /// [customRoots] is `null`.
+  final Signal<String> customRootsLabel;
 
   /// Trust backend the controller's per-instance `NtsClient`
   /// resolved to on its most-recent successful query / warm.

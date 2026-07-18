@@ -59,13 +59,13 @@ const Duration _kTimeout = Duration(milliseconds: 5000);
 
 class NtsController {
   NtsController(this.state)
-    : _client = NtsClient(trustMode: state.trustMode.value),
-      // Initialize from the same source-of-truth that built `_client`
+    : // Initialize from the same source-of-truth that builds `_client`
       // so the two cannot diverge if the caller starts the app under
       // a non-default trust mode (e.g. a future deeplink that pre-
       // populates `state.trustMode` to `platformOnly` before the
       // controller is constructed).
       _activeMode = state.trustMode.value {
+    _client = _mintClient();
     // Re-mint the per-instance NtsClient whenever the user toggles
     // the trust-mode signal. TrustMode is a construction-time
     // parameter on the Rust side; replacing the handle is the only
@@ -74,14 +74,31 @@ class NtsController {
     // intentionally — the demo's whole point is to make the cold-
     // start cost of each policy visible.
     state.trustMode.subscribe((_) => _onTrustModeChanged());
+    // Re-mint whenever custom roots change so the new roots take
+    // effect on the next handshake without requiring a trust-mode
+    // toggle. `subscribe` fires immediately with the current value
+    // on first listen; `_initialized` guards against that no-op
+    // initial call polluting the log before the user has done
+    // anything.
+    state.customRoots.subscribe((_) {
+      if (_initialized) _onCustomRootsChanged();
+    });
+    _initialized = true;
   }
 
   final AppState state;
 
-  /// Active per-instance NTS client. Owns its own per-host session
-  /// table so the demo's trust-mode toggle doesn't bleed cookies /
-  /// keys between policies.
-  NtsClient _client;
+  /// Set to `true` at the end of the constructor after subscriptions
+  /// are attached. Guards the `customRoots` subscription callback
+  /// against the immediate-fire that `subscribe` performs on first
+  /// listen, so construction does not post a spurious log line.
+  bool _initialized = false;
+
+  /// Active per-instance NTS client, or `null` when
+  /// [TrustMode.custom] is selected but no root certificate has been
+  /// loaded yet. Action methods guard on this being non-null and
+  /// post a log warning when it is `null`.
+  NtsClient? _client;
 
   /// Trust mode the active [_client] was constructed with. Tracked
   /// independently of [AppState.trustMode] so the subscription
@@ -91,11 +108,26 @@ class NtsController {
   /// the two stay in lockstep from construction onward.
   TrustMode _activeMode;
 
+  /// Construct a fresh [NtsClient] from the current signal values,
+  /// or return `null` when [TrustMode.custom] is active but
+  /// [AppState.customRoots] has not yet been populated.
+  NtsClient? _mintClient() {
+    final mode = state.trustMode.value;
+    if (mode == TrustMode.custom) {
+      final roots = state.customRoots.value;
+      if (roots == null) return null;
+      return NtsClient(trustMode: mode, customRoots: roots);
+    }
+    // customRoots must NOT be passed for non-custom modes — the
+    // NtsClient factory throws ArgumentError if it is.
+    return NtsClient(trustMode: mode);
+  }
+
   void _onTrustModeChanged() {
     final next = state.trustMode.value;
     if (next == _activeMode) return;
     _activeMode = next;
-    _client = NtsClient(trustMode: next);
+    _client = _mintClient();
     // The previous client's last-handshake backend belongs to a
     // policy that no longer applies; clearing the signal puts the
     // panel back to its "no per-client handshake yet" sentinel
@@ -111,17 +143,42 @@ class NtsController {
       backend: null,
       source: 'trust_mode_toggle',
     );
+    final clientCreated = _client != null;
+    final suffix = clientCreated
+        ? '(new NtsClient minted; cached sessions dropped)'
+        : '(no roots loaded — actions will no-op until roots are applied)';
     state.log.info(
       'system',
-      'TrustMode → ${formatTrustMode(next)} '
-          '(new NtsClient minted; cached sessions dropped)',
+      'TrustMode → ${formatTrustMode(next)} $suffix',
       trustMode: next,
     );
     developer.log(
-      'TrustMode toggled → ${next.name} '
-      '(new NtsClient minted; cached sessions dropped)',
+      'TrustMode toggled → ${next.name} $suffix',
       name: _kDeveloperLogName,
     );
+  }
+
+  void _onCustomRootsChanged() {
+    _client = _mintClient();
+    _setLastHandshakeBackend(
+      host: null,
+      backend: null,
+      source: 'custom_roots_changed',
+    );
+    final roots = state.customRoots.value;
+    if (roots == null) {
+      state.log.info(
+        'system',
+        'Custom roots cleared (NtsClient dropped; actions will no-op '
+            'until roots are loaded)',
+      );
+    } else {
+      state.log.info(
+        'system',
+        'Custom roots applied — ${roots.length} bytes '
+            '(new NtsClient minted; cached sessions dropped)',
+      );
+    }
   }
 
   /// Single mutation point for `state.lastHandshakeBackend`.
@@ -199,6 +256,15 @@ class NtsController {
   /// between a cold press and a warm press is part of what the demo is
   /// meant to illustrate.
   Future<void> runQuery(NtsServerEntry entry) async {
+    final client = _client;
+    if (client == null) {
+      state.log.warn(
+        'nts_query',
+        'No NtsClient available — load a custom root certificate first.',
+        host: entry.hostname,
+      );
+      return;
+    }
     state.log.info('nts_query', 'Starting query', host: entry.hostname);
     // Capture the active client identity at start. If the user flips
     // the trust-mode toggle while this query is in-flight,
@@ -206,7 +272,7 @@ class NtsController {
     // future then completes against a session that has been dropped.
     // Comparing identity on resume lets the success / state-write
     // path tell stale completions apart from live ones.
-    final clientAtStart = _client;
+    final clientAtStart = client;
     try {
       final sample = await clientAtStart.query(
         spec: entry.spec,
@@ -254,8 +320,17 @@ class NtsController {
   }
 
   Future<void> warmCookies(NtsServerEntry entry) async {
+    final client = _client;
+    if (client == null) {
+      state.log.warn(
+        'nts_warm_cookies',
+        'No NtsClient available — load a custom root certificate first.',
+        host: entry.hostname,
+      );
+      return;
+    }
     state.log.info('nts_warm_cookies', 'Starting warm', host: entry.hostname);
-    final clientAtStart = _client;
+    final clientAtStart = client;
     try {
       final outcome = await clientAtStart.warmCookies(
         spec: entry.spec,
@@ -304,8 +379,17 @@ class NtsController {
   /// [warmCookies] (handshake only); this button is the "do the
   /// whole thing for me" path the high-level API exists for.
   Future<void> getTime(NtsServerEntry entry) async {
+    final client = _client;
+    if (client == null) {
+      state.log.warn(
+        'nts_get_time',
+        'No NtsClient available — load a custom root certificate first.',
+        host: entry.hostname,
+      );
+      return;
+    }
     state.log.info('nts_get_time', 'Starting getTime', host: entry.hostname);
-    final clientAtStart = _client;
+    final clientAtStart = client;
     try {
       final synced = await clientAtStart.getTime(spec: entry.spec);
       final stale = !identical(clientAtStart, _client);
