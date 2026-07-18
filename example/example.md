@@ -8,8 +8,10 @@ an exhaustive switch on every `NtsError` variant.
 `ntsQuery` deliberately returns the raw protocol primitives (server
 transmit timestamp + measured RTT) rather than a finished synchronized
 clock; this snippet shows the minimum filtering and offset correction
-a production caller needs. See the README's "Production Considerations"
-section for the rationale.
+a production caller needs when composing the primitives by hand. Most
+callers can skip all of it and use the one-call `ntsGetTime`
+convenience instead — see the README's "Quick start" and "Manual
+control (advanced primitives)" sections for the rationale.
 
 The same code ships as a runnable Flutter target at
 [`example/main.dart`](main.dart).
@@ -26,8 +28,9 @@ The same code ships as a runnable Flutter target at
 // `ntsQuery` returns the raw protocol primitives — server transmit
 // timestamp plus measured round-trip time — not a finished synchronized
 // clock. The burst-and-pick pattern below is the minimum a production
-// caller needs on top to get a stable offset; see `README.md`'s
-// "Production Considerations" section for the full rationale.
+// caller needs on top to get a stable offset; the one-call `ntsGetTime`
+// convenience automates this exact recipe. See `README.md`'s "Manual
+// control (advanced primitives)" section for the full rationale.
 //
 // Run from a Flutter target (`flutter run -t example/main.dart`)
 // so the Native Assets pipeline bundles the Rust dylib. Plain

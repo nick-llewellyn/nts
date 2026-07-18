@@ -105,6 +105,17 @@
 
 ### Documentation
 
+- Restructured the README around the high-level convenience API: the
+  "Use" section became a "Quick start" leading with `ntsGetTime` and
+  the `NtsSyncedTime.utcNow` monotonic projection, and the
+  "Production Considerations" section became "Manual control
+  (advanced primitives)", presenting `ntsQuery` / `ntsWarmCookies` /
+  `NtsClient` as the composition surface for callers who need
+  non-default burst sizes, budgets, or handshake timing. The API
+  summary table now lists `ntsGetTime` first as the recommended
+  entry point. Cross-references in `example/example.md` and
+  `example/main.dart` updated to the renamed section. Docs-only; no
+  behavioural change. (NTS-85)
 - Documented the millisecond resolution of the FFI boundary on the
   typed time parameters (`ntsQuery` dartdoc and the README tuning
   notes): a sub-millisecond `timeout` component is rounded **up** to
