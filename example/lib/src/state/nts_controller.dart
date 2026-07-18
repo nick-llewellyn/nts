@@ -159,6 +159,13 @@ class NtsController {
   }
 
   void _onCustomRootsChanged() {
+    // Roots only participate in client construction under
+    // TrustMode.custom (_mintClient does not pass them otherwise).
+    // Re-minting here in a non-custom mode would drop cached sessions
+    // for no effect and post a misleading "Custom roots applied" log.
+    // The change is picked up when the user switches to custom mode,
+    // which re-mints via _onTrustModeChanged.
+    if (state.trustMode.value != TrustMode.custom) return;
     _client = _mintClient();
     _setLastHandshakeBackend(
       host: null,
