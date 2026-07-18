@@ -482,7 +482,12 @@ constant's dartdoc.
   so no phase can stretch the total cost past the caller's budget.
   Exhaustion at any phase surfaces as `NtsError.timeout` carrying
   the `TimeoutPhase` that ran out; use a `switch` expression on
-  `NtsError` for exhaustive failure handling.
+  `NtsError` for exhaustive failure handling. The FFI boundary is
+  millisecond-resolution: a sub-millisecond `timeout` component is
+  rounded up to the next whole millisecond, and sub-millisecond
+  `verificationTime` precision is truncated to whole milliseconds
+  since the epoch — microseconds do not round-trip through either
+  parameter.
 - **`dnsConcurrencyCap`** (default **4**) bounds in-flight
   `getaddrinfo` worker threads process-wide. `getaddrinfo` is
   non-cancellable, so a stalled lookup is detached rather than

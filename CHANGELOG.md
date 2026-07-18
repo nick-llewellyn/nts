@@ -103,6 +103,16 @@
   with a single conversion point. Dart-only wrapper change; zero
   FFI/bridge changes. (NTS-81)
 
+### Documentation
+
+- Documented the millisecond resolution of the FFI boundary on the
+  typed time parameters (`ntsQuery` dartdoc and the README tuning
+  notes): a sub-millisecond `timeout` component is rounded **up** to
+  the next whole millisecond, and sub-millisecond `verificationTime`
+  precision is **truncated** to whole milliseconds since the epoch —
+  microseconds do not round-trip through either parameter. Docs-only;
+  no behavioural change. (NTS-84)
+
 ### Security
 
 - Bumped `anyhow` from `1.0.102` to `1.0.103` to clear **RUSTSEC-2026-0190**

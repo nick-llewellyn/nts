@@ -201,6 +201,17 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// reaching the Rust boundary, on the same `await`/`catch` shape as
 /// every other failure mode this wrapper surfaces.
 ///
+/// The FFI boundary carries time at millisecond resolution, so the
+/// microsecond precision of the typed parameters does not survive
+/// dispatch: a `timeout` with a sub-millisecond component is rounded
+/// **up** to the next whole millisecond (the budget is never shortened
+/// by conversion), and a `verificationTime` with sub-millisecond
+/// precision is **truncated** to whole milliseconds since the Unix
+/// epoch. Neither loss is observable in practice — the wire protocol
+/// and certificate validity windows operate at far coarser
+/// granularity — but callers deriving these values arithmetically
+/// should not expect microseconds to round-trip.
+///
 /// `verificationTime`, when non-null, overrides the timestamp used to
 /// check the NTS-KE server certificate's validity window
 /// (`notBefore`/`notAfter`) — interpreted in UTC (a non-UTC `DateTime`
