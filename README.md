@@ -128,7 +128,8 @@ Future<void> main() async {
   const spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
 
   // 3. Synchronize. Handshake + 8-sample burst + lowest-RTT selection
-  //    + RTT/2 compensation, all automatic under one 8 s total budget.
+  //    + RTT/2 compensation, all automatic under one 8-second total
+  //    budget.
   final synced = await ntsGetTime(spec: spec);
 
   // 4. Read the clock. `utcNow` projects the authenticated instant
@@ -146,8 +147,9 @@ sync so you can decide when a refresh is worth it. Local oscillator
 drift accumulates roughly a millisecond per minute-to-hour of age
 depending on hardware.
 
-`ntsGetTime`'s tuning is deliberately fixed (8-sample burst, one 8 s
-total budget, package-default concurrency caps): a zero-decision
+`ntsGetTime`'s tuning is deliberately fixed (8-sample burst, one
+8-second total budget, package-default concurrency caps): a
+zero-decision
 call sized to serve phones and desktops alike. If you need different
 numbers, compose the primitives yourself — see
 [Manual control](#manual-control-advanced-primitives) below.
@@ -470,7 +472,7 @@ relative fallback can fire.
 | Symbol | Purpose |
 |--------|---------|
 | `NtsRustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
-| `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-RTT selection, `roundTrip / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8 s **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. The deprecated `verificationTimeMs` `int` parameter remains accepted for one release. |
+| `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-RTT selection, `roundTrip / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8-second **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. The deprecated `verificationTimeMs` `int` parameter remains accepted for one release. |
 | `ntsQuery({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: one authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTime` (optional `DateTime`, interpreted as UTC, not before the epoch) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. The deprecated `timeoutMs` / `verificationTimeMs` `int` parameters remain accepted for one release. |
 | `ntsWarmCookies({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTime` carries the same clock-skew-rescue semantics as on `ntsQuery`. Same one-release deprecation of the `*Ms` parameters. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
