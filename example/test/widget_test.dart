@@ -512,6 +512,103 @@ void main() {
     expect(find.byKey(const Key('custom_roots_status_chip')), findsOneWidget);
   });
 
+  testWidgets('switching custom → platformOnly after roots are loaded '
+      'does not throw', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Load roots under custom mode.
+    h.state.trustMode.value = TrustMode.custom;
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('custom_roots_text_field')),
+      '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----',
+    );
+    await tester.tap(find.byKey(const Key('custom_roots_apply_button')));
+    await tester.pump();
+    expect(h.state.customRoots.value, isNotNull);
+
+    // Switch away while roots are still populated. The regression this
+    // guards: _mintClient passing customRoots to a non-custom NtsClient
+    // constructor, which throws ArgumentError.
+    h.state.trustMode.value = TrustMode.platformOnly;
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    // Panel collapses; roots signal retains its value for a later
+    // return to custom mode.
+    expect(find.byKey(const Key('custom_roots_text_field')), findsNothing);
+    expect(h.state.customRoots.value, isNotNull);
+  });
+
+  testWidgets('pasting non-ASCII text and tapping Apply shows a validation '
+      'error and leaves customRoots null', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    h.state.trustMode.value = TrustMode.custom;
+    await tester.pump();
+
+    await tester.enterText(
+      find.byKey(const Key('custom_roots_text_field')),
+      '-----BEGIN CERTIFICATE-----\nfaké\n-----END CERTIFICATE-----',
+    );
+    await tester.tap(find.byKey(const Key('custom_roots_apply_button')));
+    await tester.pump();
+
+    expect(find.textContaining('non-ASCII characters'), findsOneWidget);
+    expect(h.state.customRoots.value, isNull);
+    expect(h.state.customRootsLabel.value, isEmpty);
+  });
+
+  testWidgets('tapping Clear resets customRoots and customRootsLabel and '
+      'removes the status chip', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
+
+    // Arrange: apply pasted PEM so the chip is visible.
+    h.state.trustMode.value = TrustMode.custom;
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('custom_roots_text_field')),
+      '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----',
+    );
+    await tester.tap(find.byKey(const Key('custom_roots_apply_button')));
+    await tester.pump();
+    expect(find.byKey(const Key('custom_roots_status_chip')), findsOneWidget);
+
+    // Act: clear.
+    await tester.tap(find.byKey(const Key('custom_roots_clear_button')));
+    await tester.pump();
+
+    // Assert: signals reset, chip gone, text field emptied.
+    expect(h.state.customRoots.value, isNull);
+    expect(h.state.customRootsLabel.value, isEmpty);
+    expect(find.byKey(const Key('custom_roots_status_chip')), findsNothing);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('custom_roots_text_field')))
+          .controller!
+          .text,
+      isEmpty,
+    );
+  });
+
   testWidgets('compact ClientTab branch renders without a multiple-'
       'PrimaryScrollController assertion under a short body height', (
     tester,

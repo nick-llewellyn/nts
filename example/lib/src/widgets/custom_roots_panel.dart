@@ -11,7 +11,6 @@
 // [SizedBox] so it contributes no layout space.
 
 import 'dart:convert' show utf8;
-import 'dart:typed_data' show Uint8List;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -134,24 +133,37 @@ class _CustomRootsPanelState extends State<CustomRootsPanel> {
       );
       return;
     }
-    final bytes = Uint8List.fromList(utf8.encode(text));
-    widget.state.customRoots.value = bytes;
+    // utf8.encode returns a Uint8List directly (since Dart 3.2), so no
+    // extra copy is needed.
+    widget.state.customRoots.value = utf8.encode(text);
     widget.state.customRootsLabel.value = 'pasted PEM';
     setState(() => _validationError = null);
   }
 
   Future<void> _pickFile() async {
-    final result = await FilePicker.pickFiles();
-    if (result == null || result.files.isEmpty) return;
-    final file = result.files.first;
-    final bytes = await file.readAsBytes();
-    if (bytes.isEmpty) {
-      setState(() => _validationError = 'Selected file is empty.');
-      return;
+    try {
+      final result = await FilePicker.pickFiles();
+      if (result == null || result.files.isEmpty) return;
+      final file = result.files.first;
+      final bytes = await file.readAsBytes();
+      // The picker dialog is modal-async: the widget can be disposed
+      // while it is open (e.g. the trust mode is flipped by another
+      // code path and the panel unmounts).
+      if (!mounted) return;
+      if (bytes.isEmpty) {
+        setState(() => _validationError = 'Selected file is empty.');
+        return;
+      }
+      widget.state.customRoots.value = bytes;
+      widget.state.customRootsLabel.value = file.name;
+      setState(() => _validationError = null);
+    } on Exception catch (e) {
+      // Surface picker/read failures (e.g. MissingPluginException,
+      // I/O errors) as a validation error instead of an unhandled
+      // zone exception.
+      if (!mounted) return;
+      setState(() => _validationError = 'Could not load file: $e');
     }
-    widget.state.customRoots.value = bytes;
-    widget.state.customRootsLabel.value = file.name;
-    setState(() => _validationError = null);
   }
 
   void _clear() {
