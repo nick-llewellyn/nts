@@ -24,10 +24,11 @@ else mandatory. The load-bearing facts:
   parsers](#fuzzing-the-rust-parsers-cargo-fuzz)). Toolchain bumps
   follow the upgrade checklist in `rust-toolchain.toml`'s comments
   and land as their own PR. When a bump lands on `main`, nothing
-  manual is needed after pulling: the hook's pre-build
-  `rustup show active-toolchain` (run inside `rust/`) auto-installs
-  the new pin, exactly as on first use — `rustup update` is not part
-  of the flow. Optionally reclaim disk from the superseded pin with
+  manual is needed after pulling: rustup resolves
+  `rust-toolchain.toml` on the next hook build or `cargo`
+  invocation inside `rust/` and auto-installs the new pin, exactly
+  as on first use — `rustup update` is not part of the flow.
+  Optionally reclaim disk from the superseded pin with
   `rustup toolchain uninstall <old-version>`.
 - **Flutter tracks the `stable` channel** (see `.fvmrc`); CI also
   runs the SDK floor (3.38.10) as a second matrix leg.

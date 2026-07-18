@@ -206,9 +206,9 @@
   references in `README.md`, `DEVELOPMENT.md`, and
   `example/README.md` are aligned with the new version, and the
   docs now spell out the upgrade path for consumers and
-  contributors: none — the Native Assets hook's pre-build
-  `rustup show active-toolchain` (run inside `rust/`) auto-installs
-  a bumped pin on the next `flutter run` / `flutter build`, so no
+  contributors: none — rustup resolves `rust-toolchain.toml` on
+  the next `flutter run` / `flutter build` (or any `cargo`
+  invocation inside `rust/`) and auto-installs a bumped pin, so no
   `rustup update` or other manual step is required. (NTS-79)
 
 - Bumped the pinned Rust toolchain (`rust/rust-toolchain.toml`) from
