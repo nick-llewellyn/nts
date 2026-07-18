@@ -123,8 +123,9 @@ class _CustomRootsPanelState extends State<CustomRootsPanel> {
       setState(() => _validationError = 'Paste a PEM certificate first.');
       return;
     }
-    // PEM is ASCII; reject pasted input that contains non-ASCII characters
-    // to avoid silent mis-encoding or runtime errors from codeUnits > 255.
+    // PEM is ASCII. Reject non-ASCII input (code unit > 127) before encoding:
+    // utf8.encode would silently produce multi-byte sequences that the TLS
+    // stack will not recognise as valid PEM.
     if (text.codeUnits.any((c) => c > 127)) {
       setState(
         () => _validationError =
