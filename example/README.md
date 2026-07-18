@@ -146,7 +146,7 @@ The Rust dylib is built and bundled automatically by the package's
 Native Assets build hook (`../hook/build.dart`), which invokes `cargo
 build --release` for the active target via `native_toolchain_rust`.
 The hook resolves the toolchain through rustup from the pin in
-`rust/rust-toolchain.toml` (currently Rust 1.96.1), auto-installing
+`rust/rust-toolchain.toml` (currently Rust 1.97.1), auto-installing
 it and the platform's cross-compile target on first use — so the
 only setup is having `rustup` on your `PATH`, per the root README's
 [Prerequisites](../README.md#prerequisites). No manual `cargo build`
@@ -236,7 +236,7 @@ cargo build --release
 
 Run it from inside `rust/` so cargo picks up the
 `rust-toolchain.toml` pin — rustup resolves and auto-installs the
-pinned toolchain (currently Rust 1.96.1), so no manual toolchain
+pinned toolchain (currently Rust 1.97.1), so no manual toolchain
 selection is needed, the same as the GUI path.
 
 The build drops `libnts_rust.{dylib|so|dll}` into

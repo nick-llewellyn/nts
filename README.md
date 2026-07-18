@@ -50,7 +50,7 @@ and cryptographic specifics.
   Assets build hook the first time you run `flutter run` /
   `flutter build`. The hook reads `rust/rust-toolchain.toml` via
   rustup, which automatically installs the pinned toolchain
-  (currently Rust 1.96.1) and the cross-compile target for the
+  (currently Rust 1.97.1) and the cross-compile target for the
   platform being built. No manual `cargo` invocation, dylib
   copying, or build configuration is needed — but without rustup
   installed the build fails at the hook step.
@@ -69,6 +69,13 @@ and cryptographic specifics.
 
   Restart your terminal (or IDE) afterwards so the updated `PATH`
   is picked up, and verify with `rustup --version`.
+
+  The same mechanism covers toolchain *upgrades*: when a release of
+  this package bumps the pin in `rust/rust-toolchain.toml`, the next
+  `flutter run` / `flutter build` auto-downloads the new version —
+  no `rustup update` or other manual step is needed. The superseded
+  toolchain stays on disk; reclaim the space with
+  `rustup toolchain uninstall <old-version>` if you like.
 
 ### Install
 

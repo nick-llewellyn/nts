@@ -192,6 +192,26 @@
 ### Changed
 
 - Bumped the pinned Rust toolchain (`rust/rust-toolchain.toml`) from
+  1.96.1 to 1.97.1. The point release carries the fix for an LLVM
+  miscompilation (rust-lang/rust#159035) present since at least
+  Rust 1.87 — relevant to the cryptographic core, so tracked
+  promptly. No binding regeneration was required: `dart run
+  tool/check_bindings.dart` under the new pin reports the FRB
+  bindings in sync (the `Eq`-derive internal names echoed in the
+  generated ignore-list header are unchanged between 1.96 and
+  1.97), and `cargo fmt --check` / `cargo clippy -D warnings` /
+  `cargo test` all pass with no new lints. MSRV declared in
+  `rust/Cargo.toml` and mirrored in `rust/clippy.toml` stays at
+  1.87 (1.97 stabilizes nothing the crate adopts). The pin
+  references in `README.md`, `DEVELOPMENT.md`, and
+  `example/README.md` are aligned with the new version, and the
+  docs now spell out the upgrade path for consumers and
+  contributors: none — the Native Assets hook's pre-build
+  `rustup show active-toolchain` (run inside `rust/`) auto-installs
+  a bumped pin on the next `flutter run` / `flutter build`, so no
+  `rustup update` or other manual step is required. (NTS-79)
+
+- Bumped the pinned Rust toolchain (`rust/rust-toolchain.toml`) from
   1.92.0 to 1.96.1 and landed the clippy fixes deferred to this bump
   in the same change: the `empty_enum` lint key in `rust/Cargo.toml`
   is renamed to its 1.95+ spelling `empty_enums`, and two
