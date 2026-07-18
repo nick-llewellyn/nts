@@ -11,7 +11,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:nts/nts.dart' show NtsProfile, NtsRustLib, TrustMode;
+import 'package:nts/nts.dart' show NtsRustLib, TrustMode;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
 import 'package:nts_example/src/mock_api.dart';
@@ -174,11 +174,11 @@ void main() {
     await tester.pump();
 
     await tester.tap(find.text('Get Time'));
-    // Under flutter_test, defaultTargetPlatform reports android, so
-    // profileForPlatform picks the mobile preset: getTime = one mock
-    // warm + up to 4 serial mock queries, each sleeping 25-65 ms;
-    // pump generously to cover the worst case.
-    await tester.pump(const Duration(milliseconds: 600));
+    // getTime = one mock warm (80 ms) + up to 8 serial mock queries
+    // (the internal burst cap; the mock handshake delivers 8
+    // cookies), each sleeping 25-65 ms; pump generously to cover the
+    // worst case.
+    await tester.pump(const Duration(milliseconds: 900));
     await tester.pump();
 
     final lines = h.state.log.entries.value
@@ -195,29 +195,6 @@ void main() {
     expect(ok.message, contains('trust='));
     expect(ok.host, 'time.cloudflare.com');
     expect(ok.trustBackend, isNotNull);
-  });
-
-  test('profileForPlatform maps every TargetPlatform to its preset', () {
-    // Exhaustive: mobile-class platforms get the mobile preset,
-    // desktop-class platforms get the desktop preset. The switch in
-    // profileForPlatform has no default arm, so a future
-    // TargetPlatform addition fails analysis rather than silently
-    // falling into one bucket.
-    for (final platform in TargetPlatform.values) {
-      final expected = switch (platform) {
-        TargetPlatform.android ||
-        TargetPlatform.iOS ||
-        TargetPlatform.fuchsia => NtsProfile.mobile,
-        TargetPlatform.linux ||
-        TargetPlatform.macOS ||
-        TargetPlatform.windows => NtsProfile.desktop,
-      };
-      expect(
-        profileForPlatform(platform),
-        same(expected),
-        reason: 'wrong preset for $platform',
-      );
-    }
   });
 
   testWidgets('toggling favourites re-orders the list with pinned first', (

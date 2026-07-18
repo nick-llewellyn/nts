@@ -1807,25 +1807,32 @@ void main() {
         ),
         _ffiSample(utcUnixMicros: 3_000_000, roundTripMicros: 7000),
         _ffiSample(utcUnixMicros: 4_000_000, roundTripMicros: 6000),
+        _ffiSample(utcUnixMicros: 5_000_000, roundTripMicros: 8000),
+        _ffiSample(utcUnixMicros: 6_000_000, roundTripMicros: 5000),
+        _ffiSample(utcUnixMicros: 7_000_000, roundTripMicros: 6500),
+        _ffiSample(utcUnixMicros: 8_000_000, roundTripMicros: 7500),
       ];
       final synced = await ntsGetTime(spec: spec);
-      // Default profile is mobile: maxBurst 4, all four script
-      // entries consumed.
-      expect(api.queryDispatches, 4);
+      // The internal burst cap is 8; all eight script entries
+      // consumed.
+      expect(api.queryDispatches, 8);
       // `utcUnixMicros` is the compensated winning sample plus the
-      // anchor-lag advance covering the two queries that ran after
+      // anchor-lag advance covering the six queries that ran after
       // it. The mocks complete in microseconds, so bound the lag
       // rather than pin an exact instant.
       expect(synced.utcUnixMicros, greaterThanOrEqualTo(2_000_000 + 2000));
       expect(synced.utcUnixMicros, lessThan(2_000_000 + 2000 + 1_000_000));
       expect(synced.roundTripMicros, 4000);
-      expect(synced.samplesUsed, 4);
+      expect(synced.samplesUsed, 8);
       expect(synced.trustBackend, TrustBackend.webpkiRoots);
     });
 
     test('the compensated UTC is advanced across the burst time that '
         'elapses after the winning sample arrives', () async {
-      api.nextWarm = _ffiWarm(8);
+      // Clamp the burst to the four scripted samples via the cookie
+      // count so the fallback `nextSample` (RTT 0) can never enter
+      // the lowest-RTT selection.
+      api.nextWarm = _ffiWarm(4);
       // Every endpoint mock (warm + each query) parks 40ms on the
       // gate. The winning (lowest-RTT) sample is the *first* query,
       // so the three remaining gated queries put >= 120ms between the
@@ -1858,42 +1865,32 @@ void main() {
       expect(api.queryDispatches, 2);
     });
 
-    test('profile knobs are forwarded to the warm and every burst '
-        'query', () async {
+    test('the internal tuning is forwarded to the warm and every '
+        'burst query', () async {
       api.nextWarm = _ffiWarm(8);
-      const profile = NtsProfile(
-        maxBurst: 2,
-        timeoutMs: 7000,
-        dnsConcurrencyCap: 6,
-        bridgeConcurrencyCap: 3,
-      );
-      await ntsGetTime(spec: spec, profile: profile, verificationTimeMs: 42);
-      // The warm draws from the shared budget, so the forwarded
-      // deadline is the profile's timeoutMs minus the (tiny, ceilinged)
-      // pre-warm overhead.
-      expect(api.lastWarmTimeoutMs, inInclusiveRange(6900, 7000));
-      expect(api.lastWarmDnsCap, 6);
+      await ntsGetTime(spec: spec, verificationTimeMs: 42);
+      // The warm draws from the shared 8000ms budget, so the
+      // forwarded deadline is that total minus the (tiny, ceilinged)
+      // pre-warm overhead. The concurrency caps are the package
+      // defaults (the wrapper forwards them implicitly).
+      expect(api.lastWarmTimeoutMs, inInclusiveRange(7900, 8000));
+      expect(api.lastWarmDnsCap, kDefaultDnsConcurrencyCap);
       expect(api.lastWarmVerificationTimeMs, 42);
-      expect(api.queryDispatches, 2);
-      expect(api.lastQueryDnsCap, 6);
+      expect(api.queryDispatches, 8);
+      expect(api.lastQueryDnsCap, kDefaultDnsConcurrencyCap);
       expect(api.lastQueryVerificationTimeMs, 42);
     });
 
     test('warm and burst draw down one shared total budget', () async {
       api.nextWarm = _ffiWarm(8);
       await ntsGetTime(spec: spec);
-      // The warm gets the remaining balance (the whole budget minus
-      // the ceilinged pre-warm overhead); each query gets only what
-      // is left, so no forwarded deadline may exceed its predecessor.
+      // The warm gets the remaining balance (the whole 8000ms budget
+      // minus the ceilinged pre-warm overhead); each query gets only
+      // what is left, so no forwarded deadline may exceed its
+      // predecessor.
       final warmTimeout = api.lastWarmTimeoutMs!;
-      expect(
-        warmTimeout,
-        inInclusiveRange(
-          NtsProfile.mobile.timeoutMs - 100,
-          NtsProfile.mobile.timeoutMs,
-        ),
-      );
-      expect(api.queryTimeouts, hasLength(4));
+      expect(warmTimeout, inInclusiveRange(7900, 8000));
+      expect(api.queryTimeouts, hasLength(8));
       var previous = warmTimeout;
       for (final t in api.queryTimeouts) {
         expect(t, lessThanOrEqualTo(previous));
@@ -1909,14 +1906,18 @@ void main() {
         _ffiSample(utcUnixMicros: 5_000_000, roundTripMicros: 2000),
         const ffi.NtsError.network(message: 'eof'),
         const ffi.NtsError.network(message: 'eof again'),
+        const ffi.NtsError.network(message: 'eof 3'),
+        const ffi.NtsError.network(message: 'eof 4'),
+        const ffi.NtsError.network(message: 'eof 5'),
+        const ffi.NtsError.network(message: 'eof 6'),
       ];
       final synced = await ntsGetTime(spec: spec);
       expect(synced.samplesUsed, 1);
       // Compensated sample plus a bounded anchor-lag advance for the
-      // two failing queries that ran after it.
+      // six failing queries that ran after it.
       expect(synced.utcUnixMicros, greaterThanOrEqualTo(5_000_000 + 1000));
       expect(synced.utcUnixMicros, lessThan(5_000_000 + 1000 + 1_000_000));
-      expect(api.queryDispatches, 4);
+      expect(api.queryDispatches, 8);
     });
 
     test('an all-fail burst rethrows the last query error as its '
@@ -1926,6 +1927,10 @@ void main() {
         const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.ntp),
         const ffi.NtsError.network(message: 'first'),
         const ffi.NtsError.network(message: 'second'),
+        const ffi.NtsError.network(message: 'third'),
+        const ffi.NtsError.network(message: 'fourth'),
+        const ffi.NtsError.network(message: 'fifth'),
+        const ffi.NtsError.network(message: 'sixth'),
         const ffi.NtsError.authentication(message: 'mac stripped'),
       ];
       await expectLater(
@@ -1938,7 +1943,7 @@ void main() {
           ),
         ),
       );
-      expect(api.queryDispatches, 4);
+      expect(api.queryDispatches, 8);
     });
 
     test('a warm failure propagates as-is and dispatches no '
@@ -1973,88 +1978,42 @@ void main() {
       expect(api.queryDispatches, 0);
     });
 
-    test('budget exhausted by the warm surfaces as timeout(ntp)', () async {
-      api.nextWarm = _ffiWarm(8);
-      api.asyncGate = () =>
-          Future<void>.delayed(const Duration(milliseconds: 60));
-      const profile = NtsProfile(
-        maxBurst: 3,
-        timeoutMs: 20,
-        dnsConcurrencyCap: 4,
-        bridgeConcurrencyCap: 4,
-      );
-      await expectLater(
-        ntsGetTime(spec: spec, profile: profile),
-        throwsA(
-          isA<NtsErrorTimeout>()
-              .having((e) => e.phase, 'phase', TimeoutPhase.ntp)
-              .having(
-                (e) => e.trustBackend,
-                'trustBackend',
-                TrustBackend.platform,
-              ),
-        ),
-      );
-      // The warm completed (late); no query was ever dispatched.
-      expect(api.queryDispatches, 0);
-    });
-
-    test('out-of-range maxBurst is rejected before any FFI dispatch on '
-        'both entry points', () async {
-      const belowFloor = NtsProfile(
-        maxBurst: 0,
-        timeoutMs: 5000,
-        dnsConcurrencyCap: 4,
-        bridgeConcurrencyCap: 4,
-      );
-      const aboveCeiling = NtsProfile(
-        maxBurst: 0x100000000, // u32::MAX + 1
-        timeoutMs: 5000,
-        dnsConcurrencyCap: 4,
-        bridgeConcurrencyCap: 4,
-      );
+    test('a negative verificationTimeMs is rejected before any FFI '
+        'dispatch on both entry points', () async {
       final client = NtsClient();
-      for (final broken in [belowFloor, aboveCeiling]) {
-        for (final mint in <Future<Object?> Function()>[
-          () => ntsGetTime(spec: spec, profile: broken),
-          () => client.getTime(spec: spec, profile: broken),
-        ]) {
-          await expectLater(
-            mint(),
-            throwsA(
-              isA<NtsErrorInvalidSpec>().having(
-                (e) => e.message,
-                'message',
-                contains('maxBurst'),
-              ),
+      for (final mint in <Future<Object?> Function()>[
+        () => ntsGetTime(spec: spec, verificationTimeMs: -1),
+        () => client.getTime(spec: spec, verificationTimeMs: -1),
+      ]) {
+        await expectLater(
+          mint(),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('verificationTimeMs'),
             ),
-          );
-        }
+          ),
+        );
       }
       expect(api.lastWarmTimeoutMs, isNull);
       expect(api.lastClientWarmTimeoutMs, isNull);
       expect(api.queryDispatches, 0);
     });
 
-    test('out-of-range profile fields are rejected on the same terms '
-        'as ntsQuery', () async {
-      const broken = NtsProfile(
-        maxBurst: 3,
-        timeoutMs: 0,
-        dnsConcurrencyCap: 4,
-        bridgeConcurrencyCap: 4,
-      );
+    test('an invalid spec is rejected before any FFI dispatch', () async {
       await expectLater(
-        ntsGetTime(spec: spec, profile: broken),
+        ntsGetTime(spec: const NtsServerSpec(host: 'time.example', port: 0)),
         throwsA(
           isA<NtsErrorInvalidSpec>().having(
             (e) => e.message,
             'message',
-            contains('timeoutMs'),
+            contains('port'),
           ),
         ),
       );
       expect(api.lastWarmTimeoutMs, isNull);
+      expect(api.queryDispatches, 0);
     });
 
     test('NtsClient.getTime routes through the client endpoints and '
@@ -2062,7 +2021,7 @@ void main() {
       api.nextWarm = _ffiWarm(8);
       final client = NtsClient();
       final synced = await client.getTime(spec: spec);
-      expect(synced.samplesUsed, 4);
+      expect(synced.samplesUsed, 8);
       expect(api.lastClientWarmThat, isNotNull);
       expect(api.lastClientQueryThat, same(api.lastClientWarmThat));
       // Top-level endpoints never fired.
@@ -2071,39 +2030,7 @@ void main() {
     });
   });
 
-  group('NtsProfile / NtsSyncedTime models', () {
-    test('presets carry the documented values', () {
-      expect(NtsProfile.mobile.maxBurst, 4);
-      expect(NtsProfile.mobile.timeoutMs, 6000);
-      expect(NtsProfile.mobile.dnsConcurrencyCap, 4);
-      expect(NtsProfile.mobile.bridgeConcurrencyCap, 4);
-      expect(NtsProfile.desktop.maxBurst, 8);
-      expect(NtsProfile.desktop.timeoutMs, 7000);
-      expect(NtsProfile.desktop.dnsConcurrencyCap, 8);
-      expect(NtsProfile.desktop.bridgeConcurrencyCap, 8);
-      expect(NtsProfile.embedded.maxBurst, 2);
-      expect(NtsProfile.embedded.timeoutMs, 10000);
-      expect(NtsProfile.embedded.dnsConcurrencyCap, 2);
-      expect(NtsProfile.embedded.bridgeConcurrencyCap, 2);
-    });
-
-    test('NtsProfile equality and hashCode are value-based', () {
-      const a = NtsProfile(
-        maxBurst: 4,
-        timeoutMs: 6000,
-        dnsConcurrencyCap: 4,
-        bridgeConcurrencyCap: 4,
-      );
-      expect(a, NtsProfile.mobile);
-      expect(a.hashCode, NtsProfile.mobile.hashCode);
-      expect(a, isNot(NtsProfile.desktop));
-      expect(
-        a.toString(),
-        'NtsProfile(maxBurst: 4, timeoutMs: 6000, '
-        'dnsConcurrencyCap: 4, bridgeConcurrencyCap: 4)',
-      );
-    });
-
+  group('NtsSyncedTime model', () {
     test('NtsSyncedTime projects utcNow via its monotonic anchor', () async {
       final synced = NtsSyncedTime(
         utcUnixMicros: 1_700_000_000_000_000,
