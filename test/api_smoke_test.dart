@@ -1872,7 +1872,8 @@ void main() {
       // The warm draws from the shared 8000ms budget, so the
       // forwarded deadline is that total minus the (tiny, ceilinged)
       // pre-warm overhead. The concurrency caps are the package
-      // defaults (the wrapper forwards them implicitly).
+      // defaults, passed explicitly at each call site so the internal
+      // tuning cannot drift if the wrapper defaults ever change.
       expect(api.lastWarmTimeoutMs, inInclusiveRange(7900, 8000));
       expect(api.lastWarmDnsCap, kDefaultDnsConcurrencyCap);
       expect(api.lastWarmVerificationTimeMs, 42);

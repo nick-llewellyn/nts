@@ -319,11 +319,15 @@ Future<NtsSyncedTime> ntsGetTime({
     warm: (timeoutMs) => ntsWarmCookies(
       spec: spec,
       timeoutMs: timeoutMs,
+      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
       verificationTimeMs: verificationTimeMs,
     ),
     query: (timeoutMs) => ntsQuery(
       spec: spec,
       timeoutMs: timeoutMs,
+      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
       verificationTimeMs: verificationTimeMs,
     ),
   );
@@ -760,11 +764,15 @@ class NtsClient {
       warm: (timeoutMs) => warmCookies(
         spec: spec,
         timeoutMs: timeoutMs,
+        dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+        bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
         verificationTimeMs: verificationTimeMs,
       ),
       query: (timeoutMs) => query(
         spec: spec,
         timeoutMs: timeoutMs,
+        dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+        bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
         verificationTimeMs: verificationTimeMs,
       ),
     );
