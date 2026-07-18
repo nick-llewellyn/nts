@@ -169,13 +169,20 @@ class _CustomRootsPanelState extends State<CustomRootsPanel> {
           return const SizedBox.shrink();
         }
         final label = widget.state.customRootsLabel.value;
-        return _CustomRootsPanelBody(
-          controller: _controller,
-          validationError: _validationError,
-          statusLabel: label.isEmpty ? null : label,
-          onApply: _applyPem,
-          onPickFile: _pickFile,
-          onClear: _clear,
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _CustomRootsPanelBody(
+              controller: _controller,
+              validationError: _validationError,
+              statusLabel: label.isEmpty ? null : label,
+              onApply: _applyPem,
+              onPickFile: _pickFile,
+              onClear: _clear,
+            ),
+            const Divider(height: 1),
+          ],
         );
       },
     );
