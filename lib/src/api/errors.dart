@@ -22,16 +22,13 @@
 // - Every variant with a non-`trustBackend` payload uses a
 //   named-parameter constructor (`NtsError.keProtocol(message: ...,
 //   trustBackend: ...)`, `NtsError.invalidSpec(message: ...)`,
-//   etc.). The pre-3.x single-positional shape is preserved as a
-//   `field0` getter on the same variant for source-level
-//   back-compat. The five `trustBackend`-carrying variants made the
+//   etc.). The five `trustBackend`-carrying variants made the
 //   move in 3.0.0; the three remaining single-payload variants
 //   (`invalidSpec`, `trustBackendUnavailable`, `internal`) made the
-//   move in 4.0.0 for surface uniformity.
-// - For SemVer compatibility with pre-3.0 callers, the underscore-
-//   prefixed names (`NtsError_InvalidSpec`, ...) survive as deprecated
-//   typedef aliases at the bottom of this file. They will be removed
-//   at the next major bump.
+//   move in 4.0.0 for surface uniformity. The pre-3.x back-compat
+//   surface — the `field0` getter aliases and the underscore-
+//   prefixed typedef aliases (`NtsError_InvalidSpec`, ...) — was
+//   removed in 6.0.0 after three major-version lines of deprecation.
 
 import 'models.dart' show TrustBackend;
 
@@ -241,10 +238,6 @@ final class NtsErrorInvalidSpec extends NtsError {
   /// Construct an `InvalidSpec` variant.
   const NtsErrorInvalidSpec({required this.message}) : super._();
 
-  /// Pre-3.1 alias for [message]. Will be removed in a future major.
-  @Deprecated('Renamed to message; the positional payload is now named.')
-  String get field0 => message;
-
   @override
   int get hashCode => Object.hash(NtsErrorInvalidSpec, message);
 
@@ -268,10 +261,6 @@ final class NtsErrorNetwork extends NtsError {
 
   /// Construct a `Network` variant.
   const NtsErrorNetwork({required this.message, this.trustBackend}) : super._();
-
-  /// Pre-3.0 alias for [message]. Will be removed in a future major.
-  @Deprecated('Renamed to message; the positional payload is now named.')
-  String get field0 => message;
 
   @override
   int get hashCode => Object.hash(NtsErrorNetwork, message, trustBackend);
@@ -301,10 +290,6 @@ final class NtsErrorKeProtocol extends NtsError {
   /// Construct a `KeProtocol` variant.
   const NtsErrorKeProtocol({required this.message, this.trustBackend})
     : super._();
-
-  /// Pre-3.0 alias for [message]. Will be removed in a future major.
-  @Deprecated('Renamed to message; the positional payload is now named.')
-  String get field0 => message;
 
   @override
   int get hashCode => Object.hash(NtsErrorKeProtocol, message, trustBackend);
@@ -336,10 +321,6 @@ final class NtsErrorNtpProtocol extends NtsError {
   const NtsErrorNtpProtocol({required this.message, this.trustBackend})
     : super._();
 
-  /// Pre-3.0 alias for [message]. Will be removed in a future major.
-  @Deprecated('Renamed to message; the positional payload is now named.')
-  String get field0 => message;
-
   @override
   int get hashCode => Object.hash(NtsErrorNtpProtocol, message, trustBackend);
 
@@ -368,10 +349,6 @@ final class NtsErrorAuthentication extends NtsError {
   /// Construct an `Authentication` variant.
   const NtsErrorAuthentication({required this.message, this.trustBackend})
     : super._();
-
-  /// Pre-3.0 alias for [message]. Will be removed in a future major.
-  @Deprecated('Renamed to message; the positional payload is now named.')
-  String get field0 => message;
 
   @override
   int get hashCode =>
@@ -410,10 +387,6 @@ final class NtsErrorTimeout extends NtsError {
 
   /// Construct a `Timeout` variant.
   const NtsErrorTimeout({required this.phase, this.trustBackend}) : super._();
-
-  /// Pre-3.0 alias for [phase]. Will be removed in a future major.
-  @Deprecated('Renamed to phase; the positional payload is now named.')
-  TimeoutPhase get field0 => phase;
 
   @override
   int get hashCode => Object.hash(NtsErrorTimeout, phase, trustBackend);
@@ -473,10 +446,6 @@ final class NtsErrorTrustBackendUnavailable extends NtsError {
   /// Construct a `TrustBackendUnavailable` variant.
   const NtsErrorTrustBackendUnavailable({required this.message}) : super._();
 
-  /// Pre-3.1 alias for [message]. Will be removed in a future major.
-  @Deprecated('Renamed to message; the positional payload is now named.')
-  String get field0 => message;
-
   @override
   int get hashCode => Object.hash(NtsErrorTrustBackendUnavailable, message);
 
@@ -497,10 +466,6 @@ final class NtsErrorInternal extends NtsError {
   /// Construct an `Internal` variant.
   const NtsErrorInternal({required this.message}) : super._();
 
-  /// Pre-3.1 alias for [message]. Will be removed in a future major.
-  @Deprecated('Renamed to message; the positional payload is now named.')
-  String get field0 => message;
-
   @override
   int get hashCode => Object.hash(NtsErrorInternal, message);
 
@@ -512,59 +477,3 @@ final class NtsErrorInternal extends NtsError {
   @override
   String toString() => 'NtsError.internal($message)';
 }
-
-// Deprecated underscore-prefixed aliases for the pre-3.0 freezed-style
-// variant names. The package's stable surface uses the idiomatic Dart
-// PascalCase forms (`NtsErrorInvalidSpec` etc.); these typedefs exist
-// so consumer code that pattern-matched on the old names compiles
-// against 3.0.x with deprecation warnings, and can be migrated before
-// a future 4.x release removes them. The `camel_case_types` lint
-// suppression is intentional and scoped per-typedef.
-
-/// Pre-3.0 alias for [NtsErrorInvalidSpec]. Will be removed in a future
-/// 4.x release.
-@Deprecated('Renamed to NtsErrorInvalidSpec; remove the underscore.')
-// ignore: camel_case_types
-typedef NtsError_InvalidSpec = NtsErrorInvalidSpec;
-
-/// Pre-3.0 alias for [NtsErrorNetwork]. Will be removed in a future
-/// 4.x release.
-@Deprecated('Renamed to NtsErrorNetwork; remove the underscore.')
-// ignore: camel_case_types
-typedef NtsError_Network = NtsErrorNetwork;
-
-/// Pre-3.0 alias for [NtsErrorKeProtocol]. Will be removed in a future
-/// 4.x release.
-@Deprecated('Renamed to NtsErrorKeProtocol; remove the underscore.')
-// ignore: camel_case_types
-typedef NtsError_KeProtocol = NtsErrorKeProtocol;
-
-/// Pre-3.0 alias for [NtsErrorNtpProtocol]. Will be removed in a future
-/// 4.x release.
-@Deprecated('Renamed to NtsErrorNtpProtocol; remove the underscore.')
-// ignore: camel_case_types
-typedef NtsError_NtpProtocol = NtsErrorNtpProtocol;
-
-/// Pre-3.0 alias for [NtsErrorAuthentication]. Will be removed in a
-/// future 4.x release.
-@Deprecated('Renamed to NtsErrorAuthentication; remove the underscore.')
-// ignore: camel_case_types
-typedef NtsError_Authentication = NtsErrorAuthentication;
-
-/// Pre-3.0 alias for [NtsErrorTimeout]. Will be removed in a future
-/// 4.x release.
-@Deprecated('Renamed to NtsErrorTimeout; remove the underscore.')
-// ignore: camel_case_types
-typedef NtsError_Timeout = NtsErrorTimeout;
-
-/// Pre-3.0 alias for [NtsErrorNoCookies]. Will be removed in a future
-/// 4.x release.
-@Deprecated('Renamed to NtsErrorNoCookies; remove the underscore.')
-// ignore: camel_case_types
-typedef NtsError_NoCookies = NtsErrorNoCookies;
-
-/// Pre-3.0 alias for [NtsErrorInternal]. Will be removed in a future
-/// 4.x release.
-@Deprecated('Renamed to NtsErrorInternal; remove the underscore.')
-// ignore: camel_case_types
-typedef NtsError_Internal = NtsErrorInternal;

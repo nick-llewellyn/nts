@@ -167,7 +167,7 @@ bool isErrorSeverity(NtsError err) =>
 /// - **NTP Kiss-of-Death (KoD) and unsynchronized-server states tunnel
 ///   through [NtsErrorNtpProtocol]**. The 4-octet KoD reference id
 ///   (`RATE`, `DENY`, `RSTR`, `NTSN`, …) and the unsynchronised-leap
-///   flag are preserved verbatim in `field0`; callers that want to
+///   flag are preserved verbatim in `message`; callers that want to
 ///   distinguish "server told me to back off" from "server's clock is
 ///   not yet steered" can substring-match the message rather than
 ///   needing a dedicated error variant. The CLI / GUI surfaces here

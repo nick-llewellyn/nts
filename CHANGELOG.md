@@ -1,6 +1,23 @@
 # Changelog
 
 
+## 6.0
+
+### Breaking changes
+
+- Removed the eight deprecated underscore-prefixed typedef aliases
+  for the pre-3.0 `NtsError` variant names (`NtsError_InvalidSpec`,
+  `NtsError_Network`, `NtsError_KeProtocol`, `NtsError_NtpProtocol`,
+  `NtsError_Authentication`, `NtsError_Timeout`, `NtsError_NoCookies`,
+  `NtsError_Internal`) and the `@Deprecated` `field0` getter aliases
+  on the variant subclasses. Both surfaces had been deprecated since
+  3.0.0; removal was scheduled for 4.0.0, deferred, and missed again
+  at 5.0.0. Migration is mechanical: drop the underscore
+  (`NtsError_X` → `NtsErrorX`) and switch `field0` reads /
+  `:final field0` pattern matches to the named field (`message` on
+  every string-payload variant, `phase` on `NtsErrorTimeout`).
+  (NTS-87)
+
 ## 5.2.4
 
 ### Added
@@ -1568,6 +1585,8 @@ Any exhaustive `switch (err) { … }` over an `NtsError` value must
 add an arm for the new `NtsErrorTrustBackendUnavailable` variant:
 
 ```dart
+// As written for 3.0.x; the `field0` getters were removed in 6.0.0
+// in favour of the named `message` / `phase` fields.
 final detail = switch (err) {
   // ... existing arms unchanged ...
   NtsErrorNoCookies() => 'no cookies returned',

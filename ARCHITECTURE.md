@@ -660,9 +660,10 @@ The wrapper has three jobs:
    `NtsError` and rethrows the public twin via an exhaustive
    conversion `switch`, so the FFI's freezed-generated shape is
    contained at the boundary. The pre-3.0 underscore-prefixed
-   variant names (`NtsError_InvalidSpec`, …) survive as
-   `@Deprecated` typedef aliases for one release; they are scheduled
-   for removal at 4.0.
+   variant names (`NtsError_InvalidSpec`, …) survived as
+   `@Deprecated` typedef aliases through the 3.x–5.x lines and were
+   removed, together with the `@Deprecated` `field0` getter aliases,
+   in 6.0.0.
 
 The wrapper's default constants (`kDefaultTimeout` and its deprecated
 `kDefaultTimeoutMs` twin, `kDefaultDnsConcurrencyCap`) are pinned
@@ -699,7 +700,7 @@ release type.
 | `lib/nts.dart` | Public Dart API; explicit re-export of the stability-layer wrapper plus `NtsRustLib`. |
 | `lib/src/api/nts.dart` | Hand-written wrapper functions plus the FFI↔public conversion layer. Carries the consumer-facing dartdoc on the entry points. |
 | `lib/src/api/models.dart` | Hand-written public DTOs (`NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`, `NtsDnsPoolStats`, `PhaseTimings`). |
-| `lib/src/api/errors.dart` | Hand-written public `NtsError` sealed class plus `TimeoutPhase`; deprecated underscore-prefixed typedef aliases for the pre-3.0 variant names live at the bottom. |
+| `lib/src/api/errors.dart` | Hand-written public `NtsError` sealed class plus `TimeoutPhase`. |
 | `lib/src/ffi/` | Generated `flutter_rust_bridge` bindings — do not edit by hand. Internal implementation detail. |
 | `rust/src/api/` | Rust entry points exposed through FRB (`nts.rs`, `simple.rs`). |
 | `rust/src/nts/` | Protocol implementation (records, KE driver, AEAD, NTP, cookies, bounded DNS). |

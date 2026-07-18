@@ -843,26 +843,6 @@ void main() {
       expect(outcome.phaseTimings, isA<PhaseTimings>());
     });
 
-    test('deprecated underscore-prefixed typedefs alias the new names', () {
-      // The 3.0 rename retains the pre-3.0 freezed-style names as
-      // deprecated typedefs scheduled for removal at the next major
-      // bump (see the typedef declarations in
-      // `lib/src/api/errors.dart` and the `## 3.0.0` migration block
-      // in `CHANGELOG.md`). The deprecation is intentional; the
-      // lint suppression below is scoped to this single test so any
-      // *real* use of the old names elsewhere in the package still
-      // trips the warning.
-      // ignore: deprecated_member_use_from_same_package
-      const NtsError_InvalidSpec a = NtsErrorInvalidSpec(message: 'x');
-      // ignore: deprecated_member_use_from_same_package
-      const NtsError_NoCookies b = NtsErrorNoCookies();
-      // ignore: deprecated_member_use_from_same_package
-      const NtsError_Timeout c = NtsErrorTimeout(phase: TimeoutPhase.ntp);
-      expect(a, isA<NtsErrorInvalidSpec>());
-      expect(b, isA<NtsErrorNoCookies>());
-      expect(c, isA<NtsErrorTimeout>());
-    });
-
     test(
       'ntsQuery converts every FFI NtsError variant to its public twin',
       () async {
@@ -1298,7 +1278,7 @@ void main() {
         'toString', () {
       // Cross-variant inequality probe: a non-trivial NoCookies, used
       // to confirm every payload-bearing variant rejects an unrelated
-      // shape rather than falling through to its `field0 == ...` arm.
+      // shape rather than falling through to its `message == ...` arm.
       const otherVariant = NtsError.noCookies();
       for (final (a, sameValue, differentPayload, subclass, str)
           in stringPayloadCases) {
