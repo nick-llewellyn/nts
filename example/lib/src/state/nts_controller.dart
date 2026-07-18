@@ -113,9 +113,14 @@ class NtsController {
   /// [AppState.customRoots] has not yet been populated.
   NtsClient? _mintClient() {
     final mode = state.trustMode.value;
-    final roots = state.customRoots.value;
-    if (mode == TrustMode.custom && roots == null) return null;
-    return NtsClient(trustMode: mode, customRoots: roots);
+    if (mode == TrustMode.custom) {
+      final roots = state.customRoots.value;
+      if (roots == null) return null;
+      return NtsClient(trustMode: mode, customRoots: roots);
+    }
+    // customRoots must NOT be passed for non-custom modes — the
+    // NtsClient factory throws ArgumentError if it is.
+    return NtsClient(trustMode: mode);
   }
 
   void _onTrustModeChanged() {
@@ -162,7 +167,7 @@ class NtsController {
     if (roots == null) {
       state.log.info(
         'system',
-        'Custom roots cleared (NtsClient dropped; actions disabled '
+        'Custom roots cleared (NtsClient dropped; actions will no-op '
             'until roots are loaded)',
       );
     } else {

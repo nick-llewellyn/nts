@@ -483,38 +483,34 @@ void main() {
     expect(h.state.customRoots.value, isNull);
   });
 
-  testWidgets(
-    'pasting PEM and tapping Apply populates customRoots and disables '
-    'actions when in custom mode before roots are loaded, then '
-    're-enables them after Apply',
-    (tester) async {
-      final h = await _bootHarness();
-      await tester.pumpWidget(
-        MaterialApp(
-          home: HomePage(state: h.state, controller: h.controller),
-        ),
-      );
-      await tester.pump();
+  testWidgets('pasting PEM and tapping Apply populates customRoots and '
+      'customRootsLabel, and shows the status chip', (tester) async {
+    final h = await _bootHarness();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(state: h.state, controller: h.controller),
+      ),
+    );
+    await tester.pump();
 
-      // Switch to custom — client becomes null until roots are applied.
-      h.state.trustMode.value = TrustMode.custom;
-      await tester.pump();
-      expect(h.state.customRoots.value, isNull);
+    // Switch to custom — client becomes null until roots are applied.
+    h.state.trustMode.value = TrustMode.custom;
+    await tester.pump();
+    expect(h.state.customRoots.value, isNull);
 
-      // Paste minimal PEM text and apply.
-      await tester.enterText(
-        find.byKey(const Key('custom_roots_text_field')),
-        '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----',
-      );
-      await tester.tap(find.byKey(const Key('custom_roots_apply_button')));
-      await tester.pump();
+    // Paste minimal PEM text and apply.
+    await tester.enterText(
+      find.byKey(const Key('custom_roots_text_field')),
+      '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----',
+    );
+    await tester.tap(find.byKey(const Key('custom_roots_apply_button')));
+    await tester.pump();
 
-      expect(h.state.customRoots.value, isNotNull);
-      expect(h.state.customRootsLabel.value, 'pasted PEM');
-      // Status chip should appear.
-      expect(find.byKey(const Key('custom_roots_status_chip')), findsOneWidget);
-    },
-  );
+    expect(h.state.customRoots.value, isNotNull);
+    expect(h.state.customRootsLabel.value, 'pasted PEM');
+    // Status chip should appear.
+    expect(find.byKey(const Key('custom_roots_status_chip')), findsOneWidget);
+  });
 
   testWidgets('compact ClientTab branch renders without a multiple-'
       'PrimaryScrollController assertion under a short body height', (

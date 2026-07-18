@@ -132,7 +132,10 @@ class _CustomRootsPanelState extends State<CustomRootsPanel> {
     if (result == null || result.files.isEmpty) return;
     final file = result.files.first;
     final bytes = file.bytes;
-    if (bytes == null) return;
+    if (bytes == null || bytes.isEmpty) {
+      setState(() => _validationError = 'Selected file is empty.');
+      return;
+    }
     widget.state.customRoots.value = Uint8List.fromList(bytes);
     widget.state.customRootsLabel.value = file.name;
     setState(() => _validationError = null);
