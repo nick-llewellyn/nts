@@ -31,11 +31,12 @@ clock you can trust as much as you trust the operator's TLS
 certificate, rather than as much as you trust the network between you
 and an anonymous UDP listener.
 
-This package gives Dart and Flutter apps a single async call that
-returns an authenticated UTC sample, with the protocol details
-delegated to a bundled native implementation. See
-[ARCHITECTURE.md](ARCHITECTURE.md) for the underlying RFC 8915 layering
-and cryptographic specifics.
+This package gives Dart and Flutter apps a single async call
+(`ntsGetTime`) that returns an authenticated, monotonic-anchored UTC
+clock, with the protocol details delegated to a bundled native
+implementation. Lower-level primitives remain available for callers
+who need manual control. See [ARCHITECTURE.md](ARCHITECTURE.md) for
+the underlying RFC 8915 layering and cryptographic specifics.
 
 ## Getting Started
 
@@ -88,9 +89,9 @@ flutter pub add nts
 Supported on **Android, iOS, macOS, Linux, and Windows**. On every
 platform, integration is `flutter pub add nts` plus one
 `await NtsRustLib.init()` during application startup before the
-first `ntsQuery` / `ntsWarmCookies` call — no per-platform
-bootstrap code. See "Initialization has two layers" below for the
-rationale.
+first `ntsGetTime` / `ntsQuery` / `ntsWarmCookies` call — no
+per-platform bootstrap code. See "Initialization has two layers"
+below for the rationale.
 
 On Android the native bootstrap is automatic via the bundled
 `NtsPlugin` on the default Flutter/Gradle setup. The one exception:
@@ -105,7 +106,13 @@ Web and WebAssembly are unsupported: NTS-KE needs a raw TCP socket
 on `:4460` and NTPv4 needs a raw UDP socket on `:123`, neither of
 which is reachable from a browser tab.
 
-### Use
+### Quick start
+
+For most applications, `ntsGetTime` is the whole integration: one
+call that performs the NTS-KE handshake, takes a burst of up to 8
+authenticated samples under a single 8-second total budget, picks
+the lowest-RTT sample, applies the standard `roundTrip / 2`
+compensation, and returns a synchronized clock.
 
 ```dart
 import 'package:nts/nts.dart';
@@ -118,32 +125,34 @@ Future<void> main() async {
   await NtsRustLib.init();
 
   // 2. Pick an RFC 8915 NTS-KE endpoint. Port 4460 is the IANA default.
-  final spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
+  const spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
 
-  // 3. Query. The first call handshakes; later calls reuse cached keys.
-  //    The returned sample is the raw protocol output: a server
-  //    transmit timestamp plus the measured round-trip time. Production
-  //    callers should burst, filter, and apply RTT/2 compensation; see
-  //    "Production Considerations" below for the why.
-  //    `dnsConcurrencyCap` bounds the Rust-side pool of in-flight DNS
-  //    resolver workers (process-wide); `bridgeConcurrencyCap` bounds
-  //    how many of this package's calls occupy `flutter_rust_bridge`
-  //    worker threads at once. Both default to 4, sized for mobile;
-  //    they are passed explicitly here for visibility.
-  final sample = await ntsQuery(
-    spec: spec,
-    timeout: const Duration(seconds: 5),
-    dnsConcurrencyCap: 4,
-    bridgeConcurrencyCap: 4,
-  );
+  // 3. Synchronize. Handshake + 8-sample burst + lowest-RTT selection
+  //    + RTT/2 compensation, all automatic under one 8-second total
+  //    budget.
+  final synced = await ntsGetTime(spec: spec);
 
-  final utc = DateTime.fromMicrosecondsSinceEpoch(
-    sample.utcUnixMicros,
-    isUtc: true,
-  );
-  print('utc=$utc  rtt=${sample.roundTripMicros}µs');
+  // 4. Read the clock. `utcNow` projects the authenticated instant
+  //    forward on a monotonic anchor, so it stays correct even if the
+  //    user or OS steps the system clock after the sync.
+  print('authenticated utc = ${synced.utcNow}');
+  print('winning sample rtt = ${synced.roundTripMicros}µs '
+      '(${synced.samplesUsed} samples used)');
 }
 ```
+
+Keep the returned `NtsSyncedTime` and read `utcNow` on demand rather
+than re-querying per read; `elapsedSinceSync` reports the age of the
+sync so you can decide when a refresh is worth it. Local oscillator
+drift accumulates roughly a millisecond per minute-to-hour of age
+depending on hardware.
+
+`ntsGetTime`'s tuning is deliberately fixed (8-sample burst, one
+8-second total budget, package-default concurrency caps): a
+zero-decision
+call sized to serve phones and desktops alike. If you need different
+numbers, compose the primitives yourself — see
+[Manual control](#manual-control-advanced-primitives) below.
 
 **Initialization has two layers.** Get them straight before deciding
 what your host code needs to do.
@@ -171,14 +180,14 @@ what your host code needs to do.
    v2 dispatch table on the calling isolate. The Android plugin does
    *not* subsume this step: `NtsRustLib.init()` mutates Dart isolate
    state, and the plugin runs on the Android platform thread before
-   the Dart isolate exists. Calling `ntsQuery` or `ntsWarmCookies`
-   before `NtsRustLib.init()` resolves raises an error. In a Flutter
+   the Dart isolate exists. Calling `ntsGetTime`, `ntsQuery`, or
+   `ntsWarmCookies` before `NtsRustLib.init()` resolves raises an
+   error. In a Flutter
    app, do it right after `WidgetsFlutterBinding.ensureInitialized()`
    in `main()`; subsequent invocations are no-ops, so it is safe to
    call from a shared bootstrap path.
 
-A complete, runnable version that demonstrates the recommended
-warm-burst-filter-compensate flow with exhaustive `NtsError` handling
+A complete, runnable version with exhaustive `NtsError` handling
 lives in [`example/main.dart`](example/main.dart). For valid hostnames
 to plug into `NtsServerSpec`, see the community-maintained
 [NTS server list](https://github.com/jauderho/nts-servers).
@@ -190,24 +199,43 @@ Migration notes for breaking releases live in
 particular the `1.4.0` Android bootstrap rework (JNI symbol rename
 plus auto-init plugin) for anyone arriving from `1.3.x`.
 
-## Production Considerations
+## Manual control (advanced primitives)
 
-`ntsQuery` exposes the RFC 8915 protocol primitives — a single
-authenticated round-trip with the server's transmit timestamp and the
-locally measured RTT — not a finished synchronized clock. A single raw
-sample is sufficient for an authenticated "what time does this server
-claim it is right now?" probe, but anything that anchors application
-logic to wall-clock time should add two cheap layers on top:
+`ntsGetTime` is the packaged implementation of the standard
+NTP-hygiene recipe. When its fixed tuning does not fit — a different
+burst size, a tighter or looser budget, handshake timing decoupled
+from sampling, custom filtering — the same protocol primitives it is
+built from are public:
 
-1. **Burst sampling.** A single NTPv4 reply carries whatever jitter the
-   network and the server's queueing happened to introduce on that one
-   packet. Calling `ntsWarmCookies` once and then `ntsQuery` several
-   times in quick succession — one query per cookie the server
-   delivered, since RFC 8915 §4 leaves the pool size to server policy
-   and the returned `NtsWarmCookiesOutcome.freshCookies` reports the
-   actual count — produces a small distribution you can reason about
-   statistically. Pick the sample
-   with the smallest
+- **`ntsQuery`** — one authenticated NTPv4 round-trip. Returns the
+  raw protocol output (`NtsTimeSample`): the server's transmit
+  timestamp plus the locally measured RTT. The first call handshakes
+  implicitly; later calls reuse the cached session. Exposes the
+  `timeout`, `dnsConcurrencyCap`, and `bridgeConcurrencyCap` knobs
+  that `ntsGetTime` fixes internally.
+- **`ntsWarmCookies`** — force a fresh NTS-KE handshake without
+  sampling, e.g. to front-load the TLS cost at app startup or on a
+  known-good network window. The returned
+  `NtsWarmCookiesOutcome.freshCookies` reports how many single-use
+  cookies the server delivered (RFC 8915 §4 leaves the pool size to
+  server policy), which bounds how many `ntsQuery` calls can follow
+  before the next implicit handshake.
+- **`NtsClient`** — an owned client with its own session table and
+  trust policy, for callers who need isolation from the default
+  singleton or non-default `TrustMode`s. Carries per-client `query`
+  / `warmCookies` / `getTime` twins plus `invalidate` / `clear`
+  session management. See
+  [Security considerations](#security-considerations) below.
+
+A hand-rolled synchronized clock adds two layers on top of raw
+samples — the same two `ntsGetTime` automates:
+
+1. **Burst sampling.** A single NTPv4 reply carries whatever jitter
+   the network and the server's queueing happened to introduce on
+   that one packet. Calling `ntsWarmCookies` once and then `ntsQuery`
+   several times in quick succession — one query per delivered
+   cookie — produces a small distribution you can reason about
+   statistically. Pick the sample with the smallest
    `roundTripMicros`; on a low-RTT path the symmetric-path assumption
    below holds tightest, so that sample carries the smallest residual
    offset error. More sophisticated callers can median-filter, score by
@@ -228,14 +256,17 @@ sampled at the moment `await ntsQuery(...)` returns. Persist that offset
 and apply it on top of the device's monotonic clock rather than calling
 `ntsQuery` on every read; a few-second jitter floor on cellular
 networks makes per-call queries strictly worse than one well-filtered
-offset reused across many reads.
+offset reused across many reads. (`ntsGetTime` does exactly this,
+returning the projection as `NtsSyncedTime.utcNow`.)
 
-The package stops at protocol primitives by design: the right filter
-(lowest-RTT, median, Marzullo across multiple servers, weighted by
-stratum), the right resampling cadence, and the right way to project
-the offset onto `DateTime.now()` are all workload specific. The
+Below `ntsGetTime`, the package stops at protocol primitives by
+design: the right filter (lowest-RTT, median, Marzullo across
+multiple servers, weighted by stratum), the right resampling cadence,
+and the right way to project the offset onto `DateTime.now()` are all
+workload specific. The
 [`example/main.dart`](example/main.dart) snippet shows the minimum
-burst-filter-compensate flow described above.
+burst-filter-compensate flow described above built from the
+primitives.
 
 ## Security considerations
 
@@ -441,9 +472,9 @@ relative fallback can fire.
 | Symbol | Purpose |
 |--------|---------|
 | `NtsRustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
-| `ntsQuery({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | One authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTime` (optional `DateTime`, interpreted as UTC, not before the epoch) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. The deprecated `timeoutMs` / `verificationTimeMs` `int` parameters remain accepted for one release. |
-| `ntsWarmCookies({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTime` carries the same clock-skew-rescue semantics as on `ntsQuery`. Same one-release deprecation of the `*Ms` parameters. |
-| `ntsGetTime({required spec, verificationTime})` | One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-RTT selection, `roundTrip / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8 s **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. The deprecated `verificationTimeMs` `int` parameter remains accepted for one release. |
+| `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-RTT selection, `roundTrip / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8-second **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. The deprecated `verificationTimeMs` `int` parameter remains accepted for one release. |
+| `ntsQuery({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: one authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTime` (optional `DateTime`, interpreted as UTC, not before the epoch) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. The deprecated `timeoutMs` / `verificationTimeMs` `int` parameters remain accepted for one release. |
+| `ntsWarmCookies({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTime` carries the same clock-skew-rescue semantics as on `ntsQuery`. Same one-release deprecation of the `*Ms` parameters. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
 | `ntsTrustStatus()` | Synchronous snapshot (`NtsTrustStatus`) of the process-global trust-anchor diagnostic state. Seven observables: `defaultClientBackend` (most-recently resolved backend for the default singleton; `null` until the first singleton handshake runs), four cumulative counters partitioning the singleton's resolution history by backend (`defaultBackendPlatformCount`, `defaultBackendHybridCount`, `defaultBackendWebpkiCount`, `defaultBackendCustomCount`), `androidPlatformInitSucceeded` (static JNI bootstrap flag), and `androidHybridFallbackCount` (Android-only). Platform-irrelevant fields report sentinel values (`null` / `false` / `0`). Cheap enough for a UI poll loop. |
 | `NtsClient({trustMode = TrustMode.platformWithFallback, customRoots})` | Owned client with its own per-host session table — cookies, AEAD keys, and KE sessions are isolated from the default singleton and from other clients. Methods: `query` / `warmCookies` / `getTime` (per-client equivalents of the top-level functions, same parameters including `verificationTime`), `invalidate(spec)` (drop one cached session) / `clear()` (drop all), and the `trustMode` getter. `customRoots` is required (and only valid) when `trustMode` is `TrustMode.custom`. |
@@ -452,9 +483,9 @@ relative fallback can fire.
 | `kDefaultDnsConcurrencyCap` | Package default for `dnsConcurrencyCap` (`4`, sized for mobile pthread-stack budgets — see the constant's dartdoc). |
 | `kDefaultBridgeConcurrencyCap` | Package default for `bridgeConcurrencyCap` (`4`, sized to the smallest common mobile FRB worker pool — see the constant's dartdoc). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
+| `NtsSyncedTime` | Synchronized clock returned by `getTime`: `utcUnixMicros` (compensated best sample at the anchor), `roundTripMicros` (winning sample), `samplesUsed`, `trustBackend`, `utcNow` (monotonic projection immune to system clock changes), `elapsedSinceSync`. Identity semantics — a live clock, not a value-type DTO. |
 | `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`, `trustBackend`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`; `trustBackend` records which trust-anchor backend the post-handshake TLS verification chose. |
 | `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`, `trustBackend`. The UDP phase does not run on this path, so only KE-pipeline timings are populated; `trustBackend` carries the same per-handshake attribution as on `NtsTimeSample`. |
-| `NtsSyncedTime` | Synchronized clock returned by `getTime`: `utcUnixMicros` (compensated best sample at the anchor), `roundTripMicros` (winning sample), `samplesUsed`, `trustBackend`, `utcNow` (monotonic projection immune to system clock changes), `elapsedSinceSync`. Identity semantics — a live clock, not a value-type DTO. |
 | `PhaseTimings` | `dnsMicros`, `connectMicros`, `tlsHandshakeMicros`, `keRecordIoMicros`. Microsecond-resolution wall-clock breakdown of the four pre-NTP phases of an `ntsQuery` / `ntsWarmCookies` call. Phases that did not run report `0`. See ARCHITECTURE.md's "Phase attribution and timings" section. |
 | `TimeoutPhase` | `bridgeSaturation`, `dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`, `ntp`. Carried as the payload of `NtsError.timeout` so callers can attribute a budget exhaustion to a specific phase without parsing diagnostic strings. `bridgeSaturation` is Dart-authored (budget elapsed while queued at the bridge admission gate, before any FFI dispatch) and always carries a `null` `trustBackend`. |
 | `NtsDnsPoolStats` | `inFlight`, `highWaterMark`, `recovered`, `refused`. Process-wide pool counters; relaxed-atomic snapshot. |
@@ -463,8 +494,8 @@ relative fallback can fire.
 | `TrustBackend` | `platform` (OS trust store via `rustls-platform-verifier`), `platformWithHybridFallback` (Android-only — platform verifier's view was overridden by the `webpki-roots` fallback for a curated platform-failure shape such as Let's Encrypt R12 missing-OCSP-AIA chains), `webpkiRoots` (build-time fallback to the static bundle; loses visibility into MDM / user-installed roots), `custom` (caller-supplied custom root certificates authenticated the chain). Carried per-handshake on `NtsTimeSample.trustBackend` / `NtsWarmCookiesOutcome.trustBackend`, also exposed process-globally via `NtsTrustStatus.defaultClientBackend`. |
 | `NtsError` | Sealed class: `invalidSpec`, `network`, `keProtocol`, `ntpProtocol`, `authentication`, `timeout(TimeoutPhase)`, `noCookies`, `trustBackendUnavailable`, `internal`. |
 
-`ntsQuery` and `ntsWarmCookies` ship as a hand-written wrapper around
-the bundled FFI surface; consumers can omit `timeout`,
+`ntsGetTime`, `ntsQuery`, and `ntsWarmCookies` ship as a hand-written
+wrapper around the bundled FFI surface; consumers can omit `timeout`,
 `dnsConcurrencyCap`, `bridgeConcurrencyCap`, and `verificationTime`
 to inherit the package defaults, and future internal-only Rust
 signature changes do not propagate as breaking call-site edits. See

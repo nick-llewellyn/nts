@@ -12,11 +12,11 @@
   lowest-RTT sample, apply the standard symmetric-path compensation
   (`utc + roundTrip / 2`), and return the result as a new
   `NtsSyncedTime` anchored to a process-local monotonic `Stopwatch`
-  (`utcNow` projects the authenticated instant forward immune to
+  (`utcNow` projects the authenticated instant forward, immune to
   system clock steps; `roundTripMicros`, `samplesUsed`,
   `trustBackend`, and `elapsedSinceSync` expose the diagnostics).
   Tuning is fixed and internal — one configuration sized to serve
-  phones and desktops alike: an 8-sample burst, one total 8 s
+  phones and desktops alike: an 8-sample burst, one total 8-second
   wall-clock budget shared across the handshake and every burst query
   as a single shrinking deadline, and the package-default concurrency
   caps forwarded to every underlying call. Deployments needing
@@ -105,6 +105,17 @@
 
 ### Documentation
 
+- Restructured the README around the high-level convenience API: the
+  "Use" section became a "Quick start" leading with `ntsGetTime` and
+  the `NtsSyncedTime.utcNow` monotonic projection, and the
+  "Production Considerations" section became "Manual control
+  (advanced primitives)", presenting `ntsQuery` / `ntsWarmCookies` /
+  `NtsClient` as the composition surface for callers who need
+  non-default burst sizes, budgets, or handshake timing. The API
+  summary table now lists `ntsGetTime` first as the recommended
+  entry point. Cross-references in `example/example.md` and
+  `example/main.dart` updated to the renamed section. Docs-only; no
+  behavioural change. (NTS-85)
 - Documented the millisecond resolution of the FFI boundary on the
   typed time parameters (`ntsQuery` dartdoc and the README tuning
   notes): a sub-millisecond `timeout` component is rounded **up** to

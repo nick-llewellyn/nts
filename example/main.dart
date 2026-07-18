@@ -9,8 +9,9 @@
 // `ntsQuery` returns the raw protocol primitives — server transmit
 // timestamp plus measured round-trip time — not a finished synchronized
 // clock. The burst-and-pick pattern below is the minimum a production
-// caller needs on top to get a stable offset; see `README.md`'s
-// "Production Considerations" section for the full rationale.
+// caller needs on top to get a stable offset; the one-call `ntsGetTime`
+// convenience automates this exact recipe. See `README.md`'s "Manual
+// control (advanced primitives)" section for the full rationale.
 //
 // Run from a Flutter target (`flutter run -t example/main.dart`)
 // so the Native Assets pipeline bundles the Rust dylib. Plain
