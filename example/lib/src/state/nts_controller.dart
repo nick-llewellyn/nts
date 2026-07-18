@@ -18,8 +18,6 @@
 
 import 'dart:developer' as developer;
 
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, visibleForTesting;
 import 'package:nts/nts.dart'
     show
         NtsClient,
@@ -33,7 +31,6 @@ import 'package:nts/nts.dart'
         NtsErrorNtpProtocol,
         NtsErrorTimeout,
         NtsErrorTrustBackendUnavailable,
-        NtsProfile,
         TrustBackend,
         TrustMode,
         kDefaultDnsConcurrencyCap;
@@ -60,24 +57,6 @@ const String _kDeveloperLogName = 'nts.example.controller';
 /// for the full mechanism. Mirrors the value the original example
 /// used.
 const int _kTimeoutMs = 5000;
-
-/// Maps a Flutter [TargetPlatform] onto the [NtsProfile] preset sized
-/// for that class of host: phones and tablets (Android, iOS, Fuchsia)
-/// get [NtsProfile.mobile]'s 4-sample burst and modest concurrency
-/// caps, while desktop hosts (Linux, macOS, Windows) get
-/// [NtsProfile.desktop]'s 8-sample burst and raised caps. Split out
-/// from [NtsController.getTime] (which feeds it
-/// [defaultTargetPlatform]) so tests can pin the mapping per platform
-/// without overriding the ambient platform of the whole test binding.
-@visibleForTesting
-NtsProfile profileForPlatform(TargetPlatform platform) => switch (platform) {
-  TargetPlatform.android ||
-  TargetPlatform.iOS ||
-  TargetPlatform.fuchsia => NtsProfile.mobile,
-  TargetPlatform.linux ||
-  TargetPlatform.macOS ||
-  TargetPlatform.windows => NtsProfile.desktop,
-};
 
 class NtsController {
   NtsController(this.state)
@@ -319,22 +298,17 @@ class NtsController {
   /// returning the lowest-RTT sample as a monotonic synchronized
   /// clock.
   ///
-  /// Picks the profile via [profileForPlatform] on the running
-  /// [defaultTargetPlatform] — [NtsProfile.mobile]'s 4-sample burst
-  /// on phones and tablets, [NtsProfile.desktop]'s 8-sample burst on
-  /// desktop hosts — so the demo shows the preset the package sized
-  /// for the machine it is actually running on. Contrast with
-  /// [runQuery] (one raw sample, no selection) and [warmCookies]
-  /// (handshake only); this button is the "do the whole thing for me"
-  /// path the high-level API exists for.
+  /// Takes no tuning arguments — the package applies its single
+  /// internal configuration (8-sample burst, one shared 8 s total
+  /// budget, package-default concurrency caps) on every platform.
+  /// Contrast with [runQuery] (one raw sample, no selection) and
+  /// [warmCookies] (handshake only); this button is the "do the
+  /// whole thing for me" path the high-level API exists for.
   Future<void> getTime(NtsServerEntry entry) async {
     state.log.info('nts_get_time', 'Starting getTime', host: entry.hostname);
     final clientAtStart = _client;
     try {
-      final synced = await clientAtStart.getTime(
-        spec: entry.spec,
-        profile: profileForPlatform(defaultTargetPlatform),
-      );
+      final synced = await clientAtStart.getTime(spec: entry.spec);
       final stale = !identical(clientAtStart, _client);
       state.log.info(
         'nts_get_time',

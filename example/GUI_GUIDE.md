@@ -89,10 +89,10 @@ Three buttons sit between the server list and the log:
   burst of subsequent queries and want to amortise the handshake cost.
 - **Get Time** — runs the high-level `getTime` flow: a warming handshake
   followed by a serial burst of authenticated queries, keeping the
-  lowest-RTT sample as a synchronized clock. The profile is picked for
-  the running platform: up to 4 samples on phones and tablets (the
-  `mobile` preset), up to 8 on desktop hosts (the `desktop` preset).
-  The log line reports the burst size, the projected
+  lowest-RTT sample as a synchronized clock. Tuning is fixed and
+  internal on every platform: up to 8 samples (clamped to the fresh
+  cookie count) under one total 8-second budget shared with the
+  handshake. The log line reports the burst size, the projected
   current UTC, and the worst-case one-way-delay error bound (`± RTT/2`).
   This is the "do the whole thing for me" path; contrast a Get Time press
   with a cold NTS Query press to see what the burst-and-select layer adds.

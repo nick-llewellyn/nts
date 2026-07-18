@@ -8,31 +8,31 @@
 - Added a one-call high-level convenience API: top-level `ntsGetTime`
   and per-client `NtsClient.getTime`. Both compose the existing
   wrappers — a fresh `warmCookies` handshake followed by a serial
-  burst of up to `min(profile.maxBurst, freshCookies)` `query` calls —
-  pick the lowest-RTT sample, apply the standard symmetric-path
-  compensation (`utc + roundTrip / 2`), and return the result as a new
+  burst of up to `min(8, freshCookies)` `query` calls — pick the
+  lowest-RTT sample, apply the standard symmetric-path compensation
+  (`utc + roundTrip / 2`), and return the result as a new
   `NtsSyncedTime` anchored to a process-local monotonic `Stopwatch`
   (`utcNow` projects the authenticated instant forward immune to
   system clock steps; `roundTripMicros`, `samplesUsed`,
   `trustBackend`, and `elapsedSinceSync` expose the diagnostics).
-  Tuning arrives via the new `NtsProfile` value type
-  (`maxBurst`, total-budget `timeoutMs` shared across the handshake
-  and every burst query, `dnsConcurrencyCap`, `bridgeConcurrencyCap`)
-  with `mobile` (default), `desktop`, and `embedded` presets. Error
-  posture is best-effort across the burst: individual query failures
-  are tolerated when at least one sample lands; an all-fail burst
-  rethrows the last query error, a zero-cookie handshake surfaces
-  `NtsError.noCookies`, and a budget exhausted before the first query
-  surfaces `NtsError.timeout(phase: ntp)`. Validation front-loads the
-  same range checks as `ntsQuery` plus a `maxBurst` check against the
-  shared `1..0xFFFFFFFF` range before any FFI dispatch. Dart-only
-  wrapper layer; zero FFI/bridge changes. The example app's GUI gains
-  a matching **Get Time** action button alongside NTS Query / Warm
-  Cookies, picking the preset for the running platform (`mobile` on
-  phones and tablets, `desktop` on desktop hosts), with a
-  `formatGetTimeSuccess` log rendering that reports the burst size,
-  projected UTC, and `± RTT/2` error bound.
-  (NTS-76)
+  Tuning is fixed and internal — one configuration sized to serve
+  phones and desktops alike: an 8-sample burst, one total 8 s
+  wall-clock budget shared across the handshake and every burst query
+  as a single shrinking deadline, and the package-default concurrency
+  caps forwarded to every underlying call. Deployments needing
+  different numbers compose `ntsWarmCookies` + `ntsQuery` directly.
+  Error posture is best-effort across the burst: individual query
+  failures are tolerated when at least one sample lands; an all-fail
+  burst rethrows the last query error, a zero-cookie handshake
+  surfaces `NtsError.noCookies`, and a budget exhausted before the
+  first query surfaces `NtsError.timeout(phase: ntp)`. Validation
+  front-loads the same range checks as `ntsQuery` before any FFI
+  dispatch. Dart-only wrapper layer; zero FFI/bridge changes. The
+  example app's GUI gains a matching **Get Time** action button
+  alongside NTS Query / Warm Cookies, with a `formatGetTimeSuccess`
+  log rendering that reports the burst size, projected UTC, and
+  `± RTT/2` error bound.
+  (NTS-76, NTS-80)
 - Added `.github/workflows/advisory.yml` with two scheduled,
   non-blocking documentation-hygiene jobs (weekly, Wednesday 05:00
   UTC): a `typos` spell check over the whole tree (configured via the

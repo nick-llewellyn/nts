@@ -250,12 +250,12 @@ Future<NtsTimeSample> ntsQuery({
 ///
 /// Runs the recipe the lower-level dartdoc describes by hand: force a
 /// fresh NTS-KE handshake to fill the cookie pool, take up to
-/// `min(profile.maxBurst, freshCookies)` serial authenticated NTPv4
-/// samples, pick the one with the lowest round-trip time, and apply
-/// the standard symmetric-path compensation (`utc + roundTrip / 2`).
-/// The winning instant is projected onto a monotonic anchor and
-/// returned as an [NtsSyncedTime], whose [NtsSyncedTime.utcNow]
-/// projection is immune to later system clock changes.
+/// `min(8, freshCookies)` serial authenticated NTPv4 samples, pick
+/// the one with the lowest round-trip time, and apply the standard
+/// symmetric-path compensation (`utc + roundTrip / 2`). The winning
+/// instant is projected onto a monotonic anchor and returned as an
+/// [NtsSyncedTime], whose [NtsSyncedTime.utcNow] projection is
+/// immune to later system clock changes.
 ///
 /// The burst is serial **by design**, not as an implementation
 /// shortcut: firing samples concurrently at one server would send
@@ -265,17 +265,23 @@ Future<NtsTimeSample> ntsQuery({
 /// each observes an independent snapshot of the path. Parallelism
 /// across *distinct servers* remains legitimate — concurrent
 /// `getTime` calls (e.g. for redundancy or server selection) run
-/// independently, bounded by the bridge admission gate via
-/// [NtsProfile.bridgeConcurrencyCap].
+/// independently, bounded by the bridge admission gate documented on
+/// [ntsQuery].
 ///
-/// `profile` bundles the tuning knobs ([NtsProfile.maxBurst],
-/// [NtsProfile.timeoutMs], [NtsProfile.dnsConcurrencyCap],
-/// [NtsProfile.bridgeConcurrencyCap]) and defaults to
-/// [NtsProfile.mobile]. Unlike the per-call `timeoutMs` on the
-/// lower-level wrappers, [NtsProfile.timeoutMs] is a **total**
-/// wall-clock budget for the whole call: the warming handshake and
-/// every burst query draw down one shared shrinking deadline, so the
-/// call's overall cost is bounded by that single number.
+/// Tuning is fixed and internal — the call takes no configuration
+/// beyond `spec` and `verificationTimeMs`. The internal values are
+/// sized to serve phones and desktops alike: an 8-sample burst for a
+/// tight lowest-RTT selection, one **total** 8-second wall-clock
+/// budget shared across the handshake and every burst query as a
+/// single shrinking deadline (generous enough for a cold-radio
+/// cellular handshake plus the full serial burst; effectively free
+/// on fast paths, where the call returns as soon as the burst
+/// completes), and the package-default concurrency caps
+/// ([kDefaultDnsConcurrencyCap] / [kDefaultBridgeConcurrencyCap])
+/// forwarded to every underlying call. Deployments that need
+/// different numbers compose [ntsWarmCookies] + [ntsQuery] directly;
+/// this convenience path deliberately trades configurability for a
+/// zero-decision call.
 ///
 /// Error posture is best-effort across the burst: individual burst
 /// query failures are tolerated, and the call succeeds if **at least
@@ -298,9 +304,7 @@ Future<NtsTimeSample> ntsQuery({
 /// semantics documented on [ntsQuery] and is forwarded to every
 /// underlying call. All arguments are validated up front on the same
 /// terms as [ntsQuery] (out-of-range values surface as
-/// [NtsError.invalidSpec] before any FFI dispatch), with one addition:
-/// `profile.maxBurst` is held to the same `1..0xFFFFFFFF` range as the
-/// other tuning knobs.
+/// [NtsError.invalidSpec] before any FFI dispatch).
 ///
 /// State effects match calling the two lower-level functions yourself:
 /// the handshake replaces any cached session for `spec` in the
@@ -308,28 +312,22 @@ Future<NtsTimeSample> ntsQuery({
 /// one of the newly delivered cookies.
 Future<NtsSyncedTime> ntsGetTime({
   required NtsServerSpec spec,
-  NtsProfile profile = NtsProfile.mobile,
   int? verificationTimeMs,
 }) async {
-  _validateProfile(
-    spec: spec,
-    profile: profile,
-    verificationTimeMs: verificationTimeMs,
-  );
+  _validateGetTime(spec: spec, verificationTimeMs: verificationTimeMs);
   return _getTime(
-    profile: profile,
     warm: (timeoutMs) => ntsWarmCookies(
       spec: spec,
       timeoutMs: timeoutMs,
-      dnsConcurrencyCap: profile.dnsConcurrencyCap,
-      bridgeConcurrencyCap: profile.bridgeConcurrencyCap,
+      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
       verificationTimeMs: verificationTimeMs,
     ),
     query: (timeoutMs) => ntsQuery(
       spec: spec,
       timeoutMs: timeoutMs,
-      dnsConcurrencyCap: profile.dnsConcurrencyCap,
-      bridgeConcurrencyCap: profile.bridgeConcurrencyCap,
+      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
       verificationTimeMs: verificationTimeMs,
     ),
   );
@@ -748,40 +746,33 @@ class NtsClient {
   /// synchronized clock built on [warmCookies] + a burst of [query]
   /// calls against this client's own session table.
   ///
-  /// Behaviour, parameter semantics, error posture, and validation
-  /// are identical to [ntsGetTime] — see its dartdoc for the full
-  /// contract (total shared [NtsProfile.timeoutMs] budget, serial
-  /// burst of `min(profile.maxBurst, freshCookies)` samples,
-  /// lowest-RTT selection with `roundTrip / 2` compensation,
-  /// best-effort success when at least one sample lands). The only
-  /// difference is state scope: the handshake replaces the cached
-  /// session for `spec` in **this client's** table, and the burst
-  /// spends this client's cookies, leaving the process-wide default
-  /// client untouched.
+  /// Behaviour, parameter semantics, internal tuning, error posture,
+  /// and validation are identical to [ntsGetTime] — see its dartdoc
+  /// for the full contract (fixed 8-sample serial burst clamped to
+  /// `freshCookies`, one total 8-second shared budget, lowest-RTT
+  /// selection with `roundTrip / 2` compensation, best-effort success
+  /// when at least one sample lands). The only difference is state
+  /// scope: the handshake replaces the cached session for `spec` in
+  /// **this client's** table, and the burst spends this client's
+  /// cookies, leaving the process-wide default client untouched.
   Future<NtsSyncedTime> getTime({
     required NtsServerSpec spec,
-    NtsProfile profile = NtsProfile.mobile,
     int? verificationTimeMs,
   }) async {
-    _validateProfile(
-      spec: spec,
-      profile: profile,
-      verificationTimeMs: verificationTimeMs,
-    );
+    _validateGetTime(spec: spec, verificationTimeMs: verificationTimeMs);
     return _getTime(
-      profile: profile,
       warm: (timeoutMs) => warmCookies(
         spec: spec,
         timeoutMs: timeoutMs,
-        dnsConcurrencyCap: profile.dnsConcurrencyCap,
-        bridgeConcurrencyCap: profile.bridgeConcurrencyCap,
+        dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+        bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
         verificationTimeMs: verificationTimeMs,
       ),
       query: (timeoutMs) => query(
         spec: spec,
         timeoutMs: timeoutMs,
-        dnsConcurrencyCap: profile.dnsConcurrencyCap,
-        bridgeConcurrencyCap: profile.bridgeConcurrencyCap,
+        dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+        bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
         verificationTimeMs: verificationTimeMs,
       ),
     );
@@ -918,32 +909,17 @@ void _validateRanges({
 }
 
 // `getTime` validation front-loads the same checks its underlying
-// warm/query calls would run, plus the `maxBurst` range check that has
-// no lower-level equivalent, so an invalid profile surfaces as
+// warm/query calls would run, so an invalid argument surfaces as
 // `NtsError.invalidSpec` before the warming handshake ever dispatches
 // (rather than after a successful handshake has already replaced the
-// cached session). `maxBurst` never crosses the FFI boundary (the
-// burst loop is pure Dart), but it is held to the same
-// `1..0xFFFFFFFF` range as the other tuning knobs so all four profile
-// fields share one validation contract.
-void _validateProfile({
-  required NtsServerSpec spec,
-  required NtsProfile profile,
-  int? verificationTimeMs,
-}) {
-  if (profile.maxBurst < 1 || profile.maxBurst > _kU32Max) {
-    throw NtsError.invalidSpec(
-      message:
-          'profile.maxBurst ${profile.maxBurst} is outside the valid '
-          'range 1..$_kU32Max; a getTime call needs at least one burst '
-          'sample',
-    );
-  }
+// cached session). The tuning knobs themselves are internal constants
+// and need no range check.
+void _validateGetTime({required NtsServerSpec spec, int? verificationTimeMs}) {
   _validateRanges(
     spec: spec,
-    timeoutMs: profile.timeoutMs,
-    dnsConcurrencyCap: profile.dnsConcurrencyCap,
-    bridgeConcurrencyCap: profile.bridgeConcurrencyCap,
+    timeoutMs: _kGetTimeTimeoutMs,
+    dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+    bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
     verificationTimeMs: verificationTimeMs,
   );
 }
@@ -956,15 +932,31 @@ void _validateProfile({
 // delegate the budget accounting, burst loop, lowest-RTT selection,
 // and compensation here so the two surfaces cannot drift.
 //
-// The profile's `timeoutMs` is one total budget: a single `Stopwatch`
+// `_kGetTimeTimeoutMs` is one total budget: a single `Stopwatch`
 // started before the handshake meters every underlying call, and each
 // call receives only the remaining balance. The lower-level wrappers
 // validate `timeoutMs >= 1`, so a depleted budget is detected here
 // (and surfaced as `timeout(ntp)`) rather than tripping their
 // `invalidSpec` range check with a confusing message.
 
+// Upper bound on the number of burst `query` samples taken after the
+// warming handshake. The effective burst size is
+// `min(_kGetTimeMaxBurst, freshCookies)` — each query spends one
+// cookie, so the burst never exhausts the pool it just filled. Eight
+// samples give a tight lowest-RTT selection on steady paths and
+// enough spread to ride out jitter on cellular / Wi-Fi ones.
+const int _kGetTimeMaxBurst = 8;
+
+// Total wall-clock budget for the whole `getTime` call in
+// milliseconds, shared across the warming handshake and every burst
+// query as one shrinking deadline. Sized for the 8-query burst over
+// a cold-radio cellular path (DNS + TCP + TLS + KE handshake plus
+// eight serial UDP round-trips); on fast paths the call returns as
+// soon as the burst completes, so the generous cap only moves the
+// worst-case failure latency, never the happy path.
+const int _kGetTimeTimeoutMs = 8000;
+
 Future<NtsSyncedTime> _getTime({
-  required NtsProfile profile,
   required Future<NtsWarmCookiesOutcome> Function(int timeoutMs) warm,
   required Future<NtsTimeSample> Function(int timeoutMs) query,
 }) async {
@@ -976,13 +968,13 @@ Future<NtsSyncedTime> _getTime({
   // query and overshooting the documented total budget by up to
   // ~1ms.
   int remaining() =>
-      profile.timeoutMs - (budget.elapsedMicroseconds + 999) ~/ 1000;
+      _kGetTimeTimeoutMs - (budget.elapsedMicroseconds + 999) ~/ 1000;
 
   // Warm phase: always a fresh handshake, so the burst below runs
   // against a full cookie pool and a known-fresh AEAD session. A
   // failure here is fatal by design — there is nothing to sample with.
   // The handshake draws from the shared balance too (not a fresh
-  // `profile.timeoutMs`), so overhead accrued since `budget` started
+  // `_kGetTimeTimeoutMs`), so overhead accrued since `budget` started
   // is charged against the total rather than silently extending it.
   // The clamp keeps a fully depleted balance from tripping the
   // lower-level `timeoutMs >= 1` validation; a 1ms warm then times
@@ -992,7 +984,7 @@ Future<NtsSyncedTime> _getTime({
     throw NtsError.noCookies(trustBackend: outcome.trustBackend);
   }
 
-  final burst = math.min(profile.maxBurst, outcome.freshCookies);
+  final burst = math.min(_kGetTimeMaxBurst, outcome.freshCookies);
   NtsTimeSample? best;
   // Monotonic instant (on `budget`'s timeline) at which the current
   // `best` sample's reply arrived. Used below to advance the winning
