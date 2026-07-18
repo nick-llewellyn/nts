@@ -24,6 +24,7 @@ import 'package:flutter/material.dart';
 import 'state/app_state.dart';
 import 'state/nts_controller.dart';
 import 'widgets/action_panel.dart';
+import 'widgets/custom_roots_panel.dart';
 import 'widgets/latest_result_panel.dart';
 import 'widgets/log_view.dart';
 import 'widgets/server_list_view.dart';
@@ -90,23 +91,22 @@ class HomePage extends StatelessWidget {
 }
 
 /// Catalog + action surface tab. Server list claims the upper
-/// flexible region; the three control / summary panels stack below
+/// flexible region; the control / summary panels stack below
 /// at intrinsic heights, separated by hairline dividers.
 ///
 /// Switches between two layouts based on the body height:
 ///
 /// * **Roomy** (≥ 400dp tall) — `Expanded(ServerListView)` plus the
-///   four intrinsic-height panels in a `Column`. This is the
-///   normal phone-portrait and tablet path.
+///   intrinsic-height panels in a `Column`. This is the normal
+///   phone-portrait and tablet path.
 /// * **Compact** (< 400dp tall) — a `SingleChildScrollView` with a
-///   fixed-height `ServerListView` on top and the four panels
-///   below. Covers tablet multi-window slices, foldables in the
-///   folded half-state, and the brief frame during a pending
-///   phone-to-portrait rotation before the orientation lock from
-///   `_lockOrientationOnPhones` (in `main.dart`) takes effect.
-///   Without this dispatch the four panels (~220dp combined
-///   intrinsic) plus the filter bar's ~120dp minimum can't both
-///   fit, and the outer column surfaces a `RenderFlex` overflow.
+///   fixed-height `ServerListView` on top and the panels below.
+///   Covers tablet multi-window slices, foldables in the folded
+///   half-state, and the brief frame during a pending phone-to-portrait
+///   rotation before the orientation lock from `_lockOrientationOnPhones`
+///   (in `main.dart`) takes effect. Without this dispatch the panels
+///   plus the filter bar's ~120dp minimum can't both fit, and the outer
+///   column surfaces a `RenderFlex` overflow.
 class _ClientTab extends StatelessWidget {
   const _ClientTab({required this.state, required this.controller});
 
@@ -133,10 +133,15 @@ class _ClientTab extends StatelessWidget {
         // The four panels below the server list are identical in
         // both layouts; only ServerListView's height-allocation
         // strategy changes.
+        // Panels stacked below the server list. CustomRootsPanel is
+        // zero-height when TrustMode.custom is not active, so the
+        // divider before it is always rendered but the panel itself
+        // collapses — this avoids a double-divider artefact.
         final bottomPanels = <Widget>[
           const Divider(height: 1),
           ActionPanel(state: state, controller: controller),
           const Divider(height: 1),
+          CustomRootsPanel(state: state),
           TrustStatusPanel(state: state),
           const Divider(height: 1),
           LatestResultPanel(state: state),

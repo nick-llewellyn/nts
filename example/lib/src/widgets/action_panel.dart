@@ -142,6 +142,14 @@ class _TrustModeDropdown extends StatelessWidget {
                     value: TrustMode.platformOnly,
                     child: Text('Platform only'),
                   ),
+                  DropdownMenuItem<TrustMode>(
+                    value: TrustMode.bundledOnly,
+                    child: Text('Bundled only'),
+                  ),
+                  DropdownMenuItem<TrustMode>(
+                    value: TrustMode.custom,
+                    child: Text('Custom roots'),
+                  ),
                 ],
               ),
             ],
