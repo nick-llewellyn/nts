@@ -859,9 +859,11 @@ const int _kU32Max = 0xFFFFFFFF;
 // only `timeoutMs` necessarily leaves `timeout` at `kDefaultTimeout` —
 // that is the silent compatibility path. An explicit non-default
 // `timeout` alongside `timeoutMs` is a demonstrable conflict and is
-// rejected. Known blind spot (accepted): `timeout: kDefaultTimeout`
-// passed explicitly alongside `timeoutMs` is indistinguishable from the
-// default case and resolves to `timeoutMs` without error.
+// rejected. Known blind spot (accepted): `Duration` equality is
+// value-based, so any explicit `timeout` equal to [kDefaultTimeout]
+// (the constant itself or e.g. `Duration(seconds: 5)`) passed alongside
+// `timeoutMs` is indistinguishable from the default case and resolves
+// to `timeoutMs` without error.
 Duration _resolveTimeout(Duration timeout, int? timeoutMs) {
   if (timeoutMs == null) return timeout;
   if (timeout == kDefaultTimeout) return Duration(milliseconds: timeoutMs);
