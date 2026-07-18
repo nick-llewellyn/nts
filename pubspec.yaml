@@ -2,7 +2,7 @@ name: nts
 description: >-
   Authenticated network time for Flutter apps, secured by Network
   Time Security (NTS).
-version: 5.2.3
+version: 5.2.4
 homepage: https://github.com/nick-llewellyn/nts
 repository: https://github.com/nick-llewellyn/nts
 issue_tracker: https://github.com/nick-llewellyn/nts/issues
@@ -16,13 +16,9 @@ topics:
 
 screenshots:
   - description: >-
-      Client tab: NTS server catalog with region filtering, favourites,
-      and live authenticated time query results.
-    path: screenshots/screenshot_client.webp
-  - description: >-
-      Log tab: unified live log of authenticated time queries and
-      NTS-KE exchange details.
-    path: screenshots/screenshot_log.webp
+      Example app: NTS server catalog with region filtering,
+      favourites, and live authenticated time query results.
+    path: screenshots/screenshot_gui_example.webp
 
 # Explicit platform allow-list. RFC 8915 requires raw TCP (NTS-KE on
 # :4460) and raw UDP (NTPv4 on :123) sockets, neither of which is
