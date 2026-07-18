@@ -1,14 +1,16 @@
 // Panel shown below the ActionPanel when TrustMode.custom is active.
 //
-// Lets the user supply a PEM or DER root certificate either by pasting
-// text directly into a TextField or by loading a file from disk via the
-// system file picker. Once the bytes are applied they are written into
-// [AppState.customRoots], which causes [NtsController] to re-mint its
-// client so the new roots take effect on the next handshake.
+// Lets the user supply a root certificate either by pasting PEM text
+// directly into a TextField (ASCII only; DER is not supported via paste)
+// or by loading a PEM or DER file from disk via the system file picker.
+// Once the bytes are applied they are written into [AppState.customRoots],
+// which causes [NtsController] to re-mint its client so the new roots take
+// effect on the next handshake.
 //
 // When any other TrustMode is active the panel renders a zero-size
 // [SizedBox] so it contributes no layout space.
 
+import 'dart:convert' show utf8;
 import 'dart:typed_data' show Uint8List;
 
 import 'package:file_picker/file_picker.dart';
@@ -121,7 +123,17 @@ class _CustomRootsPanelState extends State<CustomRootsPanel> {
       setState(() => _validationError = 'Paste a PEM certificate first.');
       return;
     }
-    final bytes = Uint8List.fromList(text.codeUnits);
+    // PEM is ASCII; reject pasted input that contains non-ASCII characters
+    // to avoid silent mis-encoding or runtime errors from codeUnits > 255.
+    if (text.codeUnits.any((c) => c > 127)) {
+      setState(
+        () => _validationError =
+            'Pasted text contains non-ASCII characters. '
+            'Use the "Load file…" button to load a DER or binary file.',
+      );
+      return;
+    }
+    final bytes = Uint8List.fromList(utf8.encode(text));
     widget.state.customRoots.value = bytes;
     widget.state.customRootsLabel.value = 'pasted PEM';
     setState(() => _validationError = null);
