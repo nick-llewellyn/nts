@@ -243,7 +243,8 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   final report = await probeAll(
     entries,
     port: common.port,
-    timeoutMs: common.timeoutMs,
+    // Single conversion point: the CLI surface stays milliseconds.
+    timeout: Duration(milliseconds: common.timeoutMs),
     samples: common.samples,
     concurrency: common.concurrency,
     dnsConcurrencyCap: dnsCap,

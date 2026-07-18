@@ -197,6 +197,8 @@ Future<void> main(List<String> argv) async {
   // instead each call's `.then` prints as soon as its individual
   // round-trip completes, so the user sees results in completion
   // order (typically reflecting RTT) rather than batched at the end.
+  // Single conversion point: the CLI surface stays milliseconds.
+  final timeout = Duration(milliseconds: timeoutMs);
   final pending = <Future<void>>[];
   for (final host in args.rest) {
     final spec = NtsServerSpec(host: host, port: port);
@@ -204,14 +206,14 @@ Future<void> main(List<String> argv) async {
       (args['warm'] as bool)
           ? _runWarm(
               spec,
-              timeoutMs,
+              timeout,
               ctx,
               dnsConcurrencyCap: dnsCap,
               bridgeConcurrencyCap: bridgeCap,
             )
           : _runQuery(
               spec,
-              timeoutMs,
+              timeout,
               ctx,
               dnsConcurrencyCap: dnsCap,
               bridgeConcurrencyCap: bridgeCap,
@@ -227,7 +229,7 @@ Future<void> main(List<String> argv) async {
 
 Future<void> _runQuery(
   NtsServerSpec spec,
-  int timeoutMs,
+  Duration timeout,
   _Ctx ctx, {
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
@@ -236,7 +238,7 @@ Future<void> _runQuery(
   try {
     final sample = await ntsQuery(
       spec: spec,
-      timeoutMs: timeoutMs,
+      timeout: timeout,
       dnsConcurrencyCap: dnsConcurrencyCap,
       bridgeConcurrencyCap: bridgeConcurrencyCap,
     );
@@ -255,7 +257,7 @@ Future<void> _runQuery(
 
 Future<void> _runWarm(
   NtsServerSpec spec,
-  int timeoutMs,
+  Duration timeout,
   _Ctx ctx, {
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
@@ -264,7 +266,7 @@ Future<void> _runWarm(
   try {
     final outcome = await ntsWarmCookies(
       spec: spec,
-      timeoutMs: timeoutMs,
+      timeout: timeout,
       dnsConcurrencyCap: dnsConcurrencyCap,
       bridgeConcurrencyCap: bridgeConcurrencyCap,
     );

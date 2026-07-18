@@ -13,7 +13,7 @@
 //    a `required` named parameter on the Dart side, with no support
 //    for optional / defaulted parameters. The wrapper restores idiomatic
 //    Dart signatures with named optional parameters and defaults
-//    (`kDefaultTimeoutMs`, `kDefaultDnsConcurrencyCap`).
+//    (`kDefaultTimeout`, `kDefaultDnsConcurrencyCap`).
 // 2. Type shape: the FFI DTOs use FRB-specific types like
 //    `PlatformInt64` and a freezed-generated `NtsError`. Converting to
 //    plain Dart `int` and a hand-written sealed `NtsError` at this
@@ -36,16 +36,24 @@ export 'errors.dart';
 export 'models.dart';
 
 /// Default per-call wall-clock budget for [ntsQuery] / [ntsWarmCookies]
-/// / [NtsClient.query] / [NtsClient.warmCookies], in milliseconds.
+/// / [NtsClient.query] / [NtsClient.warmCookies].
 ///
 /// Sized to cover one DNS lookup plus the NTS-KE TLS 1.3 handshake plus
 /// the NTPv4 UDP round-trip against a public server over a typical
 /// consumer network, while still failing fast against an unreachable
 /// host. Centralising the constant gives callers a stable name to refer
 /// to "the package's tuned default" rather than hardcoding the number.
-/// Override per-call by passing an explicit `timeoutMs` argument; values
-/// must lie in `1..4294967295` (the FFI encoding range, validated at
-/// the wrapper boundary).
+/// Override per-call by passing an explicit `timeout` argument; values
+/// must lie between 1 ms and 4294967295 ms (the FFI encoding range,
+/// validated at the wrapper boundary).
+const Duration kDefaultTimeout = Duration(milliseconds: 5000);
+
+/// Deprecated alias for [kDefaultTimeout], expressed in milliseconds.
+///
+/// The literal 5000 mirrors `kDefaultTimeout.inMilliseconds`; the getter
+/// is an instance member and never const-usable, so it cannot be
+/// referenced here.
+@Deprecated('Use kDefaultTimeout instead.')
 const int kDefaultTimeoutMs = 5000;
 
 /// Default per-call ceiling on in-flight DNS resolver workers, applied
@@ -72,13 +80,13 @@ const int kDefaultDnsConcurrencyCap = 4;
 ///
 /// Each in-flight call pins one `flutter_rust_bridge` worker thread
 /// (a fixed pool of one thread per logical CPU by default) for its
-/// full duration — up to `timeoutMs` in the worst case — so an
+/// full duration — up to `timeout` in the worst case — so an
 /// unbounded distinct-host fan-out could occupy every worker and
 /// stall unrelated bridge calls behind it. The cap bounds how many of
 /// this package's calls occupy workers at once; calls beyond it queue
 /// on the Dart side (holding no worker thread) and fail with
 /// [NtsError.timeout] ([TimeoutPhase.bridgeSaturation]) if the whole
-/// `timeoutMs` budget elapses before a slot frees. Sized to the
+/// `timeout` budget elapses before a slot frees. Sized to the
 /// smallest common mobile pool (4 logical CPUs) so even a saturating
 /// burst cannot occupy more workers than the smallest pool holds.
 /// Raise per-call on hosts with more headroom by passing an explicit
@@ -95,10 +103,13 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// subsequent calls reuse the cached AEAD keys and spend a stored
 /// cookie.
 ///
-/// `timeoutMs` is a single global wall-clock budget that spans DNS,
+/// `timeout` is a single global wall-clock budget that spans DNS,
 /// NTS-KE (TCP connect, TLS handshake, record I/O) and the AEAD-NTPv4
 /// UDP exchange as one shrinking deadline. Defaults to
-/// [kDefaultTimeoutMs] when omitted.
+/// [kDefaultTimeout] when omitted. The deprecated `timeoutMs` carries
+/// the same budget as raw milliseconds; providing it alongside an
+/// explicit non-default `timeout` is rejected with
+/// [NtsError.invalidSpec].
 ///
 /// `dnsConcurrencyCap` is a per-call ceiling on the process-wide bounded
 /// DNS resolver: if the global in-flight counter has already reached
@@ -124,7 +135,7 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// this wrapper is `async`, the underlying Rust call is a blocking
 /// network exchange dispatched to the `flutter_rust_bridge` worker
 /// pool: each in-flight call pins one pool thread for its full
-/// duration — up to `timeoutMs` in the worst case. The default pool
+/// duration — up to `timeout` in the worst case. The default pool
 /// holds one thread per logical CPU, so a burst of concurrent cold
 /// queries against many *distinct* hosts could otherwise occupy every
 /// worker and stall unrelated bridge calls behind them until a thread
@@ -137,7 +148,7 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// own calls independently, while the FRB worker pool they land on
 /// is shared process-wide, so a multi-isolate app's combined
 /// occupancy is bounded by the sum of each isolate's cap, not by one
-/// cap. Queue wait is charged against `timeoutMs`: the budget
+/// cap. Queue wait is charged against `timeout`: the budget
 /// forwarded to the Rust pipeline shrinks by the time spent queued,
 /// so the caller's total wall-clock budget stays honest, and a call
 /// whose whole budget elapses while queued fails with
@@ -180,20 +191,21 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// and pick the one with the smallest `roundTripMicros` before applying
 /// that adjustment.
 ///
-/// All integer arguments (`spec.port`, `timeoutMs`, `dnsConcurrencyCap`,
+/// All arguments (`spec.port`, `timeout`, `dnsConcurrencyCap`,
 /// `bridgeConcurrencyCap`) are validated against the FFI encoding range
-/// (`1..65535` for the port, `1..4294967295` for the `u32`-shaped
-/// parameters; `bridgeConcurrencyCap` never crosses the FFI boundary
-/// but is held to the same range for symmetry) before any FFI
-/// dispatch; out-of-range values cause the returned `Future` to
-/// complete with [NtsError.invalidSpec] without reaching the Rust
-/// boundary, on the same `await`/`catch` shape as every other failure
-/// mode this wrapper surfaces.
+/// (`1..65535` for the port, 1 ms..4294967295 ms for the timeout,
+/// `1..4294967295` for the `u32`-shaped caps; `bridgeConcurrencyCap`
+/// never crosses the FFI boundary but is held to the same range for
+/// symmetry) before any FFI dispatch; out-of-range values cause the
+/// returned `Future` to complete with [NtsError.invalidSpec] without
+/// reaching the Rust boundary, on the same `await`/`catch` shape as
+/// every other failure mode this wrapper surfaces.
 ///
-/// `verificationTimeMs`, when non-null, overrides the timestamp used to
+/// `verificationTime`, when non-null, overrides the timestamp used to
 /// check the NTS-KE server certificate's validity window
-/// (`notBefore`/`notAfter`) — expressed as milliseconds since the Unix
-/// epoch. It exists to break the cold-start clock-skew deadlock: a
+/// (`notBefore`/`notAfter`) — interpreted in UTC (a non-UTC `DateTime`
+/// is converted). It exists to break the cold-start clock-skew
+/// deadlock: a
 /// device whose real-time clock is badly wrong (factory reset, dead RTC
 /// battery, never-set clock) cannot complete the NTS-KE TLS handshake
 /// because the certificate is judged expired or not-yet-valid against
@@ -204,45 +216,37 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// signature validation fully intact: an untrusted issuer, a hostname
 /// mismatch, or a bad signature still fails. When omitted (the default)
 /// the system clock is used, exactly as in every prior release.
-/// Negative values are rejected with [NtsError.invalidSpec] before
-/// dispatch.
+/// Pre-epoch instants are rejected with [NtsError.invalidSpec] before
+/// dispatch. The deprecated `verificationTimeMs` carries the same
+/// instant as milliseconds since the Unix epoch; providing both
+/// parameters is rejected with [NtsError.invalidSpec].
 ///
 /// Throws an [NtsError] on every failure path.
 Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
-  int timeoutMs = kDefaultTimeoutMs,
+  Duration timeout = kDefaultTimeout,
+  @Deprecated('Use timeout instead.') int? timeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
   int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
-  int? verificationTimeMs,
-}) async {
-  _validateRanges(
-    spec: spec,
-    timeoutMs: timeoutMs,
-    dnsConcurrencyCap: dnsConcurrencyCap,
-    bridgeConcurrencyCap: bridgeConcurrencyCap,
-    verificationTimeMs: verificationTimeMs,
-  );
-  return _withBridgeSlot(
-    bridgeConcurrencyCap: bridgeConcurrencyCap,
-    timeoutMs: timeoutMs,
-    body: (remainingTimeoutMs) async {
-      try {
-        final ffiSample = await ffi.ntsQuery(
-          spec: _ffiSpec(spec),
-          timeoutMs: remainingTimeoutMs,
-          dnsConcurrencyCap: dnsConcurrencyCap,
-          verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
-        );
-        return _publicSample(ffiSample);
-      } on ffi.NtsError catch (err, stack) {
-        // Preserve the original FFI-side stack trace through the
-        // conversion so debuggers point at the FRB dispatcher / Rust
-        // boundary where the error originated, not at this catch site.
-        Error.throwWithStackTrace(_publicError(err), stack);
-      }
-    },
-  );
-}
+  DateTime? verificationTime,
+  @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
+}) => _dispatch(
+  spec: spec,
+  timeout: timeout,
+  timeoutMs: timeoutMs,
+  dnsConcurrencyCap: dnsConcurrencyCap,
+  bridgeConcurrencyCap: bridgeConcurrencyCap,
+  verificationTime: verificationTime,
+  verificationTimeMs: verificationTimeMs,
+  call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicSample(
+    await ffi.ntsQuery(
+      spec: ffiSpec,
+      timeoutMs: ffiTimeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+      verificationTimeMs: ffiVerificationMs,
+    ),
+  ),
+);
 
 /// One-call "give me the correct time" convenience built on
 /// [ntsWarmCookies] + a burst of [ntsQuery] calls against the
@@ -269,7 +273,7 @@ Future<NtsTimeSample> ntsQuery({
 /// [ntsQuery].
 ///
 /// Tuning is fixed and internal — the call takes no configuration
-/// beyond `spec` and `verificationTimeMs`. The internal values are
+/// beyond `spec` and `verificationTime`. The internal values are
 /// sized to serve phones and desktops alike: an 8-sample burst for a
 /// tight lowest-RTT selection, one **total** 8-second wall-clock
 /// budget shared across the handshake and every burst query as a
@@ -300,8 +304,9 @@ Future<NtsTimeSample> ntsQuery({
 ///   with [TimeoutPhase.ntp] (the UDP exchange is the phase the
 ///   budget ran out in front of).
 ///
-/// `verificationTimeMs` carries the same cold-start clock-skew-rescue
-/// semantics documented on [ntsQuery] and is forwarded to every
+/// `verificationTime` (or the deprecated `verificationTimeMs`) carries
+/// the same cold-start clock-skew-rescue semantics documented on
+/// [ntsQuery] and is forwarded to every
 /// underlying call. All arguments are validated up front on the same
 /// terms as [ntsQuery] (out-of-range values surface as
 /// [NtsError.invalidSpec] before any FFI dispatch).
@@ -312,23 +317,28 @@ Future<NtsTimeSample> ntsQuery({
 /// one of the newly delivered cookies.
 Future<NtsSyncedTime> ntsGetTime({
   required NtsServerSpec spec,
-  int? verificationTimeMs,
+  DateTime? verificationTime,
+  @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
 }) async {
-  _validateGetTime(spec: spec, verificationTimeMs: verificationTimeMs);
+  final resolvedVerificationMs = _resolveVerificationTime(
+    verificationTime,
+    verificationTimeMs,
+  );
+  _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
   return _getTime(
-    warm: (timeoutMs) => ntsWarmCookies(
+    warm: (timeout) => ntsWarmCookies(
       spec: spec,
-      timeoutMs: timeoutMs,
+      timeout: timeout,
       dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-      verificationTimeMs: verificationTimeMs,
+      verificationTime: _verificationInstant(resolvedVerificationMs),
     ),
-    query: (timeoutMs) => ntsQuery(
+    query: (timeout) => ntsQuery(
       spec: spec,
-      timeoutMs: timeoutMs,
+      timeout: timeout,
       dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-      verificationTimeMs: verificationTimeMs,
+      verificationTime: _verificationInstant(resolvedVerificationMs),
     ),
   );
 }
@@ -337,16 +347,17 @@ Future<NtsSyncedTime> ntsGetTime({
 /// count along with the per-phase wall-clock breakdown of the handshake.
 /// Replaces any cached session for that spec.
 ///
-/// `timeoutMs`, `dnsConcurrencyCap`, and `bridgeConcurrencyCap` carry
+/// `timeout`, `dnsConcurrencyCap`, and `bridgeConcurrencyCap` carry
 /// the same semantics as on [ntsQuery] and default to
-/// [kDefaultTimeoutMs] / [kDefaultDnsConcurrencyCap] /
-/// [kDefaultBridgeConcurrencyCap] when omitted.
+/// [kDefaultTimeout] / [kDefaultDnsConcurrencyCap] /
+/// [kDefaultBridgeConcurrencyCap] when omitted. The deprecated
+/// `timeoutMs` resolves on the same terms as on [ntsQuery].
 ///
 /// The worker-pool occupancy mechanics and bridge admission gate
 /// documented on [ntsQuery] apply here on identical terms: each
 /// dispatched call pins one `flutter_rust_bridge` worker thread for up
-/// to `timeoutMs`, and the same isolate-wide gate bounds concurrent
-/// dispatch (queue wait charged against `timeoutMs`, saturation
+/// to `timeout`, and the same isolate-wide gate bounds concurrent
+/// dispatch (queue wait charged against `timeout`, saturation
 /// surfaced as [TimeoutPhase.bridgeSaturation]) when warming many
 /// distinct hosts concurrently.
 ///
@@ -357,53 +368,46 @@ Future<NtsSyncedTime> ntsGetTime({
 /// names the four pre-NTP phases — so "implicitly zero" here is
 /// shorthand for "the UDP send/recv leg never ran on this code path."
 ///
-/// All integer arguments are validated against the FFI encoding range
+/// All arguments are validated against the FFI encoding range
 /// before dispatch on the same terms as [ntsQuery]; out-of-range values
 /// cause the returned `Future` to complete with [NtsError.invalidSpec]
 /// without reaching the Rust boundary.
 ///
-/// `verificationTimeMs` carries the identical clock-skew-rescue
+/// `verificationTime` carries the identical clock-skew-rescue
 /// semantics described on [ntsQuery]: when non-null it pins the TLS
-/// certificate validity-window check to the supplied epoch-milliseconds
-/// instant instead of the system clock, leaving all other certificate
-/// validation intact. Negative values are rejected with
-/// [NtsError.invalidSpec] before dispatch.
+/// certificate validity-window check to the supplied instant
+/// (interpreted in UTC) instead of the system clock, leaving all other
+/// certificate validation intact. Pre-epoch instants are rejected with
+/// [NtsError.invalidSpec] before dispatch, and providing both
+/// `verificationTime` and the deprecated `verificationTimeMs` is
+/// rejected on the same terms as [ntsQuery].
 ///
 /// Throws an [NtsError] on every failure path.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
-  int timeoutMs = kDefaultTimeoutMs,
+  Duration timeout = kDefaultTimeout,
+  @Deprecated('Use timeout instead.') int? timeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
   int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
-  int? verificationTimeMs,
-}) async {
-  _validateRanges(
-    spec: spec,
-    timeoutMs: timeoutMs,
-    dnsConcurrencyCap: dnsConcurrencyCap,
-    bridgeConcurrencyCap: bridgeConcurrencyCap,
-    verificationTimeMs: verificationTimeMs,
-  );
-  return _withBridgeSlot(
-    bridgeConcurrencyCap: bridgeConcurrencyCap,
-    timeoutMs: timeoutMs,
-    body: (remainingTimeoutMs) async {
-      try {
-        final ffiOutcome = await ffi.ntsWarmCookies(
-          spec: _ffiSpec(spec),
-          timeoutMs: remainingTimeoutMs,
-          dnsConcurrencyCap: dnsConcurrencyCap,
-          verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
-        );
-        return _publicWarm(ffiOutcome);
-      } on ffi.NtsError catch (err, stack) {
-        // Preserve the original FFI-side stack trace; see the comment
-        // in `ntsQuery` above.
-        Error.throwWithStackTrace(_publicError(err), stack);
-      }
-    },
-  );
-}
+  DateTime? verificationTime,
+  @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
+}) => _dispatch(
+  spec: spec,
+  timeout: timeout,
+  timeoutMs: timeoutMs,
+  dnsConcurrencyCap: dnsConcurrencyCap,
+  bridgeConcurrencyCap: bridgeConcurrencyCap,
+  verificationTime: verificationTime,
+  verificationTimeMs: verificationTimeMs,
+  call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicWarm(
+    await ffi.ntsWarmCookies(
+      spec: ffiSpec,
+      timeoutMs: ffiTimeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+      verificationTimeMs: ffiVerificationMs,
+    ),
+  ),
+);
 
 /// Snapshot the bounded DNS resolver pool counters. Synchronous (no
 /// future / isolate hop): backed by four atomic-relaxed loads, cheap
@@ -640,14 +644,15 @@ class NtsClient {
   /// NTS-KE handshake runs, then subsequent calls reuse the cached
   /// session.
   ///
-  /// Parameter semantics for `timeoutMs`, `dnsConcurrencyCap`,
-  /// `bridgeConcurrencyCap`, and `verificationTimeMs` are identical
-  /// to [ntsQuery]; defaults come from [kDefaultTimeoutMs],
+  /// Parameter semantics for `timeout`, `dnsConcurrencyCap`,
+  /// `bridgeConcurrencyCap`, and `verificationTime` (plus the
+  /// deprecated `timeoutMs` / `verificationTimeMs`) are identical
+  /// to [ntsQuery]; defaults come from [kDefaultTimeout],
   /// [kDefaultDnsConcurrencyCap], and [kDefaultBridgeConcurrencyCap],
   /// and out-of-range values cause the returned `Future` to complete
   /// with [NtsError.invalidSpec] on the same terms as the top-level
   /// wrapper.
-  /// `verificationTimeMs` carries the same cold-start clock-skew-rescue
+  /// `verificationTime` carries the same cold-start clock-skew-rescue
   /// behaviour documented on [ntsQuery]. The [NtsTimeSample] return
   /// shape is identical too — see [ntsQuery]'s dartdoc for the raw
   /// protocol primitives the sample exposes and how to apply the
@@ -660,49 +665,40 @@ class NtsClient {
   /// Throws an [NtsError] on every failure path.
   Future<NtsTimeSample> query({
     required NtsServerSpec spec,
-    int timeoutMs = kDefaultTimeoutMs,
+    Duration timeout = kDefaultTimeout,
+    @Deprecated('Use timeout instead.') int? timeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
     int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
-    int? verificationTimeMs,
-  }) async {
-    _validateRanges(
-      spec: spec,
-      timeoutMs: timeoutMs,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-      verificationTimeMs: verificationTimeMs,
-    );
-    return _withBridgeSlot(
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-      timeoutMs: timeoutMs,
-      body: (remainingTimeoutMs) async {
-        try {
-          final ffiSample = await _inner.query(
-            spec: _ffiSpec(spec),
-            timeoutMs: remainingTimeoutMs,
-            dnsConcurrencyCap: dnsConcurrencyCap,
-            verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
-          );
-          return _publicSample(ffiSample);
-        } on ffi.NtsError catch (err, stack) {
-          // Preserve the original FFI-side stack trace through the
-          // conversion; see the comment in the top-level `ntsQuery`.
-          Error.throwWithStackTrace(_publicError(err), stack);
-        }
-      },
-    );
-  }
+    DateTime? verificationTime,
+    @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
+  }) => _dispatch(
+    spec: spec,
+    timeout: timeout,
+    timeoutMs: timeoutMs,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    verificationTime: verificationTime,
+    verificationTimeMs: verificationTimeMs,
+    call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicSample(
+      await _inner.query(
+        spec: ffiSpec,
+        timeoutMs: ffiTimeoutMs,
+        dnsConcurrencyCap: dnsConcurrencyCap,
+        verificationTimeMs: ffiVerificationMs,
+      ),
+    ),
+  );
 
   /// Per-client equivalent of the top-level [ntsWarmCookies]. Forces
   /// a fresh NTS-KE handshake and ingests the delivered cookie pool
   /// into this client's table, replacing any previously cached
   /// session for the spec.
   ///
-  /// All integer arguments are validated against the FFI encoding
+  /// All arguments are validated against the FFI encoding
   /// range before dispatch on the same terms as [ntsQuery] /
   /// [ntsWarmCookies]; out-of-range values cause the returned `Future`
   /// to complete with [NtsError.invalidSpec] without reaching the
-  /// Rust boundary. `verificationTimeMs` carries the same cold-start
+  /// Rust boundary. `verificationTime` carries the same cold-start
   /// clock-skew-rescue behaviour documented on [ntsQuery], and the
   /// bridge admission gate on [ntsQuery] applies to this method
   /// unchanged (isolate-wide, shared with the top-level wrappers and
@@ -711,36 +707,29 @@ class NtsClient {
   /// Throws an [NtsError] on every failure path.
   Future<NtsWarmCookiesOutcome> warmCookies({
     required NtsServerSpec spec,
-    int timeoutMs = kDefaultTimeoutMs,
+    Duration timeout = kDefaultTimeout,
+    @Deprecated('Use timeout instead.') int? timeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
     int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
-    int? verificationTimeMs,
-  }) async {
-    _validateRanges(
-      spec: spec,
-      timeoutMs: timeoutMs,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-      verificationTimeMs: verificationTimeMs,
-    );
-    return _withBridgeSlot(
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-      timeoutMs: timeoutMs,
-      body: (remainingTimeoutMs) async {
-        try {
-          final ffiOutcome = await _inner.warmCookies(
-            spec: _ffiSpec(spec),
-            timeoutMs: remainingTimeoutMs,
-            dnsConcurrencyCap: dnsConcurrencyCap,
-            verificationTimeMs: _ffiVerificationTime(verificationTimeMs),
-          );
-          return _publicWarm(ffiOutcome);
-        } on ffi.NtsError catch (err, stack) {
-          Error.throwWithStackTrace(_publicError(err), stack);
-        }
-      },
-    );
-  }
+    DateTime? verificationTime,
+    @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
+  }) => _dispatch(
+    spec: spec,
+    timeout: timeout,
+    timeoutMs: timeoutMs,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    verificationTime: verificationTime,
+    verificationTimeMs: verificationTimeMs,
+    call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicWarm(
+      await _inner.warmCookies(
+        spec: ffiSpec,
+        timeoutMs: ffiTimeoutMs,
+        dnsConcurrencyCap: dnsConcurrencyCap,
+        verificationTimeMs: ffiVerificationMs,
+      ),
+    ),
+  );
 
   /// Per-client equivalent of the top-level [ntsGetTime]: one-call
   /// synchronized clock built on [warmCookies] + a burst of [query]
@@ -757,23 +746,28 @@ class NtsClient {
   /// cookies, leaving the process-wide default client untouched.
   Future<NtsSyncedTime> getTime({
     required NtsServerSpec spec,
-    int? verificationTimeMs,
+    DateTime? verificationTime,
+    @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
   }) async {
-    _validateGetTime(spec: spec, verificationTimeMs: verificationTimeMs);
+    final resolvedVerificationMs = _resolveVerificationTime(
+      verificationTime,
+      verificationTimeMs,
+    );
+    _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
     return _getTime(
-      warm: (timeoutMs) => warmCookies(
+      warm: (timeout) => warmCookies(
         spec: spec,
-        timeoutMs: timeoutMs,
+        timeout: timeout,
         dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
         bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-        verificationTimeMs: verificationTimeMs,
+        verificationTime: _verificationInstant(resolvedVerificationMs),
       ),
-      query: (timeoutMs) => query(
+      query: (timeout) => query(
         spec: spec,
-        timeoutMs: timeoutMs,
+        timeout: timeout,
         dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
         bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-        verificationTimeMs: verificationTimeMs,
+        verificationTime: _verificationInstant(resolvedVerificationMs),
       ),
     );
   }
@@ -843,16 +837,115 @@ class NtsClient {
 // `NtsError.invalidSpec` on the returned `Future` (the four wrapper
 // entry points are `async`, so the error materialises on `await`)
 // before any FFI dispatch instead of a Rust-authored one after a
-// futile FFI hop. `timeoutMs` and `dnsConcurrencyCap` are restricted
-// to `1..0xFFFFFFFF`: zero used to be a sentinel for "inherit the
-// Rust-side default" in 1.x and 3.0.x, but consumers are now steered
-// toward the named `kDefault*` constants which expose the actual
-// numeric values. `bridgeConcurrencyCap` never crosses the FFI
+// futile FFI hop. `timeout` (in milliseconds) and `dnsConcurrencyCap`
+// are restricted to `1..0xFFFFFFFF`: zero used to be a sentinel for
+// "inherit the Rust-side default" in 1.x and 3.0.x, but consumers are
+// now steered toward the named `kDefault*` constants which expose the
+// actual values. `bridgeConcurrencyCap` never crosses the FFI
 // boundary (the gate is pure Dart), but it is held to the same
 // `1..0xFFFFFFFF` range so the three cap/budget parameters share one
 // validation contract.
 
 const int _kU32Max = 0xFFFFFFFF;
+
+// --- deprecated-parameter resolution ----------------------------------
+//
+// One release of overlap: the deprecated `int` millisecond parameters
+// coexist with the typed `Duration` / `DateTime` ones. These helpers
+// collapse each pair onto the single value the rest of the pipeline
+// uses, failing fast on any *detectable* conflict.
+
+// `timeout` has a non-null default, so an un-migrated caller passing
+// only `timeoutMs` necessarily leaves `timeout` at `kDefaultTimeout` —
+// that is the silent compatibility path. An explicit non-default
+// `timeout` alongside `timeoutMs` is a demonstrable conflict and is
+// rejected. Known blind spot (accepted): `Duration` equality is
+// value-based, so any explicit `timeout` equal to [kDefaultTimeout]
+// (the constant itself or e.g. `Duration(seconds: 5)`) passed alongside
+// `timeoutMs` is indistinguishable from the default case and resolves
+// to `timeoutMs` without error.
+Duration _resolveTimeout(Duration timeout, int? timeoutMs) {
+  if (timeoutMs == null) return timeout;
+  if (timeout == kDefaultTimeout) return Duration(milliseconds: timeoutMs);
+  throw const NtsError.invalidSpec(
+    message:
+        'both timeout and the deprecated timeoutMs were provided with '
+        'conflicting values; pass one or the other (prefer timeout)',
+  );
+}
+
+// Both verification parameters are nullable with no default, so "both
+// supplied" is an unambiguous caller mistake rather than a
+// default-vs-override situation. The resolved value stays an epoch-ms
+// `int?` internally (the FFI shape).
+int? _resolveVerificationTime(DateTime? verificationTime, int? ms) {
+  if (verificationTime != null && ms != null) {
+    throw const NtsError.invalidSpec(
+      message:
+          'both verificationTime and the deprecated verificationTimeMs '
+          'were provided; pass one or the other (prefer verificationTime)',
+    );
+  }
+  return verificationTime?.toUtc().millisecondsSinceEpoch ?? ms;
+}
+
+// Re-wraps a resolved epoch-ms verification instant as a UTC `DateTime`
+// for forwarding through the non-deprecated parameter of the underlying
+// wrappers (used by the getTime orchestration entry points).
+DateTime? _verificationInstant(int? resolvedMs) => resolvedMs == null
+    ? null
+    : DateTime.fromMillisecondsSinceEpoch(resolvedMs, isUtc: true);
+
+// Shared resolve -> validate -> gate -> convert -> catch scaffolding
+// for the four query/warmCookies entry points (top-level and
+// per-client). Each entry point supplies only its own FFI invocation
+// via `call`, receiving the already-converted FFI-shaped arguments.
+Future<T> _dispatch<T>({
+  required NtsServerSpec spec,
+  required Duration timeout,
+  required int? timeoutMs,
+  required int dnsConcurrencyCap,
+  required int bridgeConcurrencyCap,
+  required DateTime? verificationTime,
+  required int? verificationTimeMs,
+  required Future<T> Function(
+    ffi.NtsServerSpec ffiSpec,
+    int ffiTimeoutMs,
+    PlatformInt64? ffiVerificationMs,
+  )
+  call,
+}) async {
+  final resolvedTimeout = _resolveTimeout(timeout, timeoutMs);
+  final resolvedVerificationMs = _resolveVerificationTime(
+    verificationTime,
+    verificationTimeMs,
+  );
+  _validateRanges(
+    spec: spec,
+    timeout: resolvedTimeout,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    verificationTimeMs: resolvedVerificationMs,
+  );
+  return _withBridgeSlot(
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    timeout: resolvedTimeout,
+    body: (remainingTimeout) async {
+      try {
+        return await call(
+          _ffiSpec(spec),
+          _ffiTimeoutMs(remainingTimeout),
+          _ffiVerificationTime(resolvedVerificationMs),
+        );
+      } on ffi.NtsError catch (err, stack) {
+        // Preserve the original FFI-side stack trace through the
+        // conversion so debuggers point at the FRB dispatcher / Rust
+        // boundary where the error originated, not at this catch site.
+        Error.throwWithStackTrace(_publicError(err), stack);
+      }
+    },
+  );
+}
 
 void _validatePort(NtsServerSpec spec) {
   if (spec.port < 1 || spec.port > 65535) {
@@ -864,17 +957,19 @@ void _validatePort(NtsServerSpec spec) {
 
 void _validateRanges({
   required NtsServerSpec spec,
-  required int timeoutMs,
+  required Duration timeout,
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
   int? verificationTimeMs,
 }) {
   _validatePort(spec);
-  if (timeoutMs < 1 || timeoutMs > _kU32Max) {
+  if (timeout < const Duration(milliseconds: 1) ||
+      timeout > const Duration(milliseconds: _kU32Max)) {
     throw NtsError.invalidSpec(
       message:
-          'timeoutMs $timeoutMs is outside the valid range 1..$_kU32Max; '
-          'pass kDefaultTimeoutMs ($kDefaultTimeoutMs) to inherit the '
+          'timeout $timeout (or the deprecated timeoutMs) is outside the '
+          'valid range 1ms..${_kU32Max}ms — sub-millisecond durations are '
+          'rejected (1 ms floor); pass kDefaultTimeout to inherit the '
           'package default',
     );
   }
@@ -894,16 +989,17 @@ void _validateRanges({
           '($kDefaultBridgeConcurrencyCap) to inherit the package default',
     );
   }
-  // `verificationTimeMs` is an epoch-milliseconds instant: the Rust
-  // side maps it to a `UnixTime` via `Duration::from_millis(u64)`, so a
-  // negative value cannot encode a real instant. Reject it here with the
-  // same `invalidSpec` surface as the other range checks rather than
+  // The resolved verification instant is an epoch-milliseconds value:
+  // the Rust side maps it to a `UnixTime` via `Duration::from_millis(u64)`,
+  // so a negative value cannot encode a real instant. Reject it here with
+  // the same `invalidSpec` surface as the other range checks rather than
   // letting it silently fall back to the system clock on the Rust side.
   if (verificationTimeMs != null && verificationTimeMs < 0) {
     throw NtsError.invalidSpec(
       message:
-          'verificationTimeMs $verificationTimeMs is negative; it must be '
-          'a non-negative count of milliseconds since the Unix epoch',
+          'verificationTime (or the deprecated verificationTimeMs) resolves '
+          'to $verificationTimeMs ms, which is before the Unix epoch; it '
+          'must be a non-negative epoch-milliseconds instant',
     );
   }
 }
@@ -917,7 +1013,7 @@ void _validateRanges({
 void _validateGetTime({required NtsServerSpec spec, int? verificationTimeMs}) {
   _validateRanges(
     spec: spec,
-    timeoutMs: _kGetTimeTimeoutMs,
+    timeout: _kGetTimeTimeout,
     dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
     bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
     verificationTimeMs: verificationTimeMs,
@@ -932,10 +1028,10 @@ void _validateGetTime({required NtsServerSpec spec, int? verificationTimeMs}) {
 // delegate the budget accounting, burst loop, lowest-RTT selection,
 // and compensation here so the two surfaces cannot drift.
 //
-// `_kGetTimeTimeoutMs` is one total budget: a single `Stopwatch`
+// `_kGetTimeTimeout` is one total budget: a single `Stopwatch`
 // started before the handshake meters every underlying call, and each
 // call receives only the remaining balance. The lower-level wrappers
-// validate `timeoutMs >= 1`, so a depleted budget is detected here
+// validate `timeout >= 1ms`, so a depleted budget is detected here
 // (and surfaced as `timeout(ntp)`) rather than tripping their
 // `invalidSpec` range check with a confusing message.
 
@@ -947,39 +1043,41 @@ void _validateGetTime({required NtsServerSpec spec, int? verificationTimeMs}) {
 // enough spread to ride out jitter on cellular / Wi-Fi ones.
 const int _kGetTimeMaxBurst = 8;
 
-// Total wall-clock budget for the whole `getTime` call in
-// milliseconds, shared across the warming handshake and every burst
-// query as one shrinking deadline. Sized for the 8-query burst over
-// a cold-radio cellular path (DNS + TCP + TLS + KE handshake plus
-// eight serial UDP round-trips); on fast paths the call returns as
-// soon as the burst completes, so the generous cap only moves the
-// worst-case failure latency, never the happy path.
-const int _kGetTimeTimeoutMs = 8000;
+// Total wall-clock budget for the whole `getTime` call, shared across
+// the warming handshake and every burst query as one shrinking
+// deadline. Sized for the 8-query burst over a cold-radio cellular
+// path (DNS + TCP + TLS + KE handshake plus eight serial UDP
+// round-trips); on fast paths the call returns as soon as the burst
+// completes, so the generous cap only moves the worst-case failure
+// latency, never the happy path.
+const Duration _kGetTimeTimeout = Duration(milliseconds: 8000);
 
 Future<NtsSyncedTime> _getTime({
-  required Future<NtsWarmCookiesOutcome> Function(int timeoutMs) warm,
-  required Future<NtsTimeSample> Function(int timeoutMs) query,
+  required Future<NtsWarmCookiesOutcome> Function(Duration timeout) warm,
+  required Future<NtsTimeSample> Function(Duration timeout) query,
 }) async {
   final budget = Stopwatch()..start();
-  // Charge elapsed time at microsecond resolution, rounded *up* to
-  // whole milliseconds, so the returned balance is a floor. Deriving
-  // it from `elapsedMilliseconds` (which truncates) could report
-  // `1` with under a millisecond actually left, dispatching one more
-  // query and overshooting the documented total budget by up to
-  // ~1ms.
-  int remaining() =>
-      _kGetTimeTimeoutMs - (budget.elapsedMicroseconds + 999) ~/ 1000;
+  // Exact `Duration` subtraction at microsecond resolution. The
+  // ms-precision conversion happens once per dispatch, at the FFI
+  // boundary (`_ffiTimeoutMs`), which rounds *up* so a live sub-ms
+  // remainder is never rounded down to a dead budget. The trade-off:
+  // each forwarded ms value may exceed the true remainder by <1 ms
+  // (bounded overall to <1 ms on the final dispatch), rather than the
+  // pre-Duration shape's strict floor.
+  Duration remaining() => _kGetTimeTimeout - budget.elapsed;
 
   // Warm phase: always a fresh handshake, so the burst below runs
   // against a full cookie pool and a known-fresh AEAD session. A
   // failure here is fatal by design — there is nothing to sample with.
   // The handshake draws from the shared balance too (not a fresh
-  // `_kGetTimeTimeoutMs`), so overhead accrued since `budget` started
+  // `_kGetTimeTimeout`), so overhead accrued since `budget` started
   // is charged against the total rather than silently extending it.
   // The clamp keeps a fully depleted balance from tripping the
-  // lower-level `timeoutMs >= 1` validation; a 1ms warm then times
+  // lower-level `timeout >= 1ms` validation; a 1ms warm then times
   // out on its own terms and propagates per the posture above.
-  final outcome = await warm(math.max(1, remaining()));
+  const floor = Duration(milliseconds: 1);
+  final warmBudget = remaining();
+  final outcome = await warm(warmBudget < floor ? floor : warmBudget);
   if (outcome.freshCookies < 1) {
     throw NtsError.noCookies(trustBackend: outcome.trustBackend);
   }
@@ -997,7 +1095,7 @@ Future<NtsSyncedTime> _getTime({
   StackTrace? lastStack;
   for (var i = 0; i < burst; i++) {
     final left = remaining();
-    if (left < 1) break;
+    if (left < const Duration(milliseconds: 1)) break;
     try {
       final sample = await query(left);
       samplesUsed++;
@@ -1051,7 +1149,7 @@ Future<NtsSyncedTime> _getTime({
 // The four async wrappers dispatch blocking Rust network exchanges to
 // the `flutter_rust_bridge` worker pool (a fixed pool of one thread
 // per logical CPU by default), and each in-flight call pins one pool
-// thread for its full duration — up to `timeoutMs`. This gate bounds
+// thread for its full duration — up to `timeout`. This gate bounds
 // how many of this package's calls occupy pool threads at once so a
 // distinct-host fan-out burst cannot exhaust the pool and stall
 // unrelated bridge calls behind it. Waiters queue on the Dart side
@@ -1065,7 +1163,7 @@ Future<NtsSyncedTime> _getTime({
 // jumps a waiter that is also admissible — it only overtakes waiters
 // whose smaller caps keep them queued regardless.
 //
-// Queue wait is charged against the call's `timeoutMs` and only the
+// Queue wait is charged against the call's `timeout` and only the
 // remainder crosses the FFI boundary, keeping the caller's total
 // wall-clock budget honest; a budget that expires while queued
 // surfaces as `NtsError.timeout(phase: TimeoutPhase.bridgeSaturation)`
@@ -1085,13 +1183,13 @@ final List<_BridgeWaiter> _bridgeQueue = <_BridgeWaiter>[];
 
 Future<T> _withBridgeSlot<T>({
   required int bridgeConcurrencyCap,
-  required int timeoutMs,
-  required Future<T> Function(int remainingTimeoutMs) body,
+  required Duration timeout,
+  required Future<T> Function(Duration remainingTimeout) body,
 }) async {
   // Uncontended calls take the slot synchronously and forward
-  // `timeoutMs` verbatim; the queue-wait deduction below only applies
+  // `timeout` verbatim; the queue-wait deduction below only applies
   // to calls that actually queued.
-  var remainingTimeoutMs = timeoutMs;
+  var remainingTimeout = timeout;
   if (_bridgeInFlight < bridgeConcurrencyCap) {
     _bridgeInFlight++;
   } else {
@@ -1102,7 +1200,7 @@ Future<T> _withBridgeSlot<T>({
     // at the wrapper call path that queued the waiter, not at the timer
     // callback that fired the deadline.
     final enqueueTrace = StackTrace.current;
-    final deadline = Timer(Duration(milliseconds: timeoutMs), () {
+    final deadline = Timer(timeout, () {
       if (!waiter.admitted.isCompleted) {
         // Completing with the error is also the cancellation mark: the
         // entry stays queued and `_admitBridgeWaiters` drops it during
@@ -1125,16 +1223,16 @@ Future<T> _withBridgeSlot<T>({
     } finally {
       deadline.cancel();
     }
-    remainingTimeoutMs = timeoutMs - queueWait.elapsedMilliseconds;
+    remainingTimeout = timeout - queueWait.elapsed;
   }
   try {
-    if (remainingTimeoutMs < 1) {
+    if (remainingTimeout < const Duration(milliseconds: 1)) {
       // The slot was granted at (or a scheduling beat past) the exact
       // moment the budget ran out; dispatching with a zero budget is
       // indistinguishable from having timed out while queued.
       throw const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation);
     }
-    return await body(remainingTimeoutMs);
+    return await body(remainingTimeout);
   } finally {
     _bridgeInFlight--;
     _admitBridgeWaiters();
@@ -1188,6 +1286,13 @@ ffi.NtsServerSpec _ffiSpec(NtsServerSpec spec) =>
 // are rejected by `_validateRanges` before reaching here.
 PlatformInt64? _ffiVerificationTime(int? ms) =>
     ms == null ? null : PlatformInt64Util.from(ms);
+
+// Converts a resolved `Duration` budget to the FFI's millisecond `int`
+// with a *ceiling*, so a live sub-millisecond remainder is never rounded
+// down to a dead (zero) budget at dispatch. The forwarded value may
+// exceed the true remainder by <1 ms — see the `_getTime` remaining()
+// comment for the budget-accounting consequences.
+int _ffiTimeoutMs(Duration d) => (d.inMicroseconds + 999) ~/ 1000;
 
 NtsTimeSample _publicSample(ffi.NtsTimeSample s) => NtsTimeSample(
   utcUnixMicros: s.utcUnixMicros.toInt(),

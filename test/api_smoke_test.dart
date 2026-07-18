@@ -468,6 +468,7 @@ void main() {
       // from a single source of truth — keep them in sync by hand
       // when bumping the package's tuned defaults.
       expect(kDefaultTimeoutMs, 5000);
+      expect(kDefaultTimeout, const Duration(milliseconds: 5000));
       expect(kDefaultDnsConcurrencyCap, 4);
     });
 
@@ -475,47 +476,176 @@ void main() {
       'ntsQuery applies the package defaults when args are omitted',
       () async {
         await ntsQuery(spec: spec);
-        expect(api.lastQueryTimeoutMs, kDefaultTimeoutMs);
+        expect(api.lastQueryTimeoutMs, kDefaultTimeout.inMilliseconds);
         expect(api.lastQueryDnsCap, kDefaultDnsConcurrencyCap);
       },
     );
 
-    test('ntsQuery forwards explicit overrides verbatim', () async {
+    test('ntsQuery forwards an explicit Duration timeout as whole '
+        'milliseconds', () async {
+      await ntsQuery(
+        spec: spec,
+        timeout: const Duration(seconds: 2),
+        dnsConcurrencyCap: 32,
+      );
+      expect(api.lastQueryTimeoutMs, 2000);
+      expect(api.lastQueryDnsCap, 32);
+    });
+
+    test('ntsQuery forwards the deprecated timeoutMs verbatim when '
+        'timeout is left at its default', () async {
+      // Deprecated compatibility path: an un-migrated caller passing
+      // only `timeoutMs` must see no behaviour change.
       await ntsQuery(spec: spec, timeoutMs: 1234, dnsConcurrencyCap: 32);
       expect(api.lastQueryTimeoutMs, 1234);
       expect(api.lastQueryDnsCap, 32);
     });
 
-    test(
-      'ntsQuery defaults verificationTimeMs to null (system clock)',
-      () async {
-        await ntsQuery(spec: spec);
-        expect(api.lastQueryVerificationTimeMs, isNull);
-      },
-    );
-
-    test('ntsQuery forwards verificationTimeMs to the FFI boundary', () async {
-      await ntsQuery(spec: spec, verificationTimeMs: 1_700_000_000_000);
-      expect(api.lastQueryVerificationTimeMs, 1_700_000_000_000);
-    });
-
-    test('ntsQuery accepts verificationTimeMs == 0 (epoch) as valid', () async {
-      await ntsQuery(spec: spec, verificationTimeMs: 0);
-      expect(api.lastQueryVerificationTimeMs, 0);
-    });
-
-    test('ntsQuery rejects negative verificationTimeMs with '
-        'NtsError.invalidSpec', () async {
+    test('ntsQuery rejects an explicit non-default timeout combined with '
+        'the deprecated timeoutMs', () async {
       await expectLater(
-        ntsQuery(spec: spec, verificationTimeMs: -1),
+        ntsQuery(
+          spec: spec,
+          timeout: const Duration(seconds: 2),
+          timeoutMs: 1234,
+        ),
         throwsA(
           isA<NtsErrorInvalidSpec>().having(
             (e) => e.message,
             'message',
-            contains('verificationTimeMs -1 is negative'),
+            contains('both timeout and the deprecated timeoutMs'),
           ),
         ),
       );
+      // Rejected before any FFI dispatch.
+      expect(api.lastQueryTimeoutMs, isNull);
+    });
+
+    test('ntsQuery resolves timeout: kDefaultTimeout plus timeoutMs to '
+        'the deprecated value (documented blind spot)', () async {
+      // An explicit `timeout: kDefaultTimeout` is indistinguishable
+      // from the parameter's default, so the deprecated value wins
+      // without error. Accepted blind spot of the resolution policy.
+      await ntsQuery(spec: spec, timeout: kDefaultTimeout, timeoutMs: 1234);
+      expect(api.lastQueryTimeoutMs, 1234);
+    });
+
+    test('ntsQuery ceilings a sub-millisecond Duration remainder up but '
+        'rejects sub-millisecond totals at validation', () async {
+      // Validation runs on the caller's value: anything below the 1 ms
+      // floor is rejected even though the FFI dispatch conversion
+      // would ceiling it to 1.
+      await expectLater(
+        ntsQuery(spec: spec, timeout: const Duration(microseconds: 500)),
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains('1 ms floor'),
+          ),
+        ),
+      );
+      expect(api.lastQueryTimeoutMs, isNull);
+      // A non-whole-ms Duration above the floor is forwarded with a
+      // ceiling so a live budget never rounds down to a dead one.
+      await ntsQuery(
+        spec: spec,
+        timeout: const Duration(milliseconds: 10, microseconds: 1),
+      );
+      expect(api.lastQueryTimeoutMs, 11);
+    });
+
+    test('ntsQuery defaults verificationTime to null (system clock)', () async {
+      await ntsQuery(spec: spec);
+      expect(api.lastQueryVerificationTimeMs, isNull);
+    });
+
+    test('ntsQuery converts verificationTime to epoch-ms at the FFI '
+        'boundary', () async {
+      await ntsQuery(
+        spec: spec,
+        verificationTime: DateTime.fromMillisecondsSinceEpoch(
+          1_700_000_000_000,
+          isUtc: true,
+        ),
+      );
+      expect(api.lastQueryVerificationTimeMs, 1_700_000_000_000);
+    });
+
+    test(
+      'ntsQuery normalizes a non-UTC verificationTime via toUtc()',
+      () async {
+        // A local-zone DateTime carries the same instant; the resolved
+        // epoch-ms must be zone-independent.
+        final local = DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000);
+        await ntsQuery(spec: spec, verificationTime: local);
+        expect(api.lastQueryVerificationTimeMs, 1_700_000_000_000);
+      },
+    );
+
+    test('ntsQuery forwards the deprecated verificationTimeMs '
+        'verbatim', () async {
+      await ntsQuery(spec: spec, verificationTimeMs: 1_700_000_000_000);
+      expect(api.lastQueryVerificationTimeMs, 1_700_000_000_000);
+    });
+
+    test('ntsQuery rejects verificationTime combined with the deprecated '
+        'verificationTimeMs', () async {
+      await expectLater(
+        ntsQuery(
+          spec: spec,
+          verificationTime: DateTime.fromMillisecondsSinceEpoch(
+            1_700_000_000_000,
+            isUtc: true,
+          ),
+          verificationTimeMs: 1_700_000_000_000,
+        ),
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains(
+              'both verificationTime and the deprecated '
+              'verificationTimeMs',
+            ),
+          ),
+        ),
+      );
+      // Rejected before any FFI dispatch.
+      expect(api.lastQueryVerificationTimeMs, isNull);
+    });
+
+    test('ntsQuery accepts verificationTime at the epoch as valid', () async {
+      await ntsQuery(
+        spec: spec,
+        verificationTime: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      );
+      expect(api.lastQueryVerificationTimeMs, 0);
+    });
+
+    test('ntsQuery rejects a pre-epoch verificationTime and a negative '
+        'deprecated verificationTimeMs with NtsError.invalidSpec', () async {
+      for (final mint in <Future<Object?> Function()>[
+        () => ntsQuery(
+          spec: spec,
+          verificationTime: DateTime.fromMillisecondsSinceEpoch(
+            -1,
+            isUtc: true,
+          ),
+        ),
+        () => ntsQuery(spec: spec, verificationTimeMs: -1),
+      ]) {
+        await expectLater(
+          mint(),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('resolves to -1 ms, which is before the Unix epoch'),
+            ),
+          ),
+        );
+      }
       // Rejected before any FFI dispatch.
       expect(api.lastQueryVerificationTimeMs, isNull);
       expect(api.lastQueryTimeoutMs, isNull);
@@ -558,7 +688,7 @@ void main() {
           isA<NtsErrorInvalidSpec>().having(
             (e) => e.message,
             'message',
-            contains('timeoutMs 0 is outside the valid range'),
+            contains('is outside the valid range 1ms..4294967295ms'),
           ),
         ),
       );
@@ -594,6 +724,10 @@ void main() {
         throwsA(isA<NtsErrorInvalidSpec>()),
       );
       await expectLater(
+        ntsWarmCookies(spec: spec, timeout: const Duration(milliseconds: -1)),
+        throwsA(isA<NtsErrorInvalidSpec>()),
+      );
+      await expectLater(
         ntsWarmCookies(spec: spec, timeoutMs: -1),
         throwsA(isA<NtsErrorInvalidSpec>()),
       );
@@ -608,19 +742,37 @@ void main() {
       'ntsWarmCookies applies the package defaults when args are omitted',
       () async {
         await ntsWarmCookies(spec: spec);
-        expect(api.lastWarmTimeoutMs, kDefaultTimeoutMs);
+        expect(api.lastWarmTimeoutMs, kDefaultTimeout.inMilliseconds);
         expect(api.lastWarmDnsCap, kDefaultDnsConcurrencyCap);
       },
     );
 
     test('ntsWarmCookies forwards explicit overrides verbatim', () async {
+      await ntsWarmCookies(
+        spec: spec,
+        timeout: const Duration(seconds: 9),
+        dnsConcurrencyCap: 16,
+      );
+      expect(api.lastWarmTimeoutMs, 9000);
+      expect(api.lastWarmDnsCap, 16);
+      api.reset();
+      // Deprecated compatibility path.
       await ntsWarmCookies(spec: spec, timeoutMs: 9000, dnsConcurrencyCap: 16);
       expect(api.lastWarmTimeoutMs, 9000);
       expect(api.lastWarmDnsCap, 16);
     });
 
-    test('ntsWarmCookies forwards verificationTimeMs and rejects '
-        'negatives', () async {
+    test('ntsWarmCookies forwards verificationTime (and the deprecated '
+        'verificationTimeMs) and rejects negatives', () async {
+      await ntsWarmCookies(
+        spec: spec,
+        verificationTime: DateTime.fromMillisecondsSinceEpoch(
+          1_700_000_000_000,
+          isUtc: true,
+        ),
+      );
+      expect(api.lastWarmVerificationTimeMs, 1_700_000_000_000);
+      api.reset();
       await ntsWarmCookies(spec: spec, verificationTimeMs: 1_700_000_000_000);
       expect(api.lastWarmVerificationTimeMs, 1_700_000_000_000);
       api.reset();
@@ -1326,13 +1478,32 @@ void main() {
 
     test('query forwards explicit overrides verbatim', () async {
       final client = NtsClient();
+      await client.query(
+        spec: spec,
+        timeout: const Duration(milliseconds: 1234),
+        dnsConcurrencyCap: 32,
+      );
+      expect(api.lastClientQueryTimeoutMs, 1234);
+      expect(api.lastClientQueryDnsCap, 32);
+      api.reset();
+      // Deprecated compatibility path.
       await client.query(spec: spec, timeoutMs: 1234, dnsConcurrencyCap: 32);
       expect(api.lastClientQueryTimeoutMs, 1234);
       expect(api.lastClientQueryDnsCap, 32);
     });
 
-    test('query forwards verificationTimeMs and rejects negatives', () async {
+    test('query forwards verificationTime (and the deprecated '
+        'verificationTimeMs) and rejects negatives', () async {
       final client = NtsClient();
+      await client.query(
+        spec: spec,
+        verificationTime: DateTime.fromMillisecondsSinceEpoch(
+          1_700_000_000_000,
+          isUtc: true,
+        ),
+      );
+      expect(api.lastClientQueryVerificationTimeMs, 1_700_000_000_000);
+      api.reset();
       await client.query(spec: spec, verificationTimeMs: 1_700_000_000_000);
       expect(api.lastClientQueryVerificationTimeMs, 1_700_000_000_000);
       api.reset();
@@ -1343,18 +1514,54 @@ void main() {
       expect(api.lastClientQueryVerificationTimeMs, isNull);
     });
 
+    test(
+      'query applies the deprecated-parameter resolution policies',
+      () async {
+        final client = NtsClient();
+        await expectLater(
+          client.query(
+            spec: spec,
+            timeout: const Duration(seconds: 2),
+            timeoutMs: 1234,
+          ),
+          throwsA(isA<NtsErrorInvalidSpec>()),
+        );
+        await expectLater(
+          client.query(
+            spec: spec,
+            verificationTime: DateTime.fromMillisecondsSinceEpoch(
+              0,
+              isUtc: true,
+            ),
+            verificationTimeMs: 0,
+          ),
+          throwsA(isA<NtsErrorInvalidSpec>()),
+        );
+        expect(api.lastClientQueryTimeoutMs, isNull);
+      },
+    );
+
     test('warmCookies forwards spec, defaults, and the FFI outcome', () async {
       final client = NtsClient();
       api.nextWarm = _ffiWarm(7);
       final outcome = await client.warmCookies(spec: spec);
       expect(api.lastClientWarmThat, isNotNull);
-      expect(api.lastClientWarmTimeoutMs, kDefaultTimeoutMs);
+      expect(api.lastClientWarmTimeoutMs, kDefaultTimeout.inMilliseconds);
       expect(api.lastClientWarmDnsCap, kDefaultDnsConcurrencyCap);
       expect(outcome.freshCookies, 7);
     });
 
     test('warmCookies forwards explicit overrides verbatim', () async {
       final client = NtsClient();
+      await client.warmCookies(
+        spec: spec,
+        timeout: const Duration(milliseconds: 9876),
+        dnsConcurrencyCap: 8,
+      );
+      expect(api.lastClientWarmTimeoutMs, 9876);
+      expect(api.lastClientWarmDnsCap, 8);
+      api.reset();
+      // Deprecated compatibility path.
       await client.warmCookies(
         spec: spec,
         timeoutMs: 9876,
@@ -1364,9 +1571,18 @@ void main() {
       expect(api.lastClientWarmDnsCap, 8);
     });
 
-    test('warmCookies forwards verificationTimeMs and rejects '
-        'negatives', () async {
+    test('warmCookies forwards verificationTime (and the deprecated '
+        'verificationTimeMs) and rejects negatives', () async {
       final client = NtsClient();
+      await client.warmCookies(
+        spec: spec,
+        verificationTime: DateTime.fromMillisecondsSinceEpoch(
+          1_700_000_000_000,
+          isUtc: true,
+        ),
+      );
+      expect(api.lastClientWarmVerificationTimeMs, 1_700_000_000_000);
+      api.reset();
       await client.warmCookies(
         spec: spec,
         verificationTimeMs: 1_700_000_000_000,
@@ -1868,7 +2084,10 @@ void main() {
     test('the internal tuning is forwarded to the warm and every '
         'burst query', () async {
       api.nextWarm = _ffiWarm(8);
-      await ntsGetTime(spec: spec, verificationTimeMs: 42);
+      await ntsGetTime(
+        spec: spec,
+        verificationTime: DateTime.fromMillisecondsSinceEpoch(42, isUtc: true),
+      );
       // The warm draws from the shared 8000ms budget, so the
       // forwarded deadline is that total minus the (tiny, ceilinged)
       // pre-warm overhead. The concurrency caps are the package
@@ -1880,6 +2099,37 @@ void main() {
       expect(api.queryDispatches, 8);
       expect(api.lastQueryDnsCap, kDefaultDnsConcurrencyCap);
       expect(api.lastQueryVerificationTimeMs, 42);
+    });
+
+    test('the deprecated verificationTimeMs still reaches the warm and '
+        'burst dispatches', () async {
+      api.nextWarm = _ffiWarm(2);
+      await ntsGetTime(spec: spec, verificationTimeMs: 42);
+      expect(api.lastWarmVerificationTimeMs, 42);
+      expect(api.lastQueryVerificationTimeMs, 42);
+    });
+
+    test('getTime rejects verificationTime combined with the deprecated '
+        'verificationTimeMs on both entry points', () async {
+      final client = NtsClient();
+      final instant = DateTime.fromMillisecondsSinceEpoch(42, isUtc: true);
+      for (final mint in <Future<Object?> Function()>[
+        () => ntsGetTime(
+          spec: spec,
+          verificationTime: instant,
+          verificationTimeMs: 42,
+        ),
+        () => client.getTime(
+          spec: spec,
+          verificationTime: instant,
+          verificationTimeMs: 42,
+        ),
+      ]) {
+        await expectLater(mint(), throwsA(isA<NtsErrorInvalidSpec>()));
+      }
+      // Rejected before any FFI dispatch.
+      expect(api.lastWarmTimeoutMs, isNull);
+      expect(api.queryDispatches, 0);
     });
 
     test('warm and burst draw down one shared total budget', () async {

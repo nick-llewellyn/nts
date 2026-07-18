@@ -50,13 +50,12 @@ import 'nts_format.dart';
 /// a given `lastHandshakeBackend` mutation.
 const String _kDeveloperLogName = 'nts.example.controller';
 
-/// Per-request timeout in milliseconds. Single global wall-clock
-/// budget that spans DNS, NTS-KE (TCP connect, TLS handshake,
-/// record I/O) and the AEAD-NTPv4 UDP exchange as one shrinking
-/// deadline — see the `ntsQuery` dartdoc in `package:nts/nts.dart`
-/// for the full mechanism. Mirrors the value the original example
-/// used.
-const int _kTimeoutMs = 5000;
+/// Per-request timeout. Single global wall-clock budget that spans
+/// DNS, NTS-KE (TCP connect, TLS handshake, record I/O) and the
+/// AEAD-NTPv4 UDP exchange as one shrinking deadline — see the
+/// `ntsQuery` dartdoc in `package:nts/nts.dart` for the full
+/// mechanism. Mirrors the value the original example used.
+const Duration _kTimeout = Duration(milliseconds: 5000);
 
 class NtsController {
   NtsController(this.state)
@@ -211,7 +210,7 @@ class NtsController {
     try {
       final sample = await clientAtStart.query(
         spec: entry.spec,
-        timeoutMs: _kTimeoutMs,
+        timeout: _kTimeout,
         // Explicit at its package default (4) to surface the
         // Rust-side bounded DNS resolver pool; refusals when the
         // pool is full fail fast as TimeoutPhase.dnsSaturation.
@@ -260,7 +259,7 @@ class NtsController {
     try {
       final outcome = await clientAtStart.warmCookies(
         spec: entry.spec,
-        timeoutMs: _kTimeoutMs,
+        timeout: _kTimeout,
         // Same bounded-DNS demonstration as `runQuery` above.
         dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       );
