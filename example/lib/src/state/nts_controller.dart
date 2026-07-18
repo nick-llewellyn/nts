@@ -143,15 +143,17 @@ class NtsController {
       backend: null,
       source: 'trust_mode_toggle',
     );
+    final clientCreated = _client != null;
+    final suffix = clientCreated
+        ? '(new NtsClient minted; cached sessions dropped)'
+        : '(no roots loaded — actions will no-op until roots are applied)';
     state.log.info(
       'system',
-      'TrustMode → ${formatTrustMode(next)} '
-          '(new NtsClient minted; cached sessions dropped)',
+      'TrustMode → ${formatTrustMode(next)} $suffix',
       trustMode: next,
     );
     developer.log(
-      'TrustMode toggled → ${next.name} '
-      '(new NtsClient minted; cached sessions dropped)',
+      'TrustMode toggled → ${next.name} $suffix',
       name: _kDeveloperLogName,
     );
   }
