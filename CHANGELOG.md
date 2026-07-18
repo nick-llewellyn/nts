@@ -12,11 +12,11 @@
   lowest-RTT sample, apply the standard symmetric-path compensation
   (`utc + roundTrip / 2`), and return the result as a new
   `NtsSyncedTime` anchored to a process-local monotonic `Stopwatch`
-  (`utcNow` projects the authenticated instant forward immune to
+  (`utcNow` projects the authenticated instant forward, immune to
   system clock steps; `roundTripMicros`, `samplesUsed`,
   `trustBackend`, and `elapsedSinceSync` expose the diagnostics).
   Tuning is fixed and internal — one configuration sized to serve
-  phones and desktops alike: an 8-sample burst, one total 8 s
+  phones and desktops alike: an 8-sample burst, one total 8-second
   wall-clock budget shared across the handshake and every burst query
   as a single shrinking deadline, and the package-default concurrency
   caps forwarded to every underlying call. Deployments needing
