@@ -868,7 +868,7 @@ Duration _resolveTimeout(Duration timeout, int? timeoutMs) {
   throw const NtsError.invalidSpec(
     message:
         'both timeout and the deprecated timeoutMs were provided with '
-        'conflicting values; pass only timeout',
+        'conflicting values; pass one or the other (prefer timeout)',
   );
 }
 
@@ -881,7 +881,7 @@ int? _resolveVerificationTime(DateTime? verificationTime, int? ms) {
     throw const NtsError.invalidSpec(
       message:
           'both verificationTime and the deprecated verificationTimeMs '
-          'were provided; pass only verificationTime',
+          'were provided; pass one or the other (prefer verificationTime)',
     );
   }
   return verificationTime?.toUtc().millisecondsSinceEpoch ?? ms;
