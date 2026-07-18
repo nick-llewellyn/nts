@@ -109,16 +109,28 @@ dart_test.yaml
 sonar-project.properties
 
 # Maintainer-only Rust tool configs. rust/clippy.toml is read solely by
-# `cargo clippy` and rust/tarpaulin.toml solely by `cargo tarpaulin`,
-# both of which run only in this repo's CI / local maintainer workflow.
+# `cargo clippy`, rust/tarpaulin.toml solely by `cargo tarpaulin`, and
+# rust/deny.toml solely by `cargo deny`, all of which run only in this
+# repo's CI / local maintainer workflow.
 # The Native Assets build hook compiles consumer-side via `cargo build`
-# (RustBuilder), which never reads either file, so they are pure noise on
-# the published surface — same rationale as the analyzer/test-runner/FRB
-# /Sonar configs above. (rust/rust-toolchain.toml is deliberately NOT
+# (RustBuilder), which never reads any of these files, so they are pure
+# noise on the published surface — same rationale as the
+# analyzer/test-runner/FRB/Sonar configs above.
+# (rust/rust-toolchain.toml is deliberately NOT
 # excluded: RustBuilder reads it via rustup for the channel pin and the
 # cross-compile targets used by consumer builds.)
 rust/clippy.toml
 rust/tarpaulin.toml
+rust/deny.toml
+
+# Maintainer-only documentation-hygiene configs. _typos.toml is read
+# solely by the `typos` spell-check job and lychee.toml solely by the
+# `lychee` link-check job, both scheduled advisory jobs in
+# `.github/workflows/advisory.yml` that run only against this repo.
+# Consumers never invoke either tool against the published tarball, so
+# both files are pure noise on the published surface.
+_typos.toml
+lychee.toml
 
 # Internal tooling. tool/check_bindings.dart is a CI drift check for
 # the FRB codegen step that only runs when rust/src/api/*.rs changes;

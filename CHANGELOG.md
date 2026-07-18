@@ -124,6 +124,19 @@
   microseconds do not round-trip through either parameter. Docs-only;
   no behavioural change. (NTS-84)
 
+### Packaging
+
+- `.pubignore` now also excludes `_typos.toml`, `lychee.toml`, and
+  `rust/deny.toml`, the maintainer-only configs introduced alongside
+  the scheduled documentation-hygiene jobs (NTS-74) and the
+  `cargo-deny` CI job (NTS-72). They join the maintainer configs
+  already excluded (`analysis_options.yaml`, `dart_test.yaml`,
+  `sonar-project.properties`, `rust/clippy.toml`,
+  `rust/tarpaulin.toml`); none are read by the consumer-side Native
+  Assets build or the Dart analyzer, so all three are pure noise on
+  the published surface. Caught by the 5.2.4 pre-release
+  `dart pub publish --dry-run` audit. (NTS-86)
+
 ### Security
 
 - Bumped `anyhow` from `1.0.102` to `1.0.103` to clear **RUSTSEC-2026-0190**
