@@ -60,9 +60,9 @@ Future<void> main() async {
     // constant. Replaces any cached session for that `spec`, so
     // subsequent `ntsQuery` calls skip the KE leg until the jar
     // drains. Useful at startup or whenever the NTS-KE cost should be
-    // amortized away from a time-critical path. `timeoutMs` and
+    // amortized away from a time-critical path. `timeout` and
     // `dnsConcurrencyCap` are omitted here so the package's tuned
-    // defaults (`kDefaultTimeoutMs`, `kDefaultDnsConcurrencyCap`)
+    // defaults (`kDefaultTimeout`, `kDefaultDnsConcurrencyCap`)
     // apply; `bridgeConcurrencyCap` is passed explicitly (at its
     // default value) to surface the Dart-side admission gate that
     // bounds how many of the package's calls occupy

@@ -36,7 +36,7 @@ typedef ProbeProgress = void Function(int done, int total, ServerHealth health);
 Future<List<ServerHealth>> probeAll(
   List<NtsServerEntry> entries, {
   required int port,
-  required int timeoutMs,
+  required Duration timeout,
   required int samples,
   required int concurrency,
   required int dnsConcurrencyCap,
@@ -55,7 +55,7 @@ Future<List<ServerHealth>> probeAll(
       final health = await probeHost(
         entry,
         port: port,
-        timeoutMs: timeoutMs,
+        timeout: timeout,
         samples: samples,
         dnsConcurrencyCap: dnsConcurrencyCap,
         bridgeConcurrencyCap: bridgeConcurrencyCap,
@@ -88,7 +88,7 @@ Future<List<ServerHealth>> probeAll(
 Future<ServerHealth> probeHost(
   NtsServerEntry entry, {
   required int port,
-  required int timeoutMs,
+  required Duration timeout,
   required int samples,
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
@@ -101,7 +101,7 @@ Future<ServerHealth> probeHost(
   try {
     final warm = await ntsWarmCookies(
       spec: spec,
-      timeoutMs: timeoutMs,
+      timeout: timeout,
       dnsConcurrencyCap: dnsConcurrencyCap,
       bridgeConcurrencyCap: bridgeConcurrencyCap,
     );
@@ -155,7 +155,7 @@ Future<ServerHealth> probeHost(
     try {
       final s = await ntsQuery(
         spec: spec,
-        timeoutMs: timeoutMs,
+        timeout: timeout,
         dnsConcurrencyCap: dnsConcurrencyCap,
         bridgeConcurrencyCap: bridgeConcurrencyCap,
       );

@@ -76,6 +76,33 @@
   the daily cargo-audit job in `audit.yml`. CI-only; the new job stays
   off the required-checks list initially. (NTS-72)
 
+### Changed
+
+- Migrated the public time-handling API to idiomatic Dart types: the
+  six async entry points (`ntsQuery`, `ntsWarmCookies`, `ntsGetTime`,
+  and their `NtsClient` twins) now take `Duration timeout`
+  (default `kDefaultTimeout`, a new exported constant equal to
+  `Duration(milliseconds: 5000)`) and `DateTime? verificationTime`
+  (interpreted as UTC via `toUtc()`; must not be before the Unix
+  epoch). The former `int` parameters — `timeoutMs`,
+  `verificationTimeMs` — and the `kDefaultTimeoutMs` constant remain
+  fully functional but are `@Deprecated`, slated for removal in a
+  future major release. Passing both spellings of the same knob is
+  rejected as `NtsError.invalidSpec` when the conflict is detectable
+  (`verificationTime` + `verificationTimeMs` always; `timeout` +
+  `timeoutMs` when `timeout` differs from the default). Behaviour is
+  unchanged for un-migrated callers. Internally the wall-clock budget
+  now flows as `Duration` end-to-end and converts to the FFI's
+  millisecond integer only at the dispatch boundary, using a ceiling
+  so a live sub-millisecond remainder is never rounded down to a dead
+  budget (the forwarded value may exceed the true remainder by
+  <1 ms). Validation messages name both the new and deprecated
+  parameters, and the timeout message states the 1 ms floor. The
+  example app (GUI controller, `nts_cli`, health probes) migrated to
+  the `Duration` API; the CLI `--timeout` flag stays milliseconds
+  with a single conversion point. Dart-only wrapper change; zero
+  FFI/bridge changes. (NTS-81)
+
 ### Security
 
 - Bumped `anyhow` from `1.0.102` to `1.0.103` to clear **RUSTSEC-2026-0190**

@@ -23,7 +23,7 @@ Four properties shape every decision recorded below:
    redacted `Debug` impls so accidental `{:?}` formatting cannot
    leak bytes into logs or panic messages.
 3. **Bounded resource usage.** Every blocking path is governed by a
-   single per-call wall-clock budget (`timeoutMs`), and the two
+   single per-call wall-clock budget (`timeout`), and the two
    thread pools a call can occupy — the OS DNS resolver workers and
    the FRB bridge workers — are capped independently
    (`dnsConcurrencyCap`, `bridgeConcurrencyCap`). This document is
@@ -184,8 +184,10 @@ The seven load-bearing observations:
 
 ## Timeout budget and bounded DNS
 
-`timeoutMs` is treated as a single wall-clock budget anchored at the
-start of each `nts_query` invocation, not as a per-phase timer. Two
+The caller's `timeout` (a millisecond `timeout_ms` once across the
+FFI boundary) is treated as a single wall-clock budget anchored at
+the start of each `nts_query` invocation, not as a per-phase timer.
+Two
 private newtypes carry the resulting deadline through the blocking
 I/O paths:
 
@@ -272,7 +274,7 @@ The DNS pool bounds resolver threads, but the *whole* blocking call —
 DNS wait, TCP connect, TLS handshake, KE record I/O, UDP exchange —
 runs on a `flutter_rust_bridge` worker thread from a separate fixed
 pool (one thread per logical CPU by default), and each in-flight call
-pins its worker for up to `timeoutMs`. Concurrent calls against the
+pins its worker for up to `timeout`. Concurrent calls against the
 same `host:port` are collapsed by the per-key singleflight (see
 "Singleflight: collapsing concurrent cold queries" below), but each *distinct* host needs its
 own handshake, so an unbounded distinct-host fan-out could occupy
@@ -290,7 +292,7 @@ one FIFO refinement: the queue is walked in arrival order on every
 release and a waiter is only overtaken by a later arrival whose
 larger cap admits it while the waiter's own cap does not.
 
-Queue wait is charged against the call's `timeoutMs` — only the
+Queue wait is charged against the call's `timeout` — only the
 remainder crosses the FFI boundary, so the caller's total wall-clock
 budget holds regardless of queueing (uncontended calls forward the
 budget verbatim, bit-for-bit identical to the pre-gate behaviour). A
@@ -633,10 +635,16 @@ The wrapper has three jobs:
    every consumer (see the 1.2.0 release notes for the concrete
    `dnsConcurrencyCap` episode that motivated the refactor). The
    wrapper exposes idiomatic Dart signatures with named optional
-   parameters and defaults (`kDefaultTimeoutMs`,
+   parameters and defaults (`kDefaultTimeout`,
    `kDefaultDnsConcurrencyCap`); future Rust-side additions land as
    new optional arguments with package defaults that preserve
-   pre-existing behaviour.
+   pre-existing behaviour. Since 5.2 the wrapper also owns the
+   time-type translation: the public surface takes `Duration` /
+   `DateTime` (`timeout`, `verificationTime`) and converts to the
+   FFI's millisecond integers at the dispatch boundary, ceiling the
+   timeout so a live sub-millisecond remainder never rounds down to
+   a dead budget. The `int` twins (`timeoutMs`, `verificationTimeMs`,
+   `kDefaultTimeoutMs`) survive as `@Deprecated` for one release.
 2. **DTOs** — `lib/src/api/models.dart` hand-writes the public DTOs
    (`NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`,
    `NtsDnsPoolStats`, `PhaseTimings`) with plain Dart `int` fields
@@ -656,8 +664,9 @@ The wrapper has three jobs:
    `@Deprecated` typedef aliases for one release; they are scheduled
    for removal at 4.0.
 
-The wrapper's default constants (`kDefaultTimeoutMs`,
-`kDefaultDnsConcurrencyCap`) are pinned against their Rust
+The wrapper's default constants (`kDefaultTimeout` and its deprecated
+`kDefaultTimeoutMs` twin, `kDefaultDnsConcurrencyCap`) are pinned
+against their Rust
 counterparts (`DEFAULT_TIMEOUT_MS` in `rust/src/api/nts.rs`,
 `DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS` in `rust/src/nts/dns.rs`) by
 paired tests: `defaults_match_dart_wrapper_constants` in
