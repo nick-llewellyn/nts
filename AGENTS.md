@@ -852,8 +852,13 @@ artefact, not work-in-progress.
 
 3. **Bumps land in a dedicated release commit.** When preparing to cut
    a release, a single commit must:
-   - increment `pubspec.yaml` and `rust/Cargo.toml` to the new
-     version,
+   - increment `pubspec.yaml` to the new version,
+   - increment `rust/Cargo.toml` **only if the Rust crate changed**
+     since the previous release (any diff under `rust/` other than
+     the version field itself). The two version numbers are
+     independent — the Dart package and the Rust crate each follow
+     semver against their own surface, so a Dart-only release leaves
+     the crate version untouched,
    - finalise the `CHANGELOG.md` header for that release (e.g.
      `## 5.1` → `## 5.1.0`, or add the patch component for a point
      release),
