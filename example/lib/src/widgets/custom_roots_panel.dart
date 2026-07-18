@@ -141,15 +141,15 @@ class _CustomRootsPanelState extends State<CustomRootsPanel> {
   }
 
   Future<void> _pickFile() async {
-    final result = await FilePicker.platform.pickFiles(withData: true);
+    final result = await FilePicker.pickFiles();
     if (result == null || result.files.isEmpty) return;
     final file = result.files.first;
-    final bytes = file.bytes;
-    if (bytes == null || bytes.isEmpty) {
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) {
       setState(() => _validationError = 'Selected file is empty.');
       return;
     }
-    widget.state.customRoots.value = Uint8List.fromList(bytes);
+    widget.state.customRoots.value = bytes;
     widget.state.customRootsLabel.value = file.name;
     setState(() => _validationError = null);
   }
