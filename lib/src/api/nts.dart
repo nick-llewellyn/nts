@@ -230,40 +230,23 @@ Future<NtsTimeSample> ntsQuery({
   int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
   DateTime? verificationTime,
   @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
-}) async {
-  final resolvedTimeout = _resolveTimeout(timeout, timeoutMs);
-  final resolvedVerificationMs = _resolveVerificationTime(
-    verificationTime,
-    verificationTimeMs,
-  );
-  _validateRanges(
-    spec: spec,
-    timeout: resolvedTimeout,
-    dnsConcurrencyCap: dnsConcurrencyCap,
-    bridgeConcurrencyCap: bridgeConcurrencyCap,
-    verificationTimeMs: resolvedVerificationMs,
-  );
-  return _withBridgeSlot(
-    bridgeConcurrencyCap: bridgeConcurrencyCap,
-    timeout: resolvedTimeout,
-    body: (remainingTimeout) async {
-      try {
-        final ffiSample = await ffi.ntsQuery(
-          spec: _ffiSpec(spec),
-          timeoutMs: _ffiTimeoutMs(remainingTimeout),
-          dnsConcurrencyCap: dnsConcurrencyCap,
-          verificationTimeMs: _ffiVerificationTime(resolvedVerificationMs),
-        );
-        return _publicSample(ffiSample);
-      } on ffi.NtsError catch (err, stack) {
-        // Preserve the original FFI-side stack trace through the
-        // conversion so debuggers point at the FRB dispatcher / Rust
-        // boundary where the error originated, not at this catch site.
-        Error.throwWithStackTrace(_publicError(err), stack);
-      }
-    },
-  );
-}
+}) => _dispatch(
+  spec: spec,
+  timeout: timeout,
+  timeoutMs: timeoutMs,
+  dnsConcurrencyCap: dnsConcurrencyCap,
+  bridgeConcurrencyCap: bridgeConcurrencyCap,
+  verificationTime: verificationTime,
+  verificationTimeMs: verificationTimeMs,
+  call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicSample(
+    await ffi.ntsQuery(
+      spec: ffiSpec,
+      timeoutMs: ffiTimeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+      verificationTimeMs: ffiVerificationMs,
+    ),
+  ),
+);
 
 /// One-call "give me the correct time" convenience built on
 /// [ntsWarmCookies] + a burst of [ntsQuery] calls against the
@@ -408,39 +391,23 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
   DateTime? verificationTime,
   @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
-}) async {
-  final resolvedTimeout = _resolveTimeout(timeout, timeoutMs);
-  final resolvedVerificationMs = _resolveVerificationTime(
-    verificationTime,
-    verificationTimeMs,
-  );
-  _validateRanges(
-    spec: spec,
-    timeout: resolvedTimeout,
-    dnsConcurrencyCap: dnsConcurrencyCap,
-    bridgeConcurrencyCap: bridgeConcurrencyCap,
-    verificationTimeMs: resolvedVerificationMs,
-  );
-  return _withBridgeSlot(
-    bridgeConcurrencyCap: bridgeConcurrencyCap,
-    timeout: resolvedTimeout,
-    body: (remainingTimeout) async {
-      try {
-        final ffiOutcome = await ffi.ntsWarmCookies(
-          spec: _ffiSpec(spec),
-          timeoutMs: _ffiTimeoutMs(remainingTimeout),
-          dnsConcurrencyCap: dnsConcurrencyCap,
-          verificationTimeMs: _ffiVerificationTime(resolvedVerificationMs),
-        );
-        return _publicWarm(ffiOutcome);
-      } on ffi.NtsError catch (err, stack) {
-        // Preserve the original FFI-side stack trace; see the comment
-        // in `ntsQuery` above.
-        Error.throwWithStackTrace(_publicError(err), stack);
-      }
-    },
-  );
-}
+}) => _dispatch(
+  spec: spec,
+  timeout: timeout,
+  timeoutMs: timeoutMs,
+  dnsConcurrencyCap: dnsConcurrencyCap,
+  bridgeConcurrencyCap: bridgeConcurrencyCap,
+  verificationTime: verificationTime,
+  verificationTimeMs: verificationTimeMs,
+  call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicWarm(
+    await ffi.ntsWarmCookies(
+      spec: ffiSpec,
+      timeoutMs: ffiTimeoutMs,
+      dnsConcurrencyCap: dnsConcurrencyCap,
+      verificationTimeMs: ffiVerificationMs,
+    ),
+  ),
+);
 
 /// Snapshot the bounded DNS resolver pool counters. Synchronous (no
 /// future / isolate hop): backed by four atomic-relaxed loads, cheap
@@ -704,39 +671,23 @@ class NtsClient {
     int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
     DateTime? verificationTime,
     @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
-  }) async {
-    final resolvedTimeout = _resolveTimeout(timeout, timeoutMs);
-    final resolvedVerificationMs = _resolveVerificationTime(
-      verificationTime,
-      verificationTimeMs,
-    );
-    _validateRanges(
-      spec: spec,
-      timeout: resolvedTimeout,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-      verificationTimeMs: resolvedVerificationMs,
-    );
-    return _withBridgeSlot(
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-      timeout: resolvedTimeout,
-      body: (remainingTimeout) async {
-        try {
-          final ffiSample = await _inner.query(
-            spec: _ffiSpec(spec),
-            timeoutMs: _ffiTimeoutMs(remainingTimeout),
-            dnsConcurrencyCap: dnsConcurrencyCap,
-            verificationTimeMs: _ffiVerificationTime(resolvedVerificationMs),
-          );
-          return _publicSample(ffiSample);
-        } on ffi.NtsError catch (err, stack) {
-          // Preserve the original FFI-side stack trace through the
-          // conversion; see the comment in the top-level `ntsQuery`.
-          Error.throwWithStackTrace(_publicError(err), stack);
-        }
-      },
-    );
-  }
+  }) => _dispatch(
+    spec: spec,
+    timeout: timeout,
+    timeoutMs: timeoutMs,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    verificationTime: verificationTime,
+    verificationTimeMs: verificationTimeMs,
+    call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicSample(
+      await _inner.query(
+        spec: ffiSpec,
+        timeoutMs: ffiTimeoutMs,
+        dnsConcurrencyCap: dnsConcurrencyCap,
+        verificationTimeMs: ffiVerificationMs,
+      ),
+    ),
+  );
 
   /// Per-client equivalent of the top-level [ntsWarmCookies]. Forces
   /// a fresh NTS-KE handshake and ingests the delivered cookie pool
@@ -762,37 +713,23 @@ class NtsClient {
     int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
     DateTime? verificationTime,
     @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
-  }) async {
-    final resolvedTimeout = _resolveTimeout(timeout, timeoutMs);
-    final resolvedVerificationMs = _resolveVerificationTime(
-      verificationTime,
-      verificationTimeMs,
-    );
-    _validateRanges(
-      spec: spec,
-      timeout: resolvedTimeout,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-      verificationTimeMs: resolvedVerificationMs,
-    );
-    return _withBridgeSlot(
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-      timeout: resolvedTimeout,
-      body: (remainingTimeout) async {
-        try {
-          final ffiOutcome = await _inner.warmCookies(
-            spec: _ffiSpec(spec),
-            timeoutMs: _ffiTimeoutMs(remainingTimeout),
-            dnsConcurrencyCap: dnsConcurrencyCap,
-            verificationTimeMs: _ffiVerificationTime(resolvedVerificationMs),
-          );
-          return _publicWarm(ffiOutcome);
-        } on ffi.NtsError catch (err, stack) {
-          Error.throwWithStackTrace(_publicError(err), stack);
-        }
-      },
-    );
-  }
+  }) => _dispatch(
+    spec: spec,
+    timeout: timeout,
+    timeoutMs: timeoutMs,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    verificationTime: verificationTime,
+    verificationTimeMs: verificationTimeMs,
+    call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicWarm(
+      await _inner.warmCookies(
+        spec: ffiSpec,
+        timeoutMs: ffiTimeoutMs,
+        dnsConcurrencyCap: dnsConcurrencyCap,
+        verificationTimeMs: ffiVerificationMs,
+      ),
+    ),
+  );
 
   /// Per-client equivalent of the top-level [ntsGetTime]: one-call
   /// synchronized clock built on [warmCookies] + a burst of [query]
@@ -956,6 +893,57 @@ int? _resolveVerificationTime(DateTime? verificationTime, int? ms) {
 DateTime? _verificationInstant(int? resolvedMs) => resolvedMs == null
     ? null
     : DateTime.fromMillisecondsSinceEpoch(resolvedMs, isUtc: true);
+
+// Shared resolve -> validate -> gate -> convert -> catch scaffolding
+// for the four query/warmCookies entry points (top-level and
+// per-client). Each entry point supplies only its own FFI invocation
+// via `call`, receiving the already-converted FFI-shaped arguments.
+Future<T> _dispatch<T>({
+  required NtsServerSpec spec,
+  required Duration timeout,
+  required int? timeoutMs,
+  required int dnsConcurrencyCap,
+  required int bridgeConcurrencyCap,
+  required DateTime? verificationTime,
+  required int? verificationTimeMs,
+  required Future<T> Function(
+    ffi.NtsServerSpec ffiSpec,
+    int ffiTimeoutMs,
+    PlatformInt64? ffiVerificationMs,
+  )
+  call,
+}) async {
+  final resolvedTimeout = _resolveTimeout(timeout, timeoutMs);
+  final resolvedVerificationMs = _resolveVerificationTime(
+    verificationTime,
+    verificationTimeMs,
+  );
+  _validateRanges(
+    spec: spec,
+    timeout: resolvedTimeout,
+    dnsConcurrencyCap: dnsConcurrencyCap,
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    verificationTimeMs: resolvedVerificationMs,
+  );
+  return _withBridgeSlot(
+    bridgeConcurrencyCap: bridgeConcurrencyCap,
+    timeout: resolvedTimeout,
+    body: (remainingTimeout) async {
+      try {
+        return await call(
+          _ffiSpec(spec),
+          _ffiTimeoutMs(remainingTimeout),
+          _ffiVerificationTime(resolvedVerificationMs),
+        );
+      } on ffi.NtsError catch (err, stack) {
+        // Preserve the original FFI-side stack trace through the
+        // conversion so debuggers point at the FRB dispatcher / Rust
+        // boundary where the error originated, not at this catch site.
+        Error.throwWithStackTrace(_publicError(err), stack);
+      }
+    },
+  );
+}
 
 void _validatePort(NtsServerSpec spec) {
   if (spec.port < 1 || spec.port > 65535) {
