@@ -13,7 +13,7 @@
 # `cargo fuzz {build,run}` enabling sanitizer coverage instrumentation
 # (`-Zsanitizer`, etc.) that only nightly accepts. Keeping this crate
 # out of the parent's workspace means the parent's pin to stable
-# 1.96.1 does not need to track `cargo fuzz`'s nightly requirement.
+# 1.97.1 does not need to track `cargo fuzz`'s nightly requirement.
 #
 # Usage (local): see `DEVELOPMENT.md` for the full walkthrough.
 #   cargo install cargo-fuzz

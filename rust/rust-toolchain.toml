@@ -6,15 +6,19 @@
 # user-side `flutter run` reproducible regardless of the developer's shell
 # default.
 #
-# When upgrading: bump `channel`, run `rustup update`, then exercise
-# `flutter run --dart-define=NTS_BRIDGE=real` in the example app on at least
-# macOS and one of {linux, ios, android} before merging.
+# When upgrading: bump `channel` (rustup auto-installs the new pin on the
+# next cargo/hook invocation from this directory — no `rustup update`
+# needed), then exercise `flutter run --dart-define=NTS_BRIDGE=real` in the
+# example app on at least macOS and one of {linux, ios, android} before
+# merging.
 
 [toolchain]
 # 1.85+ required so transitive deps pulling in edition2024 (e.g.
 # `security-framework 3.7.0`) compile cleanly. Tracking developer-host
-# rustc 1.96.1 keeps stable compatible with our `Cargo.lock`.
-channel = "1.96.1"
+# rustc 1.97.1 keeps stable compatible with our `Cargo.lock`; 1.97.1
+# also carries the LLVM miscompilation fix (rust-lang/rust#159035)
+# present since at least 1.87.
+channel = "1.97.1"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
 targets = [
