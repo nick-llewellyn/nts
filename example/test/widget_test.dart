@@ -566,10 +566,7 @@ void main() {
     await tester.tap(find.byKey(const Key('custom_roots_apply_button')));
     await tester.pump();
 
-    expect(
-      find.textContaining('non-ASCII characters'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('non-ASCII characters'), findsOneWidget);
     expect(h.state.customRoots.value, isNull);
     expect(h.state.customRootsLabel.value, isEmpty);
   });
