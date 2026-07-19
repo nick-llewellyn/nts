@@ -58,9 +58,9 @@ compiled per-platform via `cfg` gates:
 | Other targets | `Instant` elapsed since a process anchor | — | Best-effort fallback: monotonic but suspend-frozen. |
 
 All three crates are platform-gated dependencies of the Rust core and
-are attributed as entries 16–18 of the
-[`NOTICE`](../NOTICE) file (`windows-sys` — Windows only; `libc` —
-Android and Linux only; `mach2` — iOS and macOS only).
+carry license attributions in the [`NOTICE`](../NOTICE) file
+(`windows-sys` — Windows only; `libc` — Android and Linux only;
+`mach2` — iOS and macOS only).
 
 The reading crosses the FFI bridge as `ntsBoottimeMicros()`, a
 synchronous call (`#[frb(sync)]`) returning `i64` — a single clock
@@ -258,7 +258,7 @@ harness) and can accept its stability terms.
   primitives)": the burst-filter-compensate recipe the RTT
   measurement feeds.
 - [`NOTICE`](../NOTICE) — license attribution for `windows-sys`,
-  `libc`, and `mach2` (entries 16–18).
+  `libc`, and `mach2`.
 - [RFC 5905 §8](https://datatracker.ietf.org/doc/html/rfc5905) — the
   symmetric-path delay compensation that consumes the RTT.
 - [RFC 8915](https://datatracker.ietf.org/doc/html/rfc8915) — Network
