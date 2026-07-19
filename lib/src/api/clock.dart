@@ -45,6 +45,9 @@ import '../ffi/api/nts.dart' as ffi;
 /// The epoch is arbitrary (per-boot for the native sources); only
 /// differences between readings from the same instance are
 /// meaningful. Values are not comparable across processes or reboots.
+/// Reboot is the only event that resets the native epoch; it also
+/// destroys every in-process object, so persisted raw readings from
+/// a previous boot are meaningless in any later boot session.
 class MonotonicClock {
   /// Shared instance for the current isolate.
   ///

@@ -360,6 +360,34 @@ keeps the fallback for its lifetime. This is deliberate — re-probing
 on later reads would switch epochs mid-instance and corrupt every
 outstanding anchor difference.
 
+### Epoch resets & why there is no boot ID
+
+The only event that resets the native monotonic epoch is a reboot (or
+power cycle). On every supported platform, a reboot also unconditionally
+terminates the process, destroying every `NtsSyncedTime` anchor with it.
+No code path exists where an anchor from boot session N is compared against
+a clock reading from boot session N+1 — the failure mode that `trusted_time`
+guards against with a persisted `bootId` is therefore unreachable in
+`package:nts`.
+
+`trusted_time` needs a boot ID because it persists its sync anchor to disk
+and validates it on restore in a later process (possibly after a reboot).
+`NtsSyncedTime` has no serialisation surface — the anchor lives only in
+process memory — so the hazard does not exist and no boot-session identifier
+is needed.
+
+The one latent risk is user-side persistence: a consumer could extract
+`utcUnixMicros` and `MonotonicClock.nowMicros()`, persist them, and attempt
+to reconstruct a projection after a reboot. The existing dartdoc on
+`MonotonicClock` and `NtsSyncedTime` explicitly prohibits this (readings are
+not meaningful across reboots; the class must not be reconstructed from
+persisted parts). If a future API adds anchor persistence — e.g.
+`NtsSyncedTime.toJson` / `restore` for faster cold starts — a boot-session
+identifier becomes mandatory at that point; `trusted_time`'s implementation
+is the reference (`/proc/sys/kernel/random/boot_id` on Android/Linux,
+`kern.bootsessionuuid` sysctl on iOS/macOS, boot-time-derived ID on
+Windows).
+
 ## Phase attribution and timings
 
 The shared deadline accounts for *when* a budget elapses but not for
