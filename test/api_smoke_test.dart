@@ -149,6 +149,12 @@ class _RecordingApi implements NtsRustLibApi {
     clientTrustModes.clear();
     trustStatusCalls = 0;
     nextTrustStatus = _zeroFfiTrustStatus();
+    // Do NOT reset `_bootSw` or `suspendOffsetMicros` — the mocked
+    // boottime source feeds the isolate-wide MonotonicClock.instance,
+    // so zeroing the offset here would jump the clock backwards after
+    // the suspend-simulation test and could flake anchors captured in
+    // earlier tests. Monotonicity across tests mirrors a real boot
+    // clock; tests that adjust the offset must only ever increase it.
   }
 
   // Shared body for the four async endpoint mocks: bump the in-flight
@@ -229,6 +235,17 @@ class _RecordingApi implements NtsRustLibApi {
     dnsPoolStatsCalls++;
     return nextDnsPoolStats;
   }
+
+  // Sleep-aware clock mock: advances with real time (so the existing
+  // delay-based NtsSyncedTime tests keep passing) plus a mutable
+  // offset that simulates time spent in device suspend. The offset is
+  // increase-only and survives `reset()` — see the note there.
+  final Stopwatch _bootSw = Stopwatch()..start();
+  int suspendOffsetMicros = 0;
+
+  @override
+  int crateApiNtsNtsBoottimeMicros() =>
+      _bootSw.elapsedMicroseconds + suspendOffsetMicros;
 
   // --- NtsClient surface ----------------------------------------------
   //
@@ -2377,6 +2394,32 @@ void main() {
       // sleep (modulo timer slop, hence the loose lower bound).
       expect(second.isAfter(first), isTrue);
       expect(synced.elapsedSinceSync, greaterThan(Duration.zero));
+    });
+
+    test('NtsSyncedTime projection keeps counting across simulated '
+        'suspend', () {
+      final synced = NtsSyncedTime(
+        utcUnixMicros: 1_700_000_000_000_000,
+        roundTripMicros: 4000,
+        samplesUsed: 2,
+        trustBackend: TrustBackend.platform,
+      );
+      final before = synced.utcNow;
+      // Simulate 5 minutes of device deep sleep: the boottime source
+      // jumps forward while no Dart timers ran. Also guards the
+      // MonotonicClock singleton's source resolution: if instance had
+      // been first accessed before initMock, it would be locked onto
+      // the Stopwatch fallback and this knob would have no effect.
+      api.suspendOffsetMicros += const Duration(minutes: 5).inMicroseconds;
+      final after = synced.utcNow;
+      expect(
+        after.difference(before),
+        greaterThanOrEqualTo(const Duration(minutes: 5)),
+      );
+      expect(
+        synced.elapsedSinceSync,
+        greaterThanOrEqualTo(const Duration(minutes: 5)),
+      );
     });
 
     test('NtsSyncedTime toString carries the diagnostic fields', () {

@@ -5,6 +5,30 @@
 
 ### Added
 
+- New public `MonotonicClock` class (exported from `package:nts/nts.dart`):
+  a sleep-aware monotonic time source whose readings keep advancing
+  while the device is in deep sleep, unlike `Stopwatch`. Reads
+  `CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on
+  iOS/macOS, and `QueryInterruptTimePrecise` on Windows through a new
+  synchronous bridge call (`ntsBoottimeMicros`). Each instance
+  resolves its source once at construction — bridge available means
+  sleep-aware, otherwise a permanent `Stopwatch` fallback — so
+  readings from one instance never mix epochs. The shared
+  `MonotonicClock.instance` is the same timeline the package now uses
+  internally. (NTS-90)
+
+### Changed
+
+- `NtsSyncedTime.utcNow` / `elapsedSinceSync`, the `getTime` total
+  timeout budget, and the bridge admission gate's queue-wait metering
+  now run on the sleep-aware `MonotonicClock.instance` timeline
+  instead of per-call `Stopwatch`es. A device that sleeps mid-session
+  no longer silently freezes the projected clock or stalls an
+  in-flight budget: `utcNow` stays correct across suspend/resume, and
+  a budget that elapses during sleep surfaces as `timeout(ntp)` on
+  resume. In bridge-less processes (pure-Dart tests) behaviour is
+  unchanged via the fallback source. (NTS-90)
+
 - The top-level `ntsGetTime` now accepts optional `trustMode` and
   `customRoots` parameters, so a one-call synchronized clock can run
   under a non-default trust-anchor policy without hand-constructing

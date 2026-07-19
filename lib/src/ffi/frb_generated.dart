@@ -67,7 +67,7 @@ class NtsRustLib
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 412369031;
+  int get rustContentHash => 1496270294;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -109,6 +109,8 @@ abstract class NtsRustLibApi extends BaseApi {
   NtsClient crateApiNtsNtsClientWithTrustMode({required TrustMode trustMode});
 
   Future<void> crateApiSimpleInitApp();
+
+  PlatformInt64 crateApiNtsNtsBoottimeMicros();
 
   NtsDnsPoolStats crateApiNtsNtsDnsPoolStats();
 
@@ -425,12 +427,34 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       const TaskConstMeta(debugName: "init_app", argNames: []);
 
   @override
-  NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
+  PlatformInt64 crateApiNtsNtsBoottimeMicros() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_i_64,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNtsNtsBoottimeMicrosConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsNtsBoottimeMicrosConstMeta =>
+      const TaskConstMeta(debugName: "nts_boottime_micros", argNames: []);
+
+  @override
+  NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_nts_dns_pool_stats,
@@ -464,7 +488,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -490,7 +514,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_nts_trust_status,
@@ -524,7 +548,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -553,7 +577,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },

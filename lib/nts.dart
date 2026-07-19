@@ -38,6 +38,13 @@ library;
 // `main()` starts. Subsequent invocations are no-ops.
 export 'src/ffi/frb_generated.dart' show NtsRustLib;
 
+// Public sleep-aware monotonic clock. A general-purpose primitive
+// whose readings keep advancing across device deep sleep; the shared
+// `MonotonicClock.instance` singleton is the same timeline the
+// package uses internally for `NtsSyncedTime` projection and timeout
+// budgets.
+export 'src/api/clock.dart';
+
 // Public NTS surface (RFC 8915). The wrapper layer carries the
 // dartdoc that consumers see and applies the package's default values
 // for optional parameters; it forwards to the FRB-generated bindings

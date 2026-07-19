@@ -29,6 +29,7 @@ import 'dart:typed_data';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64, PlatformInt64Util;
 import '../ffi/api/nts.dart' as ffi;
+import 'clock.dart';
 import 'errors.dart';
 import 'models.dart';
 
@@ -1104,9 +1105,12 @@ void _validateGetTime({required NtsServerSpec spec, int? verificationTimeMs}) {
 // delegate the budget accounting, burst loop, lowest-RTT selection,
 // and compensation here so the two surfaces cannot drift.
 //
-// `_kGetTimeTimeout` is one total budget: a single `Stopwatch`
-// started before the handshake meters every underlying call, and each
-// call receives only the remaining balance. The lower-level wrappers
+// `_kGetTimeTimeout` is one total budget: a single sleep-aware
+// monotonic clock read before the handshake meters every underlying
+// call (see `clock.dart`), and each call receives only the remaining
+// balance; the budget keeps depleting across device suspend, so a
+// mid-call sleep surfaces as `timeout(ntp)` rather than a
+// stalled-then-overrun budget. The lower-level wrappers
 // validate `timeout >= 1ms`, so a depleted budget is detected here
 // (and surfaced as `timeout(ntp)`) rather than tripping their
 // `invalidSpec` range check with a confusing message.
@@ -1132,7 +1136,8 @@ Future<NtsSyncedTime> _getTime({
   required Future<NtsWarmCookiesOutcome> Function(Duration timeout) warm,
   required Future<NtsTimeSample> Function(Duration timeout) query,
 }) async {
-  final budget = Stopwatch()..start();
+  final clock = MonotonicClock.instance;
+  final startMicros = clock.nowMicros();
   // Exact `Duration` subtraction at microsecond resolution. The
   // ms-precision conversion happens once per dispatch, at the FFI
   // boundary (`_ffiTimeoutMs`), which rounds *up* so a live sub-ms
@@ -1140,7 +1145,7 @@ Future<NtsSyncedTime> _getTime({
   // each forwarded ms value may exceed the true remainder by <1 ms
   // (bounded overall to <1 ms on the final dispatch), rather than the
   // pre-Duration shape's strict floor.
-  Duration remaining() => _kGetTimeTimeout - budget.elapsed;
+  Duration remaining() => _kGetTimeTimeout - clock.elapsedSince(startMicros);
 
   // Warm phase: always a fresh handshake, so the burst below runs
   // against a full cookie pool and a known-fresh AEAD session. A
@@ -1160,8 +1165,9 @@ Future<NtsSyncedTime> _getTime({
 
   final burst = math.min(_kGetTimeMaxBurst, outcome.freshCookies);
   NtsTimeSample? best;
-  // Monotonic instant (on `budget`'s timeline) at which the current
-  // `best` sample's reply arrived. Used below to advance the winning
+  // Monotonic instant (on the shared clock's timeline) at which the
+  // current `best` sample's reply arrived. Used below to advance the
+  // winning
   // sample's compensated UTC across the remainder of the burst, so
   // the constructed clock is anchored to "now" rather than to the
   // (possibly much earlier) winning recv.
@@ -1177,7 +1183,7 @@ Future<NtsSyncedTime> _getTime({
       samplesUsed++;
       if (best == null || sample.roundTripMicros < best.roundTripMicros) {
         best = sample;
-        bestArrivalMicros = budget.elapsedMicroseconds;
+        bestArrivalMicros = clock.nowMicros() - startMicros;
       }
     } on NtsError catch (err, stack) {
       // Best-effort posture: tolerate individual burst failures as
@@ -1204,13 +1210,13 @@ Future<NtsSyncedTime> _getTime({
   // server transmit timestamp as of the reply's *send*; adding half
   // the round trip estimates the server clock at the moment the reply
   // arrived. That estimate is only valid at the winning recv instant,
-  // while `NtsSyncedTime` anchors its monotonic stopwatch at
+  // while `NtsSyncedTime` captures its monotonic anchor at
   // construction — which happens after the whole burst has run. Bridge
   // the gap by advancing the compensated UTC across the time elapsed
   // since the winning reply arrived (`anchorLagMicros`), so the value
   // handed to the constructor is valid "now" even when the lowest-RTT
   // sample was not the last query in the burst.
-  final anchorLagMicros = budget.elapsedMicroseconds - bestArrivalMicros;
+  final anchorLagMicros = (clock.nowMicros() - startMicros) - bestArrivalMicros;
   return NtsSyncedTime(
     utcUnixMicros:
         best.utcUnixMicros + best.roundTripMicros ~/ 2 + anchorLagMicros,
@@ -1269,7 +1275,8 @@ Future<T> _withBridgeSlot<T>({
   if (_bridgeInFlight < bridgeConcurrencyCap) {
     _bridgeInFlight++;
   } else {
-    final queueWait = Stopwatch()..start();
+    final queueClock = MonotonicClock.instance;
+    final queueStartMicros = queueClock.nowMicros();
     final waiter = _BridgeWaiter(bridgeConcurrencyCap);
     _bridgeQueue.add(waiter);
     // Captured at enqueue time so the timeout error's stack trace points
@@ -1299,7 +1306,7 @@ Future<T> _withBridgeSlot<T>({
     } finally {
       deadline.cancel();
     }
-    remainingTimeout = timeout - queueWait.elapsed;
+    remainingTimeout = timeout - queueClock.elapsedSince(queueStartMicros);
   }
   try {
     if (remainingTimeout < const Duration(milliseconds: 1)) {

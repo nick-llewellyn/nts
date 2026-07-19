@@ -633,6 +633,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "mach2"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -666,7 +672,9 @@ dependencies = [
  "flutter_rust_bridge",
  "getrandom 0.4.3",
  "jni",
+ "libc",
  "log",
+ "mach2",
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
@@ -675,6 +683,7 @@ dependencies = [
  "tracing-oslog",
  "tracing-subscriber",
  "webpki-roots",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

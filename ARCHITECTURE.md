@@ -41,8 +41,9 @@ Rust crate that implements the protocol directly across `records.rs`
 (NTS-KE wire format), `ke.rs` (TLS 1.3 + ALPN handshake driver),
 `aead.rs` (SIV-CMAC / GCM-SIV authenticators), `ntp.rs` (AEAD-protected
 NTPv4 packets), `cookies.rs` (cookie jar), `dns.rs` (bounded resolver
-shared by the KE TCP and NTPv4 UDP paths), and `hybrid_verifier.rs`
-(Android trust-store fallback).
+shared by the KE TCP and NTPv4 UDP paths), `hybrid_verifier.rs`
+(Android trust-store fallback), and `boottime.rs` (sleep-aware
+monotonic clock readings; see "Sleep-aware monotonic clock" below).
 
 Two mechanisms connect the halves:
 
@@ -316,6 +317,48 @@ bridge cap above the DNS cap is legitimate for same-host-heavy
 traffic (singleflight collapses the lookups) but re-exposes
 `dnsSaturation` refusals to synchronized distinct-host bursts, so
 high-fan-out callers should raise both caps together.
+
+## Sleep-aware monotonic clock
+
+Dart's `Stopwatch` and `std::time::Instant` both read the
+suspend-frozen monotonic sources (`CLOCK_MONOTONIC` on Linux/Android,
+`mach_absolute_time` on Apple platforms, QPC on Windows): they stop
+counting while the device is in deep sleep. That breaks two things a
+time-sync package cares about — the `NtsSyncedTime.utcNow` projection
+silently falls behind real UTC by however long the device slept, and
+an in-flight `getTime` budget stalls rather than expiring.
+
+`rust/src/nts/boottime.rs` closes this with one function,
+`boottime_micros()`, reading the suspend-inclusive counterpart on each
+platform: `clock_gettime(CLOCK_BOOTTIME)` on Android/Linux (via
+`libc`), `mach_continuous_time` scaled by the cached
+`mach_timebase_info` on iOS/macOS (via `mach2`; `libc`'s mach time
+bindings are deprecated), and `QueryInterruptTimePrecise` on Windows
+(via `windows-sys`; 100 ns units, available since Windows 10). A
+`cfg`-gated fallback for unsupported targets degrades to
+`Instant`-elapsed-since-process-anchor. The reading crosses the bridge
+as the synchronous `ntsBoottimeMicros()` (`#[frb(sync)]`, `i64` so FRB
+maps it to a plain `int` rather than `BigInt`; same rationale as
+`ntsDnsPoolStats`).
+
+The Dart-side consumer is `MonotonicClock` (`lib/src/api/clock.dart`),
+a small public wrapper exported from `lib/nts.dart`. Each instance
+resolves its source exactly once at construction: a probe call of the
+bridge function selects the sleep-aware source, and any throw (bridge
+not initialized, pure-Dart test process, mock without the method)
+permanently selects a `Stopwatch` fallback. Locking the source per
+instance guarantees readings from one instance never mix epochs. The
+shared `MonotonicClock.instance` singleton is the timeline used by
+`NtsSyncedTime` (anchor + projection), the `getTime` total budget, and
+the bridge admission gate's queue-wait metering, so consumer code
+reading the same instance shares the package's exact timeline.
+
+Trade-off: statics keyed on process lifetime (the Apple timebase
+cache, the fallback anchor, the resolved Dart singleton) mean a
+process that calls `MonotonicClock.instance` before `NtsRustLib.init`
+keeps the fallback for its lifetime. This is deliberate — re-probing
+on later reads would switch epochs mid-instance and corrupt every
+outstanding anchor difference.
 
 ## Phase attribution and timings
 
