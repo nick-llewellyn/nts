@@ -382,7 +382,7 @@ Future<NtsSyncedTime> ntsGetTime({
         verificationTime: _verificationInstant(resolvedVerificationMs),
       );
     } finally {
-      client._inner.dispose();
+      client._dispose();
     }
   }
   return _getTime(
@@ -883,6 +883,16 @@ class NtsClient {
   /// the "Initialization has two layers" section of `README.md` for
   /// the full bootstrap contract.
   void clear() => _inner.clear();
+
+  // Release the underlying native handle (the Rust `Arc` behind the
+  // FRB `RustOpaque`) eagerly instead of waiting for the GC
+  // finalizer. Library-internal: the public surface deliberately
+  // exposes no dispose method — long-lived clients are reclaimed by
+  // the finalizer, and only the call-scoped client minted inside
+  // [ntsGetTime] needs deterministic release. Owning this here keeps
+  // any future cleanup for `NtsClient` internals in one place rather
+  // than coupling callers to the `_inner` representation.
+  void _dispose() => _inner.dispose();
 }
 
 // --- input validation -----------------------------------------------
