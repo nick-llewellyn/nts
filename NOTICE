@@ -112,3 +112,15 @@ Platform-gated Rust dependencies (compiled only for the named target):
 15. tracing-oslog (Zlib) -- iOS only
     https://github.com/Absolucy/tracing-oslog
     Copyright (c) Lucy (Absolucy)
+
+16. windows-sys (MIT OR Apache-2.0) -- Windows only
+    https://github.com/microsoft/windows-rs
+    Copyright (c) Microsoft Corporation
+
+17. libc (MIT OR Apache-2.0) -- Android and Linux only
+    https://github.com/rust-lang/libc
+    Copyright (c) The Rust Project Developers
+
+18. mach2 (MIT) -- iOS and macOS only
+    https://github.com/nicowillis/mach2
+    Copyright (c) 2014 The Rust Project Developers
