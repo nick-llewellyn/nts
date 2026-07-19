@@ -46,13 +46,17 @@ import '../ffi/api/nts.dart' as ffi;
 /// differences between readings from the same instance are
 /// meaningful. Values are not comparable across processes or reboots.
 class MonotonicClock {
-  /// Shared process-wide instance.
+  /// Shared instance for the current isolate.
   ///
   /// Lazily constructed — and its source resolved — on first access.
   /// The package's own internals (`NtsSyncedTime`, the `getTime`
   /// timeout budget, bridge-slot admission) all read this instance,
   /// so consumer code reading it shares one consistent monotonic
-  /// timeline with the package.
+  /// timeline with the package. Like all Dart statics it is
+  /// per-isolate: each isolate gets its own lazily resolved instance
+  /// (all reading the same underlying native clock when the bridge is
+  /// initialized, but do not compare raw readings across isolates —
+  /// a fallback-sourced isolate uses a different epoch).
   static final MonotonicClock instance = MonotonicClock();
 
   final int Function() _read;

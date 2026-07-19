@@ -21,11 +21,17 @@ pub(crate) fn boottime_micros() -> i64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // SAFETY: `ts` is a valid, writable timespec. CLOCK_BOOTTIME is
-    // supported on Linux >= 2.6.39 and every Android API level this
-    // package targets; the call cannot fail there.
+    // SAFETY: `ts` is a valid, writable timespec.
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &raw mut ts) };
-    debug_assert_eq!(rc, 0);
+    if rc != 0 {
+        // CLOCK_BOOTTIME is supported on Linux >= 2.6.39 and every
+        // Android API level this package targets, so this path is
+        // theoretical. The only documented failure (EINVAL: clock id
+        // unsupported) is deterministic per kernel — it either always
+        // or never fires — so falling back cannot mix epochs between
+        // calls.
+        return instant_fallback_micros();
+    }
     // Widen through i128: tv_sec/tv_nsec are i64 on LP64 targets but
     // i32 on 32-bit Android, so neither `as i64` (unnecessary_cast on
     // LP64) nor `i64::from` (useless_conversion on LP64) is portable.
@@ -45,14 +51,22 @@ pub(crate) fn boottime_micros() -> i64 {
 pub(crate) fn boottime_micros() -> i64 {
     use std::sync::OnceLock;
     // mach_timebase_info is constant for the process lifetime; cache
-    // it so the hot path is one clock read plus a mul/div.
-    static TIMEBASE: OnceLock<mach2::mach_time::mach_timebase_info> = OnceLock::new();
+    // the validated result so the hot path is one clock read plus a
+    // mul/div. `None` records a failed or degenerate probe (non-zero
+    // kern_return, zero numer/denom that would divide by zero below);
+    // the decision is made once, so fallback readings never mix with
+    // scaled readings.
+    static TIMEBASE: OnceLock<Option<mach2::mach_time::mach_timebase_info>> = OnceLock::new();
     let tb = TIMEBASE.get_or_init(|| {
         let mut info = mach2::mach_time::mach_timebase_info { numer: 0, denom: 0 };
-        // SAFETY: valid out-pointer; documented to always succeed.
-        unsafe { mach2::mach_time::mach_timebase_info(&raw mut info) };
-        info
+        // SAFETY: valid out-pointer to a mach_timebase_info.
+        let kr = unsafe { mach2::mach_time::mach_timebase_info(&raw mut info) };
+        (kr == mach2::kern_return::KERN_SUCCESS && info.numer != 0 && info.denom != 0)
+            .then_some(info)
     });
+    let Some(tb) = tb else {
+        return instant_fallback_micros();
+    };
     // SAFETY: no preconditions. mach_continuous_time (unlike
     // mach_absolute_time) includes time the system spent asleep —
     // Apple-documented suspend-inclusive monotonic source.
@@ -92,10 +106,21 @@ pub(crate) fn boottime_micros() -> i64 {
     target_os = "windows"
 )))]
 pub(crate) fn boottime_micros() -> i64 {
+    // Best-effort fallback for unsupported targets. Does NOT count
+    // time asleep; documented as such on the bridge function.
+    instant_fallback_micros()
+}
+
+/// Plain monotonic elapsed time since a process-wide anchor.
+///
+/// Suspend-frozen (`Instant` semantics), so it does NOT count time
+/// asleep. Serves as the whole-body implementation on unsupported
+/// targets and as the runtime escape hatch when a supported
+/// platform's clock probe fails. Not compiled on Windows:
+/// `QueryInterruptTimePrecise` returns no status and cannot fail.
+#[cfg(not(target_os = "windows"))]
+fn instant_fallback_micros() -> i64 {
     use std::sync::OnceLock;
-    // Best-effort fallback for unsupported targets: plain monotonic
-    // elapsed time since a process-wide anchor. Does NOT count time
-    // asleep; documented as such on the bridge function.
     static ANCHOR: OnceLock<std::time::Instant> = OnceLock::new();
     let anchor = ANCHOR.get_or_init(std::time::Instant::now);
     anchor.elapsed().as_micros() as i64
