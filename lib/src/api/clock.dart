@@ -11,7 +11,7 @@
 // `MonotonicClock.instance`.
 
 import '../ffi/api/nts.dart' as ffi;
-import '../ffi/frb_generated.dart' show NtsRustLib;
+import '../ffi/frb_generated.dart' show NtsRustLib, NtsRustLibApiImpl;
 
 /// A sleep-aware monotonic time source.
 ///
@@ -46,8 +46,11 @@ import '../ffi/frb_generated.dart' show NtsRustLib;
 /// initialized via `NtsRustLib.initMock()` with an API that does not
 /// stub `crateApiNtsNtsBoottimeMicros`, the probe call throws and the
 /// instance degrades to a standard, suspend-frozen [Stopwatch]
-/// source. A real bridge never takes this path: after
-/// `NtsRustLib.init()` the synchronous clock read cannot throw.
+/// source. A real bridge (`NtsRustLib.init()` installing the
+/// generated FFI implementation) is detected structurally and never
+/// takes this path: its clock read is dispatched directly, with no
+/// probe and no catch, so any failure propagates instead of being
+/// masked by a silent source switch.
 ///
 /// The epoch is arbitrary (per-boot for the native sources); only
 /// differences between readings from the same instance are
@@ -92,11 +95,22 @@ class MonotonicClock {
         'MonotonicClock.instance.',
       );
     }
+    // `api` is FRB-internal, but this package owns the generated
+    // bindings; the same access pattern is used throughout
+    // `lib/src/ffi/api/nts.dart`.
+    // ignore: invalid_use_of_internal_member
+    if (NtsRustLib.instance.api is NtsRustLibApiImpl) {
+      // Real bridge (`NtsRustLib.init()` installed the generated FFI
+      // dispatch implementation): no probe, no catch. Any failure of
+      // the synchronous clock read propagates instead of being masked
+      // by a silent switch to a suspend-frozen source.
+      return () => ffi.ntsBoottimeMicros().toInt();
+    }
     try {
-      // Probe: throws (e.g. UnsupportedError from a mock whose
-      // `noSuchMethod` rejects unstubbed calls) only in mock mode —
-      // a real bridge's synchronous clock read cannot fail. Any
-      // throw selects the suspend-frozen test fallback.
+      // Mock mode (`NtsRustLib.initMock()`, or a hand-supplied API
+      // passed to `init()`): probe once. A throw (e.g.
+      // UnsupportedError from a fake whose `noSuchMethod` rejects
+      // unstubbed calls) selects the suspend-frozen test fallback.
       ffi.ntsBoottimeMicros();
       return () => ffi.ntsBoottimeMicros().toInt();
     } catch (_) {

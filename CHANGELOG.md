@@ -13,8 +13,11 @@
   production build can no longer silently degrade to a clock that
   freezes during device sleep. The `Stopwatch` fallback remains only
   for mock mode (`NtsRustLib.initMock()` with an API that does not
-  stub `crateApiNtsNtsBoottimeMicros`) — a test-only path, since a
-  real bridge's synchronous clock read cannot fail. Because
+  stub `crateApiNtsNtsBoottimeMicros`) and is now gated structurally:
+  a real bridge (the generated FFI implementation installed by
+  `NtsRustLib.init()`) dispatches the clock read directly with no
+  probe and no catch, so any failure propagates instead of silently
+  switching the instance to a suspend-frozen source. Because
   `NtsSyncedTime` captures its anchor from `MonotonicClock.instance`
   at construction, constructing one before bridge init now also
   throws. Migration: `await NtsRustLib.init()` (or

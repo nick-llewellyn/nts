@@ -346,10 +346,13 @@ a small public wrapper exported from `lib/nts.dart`. Construction
 before `NtsRustLib.init()` / `NtsRustLib.initMock()` throws a `StateError`
 (fail-fast: a production process can never silently degrade to a
 suspend-frozen clock). After init, each instance resolves its source
-exactly once at construction: a probe call of the bridge function
-selects the sleep-aware source, and any throw (a mock API without a
-boottime stub — a test-only path, since a real bridge's synchronous
-read cannot fail) permanently selects a `Stopwatch` fallback. Locking
+exactly once at construction, discriminating structurally on the
+installed API: a real bridge (`api is NtsRustLibApiImpl`, the
+generated implementation `NtsRustLib.init()` installs) dispatches
+directly with no probe and no catch, so any clock-read failure
+propagates; only a mock-mode API (from `NtsRustLib.initMock()`, or
+hand-supplied to `init()`) is probed, and a throw (no boottime stub)
+permanently selects a `Stopwatch` fallback. Locking
 the source per instance guarantees readings from one instance never
 mix epochs. The shared `MonotonicClock.instance` singleton is the
 timeline used by `NtsSyncedTime` (anchor + projection), the `getTime`

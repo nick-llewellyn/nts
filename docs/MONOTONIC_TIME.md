@@ -90,14 +90,18 @@ construction. Constructing an instance — or first accessing
 `MonotonicClock.instance` — before `NtsRustLib.init()` (or
 `NtsRustLib.initMock()`) has completed throws a `StateError` naming
 the missing init call; a production build can never silently degrade
-to a clock that freezes during device sleep. When the bridge was
-initialized via `NtsRustLib.initMock()` with an API that does not stub the
-boottime call, a single probe call of `ntsBoottimeMicros()` throws
-and the instance permanently selects a plain `Stopwatch` fallback —
-a test-only path, since a real bridge's synchronous clock read
-cannot fail. Because the source never changes for the instance's
-lifetime, readings from one instance are always mutually comparable
-and never mix epochs.
+to a clock that freezes during device sleep. After init, the
+resolution discriminates structurally on the installed API: a real
+bridge (the generated FFI implementation that `NtsRustLib.init()`
+installs) gets a direct dispatch to `ntsBoottimeMicros()` with no
+probe and no catch, so any failure of the clock read propagates
+loudly rather than being masked. Only in mock mode — an API that is
+not the generated implementation, i.e. `NtsRustLib.initMock()` or a
+hand-supplied API passed to `init()` — does a single probe call run,
+and a throw (an API that does not stub the boottime call)
+permanently selects a plain `Stopwatch` fallback. Because the source
+never changes for the instance's lifetime, readings from one
+instance are always mutually comparable and never mix epochs.
 
 The shared `MonotonicClock.instance` singleton is the same timeline
 the package uses internally, so consumer code reading it stays on
