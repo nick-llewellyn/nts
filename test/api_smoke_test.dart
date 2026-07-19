@@ -149,9 +149,12 @@ class _RecordingApi implements NtsRustLibApi {
     clientTrustModes.clear();
     trustStatusCalls = 0;
     nextTrustStatus = _zeroFfiTrustStatus();
-    // Do NOT reset `_bootSw` — monotonicity across tests is fine and
-    // mirrors a real boot clock.
-    suspendOffsetMicros = 0;
+    // Do NOT reset `_bootSw` or `suspendOffsetMicros` — the mocked
+    // boottime source feeds the process-wide MonotonicClock.instance,
+    // so zeroing the offset here would jump the clock backwards after
+    // the suspend-simulation test and could flake anchors captured in
+    // earlier tests. Monotonicity across tests mirrors a real boot
+    // clock; tests that adjust the offset must only ever increase it.
   }
 
   // Shared body for the four async endpoint mocks: bump the in-flight
@@ -235,7 +238,8 @@ class _RecordingApi implements NtsRustLibApi {
 
   // Sleep-aware clock mock: advances with real time (so the existing
   // delay-based NtsSyncedTime tests keep passing) plus a mutable
-  // offset that simulates time spent in device suspend.
+  // offset that simulates time spent in device suspend. The offset is
+  // increase-only and survives `reset()` — see the note there.
   final Stopwatch _bootSw = Stopwatch()..start();
   int suspendOffsetMicros = 0;
 
