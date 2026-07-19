@@ -335,9 +335,14 @@ class _RecordingApi implements NtsRustLibApi {
 // call back through `NtsRustLib.instance.api`, which is the same
 // `_RecordingApi` instance, so the mock observes the call exactly as
 // the real `NtsClientImpl` would have routed it. `dispose` /
-// `isDisposed` are stubbed because the real `RustOpaqueInterface`
-// requires them but the test mock has no `Arc` to release.
+// `isDisposed` track a local flag because the real
+// `RustOpaqueInterface` requires them but the test mock has no `Arc`
+// to release; the flag lets tests assert that call-scoped clients
+// (e.g. `ntsGetTime` with a non-default trust policy) release their
+// native handle eagerly.
 class _FakeFfiNtsClient implements ffi.NtsClient {
+  bool _disposed = false;
+
   @override
   void clear() => NtsRustLib.instance.api.crateApiNtsNtsClientClear(that: this);
 
@@ -378,10 +383,10 @@ class _FakeFfiNtsClient implements ffi.NtsClient {
   );
 
   @override
-  void dispose() {}
+  void dispose() => _disposed = true;
 
   @override
-  bool get isDisposed => false;
+  bool get isDisposed => _disposed;
 }
 
 ffi.PhaseTimings _zeroFfiPhaseTimings() => ffi.PhaseTimings(
@@ -2258,6 +2263,97 @@ void main() {
       // Top-level endpoints never fired.
       expect(api.lastWarmTimeoutMs, isNull);
       expect(api.lastQueryTimeoutMs, isNull);
+    });
+
+    test('the default trust policy keeps ntsGetTime on the singleton '
+        'path without constructing any client', () async {
+      api.nextWarm = _ffiWarm(2);
+      await ntsGetTime(spec: spec, trustMode: TrustMode.platformWithFallback);
+      expect(api.clientNewCalls, 0);
+      expect(api.clientWithTrustModeCalls, 0);
+      // The top-level endpoints served the call.
+      expect(api.lastWarmTimeoutMs, isNotNull);
+      expect(api.lastClientWarmTimeoutMs, isNull);
+    });
+
+    test('a non-default trustMode routes ntsGetTime through a '
+        'call-scoped client and disposes it', () async {
+      api.nextWarm = _ffiWarm(2);
+      final synced = await ntsGetTime(
+        spec: spec,
+        trustMode: TrustMode.platformOnly,
+      );
+      expect(synced.samplesUsed, 2);
+      expect(api.clientWithTrustModeCalls, 1);
+      expect(
+        api.lastClientWithTrustModeMode,
+        const ffi.TrustMode.platformOnly(),
+      );
+      // The whole warm+burst ran against the call-scoped client; the
+      // singleton endpoints never fired.
+      expect(api.lastClientWarmThat, isNotNull);
+      expect(api.lastClientQueryThat, same(api.lastClientWarmThat));
+      expect(api.lastWarmTimeoutMs, isNull);
+      expect(api.lastQueryTimeoutMs, isNull);
+      // The native handle was released eagerly, not left to the GC
+      // finalizer.
+      expect(api.lastClientWarmThat!.isDisposed, isTrue);
+    });
+
+    test('TrustMode.custom round-trips the caller-supplied roots '
+        'through ntsGetTime', () async {
+      api.nextWarm = _ffiWarm(1);
+      final roots = [1, 2, 3];
+      await ntsGetTime(
+        spec: spec,
+        trustMode: TrustMode.custom,
+        customRoots: roots,
+      );
+      expect(api.clientWithTrustModeCalls, 1);
+      expect(
+        api.lastClientWithTrustModeMode,
+        ffi.TrustMode.custom(Uint8List.fromList(roots)),
+      );
+    });
+
+    test('ntsGetTime rejects a mismatched trustMode/customRoots pair '
+        'before any FFI dispatch', () async {
+      await expectLater(
+        ntsGetTime(
+          spec: spec,
+          trustMode: TrustMode.platformOnly,
+          customRoots: [1, 2, 3],
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(
+        ntsGetTime(spec: spec, trustMode: TrustMode.custom),
+        throwsArgumentError,
+      );
+      await expectLater(
+        ntsGetTime(
+          spec: spec,
+          trustMode: TrustMode.custom,
+          customRoots: const [],
+        ),
+        throwsArgumentError,
+      );
+      expect(api.clientWithTrustModeCalls, 0);
+      expect(api.lastWarmTimeoutMs, isNull);
+      expect(api.lastClientWarmTimeoutMs, isNull);
+      expect(api.queryDispatches, 0);
+    });
+
+    test('the call-scoped client is disposed even when the warm '
+        'fails', () async {
+      api.nextThrow = const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.tls);
+      await expectLater(
+        ntsGetTime(spec: spec, trustMode: TrustMode.bundledOnly),
+        throwsA(isA<NtsError>()),
+      );
+      expect(api.clientWithTrustModeCalls, 1);
+      expect(api.lastClientWarmThat!.isDisposed, isTrue);
+      expect(api.queryDispatches, 0);
     });
   });
 

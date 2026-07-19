@@ -284,7 +284,8 @@ Future<NtsTimeSample> ntsQuery({
 /// [ntsQuery].
 ///
 /// Tuning is fixed and internal — the call takes no configuration
-/// beyond `spec` and `verificationTime`. The internal values are
+/// beyond `spec`, the trust-policy pair (`trustMode` /
+/// `customRoots`), and `verificationTime`. The internal values are
 /// sized to serve phones and desktops alike: an 8-sample burst for a
 /// tight lowest-RTT selection, one **total** 8-second wall-clock
 /// budget shared across the handshake and every burst query as a
@@ -315,6 +316,31 @@ Future<NtsTimeSample> ntsQuery({
 ///   with [TimeoutPhase.ntp] (the UDP exchange is the phase the
 ///   budget ran out in front of).
 ///
+/// `trustMode` selects the trust-anchor policy applied to the warming
+/// handshake and defaults to [TrustMode.platformWithFallback] — the
+/// process-wide default client's policy, preserving prior behaviour
+/// exactly. Passing any other mode (or a non-null `customRoots`)
+/// routes the whole warm+burst flow through a private, call-scoped
+/// [NtsClient] constructed with the requested policy; its native
+/// handle is disposed before the call returns. This is sound on this
+/// path specifically because the call always begins with a forced
+/// fresh handshake and spends only the cookies that handshake just
+/// minted — there is no cache-reuse window in which a session
+/// established under a different policy could be served. The
+/// per-mode semantics (`platformOnly` refusing the silent
+/// `webpki-roots` downgrade, `bundledOnly` bypassing the platform
+/// store, `custom` trusting only the caller-supplied roots) and the
+/// accepted `customRoots` encodings (PEM bundle or single DER
+/// certificate) are documented on the [NtsClient] constructor. Pair
+/// validation matches that constructor too: a non-null `customRoots`
+/// requires [TrustMode.custom], and [TrustMode.custom] requires a
+/// non-empty `customRoots`; violations complete the returned
+/// `Future` with an [ArgumentError] before any FFI dispatch. Calls
+/// routed through the call-scoped client do not update the default
+/// singleton's [ntsTrustStatus] counters (same as any explicit
+/// [NtsClient] today); read [NtsSyncedTime.trustBackend] for
+/// per-call attribution.
+///
 /// `verificationTime` (or the deprecated `verificationTimeMs`) carries
 /// the same cold-start clock-skew-rescue semantics documented on
 /// [ntsQuery] and is forwarded to every
@@ -323,11 +349,16 @@ Future<NtsTimeSample> ntsQuery({
 /// [NtsError.invalidSpec] before any FFI dispatch).
 ///
 /// State effects match calling the two lower-level functions yourself:
-/// the handshake replaces any cached session for `spec` in the
-/// process-wide default client's table, and each burst query spends
-/// one of the newly delivered cookies.
+/// with the default trust policy the handshake replaces any cached
+/// session for `spec` in the process-wide default client's table, and
+/// each burst query spends one of the newly delivered cookies. With a
+/// non-default policy the session lives in the call-scoped client's
+/// table instead and is discarded with it; the default client's table
+/// is left untouched.
 Future<NtsSyncedTime> ntsGetTime({
   required NtsServerSpec spec,
+  TrustMode trustMode = TrustMode.platformWithFallback,
+  List<int>? customRoots,
   DateTime? verificationTime,
   @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
 }) async {
@@ -336,6 +367,24 @@ Future<NtsSyncedTime> ntsGetTime({
     verificationTimeMs,
   );
   _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
+  if (trustMode != TrustMode.platformWithFallback || customRoots != null) {
+    // Non-default policy: run the whole warm+burst against a private,
+    // call-scoped client so the singleton's session table (and its
+    // construction-time policy invariant) is never touched. The
+    // NtsClient factory owns the trustMode/customRoots pair
+    // validation, so the two surfaces cannot drift. Disposing the
+    // native handle eagerly releases the throwaway session table
+    // rather than waiting for the GC finalizer.
+    final client = NtsClient(trustMode: trustMode, customRoots: customRoots);
+    try {
+      return await client.getTime(
+        spec: spec,
+        verificationTime: _verificationInstant(resolvedVerificationMs),
+      );
+    } finally {
+      client._dispose();
+    }
+  }
   return _getTime(
     warm: (timeout) => ntsWarmCookies(
       spec: spec,
@@ -751,10 +800,16 @@ class NtsClient {
   /// for the full contract (fixed 8-sample serial burst clamped to
   /// `freshCookies`, one total 8-second shared budget, lowest-RTT
   /// selection with `roundTrip / 2` compensation, best-effort success
-  /// when at least one sample lands). The only difference is state
-  /// scope: the handshake replaces the cached session for `spec` in
-  /// **this client's** table, and the burst spends this client's
-  /// cookies, leaving the process-wide default client untouched.
+  /// when at least one sample lands). The differences are state scope
+  /// and trust policy: the handshake replaces the cached session for
+  /// `spec` in **this client's** table, the burst spends this
+  /// client's cookies (leaving the process-wide default client
+  /// untouched), and the handshake runs under this client's
+  /// construction-time trust policy — there is no per-call
+  /// `trustMode` parameter here, because the policy is already a
+  /// property of the client ([ntsGetTime]'s `trustMode` /
+  /// `customRoots` parameters are the convenience spelling of
+  /// constructing such a client for one call).
   Future<NtsSyncedTime> getTime({
     required NtsServerSpec spec,
     DateTime? verificationTime,
@@ -828,6 +883,16 @@ class NtsClient {
   /// the "Initialization has two layers" section of `README.md` for
   /// the full bootstrap contract.
   void clear() => _inner.clear();
+
+  // Release the underlying native handle (the Rust `Arc` behind the
+  // FRB `RustOpaque`) eagerly instead of waiting for the GC
+  // finalizer. Library-internal: the public surface deliberately
+  // exposes no dispose method — long-lived clients are reclaimed by
+  // the finalizer, and only the call-scoped client minted inside
+  // [ntsGetTime] needs deterministic release. Owning this here keeps
+  // any future cleanup for `NtsClient` internals in one place rather
+  // than coupling callers to the `_inner` representation.
+  void _dispose() => _inner.dispose();
 }
 
 // --- input validation -----------------------------------------------
