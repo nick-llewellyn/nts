@@ -7,14 +7,18 @@
 // - `frb_generated`  — produced by `flutter_rust_bridge_codegen generate`.
 //                      Do not edit by hand; regenerate after changing `api/`.
 
-// Hand-written code in this crate is `unsafe`-free. The only `unsafe`
-// blocks live inside `frb_generated.rs`, the FFI dispatch shim that
-// `flutter_rust_bridge_codegen` emits — that module is exempted via a
-// per-item `#[allow(unsafe_code)]` on its `mod` declaration below.
-// `deny` (not `forbid`) is deliberate: `forbid` cannot be relaxed by a
-// per-item `allow`, and the FRB-emitted shim genuinely needs `unsafe`
-// to cross the C ABI. Any new `unsafe` block in our own modules will
-// fail to compile and force a deliberate per-item override decision.
+// Hand-written code in this crate avoids `unsafe` by default. Two
+// exemptions exist: `frb_generated.rs`, the FFI dispatch shim that
+// `flutter_rust_bridge_codegen` emits (exempted via a per-item
+// `#[allow(unsafe_code)]` on its `mod` declaration below), and the
+// platform clock syscalls in `nts::boottime` (each carries a
+// per-function `#[expect(unsafe_code, reason = ...)]`). `deny` (not
+// `forbid`) is deliberate: `forbid` cannot be relaxed by a per-item
+// `allow`/`expect`, and both sites genuinely need `unsafe` — the FRB
+// shim to cross the C ABI, the clock readings to reach suspend-aware
+// OS sources that std deliberately does not expose. Any new `unsafe`
+// block elsewhere will fail to compile and force a deliberate
+// per-item override decision.
 #![deny(unsafe_code)]
 
 pub mod api;
