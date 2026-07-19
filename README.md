@@ -299,7 +299,7 @@ monotonic sources:
 For the platform syscall mappings, epoch semantics, the
 bridge-initialization requirement, and how to synchronize your own
 protocol-level timeouts with the package's clock, see
-[docs/MONOTONIC_TIME.md](docs/MONOTONIC_TIME.md).
+[doc/MONOTONIC_TIME.md](doc/MONOTONIC_TIME.md).
 
 ## Security considerations
 
