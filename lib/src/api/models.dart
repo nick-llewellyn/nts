@@ -581,6 +581,14 @@ class NtsTrustStatus {
 /// live clock with identity semantics: two instances are never equal
 /// even when constructed from identical samples, because each anchors
 /// its own clock.
+///
+/// **Do not persist and restore.** The monotonic anchor is bound to
+/// the current boot session and process: after a reboot the native
+/// clock starts a fresh epoch, so a monotonic anchor captured in a
+/// previous boot would silently project garbage. There is no
+/// `toJson` / `fromJson` on this class because no safe restore is
+/// possible — call `getTime` again on app start instead of caching
+/// an instance across launches.
 class NtsSyncedTime {
   /// One-way-delay-compensated server UTC as microseconds since the
   /// Unix epoch, valid at the instant this object was constructed
