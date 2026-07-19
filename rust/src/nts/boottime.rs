@@ -26,7 +26,12 @@ pub(crate) fn boottime_micros() -> i64 {
     // package targets; the call cannot fail there.
     let rc = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &raw mut ts) };
     debug_assert_eq!(rc, 0);
-    (ts.tv_sec as i64) * 1_000_000 + (ts.tv_nsec as i64) / 1_000
+    // Widen through i128: tv_sec/tv_nsec are i64 on LP64 targets but
+    // i32 on 32-bit Android, so neither `as i64` (unnecessary_cast on
+    // LP64) nor `i64::from` (useless_conversion on LP64) is portable.
+    // i128::from is a real widening on every target, and the final
+    // narrowing is safe: boot-relative micros fit i64 for ~292k years.
+    (i128::from(ts.tv_sec) * 1_000_000 + i128::from(ts.tv_nsec) / 1_000) as i64
 }
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
