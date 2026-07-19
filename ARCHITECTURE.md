@@ -377,7 +377,7 @@ process memory — so the hazard does not exist and no boot-session identifier
 is needed.
 
 The one latent risk is user-side persistence: a consumer could extract
-`utcUnixMicros` and `MonotonicClock.nowMicros()`, persist them, and attempt
+`utcUnixMicros` and `MonotonicClock.instance.nowMicros()`, persist them, and attempt
 to reconstruct a projection after a reboot. The existing dartdoc on
 `MonotonicClock` and `NtsSyncedTime` explicitly prohibits this (readings are
 not meaningful across reboots; the class must not be reconstructed from
