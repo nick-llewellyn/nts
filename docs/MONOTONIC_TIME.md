@@ -3,7 +3,7 @@
 This document is the technical deep-dive behind the sleep-aware
 monotonic clock introduced in
 [PR #231](https://github.com/nick-llewellyn/nts/pull/231) (NTS-90,
-first shipping in v6.1). It explains why the package moved away from
+first shipping in v7.0). It explains why the package moved away from
 system-clock-dependent timing, which platform primitives back the new
 clock, and how developers building custom NTS logic can share the
 package's monotonic timeline.

@@ -3,33 +3,6 @@
 
 ## 7.0
 
-### Changed
-
-- **Breaking:** `MonotonicClock` now throws a `StateError` (naming
-  `NtsRustLib.init()` as the fix) when constructed — or when
-  `MonotonicClock.instance` is first accessed — before the bridge is
-  initialized. This retracts the 6.1 promise of a silent
-  suspend-frozen `Stopwatch` fallback in bridge-less processes: a
-  production build can no longer silently degrade to a clock that
-  freezes during device sleep. The `Stopwatch` fallback remains only
-  for mock mode (`NtsRustLib.initMock()` with an API that does not
-  stub `crateApiNtsNtsBoottimeMicros`) and is now gated structurally:
-  a real bridge (the generated FFI implementation installed by
-  `NtsRustLib.init()`) dispatches the clock read directly with no
-  probe and no catch, so any failure propagates instead of silently
-  switching the instance to a suspend-frozen source. Because
-  `NtsSyncedTime` captures its anchor from `MonotonicClock.instance`
-  at construction, constructing one before bridge init now also
-  throws. Migration: `await NtsRustLib.init()` (or
-  `NtsRustLib.initMock(...)` in tests) before touching
-  `MonotonicClock`, `NtsSyncedTime`, or `ntsGetTime`; downstream
-  mocks should stub `crateApiNtsNtsBoottimeMicros` to keep the
-  sleep-aware source in tests. The throwing lazy static is not
-  poisoned: the first `MonotonicClock.instance` access after init
-  resolves normally. (NTS-93)
-
-## 6.1
-
 ### Added
 
 - New public `MonotonicClock` class (exported from `package:nts/nts.dart`):
@@ -38,13 +11,35 @@
   `CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on
   iOS/macOS, and `QueryInterruptTimePrecise` on Windows through a new
   synchronous bridge call (`ntsBoottimeMicros`). Each instance
-  resolves its source once at construction — bridge available means
-  sleep-aware, otherwise a permanent `Stopwatch` fallback — so
-  readings from one instance never mix epochs. The shared
-  `MonotonicClock.instance` is the same timeline the package now uses
-  internally. (NTS-90)
+  resolves its source once at construction, so readings from one
+  instance never mix epochs; construction before bridge init throws
+  (see the breaking `NtsSyncedTime` entry below for the exact
+  contract). The shared `MonotonicClock.instance` is the same
+  timeline the package now uses internally. (NTS-90)
 
 ### Changed
+
+- **Breaking:** constructing an `NtsSyncedTime` before the bridge is
+  initialized now throws a `StateError` (naming `NtsRustLib.init()`
+  as the fix). In 6.0.0 the constructor anchored on a plain
+  `Stopwatch` and worked without the bridge; it now captures its
+  anchor from `MonotonicClock.instance`, which — like direct
+  `MonotonicClock` construction — fails fast when neither
+  `NtsRustLib.init()` nor `NtsRustLib.initMock()` has run. A
+  production build can therefore never silently degrade to a clock
+  that freezes during device sleep. The `Stopwatch` fallback exists
+  only for mock mode (`NtsRustLib.initMock()` with an API that does
+  not stub `crateApiNtsNtsBoottimeMicros`) and is gated structurally:
+  a real bridge (the generated FFI implementation installed by
+  `NtsRustLib.init()`) dispatches the clock read directly with no
+  probe and no catch, so any failure propagates instead of silently
+  switching the instance to a suspend-frozen source. Migration:
+  `await NtsRustLib.init()` (or `NtsRustLib.initMock(...)` in tests)
+  before touching `MonotonicClock`, `NtsSyncedTime`, or `ntsGetTime`;
+  downstream mocks should stub `crateApiNtsNtsBoottimeMicros` to keep
+  the sleep-aware source in tests. The throwing lazy static is not
+  poisoned: the first `MonotonicClock.instance` access after init
+  resolves normally. (NTS-93)
 
 - `NtsSyncedTime.utcNow` / `elapsedSinceSync`, the `getTime` total
   timeout budget, and the bridge admission gate's queue-wait metering
@@ -53,8 +48,10 @@
   no longer silently freezes the projected clock or stalls an
   in-flight budget: `utcNow` stays correct across suspend/resume, and
   a budget that elapses during sleep surfaces as `timeout(ntp)` on
-  resume. In bridge-less processes (pure-Dart tests) behaviour is
-  unchanged via the fallback source. (NTS-90)
+  resume. Pure-Dart tests keep working through
+  `NtsRustLib.initMock()`, which retains the `Stopwatch` fallback for
+  mocks that do not stub the boottime call (see the breaking entry
+  above). (NTS-90)
 
 - The top-level `ntsGetTime` now accepts optional `trustMode` and
   `customRoots` parameters, so a one-call synchronized clock can run
