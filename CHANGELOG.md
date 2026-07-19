@@ -1,6 +1,29 @@
 # Changelog
 
 
+## 6.1
+
+### Added
+
+- The top-level `ntsGetTime` now accepts optional `trustMode` and
+  `customRoots` parameters, so a one-call synchronized clock can run
+  under a non-default trust-anchor policy without hand-constructing
+  an `NtsClient`. The default (`TrustMode.platformWithFallback`, no
+  custom roots) keeps the existing process-wide singleton path
+  byte-for-byte unchanged; any other policy routes the whole
+  warm+burst flow through a private call-scoped client whose native
+  handle is disposed before the call returns. This is sound on this
+  path specifically because `ntsGetTime` always forces a fresh
+  handshake and spends only the cookies that handshake minted — no
+  cache-reuse window exists in which a session established under a
+  different policy could be served. Pair validation matches the
+  `NtsClient` constructor (`customRoots` requires `TrustMode.custom`
+  and vice versa, rejected with `ArgumentError` before any FFI
+  dispatch). `ntsQuery` / `ntsWarmCookies` are deliberately
+  unchanged: their value is the warm session cache, and a per-call
+  policy there requires session-table re-keying tracked separately.
+  (NTS-89)
+
 ## 6.0.0
 
 ### Breaking changes
