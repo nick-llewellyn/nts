@@ -269,6 +269,38 @@ workload specific. The
 burst-filter-compensate flow described above built from the
 primitives.
 
+## Monotonic Time & Measurement Accuracy
+
+A time-synchronization package cannot trust the clock it exists to
+correct, so `package:nts` never meters a timeout or measures a
+network delay against the system clock. All internal timing runs on
+monotonic sources:
+
+- **Sleep-aware on the Dart side.** Budgets and projections read the
+  suspend-inclusive "boottime" clock family through the Rust core
+  (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on
+  iOS/macOS, `QueryInterruptTimePrecise` on Windows), exposed
+  publicly as `MonotonicClock`. Unlike Dart's `Stopwatch`, readings
+  keep advancing while the device is in deep sleep, so the
+  `NtsSyncedTime.utcNow` projection stays correct across
+  suspend/resume and an in-flight `getTime` budget expires on
+  schedule instead of stalling.
+- **Monotonic deadlines in the Rust core.** The NTS-KE handshake
+  (DNS, TCP connect, TLS, record exchange) and the UDP exchange run
+  under single shrinking `Instant`-anchored deadlines, so timeouts
+  fire neither prematurely nor late regardless of NTP slews, clock
+  steps, or manual adjustments mid-call.
+- **Trustworthy RTT.** `roundTripMicros` is measured monotonically
+  around the UDP round-trip, which matters because the lowest-RTT
+  sample drives `ntsGetTime`'s burst selection and `rtt / 2` is the
+  delay compensation applied to the final offset — a contaminated
+  RTT would corrupt the synchronized time itself.
+
+For the platform syscall mappings, epoch semantics, the
+`Stopwatch`-fallback rules, and how to synchronize your own
+protocol-level timeouts with the package's clock, see
+[docs/MONOTONIC_TIME.md](docs/MONOTONIC_TIME.md).
+
 ## Security considerations
 
 The package handles authentication and replay protection on its own
