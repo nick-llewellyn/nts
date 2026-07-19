@@ -11,6 +11,7 @@
 // `MonotonicClock.instance`.
 
 import '../ffi/api/nts.dart' as ffi;
+import '../ffi/frb_generated.dart' show NtsRustLib;
 
 /// A sleep-aware monotonic time source.
 ///
@@ -28,19 +29,25 @@ import '../ffi/api/nts.dart' as ffi;
 /// - **Windows:** `QueryInterruptTimePrecise` (interrupt time includes
 ///   sleep/hibernation; 100 ns units)
 ///
-/// Each instance resolves its source exactly once, at construction:
-/// one probe call of the bridge function decides between the
-/// sleep-aware native clock and a plain [Stopwatch] fallback. The
-/// source never changes for the instance's lifetime, so readings from
-/// one instance are always mutually comparable and never mix epochs.
-/// Never compare readings taken from two different instances.
+/// Each instance resolves its source exactly once, at construction.
+/// The source never changes for the instance's lifetime, so readings
+/// from one instance are always mutually comparable and never mix
+/// epochs. Never compare readings taken from two different instances.
 ///
-/// **Fallback:** if the instance is constructed (or [instance] first
-/// accessed) before `NtsRustLib.init()` has completed — or in a
-/// pure-Dart context with no bridge at all — the probe throws and the
-/// instance permanently degrades to a standard, suspend-frozen
-/// [Stopwatch] source. Initialize the bridge before first access to
-/// get the sleep-aware source.
+/// **Initialization is required:** constructing an instance (or first
+/// accessing [instance]) before `NtsRustLib.init()` (or
+/// `NtsRustLib.initMock()`) has completed throws a [StateError]. The
+/// silent suspend-frozen [Stopwatch] fallback that existed before
+/// v7.0.0 has been removed for uninitialized processes — a production
+/// build can no longer silently degrade to a clock that freezes
+/// during device sleep.
+///
+/// **Mock-mode fallback (tests only):** when the bridge was
+/// initialized via `NtsRustLib.initMock()` with an API that does not
+/// stub `crateApiNtsNtsBoottimeMicros`, the probe call throws and the
+/// instance degrades to a standard, suspend-frozen [Stopwatch]
+/// source. A real bridge never takes this path: after
+/// `NtsRustLib.init()` the synchronous clock read cannot throw.
 ///
 /// The epoch is arbitrary (per-boot for the native sources); only
 /// differences between readings from the same instance are
@@ -59,19 +66,36 @@ class MonotonicClock {
   /// per-isolate: each isolate gets its own lazily resolved instance
   /// (all reading the same underlying native clock when the bridge is
   /// initialized, but do not compare raw readings across isolates —
-  /// a fallback-sourced isolate uses a different epoch).
+  /// a mock-fallback-sourced isolate uses a different epoch).
+  ///
+  /// Accessing this before `NtsRustLib.init()` / `initMock()` throws
+  /// a [StateError]. Because Dart re-runs a throwing lazy-static
+  /// initializer on the next access, the singleton is not poisoned:
+  /// the first access *after* bridge init resolves normally.
   static final MonotonicClock instance = MonotonicClock();
 
   final int Function() _read;
 
   /// Resolve the time source and capture it for this instance.
+  ///
+  /// Throws [StateError] when the bridge has not been initialized;
+  /// see the class doc for the mock-mode [Stopwatch] fallback.
   MonotonicClock() : _read = _resolveSource();
 
   static int Function() _resolveSource() {
+    if (!NtsRustLib.instance.initialized) {
+      throw StateError(
+        'MonotonicClock requires the nts bridge: call '
+        '`await NtsRustLib.init()` (or `NtsRustLib.initMock()` in '
+        'tests) before constructing a MonotonicClock or accessing '
+        'MonotonicClock.instance.',
+      );
+    }
     try {
-      // Probe: throws StateError if the bridge is not initialized, or
-      // UnsupportedError from a mock whose `noSuchMethod` rejects
-      // unstubbed calls. Any throw selects the fallback.
+      // Probe: throws (e.g. UnsupportedError from a mock whose
+      // `noSuchMethod` rejects unstubbed calls) only in mock mode —
+      // a real bridge's synchronous clock read cannot fail. Any
+      // throw selects the suspend-frozen test fallback.
       ffi.ntsBoottimeMicros();
       return () => ffi.ntsBoottimeMicros().toInt();
     } catch (_) {

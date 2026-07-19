@@ -297,7 +297,7 @@ monotonic sources:
   RTT would corrupt the synchronized time itself.
 
 For the platform syscall mappings, epoch semantics, the
-`Stopwatch`-fallback rules, and how to synchronize your own
+bridge-initialization requirement, and how to synchronize your own
 protocol-level timeouts with the package's clock, see
 [docs/MONOTONIC_TIME.md](docs/MONOTONIC_TIME.md).
 
@@ -517,7 +517,7 @@ relative fallback can fire.
 | `kDefaultBridgeConcurrencyCap` | Package default for `bridgeConcurrencyCap` (`4`, sized to the smallest common mobile FRB worker pool — see the constant's dartdoc). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
 | `NtsSyncedTime` | Synchronized clock returned by `getTime`: `utcUnixMicros` (compensated best sample at the anchor), `roundTripMicros` (winning sample), `samplesUsed`, `trustBackend`, `utcNow` (sleep-aware monotonic projection immune to system clock changes and device suspend), `elapsedSinceSync`. Identity semantics — a live clock, not a value-type DTO. |
-| `MonotonicClock` | General-purpose sleep-aware monotonic time source: readings keep advancing across device deep sleep, unlike `Stopwatch` (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on iOS/macOS, `QueryInterruptTimePrecise` on Windows). The shared `MonotonicClock.instance` singleton is the same timeline the package uses internally; an instance first resolved before `NtsRustLib.init()` permanently falls back to a suspend-frozen `Stopwatch` source. `nowMicros()`, `elapsedSince(startMicros)`. |
+| `MonotonicClock` | General-purpose sleep-aware monotonic time source: readings keep advancing across device deep sleep, unlike `Stopwatch` (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on iOS/macOS, `QueryInterruptTimePrecise` on Windows). The shared `MonotonicClock.instance` singleton is the same timeline the package uses internally; constructing an instance (or first accessing `MonotonicClock.instance`) before `NtsRustLib.init()` / `initMock()` throws a `StateError`. `nowMicros()`, `elapsedSince(startMicros)`. |
 | `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`, `trustBackend`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`; `trustBackend` records which trust-anchor backend the post-handshake TLS verification chose. |
 | `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`, `trustBackend`. The UDP phase does not run on this path, so only KE-pipeline timings are populated; `trustBackend` carries the same per-handshake attribution as on `NtsTimeSample`. |
 | `PhaseTimings` | `dnsMicros`, `connectMicros`, `tlsHandshakeMicros`, `keRecordIoMicros`. Microsecond-resolution wall-clock breakdown of the four pre-NTP phases of an `ntsQuery` / `ntsWarmCookies` call. Phases that did not run report `0`. See ARCHITECTURE.md's "Phase attribution and timings" section. |

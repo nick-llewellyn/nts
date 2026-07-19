@@ -1,6 +1,30 @@
 # Changelog
 
 
+## 7.0
+
+### Changed
+
+- **Breaking:** `MonotonicClock` now throws a `StateError` (naming
+  `NtsRustLib.init()` as the fix) when constructed — or when
+  `MonotonicClock.instance` is first accessed — before the bridge is
+  initialized. This retracts the 6.1 promise of a silent
+  suspend-frozen `Stopwatch` fallback in bridge-less processes: a
+  production build can no longer silently degrade to a clock that
+  freezes during device sleep. The `Stopwatch` fallback remains only
+  for mock mode (`NtsRustLib.initMock()` with an API that does not
+  stub `crateApiNtsNtsBoottimeMicros`) — a test-only path, since a
+  real bridge's synchronous clock read cannot fail. Because
+  `NtsSyncedTime` captures its anchor from `MonotonicClock.instance`
+  at construction, constructing one before bridge init now also
+  throws. Migration: `await NtsRustLib.init()` (or
+  `NtsRustLib.initMock(...)` in tests) before touching
+  `MonotonicClock`, `NtsSyncedTime`, or `ntsGetTime`; downstream
+  mocks should stub `crateApiNtsNtsBoottimeMicros` to keep the
+  sleep-aware source in tests. The throwing lazy static is not
+  poisoned: the first `MonotonicClock.instance` access after init
+  resolves normally. (NTS-93)
+
 ## 6.1
 
 ### Added

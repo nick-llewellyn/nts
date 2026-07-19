@@ -2422,6 +2422,41 @@ void main() {
       );
     });
 
+    test('MonotonicClock construction before bridge init throws '
+        'StateError naming NtsRustLib.init', () {
+      // `initMock` ran in setUpAll, so temporarily reset the FRB
+      // entrypoint state to reproduce an uninitialized process. Only
+      // direct construction is exercised: the shared
+      // `MonotonicClock.instance` lazy static resolved earlier in
+      // this suite and is untouched by the reset.
+      NtsRustLib.instance.resetState();
+      try {
+        expect(
+          MonotonicClock.new,
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('NtsRustLib.init'),
+            ),
+          ),
+        );
+      } finally {
+        NtsRustLib.initMock(api: api);
+      }
+    });
+
+    test('MonotonicClock constructed after initMock with a boottime '
+        'stub uses the sleep-aware source', () {
+      final clock = MonotonicClock();
+      final before = clock.nowMicros();
+      api.suspendOffsetMicros += const Duration(minutes: 1).inMicroseconds;
+      expect(
+        clock.elapsedSince(before),
+        greaterThanOrEqualTo(const Duration(minutes: 1)),
+      );
+    });
+
     test('NtsSyncedTime toString carries the diagnostic fields', () {
       final synced = NtsSyncedTime(
         utcUnixMicros: 123,
