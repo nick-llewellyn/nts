@@ -28,8 +28,9 @@
   `NtsRustLib.init()` nor `NtsRustLib.initMock()` has run. A
   production build can therefore never silently degrade to a clock
   that freezes during device sleep. The `Stopwatch` fallback exists
-  only for mock mode (`NtsRustLib.initMock()` with an API that does
-  not stub `crateApiNtsNtsBoottimeMicros`) and is gated structurally:
+  only for mock mode (`NtsRustLib.initMock()`, or a hand-supplied API
+  passed to `NtsRustLib.init(api: ...)`, when the API does not stub
+  `crateApiNtsNtsBoottimeMicros`) and is gated structurally:
   a real bridge (the generated FFI implementation installed by
   `NtsRustLib.init()`) dispatches the clock read directly with no
   probe and no catch, so any failure propagates instead of silently

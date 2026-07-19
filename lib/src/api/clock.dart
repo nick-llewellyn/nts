@@ -42,15 +42,17 @@ import '../ffi/frb_generated.dart' show NtsRustLib, NtsRustLibApiImpl;
 /// build can no longer silently degrade to a clock that freezes
 /// during device sleep.
 ///
-/// **Mock-mode fallback (tests only):** when the bridge was
-/// initialized via `NtsRustLib.initMock()` with an API that does not
-/// stub `crateApiNtsNtsBoottimeMicros`, the probe call throws and the
-/// instance degrades to a standard, suspend-frozen [Stopwatch]
-/// source. A real bridge (`NtsRustLib.init()` installing the
-/// generated FFI implementation) is detected structurally and never
-/// takes this path: its clock read is dispatched directly, with no
-/// probe and no catch, so any failure propagates instead of being
-/// masked by a silent source switch.
+/// **Mock-mode fallback (tests only):** the gate is structural, on
+/// the installed API's type. Whenever the bridge holds any API other
+/// than the generated FFI implementation — `NtsRustLib.initMock()`,
+/// or a hand-supplied API passed to `NtsRustLib.init(api: ...)` —
+/// the source is probed once; if the probe throws (the API does not
+/// stub `crateApiNtsNtsBoottimeMicros`), the instance degrades to a
+/// standard, suspend-frozen [Stopwatch] source. A real bridge (the
+/// generated FFI implementation that `NtsRustLib.init()` installs by
+/// default) never takes this path: its clock read is dispatched
+/// directly, with no probe and no catch, so any failure propagates
+/// instead of being masked by a silent source switch.
 ///
 /// The epoch is arbitrary (per-boot for the native sources); only
 /// differences between readings from the same instance are
