@@ -150,7 +150,7 @@ class _RecordingApi implements NtsRustLibApi {
     trustStatusCalls = 0;
     nextTrustStatus = _zeroFfiTrustStatus();
     // Do NOT reset `_bootSw` or `suspendOffsetMicros` — the mocked
-    // boottime source feeds the process-wide MonotonicClock.instance,
+    // boottime source feeds the isolate-wide MonotonicClock.instance,
     // so zeroing the offset here would jump the clock backwards after
     // the suspend-simulation test and could flake anchors captured in
     // earlier tests. Monotonicity across tests mirrors a real boot

@@ -143,11 +143,17 @@ mod tests {
     #[test]
     fn advances_roughly_with_real_time() {
         let a = boottime_micros();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Wait until >= 50ms of wall time has verifiably elapsed:
+        // `thread::sleep` alone may return early on spurious wakeups /
+        // signals, which would flake the lower bound below.
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(50) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let b = boottime_micros();
         let delta = b - a;
         // Loose bounds: schedulers oversleep, never undersleep (much).
-        assert!(delta >= 45_000, "advanced only {delta}us over 50ms sleep");
+        assert!(delta >= 45_000, "advanced only {delta}us over 50ms wait");
         assert!(delta < 5_000_000, "implausible advance {delta}us");
     }
 
