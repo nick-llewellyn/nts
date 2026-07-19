@@ -14,6 +14,13 @@
 // `flutter_rust_bridge`'s `PlatformInt64` wrapper. See
 // `ARCHITECTURE.md`'s "Public API stability layer" section for the
 // rationale.
+//
+// One deliberate exception to the standalone-DTO posture:
+// `NtsSyncedTime` imports the public `MonotonicClock` (via
+// `clock.dart`) because it is a live clock, not a value-type DTO --
+// its projection needs the package's sleep-aware monotonic timeline.
+
+import 'clock.dart';
 
 /// Address of an NTS-KE endpoint.
 class NtsServerSpec {
@@ -549,10 +556,13 @@ class NtsTrustStatus {
 ///
 /// Wraps the burst's lowest-RTT sample — already compensated for the
 /// one-way network delay (`utc + roundTrip / 2`) — and anchors it to
-/// a process-local monotonic [Stopwatch] started at construction.
-/// [utcNow] projects the authenticated instant forward using that
-/// monotonic elapsed time, so the projection is immune to system
-/// clock steps, slew, and user adjustment after the sync.
+/// a process-local **sleep-aware monotonic clock** reading captured
+/// at construction (`CLOCK_BOOTTIME` on Android/Linux,
+/// `mach_continuous_time` on iOS/macOS, interrupt time on Windows —
+/// see [MonotonicClock]). [utcNow] projects the authenticated instant
+/// forward using that monotonic elapsed time, so the projection keeps
+/// counting across device deep sleep as well as being immune to
+/// system clock steps, slew, and user adjustment after the sync.
 ///
 /// The projection does **not** correct for local oscillator drift:
 /// a typical crystal drifts on the order of tens of parts per
@@ -561,10 +571,16 @@ class NtsTrustStatus {
 /// hardware. Re-run `getTime` when tighter bounds are needed;
 /// [elapsedSinceSync] exposes the age so callers can decide when.
 ///
+/// When [MonotonicClock.instance] first resolved before
+/// `NtsRustLib.init` (e.g. a pure-Dart test process), the anchor
+/// degrades to a plain monotonic source that freezes during suspend
+/// (test-fixture path); production instances come from `ntsGetTime`,
+/// which only runs after bridge init.
+///
 /// Unlike the value-type DTOs in this library, [NtsSyncedTime] is a
 /// live clock with identity semantics: two instances are never equal
 /// even when constructed from identical samples, because each anchors
-/// its own stopwatch.
+/// its own clock.
 class NtsSyncedTime {
   /// One-way-delay-compensated server UTC as microseconds since the
   /// Unix epoch, valid at the instant this object was constructed
@@ -588,34 +604,44 @@ class NtsSyncedTime {
   /// [NtsTimeSample.trustBackend].
   final TrustBackend trustBackend;
 
-  final Stopwatch _anchor;
+  final int _anchorMicros;
 
   /// Construct a synchronized clock anchored at the current instant.
   ///
   /// [utcUnixMicros] must be the compensated UTC valid *now*: the
-  /// internal monotonic stopwatch starts inside this constructor.
-  /// Intended for the wrapper layer and for test fixtures; production
-  /// code receives instances from `ntsGetTime`.
+  /// monotonic anchor is captured from [MonotonicClock.instance]
+  /// inside this constructor, so this projection shares one
+  /// consistent monotonic timeline with consumer code that reads the
+  /// same instance. Intended for the wrapper layer and for test
+  /// fixtures; production code receives instances from `ntsGetTime`.
+  ///
+  /// The anchor uses the package's sleep-aware monotonic clock when
+  /// the Rust bridge is initialized. If [MonotonicClock.instance] was
+  /// first accessed *before* `NtsRustLib.init` (e.g. in a pure-Dart
+  /// test process), it has permanently resolved to a plain monotonic
+  /// [Stopwatch] source, which does not count time the device spends
+  /// suspended.
   NtsSyncedTime({
     required this.utcUnixMicros,
     required this.roundTripMicros,
     required this.samplesUsed,
     required this.trustBackend,
-  }) : _anchor = Stopwatch()..start();
+  }) : _anchorMicros = MonotonicClock.instance.nowMicros();
 
   /// Current authenticated UTC time, projected from the anchor via
-  /// the monotonic stopwatch. Unaffected by system clock changes
-  /// after the sync; subject to local oscillator drift as described
-  /// on the class doc.
+  /// the sleep-aware monotonic clock. Unaffected by system clock
+  /// changes after the sync; subject to local oscillator drift as
+  /// described on the class doc.
   DateTime get utcNow => DateTime.fromMicrosecondsSinceEpoch(
-    utcUnixMicros + _anchor.elapsedMicroseconds,
+    utcUnixMicros + (MonotonicClock.instance.nowMicros() - _anchorMicros),
     isUtc: true,
   );
 
   /// Monotonic wall-clock time elapsed since the anchor instant.
   /// Use to decide when the projection has aged enough to warrant a
   /// fresh `getTime` call.
-  Duration get elapsedSinceSync => _anchor.elapsed;
+  Duration get elapsedSinceSync =>
+      MonotonicClock.instance.elapsedSince(_anchorMicros);
 
   @override
   String toString() =>

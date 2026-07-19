@@ -131,6 +131,26 @@ tracing-oslog = "0.3"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 tracing-log = "0.2"
 
+# Windows-only: `QueryInterruptTimePrecise` for the same sleep-aware
+# monotonic source (interrupt time includes sleep/hibernation; 100 ns
+# units). The feature gates just the WindowsProgramming API subset.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_WindowsProgramming"] }
+
+# Android/Linux: raw `clock_gettime(CLOCK_BOOTTIME)` for the
+# sleep-aware monotonic source in `nts::boottime`.
+# `std::time::Instant` deliberately uses the suspend-frozen
+# CLOCK_MONOTONIC, so libc is the only route to the boot-time clock.
+[target.'cfg(any(target_os = "android", target_os = "linux"))'.dependencies]
+libc = "0.2.186"
+
+# iOS/macOS: `mach_continuous_time` + `mach_timebase_info` for the same
+# sleep-aware monotonic source. `std::time::Instant` uses the
+# suspend-frozen `mach_absolute_time`; libc deprecated its mach time
+# bindings in favour of this crate.
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+mach2 = "0.6.0"
+
 [lints.rust]
 # `frb_expand` is set by flutter_rust_bridge_codegen during macro expansion.
 # Declaring it here silences the spurious `unexpected_cfgs` warning on builds

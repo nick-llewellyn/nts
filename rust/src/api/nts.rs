@@ -424,6 +424,36 @@ pub fn nts_trust_status() -> NtsTrustStatus {
     }
 }
 
+/// Sleep-aware monotonic clock reading in microseconds
+/// (`ntsBoottimeMicros` on the Dart side).
+///
+/// Reads a suspend-inclusive monotonic source: `CLOCK_BOOTTIME` on
+/// Android/Linux, `mach_continuous_time` (scaled by the cached
+/// timebase) on iOS/macOS, `QueryInterruptTimePrecise` on Windows.
+/// Unlike Dart's `Stopwatch` (CLOCK_MONOTONIC / mach_absolute_time),
+/// the value keeps counting while the device is in deep sleep, so
+/// projections and timeout budgets anchored to it remain correct
+/// across suspend/resume cycles.
+///
+/// The epoch is arbitrary (per-boot); only differences between two
+/// readings from the same process are meaningful. On targets outside
+/// the five supported platforms the reading degrades to a plain
+/// monotonic elapsed-since-process-anchor value (suspend-frozen,
+/// best-effort).
+///
+/// Marked `#[frb(sync)]` for the same reason as
+/// [`nts_dns_pool_stats`]: a single clock read is cheap enough that
+/// paying isolate-hop overhead would dominate the call, and the Dart
+/// wrapper reads it inside hot getters (`NtsSyncedTime.utcNow`).
+///
+/// Returns `i64` (not `u64`) so FRB maps it to `PlatformInt64`
+/// (a plain `int` on all supported non-web targets) instead of
+/// `BigInt`.
+#[flutter_rust_bridge::frb(sync)]
+pub fn nts_boottime_micros() -> i64 {
+    crate::nts::boottime::boottime_micros()
+}
+
 /// Trust-anchor backend that authenticated a TLS chain, or that a
 /// process-global resolution attempt landed on.
 ///

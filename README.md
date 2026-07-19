@@ -32,8 +32,8 @@ certificate, rather than as much as you trust the network between you
 and an anonymous UDP listener.
 
 This package gives Dart and Flutter apps a single async call
-(`ntsGetTime`) that returns an authenticated, monotonic-anchored UTC
-clock, with the protocol details delegated to a bundled native
+(`ntsGetTime`) that returns an authenticated, sleep-aware
+monotonic-anchored UTC clock, with the protocol details delegated to a bundled native
 implementation. Lower-level primitives remain available for callers
 who need manual control. See [ARCHITECTURE.md](ARCHITECTURE.md) for
 the underlying RFC 8915 layering and cryptographic specifics.
@@ -133,7 +133,8 @@ Future<void> main() async {
   final synced = await ntsGetTime(spec: spec);
 
   // 4. Read the clock. `utcNow` projects the authenticated instant
-  //    forward on a monotonic anchor, so it stays correct even if the
+  //    forward on a sleep-aware monotonic anchor (keeps counting
+  //    through device deep sleep), so it stays correct even if the
   //    user or OS steps the system clock after the sync.
   print('authenticated utc = ${synced.utcNow}');
   print('winning sample rtt = ${synced.roundTripMicros}µs '
@@ -483,7 +484,8 @@ relative fallback can fire.
 | `kDefaultDnsConcurrencyCap` | Package default for `dnsConcurrencyCap` (`4`, sized for mobile pthread-stack budgets — see the constant's dartdoc). |
 | `kDefaultBridgeConcurrencyCap` | Package default for `bridgeConcurrencyCap` (`4`, sized to the smallest common mobile FRB worker pool — see the constant's dartdoc). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
-| `NtsSyncedTime` | Synchronized clock returned by `getTime`: `utcUnixMicros` (compensated best sample at the anchor), `roundTripMicros` (winning sample), `samplesUsed`, `trustBackend`, `utcNow` (monotonic projection immune to system clock changes), `elapsedSinceSync`. Identity semantics — a live clock, not a value-type DTO. |
+| `NtsSyncedTime` | Synchronized clock returned by `getTime`: `utcUnixMicros` (compensated best sample at the anchor), `roundTripMicros` (winning sample), `samplesUsed`, `trustBackend`, `utcNow` (sleep-aware monotonic projection immune to system clock changes and device suspend), `elapsedSinceSync`. Identity semantics — a live clock, not a value-type DTO. |
+| `MonotonicClock` | General-purpose sleep-aware monotonic time source: readings keep advancing across device deep sleep, unlike `Stopwatch` (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on iOS/macOS, `QueryInterruptTimePrecise` on Windows). The shared `MonotonicClock.instance` singleton is the same timeline the package uses internally; an instance first resolved before `NtsRustLib.init()` permanently falls back to a suspend-frozen `Stopwatch` source. `nowMicros()`, `elapsedSince(startMicros)`. |
 | `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`, `trustBackend`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`; `trustBackend` records which trust-anchor backend the post-handshake TLS verification chose. |
 | `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`, `trustBackend`. The UDP phase does not run on this path, so only KE-pipeline timings are populated; `trustBackend` carries the same per-handshake attribution as on `NtsTimeSample`. |
 | `PhaseTimings` | `dnsMicros`, `connectMicros`, `tlsHandshakeMicros`, `keRecordIoMicros`. Microsecond-resolution wall-clock breakdown of the four pre-NTP phases of an `ntsQuery` / `ntsWarmCookies` call. Phases that did not run report `0`. See ARCHITECTURE.md's "Phase attribution and timings" section. |

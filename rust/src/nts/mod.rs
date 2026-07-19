@@ -21,6 +21,7 @@
 #![allow(dead_code)]
 
 pub mod aead;
+pub mod boottime;
 pub mod cookies;
 pub mod dns;
 pub mod ke;
