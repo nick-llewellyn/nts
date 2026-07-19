@@ -342,23 +342,31 @@ maps it to a plain `int` rather than `BigInt`; same rationale as
 `ntsDnsPoolStats`).
 
 The Dart-side consumer is `MonotonicClock` (`lib/src/api/clock.dart`),
-a small public wrapper exported from `lib/nts.dart`. Each instance
-resolves its source exactly once at construction: a probe call of the
-bridge function selects the sleep-aware source, and any throw (bridge
-not initialized, pure-Dart test process, mock without the method)
-permanently selects a `Stopwatch` fallback. Locking the source per
-instance guarantees readings from one instance never mix epochs. The
-shared `MonotonicClock.instance` singleton is the timeline used by
-`NtsSyncedTime` (anchor + projection), the `getTime` total budget, and
-the bridge admission gate's queue-wait metering, so consumer code
-reading the same instance shares the package's exact timeline.
+a small public wrapper exported from `lib/nts.dart`. Construction
+before `NtsRustLib.init()` / `NtsRustLib.initMock()` throws a `StateError`
+(fail-fast: a production process can never silently degrade to a
+suspend-frozen clock). After init, each instance resolves its source
+exactly once at construction, discriminating structurally on the
+installed API: a real bridge (`api is NtsRustLibApiImpl`, the
+generated implementation `NtsRustLib.init()` installs) dispatches
+directly with no probe and no catch, so any clock-read failure
+propagates; only a mock-mode API (from `NtsRustLib.initMock()`, or
+hand-supplied to `init()`) is probed, and a throw (no boottime stub)
+permanently selects a `Stopwatch` fallback. Locking
+the source per instance guarantees readings from one instance never
+mix epochs. The shared `MonotonicClock.instance` singleton is the
+timeline used by `NtsSyncedTime` (anchor + projection), the `getTime`
+total budget, and the bridge admission gate's queue-wait metering, so
+consumer code reading the same instance shares the package's exact
+timeline.
 
 Trade-off: statics keyed on process lifetime (the Apple timebase
-cache, the fallback anchor, the resolved Dart singleton) mean a
-process that calls `MonotonicClock.instance` before `NtsRustLib.init`
-keeps the fallback for its lifetime. This is deliberate — re-probing
-on later reads would switch epochs mid-instance and corrupt every
-outstanding anchor difference.
+cache, the resolved Dart singleton) mean a mock-mode process whose
+probe threw keeps the fallback for its lifetime. This is deliberate —
+re-probing on later reads would switch epochs mid-instance and
+corrupt every outstanding anchor difference. The pre-init `StateError`
+does not poison the singleton: Dart re-runs a throwing lazy-static
+initializer, so the first access after init resolves normally.
 
 ### Epoch resets & why there is no boot ID
 

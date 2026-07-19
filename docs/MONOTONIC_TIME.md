@@ -3,7 +3,7 @@
 This document is the technical deep-dive behind the sleep-aware
 monotonic clock introduced in
 [PR #231](https://github.com/nick-llewellyn/nts/pull/231) (NTS-90,
-first shipping in v6.1). It explains why the package moved away from
+first shipping in v7.0). It explains why the package moved away from
 system-clock-dependent timing, which platform primitives back the new
 clock, and how developers building custom NTS logic can share the
 package's monotonic timeline.
@@ -86,14 +86,22 @@ NTP slews, NTP steps, and manual system-clock adjustments by
 construction — it never reads the wall clock at all.
 
 Each instance resolves its time source exactly once, at
-construction: a single probe call of `ntsBoottimeMicros()` decides
-between the sleep-aware native clock and a plain `Stopwatch`
-fallback. The probe throws — and the fallback is selected
-permanently — when the bridge is not yet initialized (e.g. a
-pure-Dart test process before `NtsRustLib.init()`) or when a mock
-FFI layer rejects the call. Because the source never changes for the
-instance's lifetime, readings from one instance are always mutually
-comparable and never mix epochs.
+construction. Constructing an instance — or first accessing
+`MonotonicClock.instance` — before `NtsRustLib.init()` (or
+`NtsRustLib.initMock()`) has completed throws a `StateError` naming
+the missing init call; a production build can never silently degrade
+to a clock that freezes during device sleep. After init, the
+resolution discriminates structurally on the installed API: a real
+bridge (the generated FFI implementation that `NtsRustLib.init()`
+installs) gets a direct dispatch to `ntsBoottimeMicros()` with no
+probe and no catch, so any failure of the clock read propagates
+loudly rather than being masked. Only in mock mode — an API that is
+not the generated implementation, i.e. `NtsRustLib.initMock()` or a
+hand-supplied API passed to `init()` — does a single probe call run,
+and a throw (an API that does not stub the boottime call)
+permanently selects a plain `Stopwatch` fallback. Because the source
+never changes for the instance's lifetime, readings from one
+instance are always mutually comparable and never mix epochs.
 
 The shared `MonotonicClock.instance` singleton is the same timeline
 the package uses internally, so consumer code reading it stays on
@@ -174,7 +182,7 @@ failure.
 ```
 Dart caller
   └─ MonotonicClock.instance          (CLOCK_BOOTTIME family, via FFI;
-     meters getTime budget + queue     Stopwatch fallback pre-init)
+     meters getTime budget + queue     StateError pre-init)
      wait, anchors NtsSyncedTime
         └─ FFI: remaining budget crosses as a plain ms int
              └─ Rust: Deadline / UdpDeadline (std::time::Instant)
@@ -227,10 +235,11 @@ cross-clock skew.
 
 Rules to respect:
 
-- **Initialize the bridge first.** An instance first resolved before
-  `NtsRustLib.init()` permanently falls back to a suspend-frozen
-  `Stopwatch` source. Touch `MonotonicClock.instance` only after
-  init when you need the sleep-aware guarantee.
+- **Initialize the bridge first.** Constructing an instance — or
+  first accessing `MonotonicClock.instance` — before
+  `NtsRustLib.init()` throws a `StateError`. (The lazy static is not
+  poisoned by the throw: the first access after init resolves
+  normally.)
 - **Compare readings from one instance only.** Epochs differ between
   instances, isolates, processes, and boots.
 - **Never persist raw readings.** They are meaningless after a
@@ -244,10 +253,10 @@ bridge function returning the raw microsecond reading as an `int`.
 The FFI layer is an internal surface — it is not exported from
 `package:nts/nts.dart`, its signatures follow the Rust core, and it
 throws `StateError` when called before `NtsRustLib.init()`. Prefer
-`MonotonicClock`, which adds the one-time source probe and the
-`Stopwatch` fallback; reach for the FFI call only if you are already
-importing the FFI layer for other reasons (e.g. a custom mock
-harness) and can accept its stability terms.
+`MonotonicClock`, which locks the source once so readings never mix
+epochs; reach for the FFI call only if you are already importing the
+FFI layer for other reasons (e.g. a custom mock harness) and can
+accept its stability terms.
 
 ## Related reading
 

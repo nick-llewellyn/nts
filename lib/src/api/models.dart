@@ -571,9 +571,11 @@ class NtsTrustStatus {
 /// hardware. Re-run `getTime` when tighter bounds are needed;
 /// [elapsedSinceSync] exposes the age so callers can decide when.
 ///
-/// When [MonotonicClock.instance] first resolved before
-/// `NtsRustLib.init` (e.g. a pure-Dart test process), the anchor
-/// degrades to a plain monotonic source that freezes during suspend
+/// Constructing an instance before `NtsRustLib.init()` /
+/// `NtsRustLib.initMock()` throws a [StateError] from the
+/// [MonotonicClock.instance] anchor capture. In mock mode with an
+/// API that does not stub the boottime call, the anchor degrades to
+/// a plain monotonic source that freezes during suspend
 /// (test-fixture path); production instances come from `ntsGetTime`,
 /// which only runs after bridge init.
 ///
@@ -623,12 +625,13 @@ class NtsSyncedTime {
   /// same instance. Intended for the wrapper layer and for test
   /// fixtures; production code receives instances from `ntsGetTime`.
   ///
-  /// The anchor uses the package's sleep-aware monotonic clock when
-  /// the Rust bridge is initialized. If [MonotonicClock.instance] was
-  /// first accessed *before* `NtsRustLib.init` (e.g. in a pure-Dart
-  /// test process), it has permanently resolved to a plain monotonic
-  /// [Stopwatch] source, which does not count time the device spends
-  /// suspended.
+  /// The anchor uses the package's sleep-aware monotonic clock.
+  /// Constructing before `NtsRustLib.init()` /
+  /// `NtsRustLib.initMock()` throws a [StateError] from
+  /// [MonotonicClock.instance]. Under a mock API
+  /// without a boottime stub the anchor permanently resolves to a
+  /// plain monotonic [Stopwatch] source, which does not count time
+  /// the device spends suspended.
   NtsSyncedTime({
     required this.utcUnixMicros,
     required this.roundTripMicros,

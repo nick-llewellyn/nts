@@ -23,11 +23,19 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show PlatformInt64Util;
+    show BaseHandler, ExternalLibrary, PlatformInt64Util;
+// Not re-exported by the public FRB entrypoints; the real-bridge
+// coverage test constructs the generated `NtsRustLibApiImpl` directly
+// and needs these (file-level implementation_imports ignore above).
+import 'package:flutter_rust_bridge/src/generalized_frb_rust_binding/generalized_frb_rust_binding.dart'
+    show GeneralizedFrbRustBinding;
+import 'package:flutter_rust_bridge/src/main_components/port_manager.dart'
+    show PortManager;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart';
 import 'package:nts/src/ffi/api/nts.dart' as ffi;
 import 'package:nts/src/ffi/frb_generated.dart';
+import 'package:nts/src/ffi/frb_generated.io.dart' show NtsRustLibWire;
 
 class _RecordingApi implements NtsRustLibApi {
   int? lastQueryTimeoutMs;
@@ -2420,6 +2428,72 @@ void main() {
         synced.elapsedSinceSync,
         greaterThanOrEqualTo(const Duration(minutes: 5)),
       );
+    });
+
+    test('MonotonicClock construction before bridge init throws '
+        'StateError naming NtsRustLib.init', () {
+      // `initMock` ran in setUpAll, so temporarily reset the FRB
+      // entrypoint state to reproduce an uninitialized process. Only
+      // direct construction is exercised: the shared
+      // `MonotonicClock.instance` lazy static resolved earlier in
+      // this suite and is untouched by the reset.
+      NtsRustLib.instance.resetState();
+      try {
+        expect(
+          MonotonicClock.new,
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('NtsRustLib.init'),
+            ),
+          ),
+        );
+      } finally {
+        NtsRustLib.initMock(api: api);
+      }
+    });
+
+    test('MonotonicClock constructed after initMock with a boottime '
+        'stub uses the sleep-aware source', () {
+      final clock = MonotonicClock();
+      final before = clock.nowMicros();
+      api.suspendOffsetMicros += const Duration(minutes: 1).inMicroseconds;
+      expect(
+        clock.elapsedSince(before),
+        greaterThanOrEqualTo(const Duration(minutes: 1)),
+      );
+    });
+
+    test('MonotonicClock with the real generated bridge dispatches '
+        'directly with no Stopwatch fallback', () {
+      // Install the actual generated `NtsRustLibApiImpl`, backed by
+      // the test process itself, which does not export the Rust
+      // symbols (FRB resolves them lazily, so construction is safe).
+      // This exercises the real-bridge arm of `_resolveSource` and
+      // proves the structural gate: a clock-read failure propagates
+      // instead of silently switching to a suspend-frozen Stopwatch.
+      final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+      final binding = GeneralizedFrbRustBinding(lib);
+      final handler = BaseHandler();
+      final realApi = NtsRustLibApiImpl(
+        handler: handler,
+        wire: NtsRustLibWire.fromExternalLibrary(lib),
+        generalizedFrbRustBinding: binding,
+        portManager: PortManager(binding, handler),
+      );
+      NtsRustLib.instance.resetState();
+      try {
+        NtsRustLib.initMock(api: realApi);
+        final clock = MonotonicClock();
+        // Direct dispatch resolved with no probe: the read reaches
+        // the FFI dispatcher, whose symbol is absent from this test
+        // process, and the lookup failure surfaces loudly.
+        expect(clock.nowMicros, throwsA(anything));
+      } finally {
+        NtsRustLib.instance.resetState();
+        NtsRustLib.initMock(api: api);
+      }
     });
 
     test('NtsSyncedTime toString carries the diagnostic fields', () {
