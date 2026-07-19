@@ -1,7 +1,7 @@
 // Script to extract and validate Dart code snippets in documentation.
 //
 // Extracts Dart code blocks from README.md, CHANGELOG.md, ARCHITECTURE.md,
-// docs/MONOTONIC_TIME.md, and example/example.md, wraps them in a minimal
+// doc/MONOTONIC_TIME.md, and example/example.md, wraps them in a minimal
 // harness when they lack a
 // main function or top-level declaration (class, enum, extension, mixin, or
 // typedef), and runs `dart analyze` to catch type errors, missing imports,
@@ -23,7 +23,7 @@ const _docFiles = [
   'README.md',
   'CHANGELOG.md',
   'ARCHITECTURE.md',
-  'docs/MONOTONIC_TIME.md',
+  'doc/MONOTONIC_TIME.md',
   'example/example.md',
 ];
 const _snippetDir = 'tool/.snippets';
@@ -37,7 +37,7 @@ const _usage = '''
 Validate Dart code snippets embedded in project documentation.
 
 Extracts `dart` fenced code blocks from README.md, CHANGELOG.md,
-ARCHITECTURE.md, docs/MONOTONIC_TIME.md, and example/example.md, wraps
+ARCHITECTURE.md, doc/MONOTONIC_TIME.md, and example/example.md, wraps
 fragments in a minimal harness, and runs `dart analyze` over them.
 
 Usage: dart run tool/check_doc_snippets.dart [options]
