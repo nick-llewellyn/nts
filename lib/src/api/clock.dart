@@ -68,8 +68,9 @@ class MonotonicClock {
   /// initialized, but do not compare raw readings across isolates —
   /// a mock-fallback-sourced isolate uses a different epoch).
   ///
-  /// Accessing this before `NtsRustLib.init()` / `initMock()` throws
-  /// a [StateError]. Because Dart re-runs a throwing lazy-static
+  /// Accessing this before `NtsRustLib.init()` /
+  /// `NtsRustLib.initMock()` throws a [StateError]. Because Dart
+  /// re-runs a throwing lazy-static
   /// initializer on the next access, the singleton is not poisoned:
   /// the first access *after* bridge init resolves normally.
   static final MonotonicClock instance = MonotonicClock();

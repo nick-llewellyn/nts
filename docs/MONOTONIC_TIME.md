@@ -91,7 +91,7 @@ construction. Constructing an instance — or first accessing
 `NtsRustLib.initMock()`) has completed throws a `StateError` naming
 the missing init call; a production build can never silently degrade
 to a clock that freezes during device sleep. When the bridge was
-initialized via `initMock()` with an API that does not stub the
+initialized via `NtsRustLib.initMock()` with an API that does not stub the
 boottime call, a single probe call of `ntsBoottimeMicros()` throws
 and the instance permanently selects a plain `Stopwatch` fallback —
 a test-only path, since a real bridge's synchronous clock read

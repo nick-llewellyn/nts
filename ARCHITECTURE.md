@@ -343,7 +343,7 @@ maps it to a plain `int` rather than `BigInt`; same rationale as
 
 The Dart-side consumer is `MonotonicClock` (`lib/src/api/clock.dart`),
 a small public wrapper exported from `lib/nts.dart`. Construction
-before `NtsRustLib.init()` / `initMock()` throws a `StateError`
+before `NtsRustLib.init()` / `NtsRustLib.initMock()` throws a `StateError`
 (fail-fast: a production process can never silently degrade to a
 suspend-frozen clock). After init, each instance resolves its source
 exactly once at construction: a probe call of the bridge function
