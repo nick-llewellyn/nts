@@ -584,7 +584,7 @@ class NtsTrustStatus {
 ///
 /// **Do not persist and restore.** The monotonic anchor is bound to
 /// the current boot session and process: after a reboot the native
-/// clock starts a fresh epoch, so a `_anchorMicros` value from a
+/// clock starts a fresh epoch, so a monotonic anchor captured in a
 /// previous boot would silently project garbage. There is no
 /// `toJson` / `fromJson` on this class because no safe restore is
 /// possible — call `getTime` again on app start instead of caching
