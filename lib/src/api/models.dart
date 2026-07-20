@@ -177,6 +177,12 @@ class NtsTimeSample {
   /// Construct a sample. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures; production code receives instances
   /// from `ntsQuery`.
+  ///
+  /// [recvBoottimeMicros] defaults to `0` so pre-7.1 fixture
+  /// constructions keep compiling. A zero stamp is epoch-implausible
+  /// by construction, so consumers applying the documented
+  /// plausibility check (such as `ntsGetTime`'s anchor-lag
+  /// arithmetic) treat it as "no wire-level stamp" and fall back.
   const NtsTimeSample({
     required this.utcUnixMicros,
     required this.roundTripMicros,
@@ -185,7 +191,7 @@ class NtsTimeSample {
     required this.freshCookies,
     required this.phaseTimings,
     required this.trustBackend,
-    required this.recvBoottimeMicros,
+    this.recvBoottimeMicros = 0,
   });
 
   @override

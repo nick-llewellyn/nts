@@ -14,7 +14,10 @@
   from a later `MonotonicClock` reading in the same process yields
   the scheduling lag since receipt. The epoch is arbitrary
   (per-boot): never persist the value or compare it across boots,
-  devices, or processes. (NTS-94)
+  devices, or processes. The public Dart constructor parameter is
+  optional and defaults to `0` (an epoch-implausible sentinel that
+  triggers the anchor-lag fallback below), so existing hand-built
+  fixtures and mocks keep compiling unchanged. (NTS-94)
 
 ### Changed
 
