@@ -253,6 +253,10 @@ jobs:
         working-directory: example
         run: flutter analyze
 
+      - name: Run example tests
+        working-directory: example
+        run: flutter test
+
   build-gate:
     # Aggregator that resolves the matrix-skip naming gap. When the
     # `build` job's `if:` gate evaluates false, GitHub collapses both

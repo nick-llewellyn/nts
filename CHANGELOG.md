@@ -3,6 +3,18 @@
 
 ## 7.1
 
+### Fixed
+
+- Fixed the example package's `nts_format_test.dart` failing with
+  `Bad state: MonotonicClock requires the nts bridge`: the
+  `formatGetTimeSuccess` fixture constructs `NtsSyncedTime`, whose
+  constructor captures a monotonic anchor from
+  `MonotonicClock.instance`, but the test never initialized the mock
+  bridge. The test now calls `NtsRustLib.initMock` in `setUpAll`. CI
+  additionally runs `flutter test` for the example package (it was
+  previously only analyzed), so example-test regressions fail the
+  build. (NTS-95)
+
 ### Added
 
 - New `NtsTimeSample.recvBoottimeMicros` field: a sleep-aware
