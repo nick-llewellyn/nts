@@ -1165,12 +1165,12 @@ Future<NtsSyncedTime> _getTime({
 
   final burst = math.min(_kGetTimeMaxBurst, outcome.freshCookies);
   NtsTimeSample? best;
-  // Monotonic instant (on the shared clock's timeline) at which the
-  // current `best` sample's reply arrived. Used below to advance the
-  // winning
-  // sample's compensated UTC across the remainder of the burst, so
-  // the constructed clock is anchored to "now" rather than to the
-  // (possibly much earlier) winning recv.
+  // Post-`await` monotonic instant (on the shared clock's timeline,
+  // relative to `startMicros`) at which the current `best` sample's
+  // reply was observed on the Dart side. Fallback input for the
+  // anchor-lag arithmetic below when the sample's wire-level
+  // `recvBoottimeMicros` stamp fails the epoch-plausibility window
+  // (hand-built fixtures, mock-mode Stopwatch clock fallback).
   var bestArrivalMicros = 0;
   var samplesUsed = 0;
   Object? lastError;
@@ -1216,7 +1216,28 @@ Future<NtsSyncedTime> _getTime({
   // since the winning reply arrived (`anchorLagMicros`), so the value
   // handed to the constructor is valid "now" even when the lowest-RTT
   // sample was not the last query in the burst.
-  final anchorLagMicros = (clock.nowMicros() - startMicros) - bestArrivalMicros;
+  //
+  // Preferred lag source: the sample's wire-level receipt stamp
+  // (`recvBoottimeMicros`), taken inside the native worker immediately
+  // after the UDP recv. It shares the `MonotonicClock` timeline by
+  // construction, and unlike the post-`await` stamp it excludes the
+  // FFI-return / worker-handoff / event-loop scheduling latency δ —
+  // the previous arithmetic under-advanced the compensated UTC by
+  // exactly δ. Plausibility window: on the production path the stamp
+  // must fall between the burst start and the post-`await` observation
+  // (recv happens after dispatch and before the `await` returns). A
+  // stamp outside that window means an epoch mismatch (hand-built
+  // fixture, mock clock on the Stopwatch fallback), in which case fall
+  // back to the post-`await` approximation rather than injecting an
+  // arbitrary cross-epoch delta.
+  final nowMicros = clock.nowMicros();
+  final postAwaitLagMicros = (nowMicros - startMicros) - bestArrivalMicros;
+  final wireLagMicros = nowMicros - best.recvBoottimeMicros;
+  final anchorLagMicros =
+      (best.recvBoottimeMicros >= startMicros &&
+          wireLagMicros >= postAwaitLagMicros)
+      ? wireLagMicros
+      : postAwaitLagMicros;
   return NtsSyncedTime(
     utcUnixMicros:
         best.utcUnixMicros + best.roundTripMicros ~/ 2 + anchorLagMicros,
@@ -1385,6 +1406,7 @@ NtsTimeSample _publicSample(ffi.NtsTimeSample s) => NtsTimeSample(
   freshCookies: s.freshCookies,
   phaseTimings: _publicPhase(s.phaseTimings),
   trustBackend: _publicTrustBackend(s.trustBackend),
+  recvBoottimeMicros: s.recvBoottimeMicros.toInt(),
 );
 
 NtsWarmCookiesOutcome _publicWarm(ffi.NtsWarmCookiesOutcome o) =>

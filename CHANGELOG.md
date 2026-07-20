@@ -1,6 +1,32 @@
 # Changelog
 
 
+## 7.1
+
+### Added
+
+- New `NtsTimeSample.recvBoottimeMicros` field: a sleep-aware
+  monotonic reading (same clock source and epoch as
+  `ntsBoottimeMicros` / `MonotonicClock`) taken inside the native
+  worker immediately after the AEAD-NTPv4 UDP recv returned — the
+  wire-level receipt instant of the sample, before any FFI-return,
+  worker-thread handoff, or Dart event-loop latency. Subtracting it
+  from a later `MonotonicClock` reading in the same process yields
+  the scheduling lag since receipt. The epoch is arbitrary
+  (per-boot): never persist the value or compare it across boots,
+  devices, or processes. (NTS-94)
+
+### Changed
+
+- `ntsGetTime` / `NtsClient.getTime` now anchor the constructed
+  `NtsSyncedTime` on the winning sample's wire-level receipt stamp
+  instead of a post-`await` Dart-side observation, removing the
+  FFI-return / event-loop scheduling latency that previously made
+  the compensated UTC lag true time by that (unmeasured) delta.
+  Samples whose stamp fails an epoch-plausibility window (hand-built
+  fixtures, mock-mode fallback clocks) fall back to the previous
+  post-`await` approximation. (NTS-94)
+
 ## 7.0.0
 
 ### Added

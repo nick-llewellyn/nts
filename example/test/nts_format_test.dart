@@ -88,6 +88,7 @@ void main() {
         freshCookies: 2,
         phaseTimings: _zeroPhaseTimings(),
         trustBackend: TrustBackend.platformWithHybridFallback,
+        recvBoottimeMicros: 0,
       );
       final out = formatQuerySuccess(sample);
       final lines = out.split('\n');
@@ -278,6 +279,7 @@ void main() {
         freshCookies: 2,
         phaseTimings: _zeroPhaseTimings(),
         trustBackend: TrustBackend.platform,
+        recvBoottimeMicros: 0,
       );
 
       expect(jsonQuerySuccess(sample), {
@@ -301,6 +303,7 @@ void main() {
         freshCookies: 8,
         phaseTimings: _zeroPhaseTimings(),
         trustBackend: TrustBackend.platform,
+        recvBoottimeMicros: 0,
       );
 
       final encoded = jsonEncode(jsonQuerySuccess(sample));

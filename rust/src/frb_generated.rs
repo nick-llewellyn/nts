@@ -790,6 +790,7 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
         let mut var_freshCookies = <u32>::sse_decode(deserializer);
         let mut var_phaseTimings = <crate::api::nts::PhaseTimings>::sse_decode(deserializer);
         let mut var_trustBackend = <crate::api::nts::TrustBackend>::sse_decode(deserializer);
+        let mut var_recvBoottimeMicros = <i64>::sse_decode(deserializer);
         return crate::api::nts::NtsTimeSample {
             utc_unix_micros: var_utcUnixMicros,
             round_trip_micros: var_roundTripMicros,
@@ -798,6 +799,7 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
             fresh_cookies: var_freshCookies,
             phase_timings: var_phaseTimings,
             trust_backend: var_trustBackend,
+            recv_boottime_micros: var_recvBoottimeMicros,
         };
     }
 }
@@ -1156,6 +1158,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTimeSample {
             self.fresh_cookies.into_into_dart().into_dart(),
             self.phase_timings.into_into_dart().into_dart(),
             self.trust_backend.into_into_dart().into_dart(),
+            self.recv_boottime_micros.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1467,6 +1470,7 @@ impl SseEncode for crate::api::nts::NtsTimeSample {
         <u32>::sse_encode(self.fresh_cookies, serializer);
         <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
         <crate::api::nts::TrustBackend>::sse_encode(self.trust_backend, serializer);
+        <i64>::sse_encode(self.recv_boottime_micros, serializer);
     }
 }
 

@@ -537,6 +537,21 @@ class NtsTimeSample {
   /// pattern established by `phase_timings`.
   final TrustBackend trustBackend;
 
+  /// Sleep-aware monotonic reading taken immediately after the
+  /// AEAD-NTPv4 UDP `recv` returned — the wire-level receipt
+  /// instant of this sample, before any FFI-return, worker-thread
+  /// handoff, or Dart event-loop latency is incurred.
+  ///
+  /// Same clock source and epoch as [`nts_boottime_micros`]
+  /// (Dart: `ntsBoottimeMicros` / `MonotonicClock`), including on
+  /// the degraded non-boottime path (both route through the same
+  /// process-wide anchor), so subtracting this from a later
+  /// `MonotonicClock` reading in the same process yields the
+  /// scheduling lag since receipt. The epoch is arbitrary
+  /// (per-boot): never persist this value and never compare it
+  /// across boots, devices, or processes.
+  final PlatformInt64 recvBoottimeMicros;
+
   const NtsTimeSample({
     required this.utcUnixMicros,
     required this.roundTripMicros,
@@ -545,6 +560,7 @@ class NtsTimeSample {
     required this.freshCookies,
     required this.phaseTimings,
     required this.trustBackend,
+    required this.recvBoottimeMicros,
   });
 
   @override
@@ -555,7 +571,8 @@ class NtsTimeSample {
       aeadId.hashCode ^
       freshCookies.hashCode ^
       phaseTimings.hashCode ^
-      trustBackend.hashCode;
+      trustBackend.hashCode ^
+      recvBoottimeMicros.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -568,7 +585,8 @@ class NtsTimeSample {
           aeadId == other.aeadId &&
           freshCookies == other.freshCookies &&
           phaseTimings == other.phaseTimings &&
-          trustBackend == other.trustBackend;
+          trustBackend == other.trustBackend &&
+          recvBoottimeMicros == other.recvBoottimeMicros;
 }
 
 /// Process-global trust-anchor diagnostic snapshot returned by

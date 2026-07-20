@@ -252,6 +252,20 @@ pub struct NtsTimeSample {
     /// queries. New in 3.0.0; mirrors the per-query observable
     /// pattern established by `phase_timings`.
     pub trust_backend: TrustBackend,
+    /// Sleep-aware monotonic reading taken immediately after the
+    /// AEAD-NTPv4 UDP `recv` returned — the wire-level receipt
+    /// instant of this sample, before any FFI-return, worker-thread
+    /// handoff, or Dart event-loop latency is incurred.
+    ///
+    /// Same clock source and epoch as [`nts_boottime_micros`]
+    /// (Dart: `ntsBoottimeMicros` / `MonotonicClock`), including on
+    /// the degraded non-boottime path (both route through the same
+    /// process-wide anchor), so subtracting this from a later
+    /// `MonotonicClock` reading in the same process yields the
+    /// scheduling lag since receipt. The epoch is arbitrary
+    /// (per-boot): never persist this value and never compare it
+    /// across boots, devices, or processes.
+    pub recv_boottime_micros: i64,
 }
 
 /// Successful outcome of `nts_warm_cookies` (Dart: `ntsWarmCookies`).
@@ -3066,6 +3080,11 @@ fn nts_query_inner(
         .map_err(NtsError::from)
         .map_err(attribute_post_handshake)?;
     let rtt_micros = send_at.elapsed().as_micros() as i64;
+    // Wire-level receipt stamp: taken here, before parsing/validation
+    // and long before the FFI return, so downstream anchor-lag
+    // arithmetic excludes scheduling latency. Same clock source as
+    // `nts_boottime_micros` by construction.
+    let recv_boottime_micros = crate::nts::boottime::boottime_micros();
 
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
         .map_err(evict_on_rekey_signal)?;
@@ -3123,6 +3142,7 @@ fn nts_query_inner(
         fresh_cookies: fresh_count,
         phase_timings,
         trust_backend: ctx.trust_backend,
+        recv_boottime_micros,
     })
 }
 
