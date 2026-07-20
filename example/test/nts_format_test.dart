@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show
         NtsError,
+        NtsRustLib,
         NtsSyncedTime,
         NtsTimeSample,
         NtsWarmCookiesOutcome,
@@ -14,9 +15,17 @@ import 'package:nts/nts.dart'
         TimeoutPhase,
         TrustBackend,
         TrustMode;
+import 'package:nts_example/src/mock_api.dart';
 import 'package:nts_example/src/state/nts_format.dart';
 
 void main() {
+  setUpAll(() {
+    // `formatGetTimeSuccess` fixtures construct NtsSyncedTime, whose
+    // constructor captures a monotonic anchor from
+    // MonotonicClock.instance — a StateError without bridge init.
+    NtsRustLib.initMock(api: MockNtsApi());
+  });
+
   group('formatRtt', () {
     test('sub-millisecond renders in microseconds', () {
       expect(formatRtt(750), '750µs');
