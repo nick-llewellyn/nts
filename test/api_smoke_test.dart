@@ -55,10 +55,13 @@ class _RecordingApi implements NtsRustLibApi {
   // Per-call query scripting for the `getTime` burst tests. When
   // non-null and non-empty, each query endpoint call (top-level and
   // per-client alike) consumes the head entry: an `ffi.NtsTimeSample`
-  // is returned, anything else is thrown. Falls back to `nextThrow` /
-  // `nextSample` when exhausted. `queryTimeouts` records the
-  // `timeoutMs` each query call received, in dispatch order, so the
-  // shared-budget tests can assert the deadline shrinks.
+  // is returned, an `ffi.NtsTimeSample Function()` is invoked at
+  // return time (so a test can stamp `recvBoottimeMicros` from the
+  // mocked boottime clock at the moment the mock "receives"), and
+  // anything else is thrown. Falls back to `nextThrow` / `nextSample`
+  // when exhausted. `queryTimeouts` records the `timeoutMs` each
+  // query call received, in dispatch order, so the shared-budget
+  // tests can assert the deadline shrinks.
   List<Object>? queryScript;
   final List<int> queryTimeouts = [];
 
@@ -191,15 +194,16 @@ class _RecordingApi implements NtsRustLibApi {
 
   // Query-endpoint body shared by the top-level and per-client query
   // mocks: consumes the head of `queryScript` when present (sample =>
-  // return, anything else => throw) — bypassing `nextThrow`, which the
-  // script supersedes — otherwise defers to the plain `_asyncEndpoint`
-  // path.
+  // return, sample factory => invoke and return, anything else =>
+  // throw) — bypassing `nextThrow`, which the script supersedes —
+  // otherwise defers to the plain `_asyncEndpoint` path.
   Future<ffi.NtsTimeSample> _queryEndpoint() {
     final script = queryScript;
     if (script != null && script.isNotEmpty) {
       final head = script.removeAt(0);
       return _asyncEndpoint(honorNextThrow: false, () {
         if (head is ffi.NtsTimeSample) return head;
+        if (head is ffi.NtsTimeSample Function()) return head();
         throw head;
       });
     }
@@ -421,6 +425,12 @@ ffi.PhaseTimings _zeroFfiPhaseTimings() => ffi.PhaseTimings(
   keRecordIoMicros: PlatformInt64Util.from(0),
 );
 
+// `recvBoottimeMicros` defaults to 0 — far below any live reading of
+// the fake's mocked boottime source — so pre-built fixtures fail the
+// `_getTime` epoch-plausibility window and exercise the post-`await`
+// fallback path, preserving the pre-7.1 arithmetic these tests were
+// written against. Tests targeting the wire-lag path synthesize the
+// stamp from the mocked clock at return time via a script factory.
 ffi.NtsTimeSample _ffiSample({
   int utcUnixMicros = 0,
   int roundTripMicros = 0,
@@ -429,6 +439,7 @@ ffi.NtsTimeSample _ffiSample({
   int freshCookies = 1,
   ffi.PhaseTimings? phaseTimings,
   ffi.TrustBackend trustBackend = ffi.TrustBackend.platform,
+  int recvBoottimeMicros = 0,
 }) => ffi.NtsTimeSample(
   utcUnixMicros: PlatformInt64Util.from(utcUnixMicros),
   roundTripMicros: PlatformInt64Util.from(roundTripMicros),
@@ -437,6 +448,7 @@ ffi.NtsTimeSample _ffiSample({
   freshCookies: freshCookies,
   phaseTimings: phaseTimings ?? _zeroFfiPhaseTimings(),
   trustBackend: trustBackend,
+  recvBoottimeMicros: PlatformInt64Util.from(recvBoottimeMicros),
 );
 
 ffi.NtsWarmCookiesOutcome _ffiWarm(
@@ -847,6 +859,7 @@ void main() {
           tlsHandshakeMicros: PlatformInt64Util.from(33_333),
           keRecordIoMicros: PlatformInt64Util.from(44_444),
         ),
+        recvBoottimeMicros: 987_654_321,
       );
       final sample = await ntsQuery(spec: spec);
       expect(sample, isA<NtsTimeSample>());
@@ -863,6 +876,7 @@ void main() {
       expect(sample.phaseTimings.connectMicros, 22_222);
       expect(sample.phaseTimings.tlsHandshakeMicros, 33_333);
       expect(sample.phaseTimings.keRecordIoMicros, 44_444);
+      expect(sample.recvBoottimeMicros, 987_654_321);
     });
 
     test('ntsWarmCookies surfaces a public NtsWarmCookiesOutcome', () async {
@@ -1041,6 +1055,7 @@ void main() {
         freshCookies: 7,
         phaseTimings: phase,
         trustBackend: TrustBackend.platform,
+        recvBoottimeMicros: 555_000,
       );
       const sameValue = NtsTimeSample(
         utcUnixMicros: 1_777_334_400_000_000,
@@ -1050,6 +1065,7 @@ void main() {
         freshCookies: 7,
         phaseTimings: phase,
         trustBackend: TrustBackend.platform,
+        recvBoottimeMicros: 555_000,
       );
       expect(base, equals(sameValue));
       expect(base.hashCode, sameValue.hashCode);
@@ -1064,6 +1080,7 @@ void main() {
           freshCookies: 7,
           phaseTimings: phase,
           trustBackend: TrustBackend.platform,
+          recvBoottimeMicros: 555_000,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -1073,6 +1090,7 @@ void main() {
           freshCookies: 7,
           phaseTimings: phase,
           trustBackend: TrustBackend.platform,
+          recvBoottimeMicros: 555_000,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -1082,6 +1100,7 @@ void main() {
           freshCookies: 7,
           phaseTimings: phase,
           trustBackend: TrustBackend.platform,
+          recvBoottimeMicros: 555_000,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -1091,6 +1110,7 @@ void main() {
           freshCookies: 7,
           phaseTimings: phase,
           trustBackend: TrustBackend.platform,
+          recvBoottimeMicros: 555_000,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -1100,6 +1120,7 @@ void main() {
           freshCookies: 0,
           phaseTimings: phase,
           trustBackend: TrustBackend.platform,
+          recvBoottimeMicros: 555_000,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -1109,6 +1130,7 @@ void main() {
           freshCookies: 7,
           phaseTimings: otherPhase,
           trustBackend: TrustBackend.platform,
+          recvBoottimeMicros: 555_000,
         ),
         NtsTimeSample(
           utcUnixMicros: 1_777_334_400_000_000,
@@ -1118,6 +1140,17 @@ void main() {
           freshCookies: 7,
           phaseTimings: phase,
           trustBackend: TrustBackend.webpkiRoots,
+          recvBoottimeMicros: 555_000,
+        ),
+        NtsTimeSample(
+          utcUnixMicros: 1_777_334_400_000_000,
+          roundTripMicros: 12_500,
+          serverStratum: 2,
+          aeadId: 30,
+          freshCookies: 7,
+          phaseTimings: phase,
+          trustBackend: TrustBackend.platform,
+          recvBoottimeMicros: 0,
         ),
       ];
       for (final p in perturbations) {
@@ -1130,7 +1163,7 @@ void main() {
         'roundTripMicros: 12500, serverStratum: 2, aeadId: 30, '
         'freshCookies: 7, phaseTimings: PhaseTimings(dnsMicros: 1, '
         'connectMicros: 2, tlsHandshakeMicros: 3, keRecordIoMicros: 4), '
-        'trustBackend: platform)',
+        'trustBackend: platform, recvBoottimeMicros: 555000)',
       );
     });
 
@@ -2083,6 +2116,52 @@ void main() {
         greaterThanOrEqualTo(1_000_000 + 1000 + 120_000),
       );
       expect(synced.utcUnixMicros, lessThan(1_000_000 + 1000 + 5_000_000));
+    });
+
+    test('the anchor-lag advance prefers the wire-level receipt stamp, '
+        'recovering scheduling latency after the native recv', () async {
+      api.nextWarm = _ffiWarm(1);
+      // Park 40ms on each endpoint (warm + query) so the synthetic
+      // 50ms scheduling delta below still lands after the burst
+      // start on the mocked boottime timeline (stamp >= start).
+      api.asyncGate = () =>
+          Future<void>.delayed(const Duration(milliseconds: 40));
+      api.queryScript = [
+        // Stamped at return time from the mocked boottime source,
+        // backdated 50ms to simulate FFI-return / event-loop latency
+        // between the native recv and the Dart-side observation.
+        () => _ffiSample(
+          utcUnixMicros: 1_000_000,
+          roundTripMicros: 2000,
+          recvBoottimeMicros: api.crateApiNtsNtsBoottimeMicros() - 50_000,
+        ),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      expect(api.queryDispatches, 1);
+      // The post-`await` approximation would advance by only the
+      // sub-ms gap between the query return and construction; the
+      // wire stamp must additionally recover the 50ms backdate.
+      expect(
+        synced.utcUnixMicros,
+        greaterThanOrEqualTo(1_000_000 + 1000 + 50_000),
+      );
+      expect(synced.utcUnixMicros, lessThan(1_000_000 + 1000 + 5_000_000));
+    });
+
+    test('an epoch-implausible receipt stamp falls back to the '
+        'post-await anchor-lag approximation', () async {
+      api.nextWarm = _ffiWarm(1);
+      // `_ffiSample`'s default stamp (0) predates the burst start on
+      // the mocked boottime timeline, so the wire path is rejected
+      // and the compensated UTC advances only by the (tiny)
+      // post-`await` lag — not by the huge cross-epoch delta the
+      // stamp would imply.
+      api.queryScript = [
+        _ffiSample(utcUnixMicros: 1_000_000, roundTripMicros: 2000),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      expect(synced.utcUnixMicros, greaterThanOrEqualTo(1_000_000 + 1000));
+      expect(synced.utcUnixMicros, lessThan(1_000_000 + 1000 + 100_000));
     });
 
     test('burst size is clamped to the handshake cookie count', () async {

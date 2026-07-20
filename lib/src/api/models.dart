@@ -159,9 +159,30 @@ class NtsTimeSample {
   /// per-query observable pattern established by [phaseTimings].
   final TrustBackend trustBackend;
 
+  /// Sleep-aware monotonic reading taken immediately after the
+  /// AEAD-NTPv4 UDP recv returned inside the native worker — the
+  /// wire-level receipt instant of this sample, before any
+  /// FFI-return, worker-thread handoff, or Dart event-loop latency
+  /// is incurred.
+  ///
+  /// Same clock source and epoch as `ntsBoottimeMicros` /
+  /// `MonotonicClock` (including on the degraded non-boottime path),
+  /// so subtracting this from a later `MonotonicClock` reading in
+  /// the same process yields the scheduling lag since receipt. The
+  /// epoch is arbitrary (per-boot): never persist this value and
+  /// never compare it across boots, devices, or processes. New in
+  /// 7.1.
+  final int recvBoottimeMicros;
+
   /// Construct a sample. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures; production code receives instances
   /// from `ntsQuery`.
+  ///
+  /// [recvBoottimeMicros] defaults to `0` so pre-7.1 fixture
+  /// constructions keep compiling. A zero stamp is epoch-implausible
+  /// by construction, so consumers applying the documented
+  /// plausibility check (such as `ntsGetTime`'s anchor-lag
+  /// arithmetic) treat it as "no wire-level stamp" and fall back.
   const NtsTimeSample({
     required this.utcUnixMicros,
     required this.roundTripMicros,
@@ -170,6 +191,7 @@ class NtsTimeSample {
     required this.freshCookies,
     required this.phaseTimings,
     required this.trustBackend,
+    this.recvBoottimeMicros = 0,
   });
 
   @override
@@ -181,6 +203,7 @@ class NtsTimeSample {
     freshCookies,
     phaseTimings,
     trustBackend,
+    recvBoottimeMicros,
   );
 
   @override
@@ -193,7 +216,8 @@ class NtsTimeSample {
           aeadId == other.aeadId &&
           freshCookies == other.freshCookies &&
           phaseTimings == other.phaseTimings &&
-          trustBackend == other.trustBackend);
+          trustBackend == other.trustBackend &&
+          recvBoottimeMicros == other.recvBoottimeMicros);
 
   @override
   String toString() =>
@@ -201,7 +225,8 @@ class NtsTimeSample {
       'roundTripMicros: $roundTripMicros, '
       'serverStratum: $serverStratum, aeadId: $aeadId, '
       'freshCookies: $freshCookies, phaseTimings: $phaseTimings, '
-      'trustBackend: ${trustBackend.name})';
+      'trustBackend: ${trustBackend.name}, '
+      'recvBoottimeMicros: $recvBoottimeMicros)';
 }
 
 /// Successful outcome of `ntsWarmCookies`.

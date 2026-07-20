@@ -50,6 +50,7 @@ class _FakeNtsRustLibApi implements NtsRustLibApi {
     freshCookies: 1,
     phaseTimings: _zeroPhaseTimings(),
     trustBackend: TrustBackend.platform,
+    recvBoottimeMicros: PlatformInt64Util.from(0),
   );
 
   @override

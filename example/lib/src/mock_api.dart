@@ -275,6 +275,12 @@ class MockNtsApi implements NtsRustLibApi {
       freshCookies: 1,
       phaseTimings: _mockPhaseTimings(),
       trustBackend: backend,
+      // This mock does not stub `crateApiNtsNtsBoottimeMicros`, so
+      // `MonotonicClock` runs on its Stopwatch fallback with an
+      // unrelated epoch. A zero stamp fails `_getTime`'s
+      // epoch-plausibility window and deliberately selects the
+      // post-`await` fallback arithmetic.
+      recvBoottimeMicros: PlatformInt64Util.from(0),
     );
   }
 

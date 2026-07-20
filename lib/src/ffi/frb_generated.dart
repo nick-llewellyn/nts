@@ -760,8 +760,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 7)
-      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
     return NtsTimeSample(
       utcUnixMicros: dco_decode_i_64(arr[0]),
       roundTripMicros: dco_decode_i_64(arr[1]),
@@ -770,6 +770,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       freshCookies: dco_decode_u_32(arr[4]),
       phaseTimings: dco_decode_phase_timings(arr[5]),
       trustBackend: dco_decode_trust_backend(arr[6]),
+      recvBoottimeMicros: dco_decode_i_64(arr[7]),
     );
   }
 
@@ -1097,6 +1098,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_freshCookies = sse_decode_u_32(deserializer);
     final var_phaseTimings = sse_decode_phase_timings(deserializer);
     final var_trustBackend = sse_decode_trust_backend(deserializer);
+    final var_recvBoottimeMicros = sse_decode_i_64(deserializer);
     return NtsTimeSample(
       utcUnixMicros: var_utcUnixMicros,
       roundTripMicros: var_roundTripMicros,
@@ -1105,6 +1107,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       freshCookies: var_freshCookies,
       phaseTimings: var_phaseTimings,
       trustBackend: var_trustBackend,
+      recvBoottimeMicros: var_recvBoottimeMicros,
     );
   }
 
@@ -1454,6 +1457,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     sse_encode_u_32(self.freshCookies, serializer);
     sse_encode_phase_timings(self.phaseTimings, serializer);
     sse_encode_trust_backend(self.trustBackend, serializer);
+    sse_encode_i_64(self.recvBoottimeMicros, serializer);
   }
 
   @protected
