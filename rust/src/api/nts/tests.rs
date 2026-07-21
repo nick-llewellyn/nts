@@ -152,6 +152,41 @@ fn unix_duration_round_trips_to_ntp64() {
     assert_eq!(micros, 1_777_334_400 * 1_000_000 + 250_000);
 }
 
+#[test]
+fn on_wire_statistics_computes_rfc5905_offset_and_peer_delay() {
+    // T1 = 100 ms, T2 = 160 ms, T3 = 161 ms, T4 = 110 ms (all offsets
+    // into the same Unix second): server clock 55 ms ahead, 10 ms
+    // round trip of which 1 ms was server processing.
+    let base = Duration::new(1_777_334_400, 0);
+    let ts = |ms: u64| unix_duration_to_ntp64(base + Duration::from_millis(ms));
+    // Reuse the zeroed client-request constructor and overwrite the
+    // two server-side timestamps the arithmetic reads.
+    let mut header = crate::nts::ntp::NtpHeader::client_request(ts(161));
+    header.receive_timestamp = ts(160);
+    let (t3, offset, peer_delay) = on_wire_statistics(ts(100), ts(110), &header);
+    assert_eq!(t3, ntp64_to_unix_micros(ts(161)));
+    // θ = ((160−100)+(161−110))/2 = 55.5 ms
+    assert_eq!(offset, 55_500);
+    // δ = (110−100)−(161−160) = 9 ms
+    assert_eq!(peer_delay, 9_000);
+}
+
+#[test]
+fn ntp_short_converts_16_16_fixed_point_to_micros() {
+    assert_eq!(ntp_short_to_micros(0), 0);
+    // 1.0 s exactly.
+    assert_eq!(ntp_short_to_micros(1 << 16), 1_000_000);
+    // 0.5 s: frac = 0x8000.
+    assert_eq!(ntp_short_to_micros(0x8000), 500_000);
+    // Max representable: 65535 + 65535/65536 s.
+    assert_eq!(
+        ntp_short_to_micros(u32::MAX),
+        65_535 * 1_000_000 + (65_535 * 1_000_000) / 65_536
+    );
+    // One LSB = 1/65536 s ≈ 15.26 µs, floored to 15.
+    assert_eq!(ntp_short_to_micros(1), 15);
+}
+
 /// Bind a local IPv4 echo socket and verify `bind_connected_udp`
 /// resolves `127.0.0.1`, picks a matching-family local socket, and
 /// completes a round trip. This is the address-family-matching
@@ -1693,6 +1728,45 @@ fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
         "server time {}us local time {}us",
         sample.utc_unix_micros,
         now_us,
+    );
+    // RFC 5905 §8 statistics. With a roughly-synced local clock the
+    // true offset is bounded by the same ±5-minute sanity window as
+    // the transmit timestamp above.
+    assert!(
+        sample.offset_micros.abs() < 5 * 60 * 1_000_000,
+        "offset {} µs outside the ±5 min sanity window",
+        sample.offset_micros,
+    );
+    // Peer delay excludes server processing time, so it must not
+    // exceed the locally measured round trip (plus a small slack for
+    // the sub-ms quantisation of the wall-clock reads on both ends).
+    assert!(
+        sample.peer_delay_micros > 0
+            && sample.peer_delay_micros <= sample.round_trip_micros + 10_000,
+        "peer_delay {} µs implausible against round_trip {} µs",
+        sample.peer_delay_micros,
+        sample.round_trip_micros,
+    );
+    // Stratum-1..15 servers report finite root metrics; Cloudflare's
+    // stratum-3ish fleet reports small positive values. Allow zero
+    // (a stratum-1 with a perfect reference reports root_delay 0)
+    // but reject the pathological "whole seconds" range.
+    assert!(
+        (0..10_000_000).contains(&sample.root_delay_micros),
+        "root_delay {} µs outside [0, 10 s)",
+        sample.root_delay_micros,
+    );
+    assert!(
+        (0..10_000_000).contains(&sample.root_dispersion_micros),
+        "root_dispersion {} µs outside [0, 10 s)",
+        sample.root_dispersion_micros,
+    );
+    // Real server clocks report precision as a negative log₂-seconds
+    // exponent (e.g. -20 ≈ 0.95 µs granularity).
+    assert!(
+        sample.server_precision < 0,
+        "server_precision {} is not negative",
+        sample.server_precision,
     );
 }
 

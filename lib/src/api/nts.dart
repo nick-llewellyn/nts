@@ -267,16 +267,21 @@ Future<NtsTimeSample> ntsQuery({
 /// Runs the recipe the lower-level dartdoc describes by hand: force a
 /// fresh NTS-KE handshake to fill the cookie pool, take up to
 /// `min(8, freshCookies)` serial authenticated NTPv4 samples, pick
-/// the one with the lowest round-trip time, and apply the standard
-/// symmetric-path compensation (`utc + roundTrip / 2`). The winning
-/// instant is projected onto a monotonic anchor and returned as an
-/// [NtsSyncedTime], whose [NtsSyncedTime.utcNow] projection is
-/// immune to later system clock changes.
+/// the one with the lowest network delay (the RFC 5905 peer delay δ,
+/// which excludes server processing time, falling back to the
+/// locally measured round trip when δ is implausible), and apply the
+/// standard symmetric-path compensation (`utc + delay / 2`). The
+/// winning instant is projected onto a monotonic anchor and returned
+/// as an [NtsSyncedTime] — which also carries the burst's RFC 5905
+/// statistics ([NtsSyncedTime.offsetMicros],
+/// [NtsSyncedTime.jitterMicros], [NtsSyncedTime.errorBoundMicros]) —
+/// whose [NtsSyncedTime.utcNow] projection is immune to later system
+/// clock changes.
 ///
 /// The burst is serial **by design**, not as an implementation
 /// shortcut: firing samples concurrently at one server would send
 /// them down the same path as a dense cluster sharing any transient
-/// queue spike, defeating the lowest-RTT selection. Sequential
+/// queue spike, defeating the lowest-delay selection. Sequential
 /// queries let the local interface queue drain between samples so
 /// each observes an independent snapshot of the path. Parallelism
 /// across *distinct servers* remains legitimate — concurrent
@@ -288,7 +293,7 @@ Future<NtsTimeSample> ntsQuery({
 /// beyond `spec`, the trust-policy pair (`trustMode` /
 /// `customRoots`), and `verificationTime`. The internal values are
 /// sized to serve phones and desktops alike: an 8-sample burst for a
-/// tight lowest-RTT selection, one **total** 8-second wall-clock
+/// tight lowest-delay selection, one **total** 8-second wall-clock
 /// budget shared across the handshake and every burst query as a
 /// single shrinking deadline (generous enough for a cold-radio
 /// cellular handshake plus the full serial burst; effectively free
@@ -799,8 +804,8 @@ class NtsClient {
   /// Behaviour, parameter semantics, internal tuning, error posture,
   /// and validation are identical to [ntsGetTime] — see its dartdoc
   /// for the full contract (fixed 8-sample serial burst clamped to
-  /// `freshCookies`, one total 8-second shared budget, lowest-RTT
-  /// selection with `roundTrip / 2` compensation, best-effort success
+  /// `freshCookies`, one total 8-second shared budget, lowest-delay
+  /// selection with `delay / 2` compensation, best-effort success
   /// when at least one sample lands). The differences are state scope
   /// and trust policy: the handshake replaces the cached session for
   /// `spec` in **this client's** table, the burst spends this
@@ -1102,7 +1107,7 @@ void _validateGetTime({required NtsServerSpec spec, int? verificationTimeMs}) {
 // Shared engine behind the top-level `ntsGetTime` and
 // `NtsClient.getTime`. Both entry points bind their own `warm` /
 // `query` closures (top-level functions vs. per-client methods) and
-// delegate the budget accounting, burst loop, lowest-RTT selection,
+// delegate the budget accounting, burst loop, lowest-delay selection,
 // and compensation here so the two surfaces cannot drift.
 //
 // `_kGetTimeTimeout` is one total budget: a single sleep-aware
@@ -1119,7 +1124,7 @@ void _validateGetTime({required NtsServerSpec spec, int? verificationTimeMs}) {
 // warming handshake. The effective burst size is
 // `min(_kGetTimeMaxBurst, freshCookies)` — each query spends one
 // cookie, so the burst never exhausts the pool it just filled. Eight
-// samples give a tight lowest-RTT selection on steady paths and
+// samples give a tight lowest-delay selection on steady paths and
 // enough spread to ride out jitter on cellular / Wi-Fi ones.
 const int _kGetTimeMaxBurst = 8;
 
@@ -1173,6 +1178,10 @@ Future<NtsSyncedTime> _getTime({
   // (hand-built fixtures, mock-mode Stopwatch clock fallback).
   var bestArrivalMicros = 0;
   var samplesUsed = 0;
+  // Per-sample offsets θ for the jitter computation (RFC 5905 §10).
+  // Parallel to arrival order; the winning sample's offset is read
+  // from `best` directly.
+  final offsets = <int>[];
   Object? lastError;
   StackTrace? lastStack;
   for (var i = 0; i < burst; i++) {
@@ -1181,7 +1190,9 @@ Future<NtsSyncedTime> _getTime({
     try {
       final sample = await query(left);
       samplesUsed++;
-      if (best == null || sample.roundTripMicros < best.roundTripMicros) {
+      offsets.add(sample.offsetMicros);
+      if (best == null ||
+          _effectiveDelayMicros(sample) < _effectiveDelayMicros(best)) {
         best = sample;
         bestArrivalMicros = clock.nowMicros() - startMicros;
       }
@@ -1208,14 +1219,16 @@ Future<NtsSyncedTime> _getTime({
 
   // Symmetric-path compensation: the sample's `utcUnixMicros` is the
   // server transmit timestamp as of the reply's *send*; adding half
-  // the round trip estimates the server clock at the moment the reply
-  // arrived. That estimate is only valid at the winning recv instant,
-  // while `NtsSyncedTime` captures its monotonic anchor at
-  // construction — which happens after the whole burst has run. Bridge
-  // the gap by advancing the compensated UTC across the time elapsed
-  // since the winning reply arrived (`anchorLagMicros`), so the value
-  // handed to the constructor is valid "now" even when the lowest-RTT
-  // sample was not the last query in the burst.
+  // the network delay (peer delay δ when plausible, else the measured
+  // round trip — see `_effectiveDelayMicros`) estimates the server
+  // clock at the moment the reply arrived. That estimate is only
+  // valid at the winning recv instant, while `NtsSyncedTime` captures
+  // its monotonic anchor at construction — which happens after the
+  // whole burst has run. Bridge the gap by advancing the compensated
+  // UTC across the time elapsed since the winning reply arrived
+  // (`anchorLagMicros`), so the value handed to the constructor is
+  // valid "now" even when the lowest-delay sample was not the last
+  // query in the burst.
   //
   // Preferred lag source: the sample's wire-level receipt stamp
   // (`recvBoottimeMicros`), taken inside the native worker immediately
@@ -1238,14 +1251,50 @@ Future<NtsSyncedTime> _getTime({
           wireLagMicros >= postAwaitLagMicros)
       ? wireLagMicros
       : postAwaitLagMicros;
+  // Sample jitter ψ (RFC 5905 §10): RMS of the offset differences
+  // between the winning sample and every other burst sample. With a
+  // single sample the sum is empty and ψ is 0.
+  final theta0 = best.offsetMicros;
+  var sumSq = 0.0;
+  for (final theta in offsets) {
+    final d = (theta - theta0).toDouble();
+    sumSq += d * d;
+  }
+  final jitterMicros = offsets.length > 1
+      ? math.sqrt(sumSq / (offsets.length - 1)).round()
+      : 0;
+  // Worst-case error bound at the anchor instant, following the
+  // RFC 5905 root-distance recipe: half the winning sample's network
+  // delay + half the server's root delay + the server's root
+  // dispersion + sample jitter. Fixture-shaped samples (all-zero 7.1
+  // fields) degrade to the pre-7.1 `roundTrip / 2` bound.
+  final delayMicros = _effectiveDelayMicros(best);
+  final errorBoundMicros =
+      delayMicros ~/ 2 +
+      best.rootDelayMicros ~/ 2 +
+      best.rootDispersionMicros +
+      jitterMicros;
   return NtsSyncedTime(
-    utcUnixMicros:
-        best.utcUnixMicros + best.roundTripMicros ~/ 2 + anchorLagMicros,
+    utcUnixMicros: best.utcUnixMicros + delayMicros ~/ 2 + anchorLagMicros,
     roundTripMicros: best.roundTripMicros,
     samplesUsed: samplesUsed,
     trustBackend: best.trustBackend,
+    offsetMicros: best.offsetMicros,
+    jitterMicros: jitterMicros,
+    errorBoundMicros: errorBoundMicros,
   );
 }
+
+// The network delay used for burst selection, one-way compensation,
+// and the error bound: the RFC 5905 peer delay δ when plausible
+// (excludes server processing time), else the locally measured round
+// trip. δ is implausible when outside `(0, roundTripMicros]` — a `0`
+// marks a pre-7.1 fixture, and a value above the measured round trip
+// (or negative) marks a local clock step mid-exchange.
+int _effectiveDelayMicros(NtsTimeSample s) =>
+    (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
+    ? s.peerDelayMicros
+    : s.roundTripMicros;
 
 // --- bridge admission gate --------------------------------------------
 //
@@ -1407,6 +1456,11 @@ NtsTimeSample _publicSample(ffi.NtsTimeSample s) => NtsTimeSample(
   phaseTimings: _publicPhase(s.phaseTimings),
   trustBackend: _publicTrustBackend(s.trustBackend),
   recvBoottimeMicros: s.recvBoottimeMicros.toInt(),
+  offsetMicros: s.offsetMicros.toInt(),
+  peerDelayMicros: s.peerDelayMicros.toInt(),
+  rootDelayMicros: s.rootDelayMicros.toInt(),
+  rootDispersionMicros: s.rootDispersionMicros.toInt(),
+  serverPrecision: s.serverPrecision,
 );
 
 NtsWarmCookiesOutcome _publicWarm(ffi.NtsWarmCookiesOutcome o) =>

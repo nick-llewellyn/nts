@@ -664,6 +664,13 @@ impl SseDecode for i64 {
     }
 }
 
+impl SseDecode for i8 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i8().unwrap()
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -762,7 +769,7 @@ impl SseDecode for crate::api::nts::NtsError {
                 return crate::api::nts::NtsError::Internal(var_field0);
             }
             _ => {
-                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                unimplemented!("");
             }
         }
     }
@@ -791,6 +798,11 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
         let mut var_phaseTimings = <crate::api::nts::PhaseTimings>::sse_decode(deserializer);
         let mut var_trustBackend = <crate::api::nts::TrustBackend>::sse_decode(deserializer);
         let mut var_recvBoottimeMicros = <i64>::sse_decode(deserializer);
+        let mut var_offsetMicros = <i64>::sse_decode(deserializer);
+        let mut var_peerDelayMicros = <i64>::sse_decode(deserializer);
+        let mut var_rootDelayMicros = <i64>::sse_decode(deserializer);
+        let mut var_rootDispersionMicros = <i64>::sse_decode(deserializer);
+        let mut var_serverPrecision = <i8>::sse_decode(deserializer);
         return crate::api::nts::NtsTimeSample {
             utc_unix_micros: var_utcUnixMicros,
             round_trip_micros: var_roundTripMicros,
@@ -800,6 +812,11 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
             phase_timings: var_phaseTimings,
             trust_backend: var_trustBackend,
             recv_boottime_micros: var_recvBoottimeMicros,
+            offset_micros: var_offsetMicros,
+            peer_delay_micros: var_peerDelayMicros,
+            root_delay_micros: var_rootDelayMicros,
+            root_dispersion_micros: var_rootDispersionMicros,
+            server_precision: var_serverPrecision,
         };
     }
 }
@@ -928,7 +945,7 @@ impl SseDecode for crate::api::nts::TrustMode {
                 return crate::api::nts::TrustMode::Custom(var_field0);
             }
             _ => {
-                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                unimplemented!("");
             }
         }
     }
@@ -1115,7 +1132,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsError {
                 [8.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
-                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                unimplemented!("");
             }
         }
     }
@@ -1159,6 +1176,11 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTimeSample {
             self.phase_timings.into_into_dart().into_dart(),
             self.trust_backend.into_into_dart().into_dart(),
             self.recv_boottime_micros.into_into_dart().into_dart(),
+            self.offset_micros.into_into_dart().into_dart(),
+            self.peer_delay_micros.into_into_dart().into_dart(),
+            self.root_delay_micros.into_into_dart().into_dart(),
+            self.root_dispersion_micros.into_into_dart().into_dart(),
+            self.server_precision.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1307,7 +1329,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::TrustMode {
                 [3.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
-                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                unimplemented!("");
             }
         }
     }
@@ -1362,6 +1384,13 @@ impl SseEncode for i64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_i64::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for i8 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i8(self).unwrap();
     }
 }
 
@@ -1446,7 +1475,7 @@ impl SseEncode for crate::api::nts::NtsError {
                 <String>::sse_encode(field0, serializer);
             }
             _ => {
-                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                unimplemented!("");
             }
         }
     }
@@ -1471,6 +1500,11 @@ impl SseEncode for crate::api::nts::NtsTimeSample {
         <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
         <crate::api::nts::TrustBackend>::sse_encode(self.trust_backend, serializer);
         <i64>::sse_encode(self.recv_boottime_micros, serializer);
+        <i64>::sse_encode(self.offset_micros, serializer);
+        <i64>::sse_encode(self.peer_delay_micros, serializer);
+        <i64>::sse_encode(self.root_delay_micros, serializer);
+        <i64>::sse_encode(self.root_dispersion_micros, serializer);
+        <i8>::sse_encode(self.server_precision, serializer);
     }
 }
 
@@ -1541,7 +1575,7 @@ impl SseEncode for crate::api::nts::TimeoutPhase {
                 crate::api::nts::TimeoutPhase::KeRecordIo => 4,
                 crate::api::nts::TimeoutPhase::Ntp => 5,
                 _ => {
-                    unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                    unimplemented!("");
                 }
             },
             serializer,
@@ -1559,7 +1593,7 @@ impl SseEncode for crate::api::nts::TrustBackend {
                 crate::api::nts::TrustBackend::WebpkiRoots => 2,
                 crate::api::nts::TrustBackend::Custom => 3,
                 _ => {
-                    unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                    unimplemented!("");
                 }
             },
             serializer,
@@ -1585,7 +1619,7 @@ impl SseEncode for crate::api::nts::TrustMode {
                 <Vec<u8>>::sse_encode(field0, serializer);
             }
             _ => {
-                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                unimplemented!("");
             }
         }
     }

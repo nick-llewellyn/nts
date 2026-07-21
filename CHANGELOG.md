@@ -17,6 +17,31 @@
 
 ### Added
 
+- New RFC 5905 §8 clock-filter fields on `NtsTimeSample`, computed in
+  the native worker from the four on-wire timestamps (T1 client
+  transmit, T2 server receive, T3 server transmit, T4 client
+  receive — T4 is now captured immediately after the UDP recv):
+  `offsetMicros` (true clock offset θ = ((T2−T1)+(T3−T4))/2, which
+  cancels symmetric network delay and excludes server processing
+  time, unlike the `roundTrip / 2` approximation), `peerDelayMicros`
+  (peer delay δ = (T4−T1)−(T3−T2), the round trip minus server
+  processing time), `rootDelayMicros` / `rootDispersionMicros` (the
+  reply header's 16.16 fixed-point root metrics converted to
+  microseconds), and `serverPrecision` (log₂-seconds clock precision
+  from the reply header). All five Dart constructor parameters are
+  optional and default to `0`, so existing hand-built fixtures and
+  mocks keep compiling unchanged; a zero `peerDelayMicros` is treated
+  as "not available" by the plausibility check below. (NTS-78)
+- New RFC 5905 statistics on `NtsSyncedTime`: `offsetMicros` (the
+  winning sample's θ), `jitterMicros` (sample jitter ψ — the RMS of
+  the offset differences between the winning sample and every other
+  burst sample, RFC 5905 §10; `0` for a single-sample burst), and
+  `errorBoundMicros` (worst-case error at the anchor instant,
+  following the root-distance recipe: half the winning sample's
+  network delay + half the server's root delay + the server's root
+  dispersion + the sample jitter). The constructor parameters are
+  optional: the statistics default to `0` and the error bound falls
+  back to the pre-7.1 `roundTripMicros ~/ 2` worst case. (NTS-78)
 - New `NtsTimeSample.recvBoottimeMicros` field: a sleep-aware
   monotonic reading (same clock source and epoch as
   `ntsBoottimeMicros` / `MonotonicClock`) taken inside the native
@@ -33,6 +58,15 @@
 
 ### Changed
 
+- `ntsGetTime` / `NtsClient.getTime` now select the winning burst
+  sample by lowest network delay — the RFC 5905 peer delay δ when it
+  is plausible (within `(0, roundTripMicros]`), falling back to the
+  locally measured round trip when it is not (pre-7.1-shaped
+  fixtures, or a local clock step mid-exchange) — and compensate the
+  one-way delay with that same value (`utc + delay / 2` instead of
+  `utc + roundTrip / 2`). On real servers δ excludes server
+  processing time, so the compensated instant no longer counts the
+  server's receive-to-transmit gap as network transit. (NTS-78)
 - `ntsGetTime` / `NtsClient.getTime` now anchor the constructed
   `NtsSyncedTime` on the winning sample's wire-level receipt stamp
   instead of a post-`await` Dart-side observation, removing the

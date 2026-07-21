@@ -281,6 +281,16 @@ class MockNtsApi implements NtsRustLibApi {
       // epoch-plausibility window and deliberately selects the
       // post-`await` fallback arithmetic.
       recvBoottimeMicros: PlatformInt64Util.from(0),
+      // Simulated RFC 5905 statistics: a small offset, a peer delay
+      // slightly under the round trip (as if the server spent ~1 ms
+      // processing), and modest root metrics for a stratum-1 server.
+      offsetMicros: PlatformInt64Util.from(1_200),
+      peerDelayMicros: PlatformInt64Util.from(
+        rttMs > 1 ? rttMs * 1000 - 1000 : rttMs * 1000,
+      ),
+      rootDelayMicros: PlatformInt64Util.from(0),
+      rootDispersionMicros: PlatformInt64Util.from(150),
+      serverPrecision: -20,
     );
   }
 

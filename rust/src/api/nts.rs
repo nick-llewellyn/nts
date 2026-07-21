@@ -266,6 +266,41 @@ pub struct NtsTimeSample {
     /// (per-boot): never persist this value and never compare it
     /// across boots, devices, or processes.
     pub recv_boottime_micros: i64,
+    /// True clock offset θ = ((T2−T1)+(T3−T4))/2 in microseconds
+    /// (RFC 5905 §8), computed from the four on-wire timestamps:
+    /// T1 client transmit, T2 server receive, T3 server transmit,
+    /// T4 client receive. Positive means the server's clock is ahead
+    /// of the local system clock. Unlike the `round_trip_micros / 2`
+    /// approximation, θ cancels symmetric network delay *and*
+    /// excludes server processing time.
+    ///
+    /// T1 and T4 are local system-clock readings, so θ is only
+    /// meaningful if the system clock was not stepped between the
+    /// UDP send and recv of this exchange. New in 7.1.
+    pub offset_micros: i64,
+    /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905
+    /// §8): the network round trip excluding the server's processing
+    /// time between receive and transmit. Always ≤ the locally
+    /// measured `round_trip_micros` when the local clock ran
+    /// steadily across the exchange; a value outside `(0,
+    /// round_trip_micros]` signals a local clock step mid-exchange
+    /// and consumers should fall back to `round_trip_micros`.
+    /// New in 7.1.
+    pub peer_delay_micros: i64,
+    /// Server-reported root delay in microseconds: total round-trip
+    /// delay from the server to the reference clock (RFC 5905 §7.3,
+    /// converted from the wire's 16.16 fixed-point seconds).
+    /// New in 7.1.
+    pub root_delay_micros: i64,
+    /// Server-reported root dispersion in microseconds: total
+    /// dispersion accumulated from the server to the reference clock
+    /// (RFC 5905 §7.3, converted from the wire's 16.16 fixed-point
+    /// seconds). New in 7.1.
+    pub root_dispersion_micros: i64,
+    /// Server clock precision as reported in the reply header:
+    /// log₂ seconds (RFC 5905 §7.3), e.g. `-20` ≈ 0.95 µs. Always
+    /// negative in practice for real servers. New in 7.1.
+    pub server_precision: i8,
 }
 
 /// Successful outcome of `nts_warm_cookies` (Dart: `ntsWarmCookies`).
@@ -3085,6 +3120,11 @@ fn nts_query_inner(
     // arithmetic excludes scheduling latency. Same clock source as
     // `nts_boottime_micros` by construction.
     let recv_boottime_micros = crate::nts::boottime::boottime_micros();
+    // T4 (destination timestamp, RFC 5905 §8): wall-clock reading at
+    // packet arrival, on the same system clock that produced T1. Taken
+    // immediately after `recv` so the offset/peer-delay arithmetic
+    // below excludes parse/validation time.
+    let destination_timestamp = system_time_to_ntp64();
 
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
         .map_err(evict_on_rekey_signal)?;
@@ -3134,8 +3174,11 @@ fn nts_query_inner(
         ctx.trust_backend,
     );
 
+    let (t3_micros, offset_micros, peer_delay_micros) =
+        on_wire_statistics(transmit_timestamp, destination_timestamp, &response.header);
+
     Ok(NtsTimeSample {
-        utc_unix_micros: ntp64_to_unix_micros(response.header.transmit_timestamp),
+        utc_unix_micros: t3_micros,
         round_trip_micros: rtt_micros,
         server_stratum: response.header.stratum,
         aead_id: ctx.aead_id,
@@ -3143,6 +3186,11 @@ fn nts_query_inner(
         phase_timings,
         trust_backend: ctx.trust_backend,
         recv_boottime_micros,
+        offset_micros,
+        peer_delay_micros,
+        root_delay_micros: ntp_short_to_micros(response.header.root_delay),
+        root_dispersion_micros: ntp_short_to_micros(response.header.root_dispersion),
+        server_precision: response.header.precision,
     })
 }
 
@@ -3245,6 +3293,49 @@ fn unix_duration_to_ntp64(d: Duration) -> u64 {
     // NTP fraction: 32-bit fixed point of seconds (2^32 ticks per second).
     let frac = ((d.subsec_nanos() as u64) << 32) / 1_000_000_000u64;
     ((secs_ntp & 0xFFFF_FFFF) << 32) | (frac & 0xFFFF_FFFF)
+}
+
+/// Convert an NTP "short format" value (16.16 fixed-point seconds,
+/// RFC 5905 §6 — the wire encoding of `root_delay` and
+/// `root_dispersion`) to microseconds.
+///
+/// The maximum representable input (~65536 s) converts to ~6.6e10 µs,
+/// far inside `i64`, so the conversion is exact up to the wire
+/// format's own ~15 µs quantisation.
+fn ntp_short_to_micros(short: u32) -> i64 {
+    let secs = i64::from(short >> 16);
+    let frac = i64::from(short & 0xFFFF);
+    secs * 1_000_000 + (frac * 1_000_000) / 65_536
+}
+
+/// RFC 5905 §8 on-wire arithmetic for a completed client/server
+/// exchange: returns `(t3_micros, offset_micros, peer_delay_micros)`
+/// where T1 is the client transmit timestamp, T4 the client receive
+/// (destination) timestamp, and T2/T3 come from the reply `header`.
+///
+/// All four timestamps are reduced to Unix microseconds first; the
+/// intermediate differences are small (network delays plus clock
+/// offset), so `saturating_*` only fires on pathological inputs
+/// (e.g. the all-zero NTP epoch).
+fn on_wire_statistics(
+    transmit_timestamp: u64,
+    destination_timestamp: u64,
+    header: &crate::nts::ntp::NtpHeader,
+) -> (i64, i64, i64) {
+    let t1_micros = ntp64_to_unix_micros(transmit_timestamp);
+    let t2_micros = ntp64_to_unix_micros(header.receive_timestamp);
+    let t3_micros = ntp64_to_unix_micros(header.transmit_timestamp);
+    let t4_micros = ntp64_to_unix_micros(destination_timestamp);
+    // θ = ((T2−T1)+(T3−T4))/2
+    let offset_micros = t2_micros
+        .saturating_sub(t1_micros)
+        .saturating_add(t3_micros.saturating_sub(t4_micros))
+        / 2;
+    // δ = (T4−T1)−(T3−T2)
+    let peer_delay_micros = t4_micros
+        .saturating_sub(t1_micros)
+        .saturating_sub(t3_micros.saturating_sub(t2_micros));
+    (t3_micros, offset_micros, peer_delay_micros)
 }
 
 /// Convert a 64-bit NTPv4 timestamp to microseconds since the Unix epoch.

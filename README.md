@@ -111,8 +111,10 @@ which is reachable from a browser tab.
 For most applications, `ntsGetTime` is the whole integration: one
 call that performs the NTS-KE handshake, takes a burst of up to 8
 authenticated samples under a single 8-second total budget, picks
-the lowest-RTT sample, applies the standard `roundTrip / 2`
-compensation, and returns a synchronized clock.
+the sample with the lowest network delay (RFC 5905 peer delay, which
+excludes server processing time), applies the standard `delay / 2`
+compensation, and returns a synchronized clock with offset, jitter,
+and worst-case error-bound statistics.
 
 ```dart
 import 'package:nts/nts.dart';
@@ -127,9 +129,9 @@ Future<void> main() async {
   // 2. Pick an RFC 8915 NTS-KE endpoint. Port 4460 is the IANA default.
   const spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
 
-  // 3. Synchronize. Handshake + 8-sample burst + lowest-RTT selection
-  //    + RTT/2 compensation, all automatic under one 8-second total
-  //    budget.
+  // 3. Synchronize. Handshake + 8-sample burst + lowest-delay
+  //    selection + delay/2 compensation, all automatic under one
+  //    8-second total budget.
   final synced = await ntsGetTime(spec: spec);
 
   // 4. Read the clock. `utcNow` projects the authenticated instant
@@ -139,6 +141,9 @@ Future<void> main() async {
   print('authenticated utc = ${synced.utcNow}');
   print('winning sample rtt = ${synced.roundTripMicros}µs '
       '(${synced.samplesUsed} samples used)');
+  print('offset = ${synced.offsetMicros}µs, '
+      'jitter = ${synced.jitterMicros}µs, '
+      'error ≤ ${synced.errorBoundMicros}µs at sync');
 }
 ```
 
@@ -236,32 +241,39 @@ samples — the same two `ntsGetTime` automates:
    that one packet. Calling `ntsWarmCookies` once and then `ntsQuery`
    several times in quick succession — one query per delivered
    cookie — produces a small distribution you can reason about
-   statistically. Pick the sample with the smallest
-   `roundTripMicros`; on a low-RTT path the symmetric-path assumption
+   statistically. Pick the sample with the smallest network delay
+   (`peerDelayMicros`, or `roundTripMicros` when the peer delay is
+   implausible); on a low-delay path the symmetric-path assumption
    below holds tightest, so that sample carries the smallest residual
    offset error. More sophisticated callers can median-filter, score by
    `serverStratum`, or run Marzullo's algorithm across multiple servers.
 
 2. **Symmetric-path delay compensation.** `utcUnixMicros` is the moment
    the server stamped the reply, not the moment it landed locally. The
-   reply then spent roughly half the round-trip travelling back to the
-   client, so the server's clock at the moment of arrival is best
-   approximated as `utcUnixMicros + roundTripMicros / 2`. This is the
+   reply then spent roughly half the network delay travelling back to
+   the client, so the server's clock at the moment of arrival is best
+   approximated as `utcUnixMicros + peerDelayMicros / 2`. This is the
    standard NTP correction (RFC 5905 §8); it assumes the outbound and
-   return paths are symmetric, which is why filtering on the lowest-RTT
-   sample matters — short paths are more likely to be symmetric.
+   return paths are symmetric, which is why filtering on the
+   lowest-delay sample matters — short paths are more likely to be
+   symmetric.
 
-The `offset` between local and server time is then
-`(utcUnixMicros + roundTripMicros / 2) - localUnixMicrosAtReceive`,
-sampled at the moment `await ntsQuery(...)` returns. Persist that offset
-and apply it on top of the device's monotonic clock rather than calling
-`ntsQuery` on every read; a few-second jitter floor on cellular
-networks makes per-call queries strictly worse than one well-filtered
-offset reused across many reads. (`ntsGetTime` does exactly this,
-returning the projection as `NtsSyncedTime.utcNow`.)
+Each sample also carries the fully computed RFC 5905 §8 statistics —
+`offsetMicros` (the true clock offset θ, from all four on-wire
+timestamps) and `peerDelayMicros` (the round trip minus the server's
+processing time) — plus the server-reported `rootDelayMicros`,
+`rootDispersionMicros`, and `serverPrecision`, so a custom filter can
+implement the full RFC 5905 clock-filter and root-distance recipes
+without re-deriving anything. Persist the winning offset and apply it
+on top of the device's monotonic clock rather than calling `ntsQuery`
+on every read; a few-second jitter floor on cellular networks makes
+per-call queries strictly worse than one well-filtered offset reused
+across many reads. (`ntsGetTime` does exactly this, returning the
+projection as `NtsSyncedTime.utcNow` alongside the winning offset,
+the burst's RMS jitter, and a worst-case `errorBoundMicros`.)
 
 Below `ntsGetTime`, the package stops at protocol primitives by
-design: the right filter (lowest-RTT, median, Marzullo across
+design: the right filter (lowest-delay, median, Marzullo across
 multiple servers, weighted by stratum), the right resampling cadence,
 and the right way to project the offset onto `DateTime.now()` are all
 workload specific. The
@@ -291,9 +303,9 @@ monotonic sources:
   fire neither prematurely nor late regardless of NTP slews, clock
   steps, or manual adjustments mid-call.
 - **Trustworthy RTT.** `roundTripMicros` is measured monotonically
-  around the UDP round-trip, which matters because the lowest-RTT
-  sample drives `ntsGetTime`'s burst selection and `rtt / 2` is the
-  delay compensation applied to the final offset — a contaminated
+  around the UDP round-trip, which matters because it is the
+  plausibility ceiling for the peer delay that drives `ntsGetTime`'s
+  burst selection and `delay / 2` compensation — a contaminated
   RTT would corrupt the synchronized time itself.
 
 For the platform syscall mappings, epoch semantics, the
@@ -505,7 +517,7 @@ relative fallback can fire.
 | Symbol | Purpose |
 |--------|---------|
 | `NtsRustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
-| `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-RTT selection, `roundTrip / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8-second **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. The deprecated `verificationTimeMs` `int` parameter remains accepted for one release. |
+| `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-delay selection (RFC 5905 peer delay, falling back to the measured round trip when implausible), `delay / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8-second **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. The deprecated `verificationTimeMs` `int` parameter remains accepted for one release. |
 | `ntsQuery({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: one authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTime` (optional `DateTime`, interpreted as UTC, not before the epoch) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. The deprecated `timeoutMs` / `verificationTimeMs` `int` parameters remain accepted for one release. |
 | `ntsWarmCookies({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTime` carries the same clock-skew-rescue semantics as on `ntsQuery`. Same one-release deprecation of the `*Ms` parameters. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |
@@ -516,9 +528,9 @@ relative fallback can fire.
 | `kDefaultDnsConcurrencyCap` | Package default for `dnsConcurrencyCap` (`4`, sized for mobile pthread-stack budgets — see the constant's dartdoc). |
 | `kDefaultBridgeConcurrencyCap` | Package default for `bridgeConcurrencyCap` (`4`, sized to the smallest common mobile FRB worker pool — see the constant's dartdoc). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
-| `NtsSyncedTime` | Synchronized clock returned by `getTime`: `utcUnixMicros` (compensated best sample at the anchor), `roundTripMicros` (winning sample), `samplesUsed`, `trustBackend`, `utcNow` (sleep-aware monotonic projection immune to system clock changes and device suspend), `elapsedSinceSync`. Identity semantics — a live clock, not a value-type DTO. |
+| `NtsSyncedTime` | Synchronized clock returned by `getTime`: `utcUnixMicros` (compensated best sample at the anchor), `roundTripMicros` (winning sample), `samplesUsed`, `trustBackend`, `offsetMicros` (winning sample's RFC 5905 θ), `jitterMicros` (burst RMS jitter ψ), `errorBoundMicros` (worst-case error at the anchor, root-distance recipe), `utcNow` (sleep-aware monotonic projection immune to system clock changes and device suspend), `elapsedSinceSync`. Identity semantics — a live clock, not a value-type DTO. |
 | `MonotonicClock` | General-purpose sleep-aware monotonic time source: readings keep advancing across device deep sleep, unlike `Stopwatch` (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on iOS/macOS, `QueryInterruptTimePrecise` on Windows). The shared `MonotonicClock.instance` singleton is the same timeline the package uses internally; constructing an instance (or first accessing `MonotonicClock.instance`) before `NtsRustLib.init()` / `NtsRustLib.initMock()` throws a `StateError`. `nowMicros()`, `elapsedSince(startMicros)`. |
-| `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`, `trustBackend`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`; `trustBackend` records which trust-anchor backend the post-handshake TLS verification chose. |
+| `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`, `trustBackend`, plus the RFC 5905 statistics `offsetMicros` (θ), `peerDelayMicros` (δ), `rootDelayMicros`, `rootDispersionMicros`, `serverPrecision`. `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`; `trustBackend` records which trust-anchor backend the post-handshake TLS verification chose. |
 | `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`, `trustBackend`. The UDP phase does not run on this path, so only KE-pipeline timings are populated; `trustBackend` carries the same per-handshake attribution as on `NtsTimeSample`. |
 | `PhaseTimings` | `dnsMicros`, `connectMicros`, `tlsHandshakeMicros`, `keRecordIoMicros`. Microsecond-resolution wall-clock breakdown of the four pre-NTP phases of an `ntsQuery` / `ntsWarmCookies` call. Phases that did not run report `0`. See ARCHITECTURE.md's "Phase attribution and timings" section. |
 | `TimeoutPhase` | `bridgeSaturation`, `dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`, `ntp`. Carried as the payload of `NtsError.timeout` so callers can attribute a budget exhaustion to a specific phase without parsing diagnostic strings. `bridgeSaturation` is Dart-authored (budget elapsed while queued at the bridge admission gate, before any FFI dispatch) and always carries a `null` `trustBackend`. |
