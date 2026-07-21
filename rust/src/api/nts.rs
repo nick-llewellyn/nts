@@ -3116,16 +3116,19 @@ fn nts_query_inner(
         .map_err(NtsError::from)
         .map_err(attribute_post_handshake)?;
     let rtt_micros = send_at.elapsed().as_micros() as i64;
+    // T4 (destination timestamp, RFC 5905 §8): wall-clock reading at
+    // packet arrival, on the same system clock that produced T1. Taken
+    // immediately after `recv` — before the boottime stamp below and
+    // before parsing/validation — so the microsecond-sensitive
+    // offset/peer-delay arithmetic sees the least-biased T4; the
+    // boottime stamp only feeds millisecond-scale anchor-lag
+    // arithmetic and tolerates the extra clock-read cost.
+    let destination_timestamp = system_time_to_ntp64();
     // Wire-level receipt stamp: taken here, before parsing/validation
     // and long before the FFI return, so downstream anchor-lag
     // arithmetic excludes scheduling latency. Same clock source as
     // `nts_boottime_micros` by construction.
     let recv_boottime_micros = crate::nts::boottime::boottime_micros();
-    // T4 (destination timestamp, RFC 5905 §8): wall-clock reading at
-    // packet arrival, on the same system clock that produced T1. Taken
-    // immediately after `recv` so the offset/peer-delay arithmetic
-    // below excludes parse/validation time.
-    let destination_timestamp = system_time_to_ntp64();
 
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
         .map_err(evict_on_rekey_signal)?;
