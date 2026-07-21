@@ -5,13 +5,6 @@
 
 ### Fixed
 
-- Silenced verbose `[log] signal created/updated` console output when
-  running the example app in debug mode: `signals` 7.x installs a
-  deprecated `DevToolsSignalsObserver` by default in debug builds,
-  which logs every signal create/update — including the example's
-  entire stringified log-buffer list on each append. The example's
-  `main()` now sets `SignalsObserver.instance = null`. Example-only;
-  the published package does not depend on `signals`.
 - Fixed the example package's `nts_format_test.dart` failing with
   `Bad state: MonotonicClock requires the nts bridge`: the
   `formatGetTimeSuccess` fixture constructs `NtsSyncedTime`, whose
