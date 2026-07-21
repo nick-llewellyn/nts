@@ -645,6 +645,15 @@ The hook commands below mirror the `Hooks shell-syntax check` and
 under `tool/hooks/**` so a hook-only PR does not rely on CI as the
 first signal.
 
+Dart string literals use single quotes: `prefer_single_quotes` is
+enabled in both `analysis_options.yaml` and
+`example/analysis_options.yaml`, so `dart analyze` flags any
+double-quoted literal (unless the string itself contains a single
+quote). FRB-generated bindings comply automatically — the codegen
+pipeline runs `dart fix` against the project's analysis options, so
+the emitted Dart is already single-quoted (see the note in
+`tool/check_bindings.dart`).
+
 ```bash
 # Dart side
 dart format --output=none --set-exit-if-changed .

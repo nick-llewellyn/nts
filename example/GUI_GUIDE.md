@@ -89,8 +89,10 @@ Three buttons sit between the server list and the log:
   burst of subsequent queries and want to amortise the handshake cost.
 - **Get Time** — runs the high-level `getTime` flow: a warming handshake
   followed by a serial burst of authenticated queries, keeping the
-  lowest-RTT sample as a synchronized clock. Tuning is fixed and
-  internal on every platform: up to 8 samples (clamped to the fresh
+  lowest-delay sample (RFC 5905 peer delay, falling back to the
+  measured round trip when implausible) as a synchronized clock.
+  Tuning is fixed and internal on every platform: up to 8 samples
+  (clamped to the fresh
   cookie count) under one total 8-second budget shared with the
   handshake. The log line reports the burst size, the projected
   current UTC, and the worst-case one-way-delay error bound (`± RTT/2`).

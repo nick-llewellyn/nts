@@ -455,6 +455,40 @@ few microseconds of inter-phase bookkeeping fall outside any
 field — but the discrepancy is bounded by call-site overhead, not
 by hidden I/O.
 
+## RFC 5905 statistics: split between native worker and Dart
+
+The 7.1 clock-filter statistics are computed on the side of the
+bridge that owns the raw inputs, so nothing timing-sensitive
+crosses the FFI boundary before it is measured.
+
+The per-sample quantities live in the native worker
+(`on_wire_statistics` in `rust/src/api/nts.rs`). Immediately after
+the UDP `recv` returns, the worker stamps T4 on the system clock
+(the same clock that produced T1 at send) and then the wire-level
+receipt instant on the boottime clock (`recv_boottime_micros`, same
+source as `nts_boottime_micros` by construction — see the
+sleep-aware clock section above). From the four on-wire timestamps
+it computes the true offset θ = ((T2−T1)+(T3−T4))/2 and the peer
+delay δ = (T4−T1)−(T3−T2) with saturating arithmetic, and converts
+the server-reported root delay / root dispersion from 16.16 fixed
+point to microseconds. All of these ride out on `NtsTimeSample` as
+plain `i64` fields; the FFI return, worker-thread handoff, and Dart
+event-loop latency happen *after* every measurement is frozen.
+
+The cross-sample quantities live in Dart (`_getTime` in
+`lib/src/api/nts.dart`), because only the burst orchestrator sees
+all samples. It selects the winning sample by lowest network delay
+(δ when plausible — inside `(0, roundTripMicros]` — else the
+measured round trip), computes the burst RMS jitter ψ from the
+per-sample θ values, derives the worst-case `errorBoundMicros`
+via the RFC 5905 root-distance recipe (delay/2 + rootDelay/2 +
+rootDispersion + ψ), and applies the `delay / 2` symmetric-path
+compensation. The receipt stamp closes the anchor gap: advancing
+the compensated UTC by `now − recvBoottimeMicros` (when the stamp
+passes an epoch-plausibility window; otherwise the post-`await`
+approximation) excludes scheduling latency that the pre-7.1
+arithmetic silently absorbed into the offset.
+
 ## Session ownership and the `NtsClient` handle
 
 Per-host session state — the negotiated AEAD keys, NTPv4 destination,
