@@ -501,13 +501,14 @@ class NtsServerSpec {
 ///
 /// This is the raw output of one protocol exchange, not a synchronized
 /// clock. See `nts_query` (Dart: `ntsQuery`) for the recommended
-/// burst-and-RTT-compensation pattern callers should layer on top.
+/// burst-and-delay-compensation pattern callers should layer on top.
 class NtsTimeSample {
   /// Server transmit time as microseconds since the Unix epoch, taken
   /// directly from the NTPv4 reply. No correction for the one-way
   /// network delay between the server and this caller is applied; add
-  /// `round_trip_micros / 2` to estimate the server's clock at the
-  /// moment the reply arrived.
+  /// half the network delay — `peer_delay_micros` when plausible
+  /// (inside `(0, round_trip_micros]`), else `round_trip_micros` —
+  /// to estimate the server's clock at the moment the reply arrived.
   final PlatformInt64 utcUnixMicros;
 
   /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
