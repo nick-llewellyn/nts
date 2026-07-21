@@ -95,7 +95,10 @@ Three buttons sit between the server list and the log:
   (clamped to the fresh
   cookie count) under one total 8-second budget shared with the
   handshake. The log line reports the burst size, the projected
-  current UTC, and the worst-case one-way-delay error bound (`± RTT/2`).
+  current UTC, and the worst-case error bound (`errorBoundMicros`,
+  the RFC 5905 root-distance recipe: half the winning sample's
+  network delay, plus the server-reported root delay/dispersion
+  contribution, plus the burst's RMS jitter).
   This is the "do the whole thing for me" path; contrast a Get Time press
   with a cold NTS Query press to see what the burst-and-select layer adds.
 

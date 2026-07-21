@@ -506,9 +506,10 @@ class NtsTimeSample {
   /// Server transmit time as microseconds since the Unix epoch, taken
   /// directly from the NTPv4 reply. No correction for the one-way
   /// network delay between the server and this caller is applied; add
-  /// half the network delay — `peer_delay_micros` when plausible
-  /// (inside `(0, round_trip_micros]`), else `round_trip_micros` —
-  /// to estimate the server's clock at the moment the reply arrived.
+  /// half the network delay — `peer_delay_micros / 2` when the peer
+  /// delay is plausible (inside `(0, round_trip_micros]`), else
+  /// `round_trip_micros / 2` — to estimate the server's clock at the
+  /// moment the reply arrived.
   final PlatformInt64 utcUnixMicros;
 
   /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP

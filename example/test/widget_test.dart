@@ -188,10 +188,11 @@ void main() {
     expect(lines.any((e) => e.message.startsWith('Starting getTime')), isTrue);
     final ok = lines.firstWhere((e) => e.message.startsWith('OK '));
     // formatGetTimeSuccess carries the burst size, the projected UTC,
-    // the RTT/2 error bound, and the trust attribution.
+    // the RFC 5905 root-distance error bound, and the trust
+    // attribution.
     expect(ok.message, contains('samples='));
     expect(ok.message, contains('utc='));
-    expect(ok.message, contains('(RTT/2)'));
+    expect(ok.message, contains('(root distance)'));
     expect(ok.message, contains('trust='));
     expect(ok.host, 'time.cloudflare.com');
     expect(ok.trustBackend, isNotNull);
