@@ -1291,6 +1291,13 @@ Future<NtsSyncedTime> _getTime({
 // trip. δ is implausible when outside `(0, roundTripMicros]` — a `0`
 // marks a pre-7.1 fixture, and a value above the measured round trip
 // (or negative) marks a local clock step mid-exchange.
+//
+// Wall-clock quantisation can also push δ marginally past the
+// monotonic round trip (the Rust live probe tolerates ~10 ms of it).
+// The strict upper bound is kept anyway: in that regime server
+// processing time is ≈0, so δ ≈ roundTrip and the fallback differs
+// from δ by at most the quantisation noise — whereas accepting a
+// δ above the measured round trip would overstate the one-way delay.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros
