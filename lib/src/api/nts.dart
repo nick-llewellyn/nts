@@ -186,11 +186,15 @@ const int kDefaultBridgeConcurrencyCap = 4;
 /// transmit timestamp exactly as it appeared on the wire; it does not
 /// include any compensation for the one-way network delay between the
 /// server and this caller. To approximate the server's clock at the
-/// moment the reply arrived, callers should add `roundTripMicros / 2`
-/// to `utcUnixMicros` (the standard NTP assumption of a symmetric
-/// path). For high-precision synchronization, take a burst of samples
-/// and pick the one with the smallest `roundTripMicros` before applying
-/// that adjustment.
+/// moment the reply arrived, callers should add half the network
+/// delay to `utcUnixMicros` (the standard NTP assumption of a
+/// symmetric path). The best delay estimate is `peerDelayMicros` (the
+/// RFC 5905 peer delay δ, which excludes server processing time) when
+/// it is plausible — inside `(0, roundTripMicros]` — falling back to
+/// `roundTripMicros` otherwise. For high-precision synchronization,
+/// take a burst of samples and pick the one with the smallest such
+/// delay before applying that adjustment; this is exactly what the
+/// one-call [ntsGetTime] convenience does.
 ///
 /// All arguments (`spec.port`, `timeout`, `dnsConcurrencyCap`,
 /// `bridgeConcurrencyCap`) are validated against the FFI encoding range

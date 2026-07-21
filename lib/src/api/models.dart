@@ -120,13 +120,15 @@ class PhaseTimings {
 /// Successful authenticated NTPv4 sample.
 ///
 /// This is the raw output of one protocol exchange, not a synchronized
-/// clock. See `ntsQuery` for the recommended burst-and-RTT-compensation
-/// pattern callers should layer on top.
+/// clock. See `ntsQuery` for the recommended
+/// burst-and-delay-compensation pattern callers should layer on top.
 class NtsTimeSample {
   /// Server transmit time as microseconds since the Unix epoch, taken
   /// directly from the NTPv4 reply. No correction for the one-way
   /// network delay between the server and this caller is applied; add
-  /// `roundTripMicros / 2` to estimate the server's clock at the
+  /// half the network delay — `peerDelayMicros / 2` when the peer
+  /// delay is plausible (inside `(0, roundTripMicros]`), else
+  /// `roundTripMicros / 2` — to estimate the server's clock at the
   /// moment the reply arrived.
   final int utcUnixMicros;
 

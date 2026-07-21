@@ -109,20 +109,21 @@ String formatWarmSuccess(NtsWarmCookiesOutcome outcome) =>
 ///
 /// Mirrors the [formatQuerySuccess] headline / continuation shape so
 /// the log stays visually uniform. The headline carries the winning
-/// sample's RTT, the burst size that fed the lowest-RTT selection,
+/// sample's RTT, the burst size that fed the lowest-delay selection,
 /// and the projected current UTC ([NtsSyncedTime.utcNow], not the
 /// anchored instant — reading it at format time demonstrates the
 /// monotonic projection the type exists for). The continuation
-/// carries the worst-case one-way-delay bound (`± RTT/2`) and the
-/// trust-backend attribution. The bound uses an integer ceiling
-/// (`(rtt + 1) ~/ 2`) so odd RTTs never understate the conservative
-/// half-RTT envelope.
+/// carries the worst-case error bound
+/// ([NtsSyncedTime.errorBoundMicros], the RFC 5905 root-distance
+/// recipe: half the winning sample's network delay plus the
+/// server-reported root delay/dispersion contribution plus burst
+/// jitter) and the trust-backend attribution.
 String formatGetTimeSuccess(NtsSyncedTime time) {
   final rtt = formatRtt(time.roundTripMicros).padLeft(8);
-  final bound = formatRtt((time.roundTripMicros + 1) ~/ 2);
+  final bound = formatRtt(time.errorBoundMicros);
   return 'OK  rtt=$rtt  samples=${time.samplesUsed}  '
       'utc=${time.utcNow.toIso8601String()}\n'
-      '    \u2514\u2500 error\u2264\u00b1$bound (RTT/2)  '
+      '    \u2514\u2500 error\u2264\u00b1$bound (root distance)  '
       'trust=${formatTrustBackend(time.trustBackend)}';
 }
 

@@ -135,6 +135,7 @@ void main() {
         utcUnixMicros: 1_777_334_400 * 1000000,
         roundTripMicros: 35_650,
         samplesUsed: 3,
+        errorBoundMicros: 21_000,
         trustBackend: TrustBackend.platform,
       );
       final out = formatGetTimeSuccess(synced);
@@ -147,9 +148,22 @@ void main() {
       // the prefix rather than the exact instant.
       expect(lines[0], contains('utc='));
       expect(lines[1], startsWith('    └─ '));
-      // Worst-case one-way-delay bound is RTT/2 through formatRtt.
-      expect(lines[1], contains('error≤±17.82ms (RTT/2)'));
+      // Worst-case bound is errorBoundMicros (RFC 5905 root
+      // distance) through formatRtt.
+      expect(lines[1], contains('error≤±21.00ms (root distance)'));
       expect(lines[1], contains('trust=platform'));
+    });
+
+    test('falls back to RTT/2 when built from a pre-7.1 fixture', () {
+      final synced = NtsSyncedTime(
+        utcUnixMicros: 1_777_334_400 * 1000000,
+        roundTripMicros: 35_650,
+        samplesUsed: 1,
+        trustBackend: TrustBackend.platform,
+      );
+      final out = formatGetTimeSuccess(synced);
+      // Constructor default: errorBoundMicros = roundTripMicros ~/ 2.
+      expect(out, contains('error≤±17.82ms (root distance)'));
     });
   });
 

@@ -217,13 +217,15 @@ impl From<KePhaseTimings> for PhaseTimings {
 ///
 /// This is the raw output of one protocol exchange, not a synchronized
 /// clock. See `nts_query` (Dart: `ntsQuery`) for the recommended
-/// burst-and-RTT-compensation pattern callers should layer on top.
+/// burst-and-delay-compensation pattern callers should layer on top.
 #[derive(Debug, Clone)]
 pub struct NtsTimeSample {
     /// Server transmit time as microseconds since the Unix epoch, taken
     /// directly from the NTPv4 reply. No correction for the one-way
     /// network delay between the server and this caller is applied; add
-    /// `round_trip_micros / 2` to estimate the server's clock at the
+    /// half the network delay — `peer_delay_micros / 2` when the peer
+    /// delay is plausible (inside `(0, round_trip_micros]`), else
+    /// `round_trip_micros / 2` — to estimate the server's clock at the
     /// moment the reply arrived.
     pub utc_unix_micros: i64,
     /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
@@ -2911,10 +2913,15 @@ where
 /// timestamp exactly as it appeared on the wire; it does not include any
 /// compensation for the one-way network delay between the server and this
 /// caller. To approximate the server's clock at the moment the reply
-/// arrived, callers should add `round_trip_micros / 2` to `utc_unix_micros`
-/// (the standard NTP assumption of a symmetric path). For high-precision
-/// synchronization, take a burst of samples and pick the one with the
-/// smallest `round_trip_micros` before applying that adjustment.
+/// arrived, callers should add half the network delay to
+/// `utc_unix_micros` (the standard NTP assumption of a symmetric path).
+/// The best delay estimate is `peer_delay_micros` (the RFC 5905 peer
+/// delay δ, which excludes server processing time) when it is plausible
+/// — inside `(0, round_trip_micros]` — falling back to
+/// `round_trip_micros` otherwise. For high-precision synchronization,
+/// take a burst of samples and pick the one with the smallest such
+/// delay before applying that adjustment; this is exactly what the
+/// one-call `ntsGetTime` convenience does.
 pub fn nts_query(
     spec: NtsServerSpec,
     timeout_ms: u32,

@@ -150,11 +150,12 @@ so. Two mechanisms matter:
 elapsed immediately after the matching `recv`. Because `Instant` is
 monotonic, the measurement cannot be corrupted by an NTP slew or
 clock step landing mid-round-trip — which matters doubly here,
-because RTT is not just a diagnostic: the lowest-RTT sample drives
-`ntsGetTime`'s burst selection, and `roundTripMicros / 2` is the
-symmetric-path delay compensation applied to the final offset
-(RFC 5905 §8). A wall-clock-contaminated RTT would corrupt the
-synchronized time itself.
+because RTT is not just a diagnostic: it is the plausibility ceiling
+for the RFC 5905 peer delay that drives `ntsGetTime`'s burst
+selection (and the fallback delay when the peer delay is
+implausible), and `delay / 2` is the symmetric-path compensation
+applied to the final offset (RFC 5905 §8). A wall-clock-contaminated
+RTT would corrupt the synchronized time itself.
 
 ### NTS-KE handshake deadlines
 

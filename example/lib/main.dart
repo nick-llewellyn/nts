@@ -18,6 +18,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
 import 'package:nts/nts.dart' show NtsRustLib;
+import 'package:signals/signals.dart' show SignalsObserver;
 
 import 'src/data/server_entry.dart';
 import 'src/data/server_loader.dart';
@@ -102,6 +103,12 @@ Future<_Boot> _bootstrap() async {
 }
 
 Future<void> main() async {
+  // signals 7.x installs a deprecated DevToolsSignalsObserver by
+  // default in debug builds, which `developer.log`s every signal
+  // create/update — including the full stringified log-buffer list on
+  // each append. Disable it; re-set deliberately if the signals
+  // devtools extension is ever wanted.
+  SignalsObserver.instance = null;
   WidgetsFlutterBinding.ensureInitialized();
   await _lockOrientationOnPhones();
   final boot = await _bootstrap();
