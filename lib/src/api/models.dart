@@ -174,6 +174,44 @@ class NtsTimeSample {
   /// 7.1.
   final int recvBoottimeMicros;
 
+  /// True clock offset θ = ((T2−T1)+(T3−T4))/2 in microseconds
+  /// (RFC 5905 §8), computed from the four on-wire timestamps.
+  /// Positive means the server's clock is ahead of the local system
+  /// clock. Unlike the `roundTripMicros / 2` approximation, θ
+  /// cancels symmetric network delay *and* excludes server
+  /// processing time.
+  ///
+  /// T1 and T4 are local system-clock readings, so θ is only
+  /// meaningful if the system clock was not stepped between the UDP
+  /// send and recv of this exchange. New in 7.1.
+  final int offsetMicros;
+
+  /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905 §8):
+  /// the network round trip excluding the server's processing time
+  /// between receive and transmit. Always ≤ [roundTripMicros] when
+  /// the local clock ran steadily across the exchange; a value
+  /// outside `(0, roundTripMicros]` signals a local clock step
+  /// mid-exchange and consumers should fall back to
+  /// [roundTripMicros]. New in 7.1.
+  final int peerDelayMicros;
+
+  /// Server-reported root delay in microseconds: total round-trip
+  /// delay from the server to the reference clock (RFC 5905 §7.3).
+  /// The wire value is signed 16.16 fixed point; a negative on-wire
+  /// root delay clamps to `0` in the native worker, so this is never
+  /// negative. New in 7.1.
+  final int rootDelayMicros;
+
+  /// Server-reported root dispersion in microseconds: total
+  /// dispersion accumulated from the server to the reference clock
+  /// (RFC 5905 §7.3). New in 7.1.
+  final int rootDispersionMicros;
+
+  /// Server clock precision as reported in the reply header: log₂
+  /// seconds (RFC 5905 §7.3), e.g. `-20` ≈ 0.95 µs. Negative in
+  /// practice for real servers. New in 7.1.
+  final int serverPrecision;
+
   /// Construct a sample. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures; production code receives instances
   /// from `ntsQuery`.
@@ -183,6 +221,11 @@ class NtsTimeSample {
   /// by construction, so consumers applying the documented
   /// plausibility check (such as `ntsGetTime`'s anchor-lag
   /// arithmetic) treat it as "no wire-level stamp" and fall back.
+  /// The 7.1 clock-filter fields ([offsetMicros], [peerDelayMicros],
+  /// [rootDelayMicros], [rootDispersionMicros], [serverPrecision])
+  /// default to `0` for the same fixture-compatibility reason; a
+  /// zero [peerDelayMicros] fails the documented plausibility check,
+  /// so consumers fall back to [roundTripMicros].
   const NtsTimeSample({
     required this.utcUnixMicros,
     required this.roundTripMicros,
@@ -192,6 +235,11 @@ class NtsTimeSample {
     required this.phaseTimings,
     required this.trustBackend,
     this.recvBoottimeMicros = 0,
+    this.offsetMicros = 0,
+    this.peerDelayMicros = 0,
+    this.rootDelayMicros = 0,
+    this.rootDispersionMicros = 0,
+    this.serverPrecision = 0,
   });
 
   @override
@@ -204,6 +252,11 @@ class NtsTimeSample {
     phaseTimings,
     trustBackend,
     recvBoottimeMicros,
+    offsetMicros,
+    peerDelayMicros,
+    rootDelayMicros,
+    rootDispersionMicros,
+    serverPrecision,
   );
 
   @override
@@ -217,7 +270,12 @@ class NtsTimeSample {
           freshCookies == other.freshCookies &&
           phaseTimings == other.phaseTimings &&
           trustBackend == other.trustBackend &&
-          recvBoottimeMicros == other.recvBoottimeMicros);
+          recvBoottimeMicros == other.recvBoottimeMicros &&
+          offsetMicros == other.offsetMicros &&
+          peerDelayMicros == other.peerDelayMicros &&
+          rootDelayMicros == other.rootDelayMicros &&
+          rootDispersionMicros == other.rootDispersionMicros &&
+          serverPrecision == other.serverPrecision);
 
   @override
   String toString() =>
@@ -226,7 +284,12 @@ class NtsTimeSample {
       'serverStratum: $serverStratum, aeadId: $aeadId, '
       'freshCookies: $freshCookies, phaseTimings: $phaseTimings, '
       'trustBackend: ${trustBackend.name}, '
-      'recvBoottimeMicros: $recvBoottimeMicros)';
+      'recvBoottimeMicros: $recvBoottimeMicros, '
+      'offsetMicros: $offsetMicros, '
+      'peerDelayMicros: $peerDelayMicros, '
+      'rootDelayMicros: $rootDelayMicros, '
+      'rootDispersionMicros: $rootDispersionMicros, '
+      'serverPrecision: $serverPrecision)';
 }
 
 /// Successful outcome of `ntsWarmCookies`.
@@ -579,15 +642,17 @@ class NtsTrustStatus {
 
 /// Synchronized clock produced by `ntsGetTime` / `NtsClient.getTime`.
 ///
-/// Wraps the burst's lowest-RTT sample — already compensated for the
-/// one-way network delay (`utc + roundTrip / 2`) — and anchors it to
-/// a process-local **sleep-aware monotonic clock** reading captured
-/// at construction (`CLOCK_BOOTTIME` on Android/Linux,
-/// `mach_continuous_time` on iOS/macOS, interrupt time on Windows —
-/// see [MonotonicClock]). [utcNow] projects the authenticated instant
-/// forward using that monotonic elapsed time, so the projection keeps
-/// counting across device deep sleep as well as being immune to
-/// system clock steps, slew, and user adjustment after the sync.
+/// Wraps the burst's lowest-delay sample — already compensated for the
+/// one-way network delay (`utc + delay / 2`, where the delay is the
+/// RFC 5905 peer delay δ when plausible, else the locally measured
+/// round trip) — and anchors it to a process-local **sleep-aware
+/// monotonic clock** reading captured at construction
+/// (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on
+/// iOS/macOS, interrupt time on Windows — see [MonotonicClock]).
+/// [utcNow] projects the authenticated instant forward using that
+/// monotonic elapsed time, so the projection keeps counting across
+/// device deep sleep as well as being immune to system clock steps,
+/// slew, and user adjustment after the sync.
 ///
 /// The projection does **not** correct for local oscillator drift:
 /// a typical crystal drifts on the order of tens of parts per
@@ -623,16 +688,44 @@ class NtsSyncedTime {
   /// time rather than reading this directly.
   final int utcUnixMicros;
 
-  /// Round-trip time of the winning (lowest-RTT) burst sample, in
+  /// Round-trip time of the winning (lowest-delay) burst sample, in
   /// microseconds. Bounds the sample's worst-case one-way-delay
   /// error: the true instant lies within `± roundTripMicros / 2` of
   /// the compensated value.
   final int roundTripMicros;
 
   /// Number of burst samples that completed successfully and entered
-  /// the lowest-RTT selection. At least `1` (a `getTime` call with
+  /// the lowest-delay selection. At least `1` (a `getTime` call with
   /// zero successful samples throws instead of returning).
   final int samplesUsed;
+
+  /// True clock offset θ of the winning sample in microseconds
+  /// (RFC 5905 §8): how far the server's clock was ahead (positive)
+  /// or behind (negative) the local system clock at the sync
+  /// instant. Informational — [utcNow] already incorporates it via
+  /// the compensated [utcUnixMicros]. `0` when constructed from a
+  /// pre-7.1 fixture. New in 7.1.
+  final int offsetMicros;
+
+  /// Sample jitter ψ in microseconds: the RMS of the offset
+  /// differences between the winning sample and every other burst
+  /// sample (RFC 5905 §10). `0` when the burst produced a single
+  /// sample. Large values indicate unstable network delay; consider
+  /// re-syncing or increasing the burst size. New in 7.1.
+  final int jitterMicros;
+
+  /// Worst-case error bound in microseconds, following the RFC 5905
+  /// root-distance recipe: half the winning sample's network delay,
+  /// plus half the server-reported root delay, plus the
+  /// server-reported root dispersion, plus [jitterMicros]. The true
+  /// UTC instant at the sync moment lies within
+  /// `± errorBoundMicros` of [utcUnixMicros] under the NTP
+  /// symmetric-delay assumption. Grows stale with oscillator drift as the
+  /// sync ages (see class doc); it describes the bound at anchor
+  /// time, not at [utcNow] time. Falls back to
+  /// `roundTripMicros / 2` when constructed from a pre-7.1 fixture.
+  /// New in 7.1.
+  final int errorBoundMicros;
 
   /// Trust-anchor backend that authenticated the winning sample's
   /// TLS chain. Same per-handshake attribution semantics as
@@ -657,12 +750,21 @@ class NtsSyncedTime {
   /// without a boottime stub the anchor permanently resolves to a
   /// plain monotonic [Stopwatch] source, which does not count time
   /// the device spends suspended.
+  ///
+  /// The 7.1 statistics parameters are optional for fixture
+  /// compatibility: [offsetMicros] and [jitterMicros] default to
+  /// `0`, and [errorBoundMicros] defaults to `roundTripMicros ~/ 2`
+  /// (the pre-7.1 worst-case bound).
   NtsSyncedTime({
     required this.utcUnixMicros,
     required this.roundTripMicros,
     required this.samplesUsed,
     required this.trustBackend,
-  }) : _anchorMicros = MonotonicClock.instance.nowMicros();
+    this.offsetMicros = 0,
+    this.jitterMicros = 0,
+    int? errorBoundMicros,
+  }) : errorBoundMicros = errorBoundMicros ?? roundTripMicros ~/ 2,
+       _anchorMicros = MonotonicClock.instance.nowMicros();
 
   /// Current authenticated UTC time, projected from the anchor via
   /// the sleep-aware monotonic clock. Unaffected by system clock
@@ -684,6 +786,8 @@ class NtsSyncedTime {
       'NtsSyncedTime(utcUnixMicros: $utcUnixMicros, '
       'roundTripMicros: $roundTripMicros, '
       'samplesUsed: $samplesUsed, trustBackend: ${trustBackend.name}, '
+      'offsetMicros: $offsetMicros, jitterMicros: $jitterMicros, '
+      'errorBoundMicros: $errorBoundMicros, '
       'elapsedSinceSync: $elapsedSinceSync)';
 }
 

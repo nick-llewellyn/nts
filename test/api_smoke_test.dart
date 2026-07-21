@@ -431,6 +431,9 @@ ffi.PhaseTimings _zeroFfiPhaseTimings() => ffi.PhaseTimings(
 // fallback path, preserving the pre-7.1 arithmetic these tests were
 // written against. Tests targeting the wire-lag path synthesize the
 // stamp from the mocked clock at return time via a script factory.
+// The 7.1 clock-filter fields likewise default to 0: a zero
+// `peerDelayMicros` fails the `(0, roundTrip]` plausibility check, so
+// selection and compensation fall back to `roundTripMicros`.
 ffi.NtsTimeSample _ffiSample({
   int utcUnixMicros = 0,
   int roundTripMicros = 0,
@@ -440,6 +443,11 @@ ffi.NtsTimeSample _ffiSample({
   ffi.PhaseTimings? phaseTimings,
   ffi.TrustBackend trustBackend = ffi.TrustBackend.platform,
   int recvBoottimeMicros = 0,
+  int offsetMicros = 0,
+  int peerDelayMicros = 0,
+  int rootDelayMicros = 0,
+  int rootDispersionMicros = 0,
+  int serverPrecision = 0,
 }) => ffi.NtsTimeSample(
   utcUnixMicros: PlatformInt64Util.from(utcUnixMicros),
   roundTripMicros: PlatformInt64Util.from(roundTripMicros),
@@ -449,6 +457,11 @@ ffi.NtsTimeSample _ffiSample({
   phaseTimings: phaseTimings ?? _zeroFfiPhaseTimings(),
   trustBackend: trustBackend,
   recvBoottimeMicros: PlatformInt64Util.from(recvBoottimeMicros),
+  offsetMicros: PlatformInt64Util.from(offsetMicros),
+  peerDelayMicros: PlatformInt64Util.from(peerDelayMicros),
+  rootDelayMicros: PlatformInt64Util.from(rootDelayMicros),
+  rootDispersionMicros: PlatformInt64Util.from(rootDispersionMicros),
+  serverPrecision: serverPrecision,
 );
 
 ffi.NtsWarmCookiesOutcome _ffiWarm(
@@ -1056,6 +1069,11 @@ void main() {
         phaseTimings: phase,
         trustBackend: TrustBackend.platform,
         recvBoottimeMicros: 555_000,
+        offsetMicros: -250,
+        peerDelayMicros: 11_000,
+        rootDelayMicros: 3_000,
+        rootDispersionMicros: 1_500,
+        serverPrecision: -20,
       );
       const sameValue = NtsTimeSample(
         utcUnixMicros: 1_777_334_400_000_000,
@@ -1066,92 +1084,62 @@ void main() {
         phaseTimings: phase,
         trustBackend: TrustBackend.platform,
         recvBoottimeMicros: 555_000,
+        offsetMicros: -250,
+        peerDelayMicros: 11_000,
+        rootDelayMicros: 3_000,
+        rootDispersionMicros: 1_500,
+        serverPrecision: -20,
       );
       expect(base, equals(sameValue));
       expect(base.hashCode, sameValue.hashCode);
 
-      // One perturbation per field, including phaseTimings and trustBackend.
-      const perturbations = <NtsTimeSample>[
-        NtsTimeSample(
-          utcUnixMicros: 0,
-          roundTripMicros: 12_500,
-          serverStratum: 2,
-          aeadId: 30,
-          freshCookies: 7,
-          phaseTimings: phase,
-          trustBackend: TrustBackend.platform,
-          recvBoottimeMicros: 555_000,
-        ),
-        NtsTimeSample(
-          utcUnixMicros: 1_777_334_400_000_000,
-          roundTripMicros: 0,
-          serverStratum: 2,
-          aeadId: 30,
-          freshCookies: 7,
-          phaseTimings: phase,
-          trustBackend: TrustBackend.platform,
-          recvBoottimeMicros: 555_000,
-        ),
-        NtsTimeSample(
-          utcUnixMicros: 1_777_334_400_000_000,
-          roundTripMicros: 12_500,
-          serverStratum: 99,
-          aeadId: 30,
-          freshCookies: 7,
-          phaseTimings: phase,
-          trustBackend: TrustBackend.platform,
-          recvBoottimeMicros: 555_000,
-        ),
-        NtsTimeSample(
-          utcUnixMicros: 1_777_334_400_000_000,
-          roundTripMicros: 12_500,
-          serverStratum: 2,
-          aeadId: 15,
-          freshCookies: 7,
-          phaseTimings: phase,
-          trustBackend: TrustBackend.platform,
-          recvBoottimeMicros: 555_000,
-        ),
-        NtsTimeSample(
-          utcUnixMicros: 1_777_334_400_000_000,
-          roundTripMicros: 12_500,
-          serverStratum: 2,
-          aeadId: 30,
-          freshCookies: 0,
-          phaseTimings: phase,
-          trustBackend: TrustBackend.platform,
-          recvBoottimeMicros: 555_000,
-        ),
-        NtsTimeSample(
-          utcUnixMicros: 1_777_334_400_000_000,
-          roundTripMicros: 12_500,
-          serverStratum: 2,
-          aeadId: 30,
-          freshCookies: 7,
-          phaseTimings: otherPhase,
-          trustBackend: TrustBackend.platform,
-          recvBoottimeMicros: 555_000,
-        ),
-        NtsTimeSample(
-          utcUnixMicros: 1_777_334_400_000_000,
-          roundTripMicros: 12_500,
-          serverStratum: 2,
-          aeadId: 30,
-          freshCookies: 7,
-          phaseTimings: phase,
-          trustBackend: TrustBackend.webpkiRoots,
-          recvBoottimeMicros: 555_000,
-        ),
-        NtsTimeSample(
-          utcUnixMicros: 1_777_334_400_000_000,
-          roundTripMicros: 12_500,
-          serverStratum: 2,
-          aeadId: 30,
-          freshCookies: 7,
-          phaseTimings: phase,
-          trustBackend: TrustBackend.platform,
-          recvBoottimeMicros: 0,
-        ),
+      // One perturbation per field, including phaseTimings and
+      // trustBackend. The builder mirrors `base` so each variant
+      // differs in exactly one field.
+      NtsTimeSample variant({
+        int utcUnixMicros = 1_777_334_400_000_000,
+        int roundTripMicros = 12_500,
+        int serverStratum = 2,
+        int aeadId = 30,
+        int freshCookies = 7,
+        PhaseTimings phaseTimings = phase,
+        TrustBackend trustBackend = TrustBackend.platform,
+        int recvBoottimeMicros = 555_000,
+        int offsetMicros = -250,
+        int peerDelayMicros = 11_000,
+        int rootDelayMicros = 3_000,
+        int rootDispersionMicros = 1_500,
+        int serverPrecision = -20,
+      }) => NtsTimeSample(
+        utcUnixMicros: utcUnixMicros,
+        roundTripMicros: roundTripMicros,
+        serverStratum: serverStratum,
+        aeadId: aeadId,
+        freshCookies: freshCookies,
+        phaseTimings: phaseTimings,
+        trustBackend: trustBackend,
+        recvBoottimeMicros: recvBoottimeMicros,
+        offsetMicros: offsetMicros,
+        peerDelayMicros: peerDelayMicros,
+        rootDelayMicros: rootDelayMicros,
+        rootDispersionMicros: rootDispersionMicros,
+        serverPrecision: serverPrecision,
+      );
+      expect(base, equals(variant()));
+      final perturbations = <NtsTimeSample>[
+        variant(utcUnixMicros: 0),
+        variant(roundTripMicros: 0),
+        variant(serverStratum: 99),
+        variant(aeadId: 15),
+        variant(freshCookies: 0),
+        variant(phaseTimings: otherPhase),
+        variant(trustBackend: TrustBackend.webpkiRoots),
+        variant(recvBoottimeMicros: 0),
+        variant(offsetMicros: 0),
+        variant(peerDelayMicros: 0),
+        variant(rootDelayMicros: 0),
+        variant(rootDispersionMicros: 0),
+        variant(serverPrecision: 0),
       ];
       for (final p in perturbations) {
         expect(base, isNot(equals(p)));
@@ -1163,7 +1151,10 @@ void main() {
         'roundTripMicros: 12500, serverStratum: 2, aeadId: 30, '
         'freshCookies: 7, phaseTimings: PhaseTimings(dnsMicros: 1, '
         'connectMicros: 2, tlsHandshakeMicros: 3, keRecordIoMicros: 4), '
-        'trustBackend: platform, recvBoottimeMicros: 555000)',
+        'trustBackend: platform, recvBoottimeMicros: 555000, '
+        'offsetMicros: -250, peerDelayMicros: 11000, '
+        'rootDelayMicros: 3000, rootDispersionMicros: 1500, '
+        'serverPrecision: -20)',
       );
     });
 
@@ -2086,6 +2077,97 @@ void main() {
       expect(synced.trustBackend, TrustBackend.webpkiRoots);
     });
 
+    test('a plausible peer delay drives selection and compensation '
+        'instead of the raw round trip', () async {
+      api.nextWarm = _ffiWarm(2);
+      api.queryScript = [
+        // Lower RTT, but the server spent most of it processing:
+        // effective delay 5000 (peer delay).
+        _ffiSample(
+          utcUnixMicros: 1_000_000,
+          roundTripMicros: 6000,
+          peerDelayMicros: 5000,
+        ),
+        // Higher RTT, yet a lower peer delay: this one must win, and
+        // compensation must use peerDelay/2 (1500), not rtt/2 (3500).
+        _ffiSample(
+          utcUnixMicros: 2_000_000,
+          roundTripMicros: 7000,
+          peerDelayMicros: 3000,
+        ),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      expect(synced.roundTripMicros, 7000);
+      expect(synced.utcUnixMicros, greaterThanOrEqualTo(2_000_000 + 1500));
+      expect(synced.utcUnixMicros, lessThan(2_000_000 + 1500 + 100_000));
+    });
+
+    test('an implausible peer delay (zero or above the measured round '
+        'trip) falls back to the round trip', () async {
+      api.nextWarm = _ffiWarm(2);
+      api.queryScript = [
+        // Peer delay above the measured RTT: a local clock step
+        // mid-exchange. Effective delay = rtt = 4000, so this sample
+        // still wins and is compensated by rtt/2.
+        _ffiSample(
+          utcUnixMicros: 1_000_000,
+          roundTripMicros: 4000,
+          peerDelayMicros: 90_000,
+        ),
+        _ffiSample(utcUnixMicros: 2_000_000, roundTripMicros: 5000),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      expect(synced.roundTripMicros, 4000);
+      expect(synced.utcUnixMicros, greaterThanOrEqualTo(1_000_000 + 2000));
+      expect(synced.utcUnixMicros, lessThan(1_000_000 + 2000 + 100_000));
+    });
+
+    test('the synced time carries the winning offset, the burst RMS '
+        'jitter, and the root-distance error bound', () async {
+      api.nextWarm = _ffiWarm(3);
+      api.queryScript = [
+        // Winner: lowest effective delay (2000).
+        _ffiSample(
+          utcUnixMicros: 1_000_000,
+          roundTripMicros: 2000,
+          peerDelayMicros: 2000,
+          offsetMicros: 100,
+          rootDelayMicros: 4000,
+          rootDispersionMicros: 1000,
+        ),
+        _ffiSample(
+          utcUnixMicros: 2_000_000,
+          roundTripMicros: 9000,
+          peerDelayMicros: 9000,
+          offsetMicros: 400,
+        ),
+        _ffiSample(
+          utcUnixMicros: 3_000_000,
+          roundTripMicros: 8000,
+          peerDelayMicros: 8000,
+          offsetMicros: -300,
+        ),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      expect(synced.offsetMicros, 100);
+      // psi = sqrt(((400-100)^2 + (-300-100)^2) / 2) = sqrt(125000)
+      expect(synced.jitterMicros, 354);
+      // delay/2 + rootDelay/2 + rootDispersion + jitter
+      expect(synced.errorBoundMicros, 1000 + 2000 + 1000 + 354);
+    });
+
+    test('fixture-shaped samples (all-zero 7.1 fields) degrade the '
+        'error bound to roundTrip/2', () async {
+      api.nextWarm = _ffiWarm(1);
+      api.queryScript = [
+        _ffiSample(utcUnixMicros: 1_000_000, roundTripMicros: 4000),
+      ];
+      final synced = await ntsGetTime(spec: spec);
+      expect(synced.offsetMicros, 0);
+      expect(synced.jitterMicros, 0);
+      expect(synced.errorBoundMicros, 2000);
+    });
+
     test('the compensated UTC is advanced across the burst time that '
         'elapses after the winning sample arrives', () async {
       // Clamp the burst to the four scripted samples via the cookie
@@ -2581,6 +2663,9 @@ void main() {
         roundTripMicros: 456,
         samplesUsed: 2,
         trustBackend: TrustBackend.platformWithHybridFallback,
+        offsetMicros: -78,
+        jitterMicros: 9,
+        errorBoundMicros: 1011,
       );
       expect(
         synced.toString(),
@@ -2589,8 +2674,24 @@ void main() {
           contains('roundTripMicros: 456'),
           contains('samplesUsed: 2'),
           contains('trustBackend: platformWithHybridFallback'),
+          contains('offsetMicros: -78'),
+          contains('jitterMicros: 9'),
+          contains('errorBoundMicros: 1011'),
         ),
       );
+    });
+
+    test('NtsSyncedTime statistics default to fixture-compatible '
+        'values, with the error bound falling back to roundTrip/2', () {
+      final synced = NtsSyncedTime(
+        utcUnixMicros: 123,
+        roundTripMicros: 456,
+        samplesUsed: 1,
+        trustBackend: TrustBackend.platform,
+      );
+      expect(synced.offsetMicros, 0);
+      expect(synced.jitterMicros, 0);
+      expect(synced.errorBoundMicros, 228);
     });
   });
 

@@ -700,7 +700,7 @@ String _prepareSnippet(String snippet) {
   // import is required regardless of whether the snippet itself mentions those
   // symbols.  Also inject it for snippets with a top-level declaration that
   // explicitly reference nts symbols.
-  if (!snippet.contains("package:nts/nts.dart") &&
+  if (!snippet.contains('package:nts/nts.dart') &&
       (needsHarness ||
           snippet.contains('Nts') ||
           snippet.contains('ntsQuery') ||

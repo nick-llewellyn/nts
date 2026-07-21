@@ -174,7 +174,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsClientClearConstMeta =>
-      const TaskConstMeta(debugName: "NtsClient_clear", argNames: ["that"]);
+      const TaskConstMeta(debugName: 'NtsClient_clear', argNames: ['that']);
 
   @override
   bool crateApiNtsNtsClientInvalidate({
@@ -205,8 +205,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientInvalidateConstMeta =>
       const TaskConstMeta(
-        debugName: "NtsClient_invalidate",
-        argNames: ["that", "spec"],
+        debugName: 'NtsClient_invalidate',
+        argNames: ['that', 'spec'],
       );
 
   @override
@@ -230,7 +230,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsClientNewConstMeta =>
-      const TaskConstMeta(debugName: "NtsClient_new", argNames: []);
+      const TaskConstMeta(debugName: 'NtsClient_new', argNames: []);
 
   @override
   Future<NtsTimeSample> crateApiNtsNtsClientQuery({
@@ -277,13 +277,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsClientQueryConstMeta => const TaskConstMeta(
-    debugName: "NtsClient_query",
+    debugName: 'NtsClient_query',
     argNames: [
-      "that",
-      "spec",
-      "timeoutMs",
-      "dnsConcurrencyCap",
-      "verificationTimeMs",
+      'that',
+      'spec',
+      'timeoutMs',
+      'dnsConcurrencyCap',
+      'verificationTimeMs',
     ],
   );
 
@@ -312,8 +312,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientTrustModeConstMeta =>
       const TaskConstMeta(
-        debugName: "NtsClient_trust_mode",
-        argNames: ["that"],
+        debugName: 'NtsClient_trust_mode',
+        argNames: ['that'],
       );
 
   @override
@@ -362,13 +362,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientWarmCookiesConstMeta =>
       const TaskConstMeta(
-        debugName: "NtsClient_warm_cookies",
+        debugName: 'NtsClient_warm_cookies',
         argNames: [
-          "that",
-          "spec",
-          "timeoutMs",
-          "dnsConcurrencyCap",
-          "verificationTimeMs",
+          'that',
+          'spec',
+          'timeoutMs',
+          'dnsConcurrencyCap',
+          'verificationTimeMs',
         ],
       );
 
@@ -395,8 +395,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientWithTrustModeConstMeta =>
       const TaskConstMeta(
-        debugName: "NtsClient_with_trust_mode",
-        argNames: ["trustMode"],
+        debugName: 'NtsClient_with_trust_mode',
+        argNames: ['trustMode'],
       );
 
   @override
@@ -424,7 +424,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiSimpleInitAppConstMeta =>
-      const TaskConstMeta(debugName: "init_app", argNames: []);
+      const TaskConstMeta(debugName: 'init_app', argNames: []);
 
   @override
   PlatformInt64 crateApiNtsNtsBoottimeMicros() {
@@ -446,7 +446,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsBoottimeMicrosConstMeta =>
-      const TaskConstMeta(debugName: "nts_boottime_micros", argNames: []);
+      const TaskConstMeta(debugName: 'nts_boottime_micros', argNames: []);
 
   @override
   NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
@@ -468,7 +468,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsDnsPoolStatsConstMeta =>
-      const TaskConstMeta(debugName: "nts_dns_pool_stats", argNames: []);
+      const TaskConstMeta(debugName: 'nts_dns_pool_stats', argNames: []);
 
   @override
   Future<NtsTimeSample> crateApiNtsNtsQuery({
@@ -504,8 +504,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsQueryConstMeta => const TaskConstMeta(
-    debugName: "nts_query",
-    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap", "verificationTimeMs"],
+    debugName: 'nts_query',
+    argNames: ['spec', 'timeoutMs', 'dnsConcurrencyCap', 'verificationTimeMs'],
   );
 
   @override
@@ -528,7 +528,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsTrustStatusConstMeta =>
-      const TaskConstMeta(debugName: "nts_trust_status", argNames: []);
+      const TaskConstMeta(debugName: 'nts_trust_status', argNames: []);
 
   @override
   Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
@@ -564,8 +564,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsWarmCookiesConstMeta => const TaskConstMeta(
-    debugName: "nts_warm_cookies",
-    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap", "verificationTimeMs"],
+    debugName: 'nts_warm_cookies',
+    argNames: ['spec', 'timeoutMs', 'dnsConcurrencyCap', 'verificationTimeMs'],
   );
 
   @override
@@ -593,7 +593,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsPhaseTimingsDefaultConstMeta =>
-      const TaskConstMeta(debugName: "phase_timings_default", argNames: []);
+      const TaskConstMeta(debugName: 'phase_timings_default', argNames: []);
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_NtsClient => wire
@@ -679,6 +679,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  int dco_decode_i_8(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
+  }
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
@@ -760,8 +766,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 8)
-      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    if (arr.length != 13)
+      throw Exception('unexpected arr length: expect 13 but see ${arr.length}');
     return NtsTimeSample(
       utcUnixMicros: dco_decode_i_64(arr[0]),
       roundTripMicros: dco_decode_i_64(arr[1]),
@@ -771,6 +777,11 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       phaseTimings: dco_decode_phase_timings(arr[5]),
       trustBackend: dco_decode_trust_backend(arr[6]),
       recvBoottimeMicros: dco_decode_i_64(arr[7]),
+      offsetMicros: dco_decode_i_64(arr[8]),
+      peerDelayMicros: dco_decode_i_64(arr[9]),
+      rootDelayMicros: dco_decode_i_64(arr[10]),
+      rootDispersionMicros: dco_decode_i_64(arr[11]),
+      serverPrecision: dco_decode_i_8(arr[12]),
     );
   }
 
@@ -987,6 +998,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  int sse_decode_i_8(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt8();
+  }
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     final len_ = sse_decode_i_32(deserializer);
@@ -1099,6 +1116,11 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_phaseTimings = sse_decode_phase_timings(deserializer);
     final var_trustBackend = sse_decode_trust_backend(deserializer);
     final var_recvBoottimeMicros = sse_decode_i_64(deserializer);
+    final var_offsetMicros = sse_decode_i_64(deserializer);
+    final var_peerDelayMicros = sse_decode_i_64(deserializer);
+    final var_rootDelayMicros = sse_decode_i_64(deserializer);
+    final var_rootDispersionMicros = sse_decode_i_64(deserializer);
+    final var_serverPrecision = sse_decode_i_8(deserializer);
     return NtsTimeSample(
       utcUnixMicros: var_utcUnixMicros,
       roundTripMicros: var_roundTripMicros,
@@ -1108,6 +1130,11 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       phaseTimings: var_phaseTimings,
       trustBackend: var_trustBackend,
       recvBoottimeMicros: var_recvBoottimeMicros,
+      offsetMicros: var_offsetMicros,
+      peerDelayMicros: var_peerDelayMicros,
+      rootDelayMicros: var_rootDelayMicros,
+      rootDispersionMicros: var_rootDispersionMicros,
+      serverPrecision: var_serverPrecision,
     );
   }
 
@@ -1359,6 +1386,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  void sse_encode_i_8(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt8(self);
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -1458,6 +1491,11 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     sse_encode_phase_timings(self.phaseTimings, serializer);
     sse_encode_trust_backend(self.trustBackend, serializer);
     sse_encode_i_64(self.recvBoottimeMicros, serializer);
+    sse_encode_i_64(self.offsetMicros, serializer);
+    sse_encode_i_64(self.peerDelayMicros, serializer);
+    sse_encode_i_64(self.rootDelayMicros, serializer);
+    sse_encode_i_64(self.rootDispersionMicros, serializer);
+    sse_encode_i_8(self.serverPrecision, serializer);
   }
 
   @protected
