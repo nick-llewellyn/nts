@@ -78,6 +78,10 @@ const _frbGeneratedDispatcher = 'lib/src/ffi/frb_generated.dart';
 //                             `NtsClientImpl._kStaticData` site)
 //   frb_generated.io.dart   : public_member_api_docs (FFI bindings)
 //   frb_generated.web.dart  : public_member_api_docs (JS interop bindings)
+//
+// `prefer_single_quotes` needs no entry here: FRB's generate pipeline
+// runs `dart fix` against the project's `analysis_options.yaml`, so with
+// the rule enabled the emitted Dart is already single-quoted.
 const _lintIgnorePatches = <String, List<String>>{
   'lib/src/ffi/api/nts.dart': <String>['public_member_api_docs'],
   'lib/src/ffi/frb_generated.dart': <String>[
@@ -168,7 +172,7 @@ Future<void> main(List<String> args) async {
 
   if (await _hasDrift()) {
     stderr.writeln(
-      "${_errorPrefix}FRB bindings drifted from rust/src/api/. Run "
+      '${_errorPrefix}FRB bindings drifted from rust/src/api/. Run '
       "'flutter_rust_bridge_codegen generate' locally and commit the result.",
     );
     exit(1);
@@ -404,17 +408,17 @@ void _checkForOrphanedApiModules() {
   orphans.sort();
 
   stderr.writeln(
-    "${_errorPrefix}orphaned generated module(s) under "
+    '${_errorPrefix}orphaned generated module(s) under '
     '$_generatedDartApiDir/:',
   );
   for (final path in orphans) {
     stderr.writeln('       $path');
   }
   stderr.writeln(
-    "       The corresponding rust/src/api/<basename>.rs no longer exposes\n"
+    '       The corresponding rust/src/api/<basename>.rs no longer exposes\n'
     '       any FRB-visible items (or has been deleted), so codegen did not\n'
-    "       regenerate the file. Remove it (and any *.freezed.dart /\n"
-    "       *.g.dart companions) and rerun this script.",
+    '       regenerate the file. Remove it (and any *.freezed.dart /\n'
+    '       *.g.dart companions) and rerun this script.',
   );
   exit(1);
 }
@@ -438,7 +442,7 @@ void _addLintsToIgnoreForFile(String path, List<String> lintsToAdd) {
   final match = pattern.firstMatch(original);
   if (match == null) {
     stderr.writeln(
-      "$_errorPrefix `// ignore_for_file:` directive missing in $path "
+      '$_errorPrefix `// ignore_for_file:` directive missing in $path '
       '(FRB output format may have changed; update _lintIgnorePatches)',
     );
     exit(1);
@@ -516,10 +520,10 @@ int _patchDartFrbGeneratedUnimplementedMessages() {
   }
   const needle = "throw UnimplementedError('');";
   const replacement =
-      "throw UnimplementedError(\n"
+      'throw UnimplementedError(\n'
       "          'flutter_rust_bridge generated codec: "
       "unexpected enum variant tag: \$tag_',\n"
-      "        );";
+      '        );';
   final original = file.readAsStringSync();
   if (!original.contains(needle)) return 0;
   final patched = original.replaceAll(needle, replacement);
@@ -534,15 +538,17 @@ int _patchDartFrbGeneratedUnimplementedMessages() {
 }
 
 // Patches the FRB-generated Dart file to include the unexpected enum variant
-// tag in the `Exception("unreachable")` thrown by each DCO codec default arm.
-// FRB emits `throw Exception("unreachable");` for these arms; the patched form
+// tag in the `Exception('unreachable')` thrown by each DCO codec default arm.
+// FRB emits `throw Exception("unreachable");` for these arms, which the
+// `dart fix` pass FRB runs during generation rewrites to single quotes
+// (the project enables `prefer_single_quotes`); the patched form
 // includes `${raw[0]}` (the tag local in scope at every DCO default arm site
 // for tagged-variant decoders) so callers can diagnose which wire tag
 // triggered the error. Symmetric to the SSE-codec patcher above, but matches
 // the DCO codec's exception type and tag-access shape.
 //
-// Idempotent: the pattern only matches the FRB-emitted bare-"unreachable" form,
-// so running the patcher twice in a row is a no-op on the second run.
+// Idempotent: the pattern only matches the FRB-emitted bare-'unreachable'
+// form, so running the patcher twice in a row is a no-op on the second run.
 int _patchDartFrbGeneratedDcoUnreachableMessages() {
   const path = 'lib/src/ffi/frb_generated.dart';
   final file = File(path);
@@ -553,7 +559,7 @@ int _patchDartFrbGeneratedDcoUnreachableMessages() {
     );
     exit(1);
   }
-  const needle = 'throw Exception("unreachable");';
+  const needle = "throw Exception('unreachable');";
   const replacement =
       'throw Exception(\n'
       "          'flutter_rust_bridge generated codec: "
@@ -566,7 +572,7 @@ int _patchDartFrbGeneratedDcoUnreachableMessages() {
       needle.allMatches(original).length - needle.allMatches(patched).length;
   file.writeAsStringSync(patched);
   stdout.writeln(
-    'Patched $path: replaced $replaced `Exception("unreachable")` '
+    "Patched $path: replaced $replaced `Exception('unreachable')` "
     'DCO arm(s) with diagnostic-bearing form',
   );
   return replaced;

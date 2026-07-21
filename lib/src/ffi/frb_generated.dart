@@ -174,7 +174,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsClientClearConstMeta =>
-      const TaskConstMeta(debugName: "NtsClient_clear", argNames: ["that"]);
+      const TaskConstMeta(debugName: 'NtsClient_clear', argNames: ['that']);
 
   @override
   bool crateApiNtsNtsClientInvalidate({
@@ -205,8 +205,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientInvalidateConstMeta =>
       const TaskConstMeta(
-        debugName: "NtsClient_invalidate",
-        argNames: ["that", "spec"],
+        debugName: 'NtsClient_invalidate',
+        argNames: ['that', 'spec'],
       );
 
   @override
@@ -230,7 +230,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsClientNewConstMeta =>
-      const TaskConstMeta(debugName: "NtsClient_new", argNames: []);
+      const TaskConstMeta(debugName: 'NtsClient_new', argNames: []);
 
   @override
   Future<NtsTimeSample> crateApiNtsNtsClientQuery({
@@ -277,13 +277,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsClientQueryConstMeta => const TaskConstMeta(
-    debugName: "NtsClient_query",
+    debugName: 'NtsClient_query',
     argNames: [
-      "that",
-      "spec",
-      "timeoutMs",
-      "dnsConcurrencyCap",
-      "verificationTimeMs",
+      'that',
+      'spec',
+      'timeoutMs',
+      'dnsConcurrencyCap',
+      'verificationTimeMs',
     ],
   );
 
@@ -312,8 +312,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientTrustModeConstMeta =>
       const TaskConstMeta(
-        debugName: "NtsClient_trust_mode",
-        argNames: ["that"],
+        debugName: 'NtsClient_trust_mode',
+        argNames: ['that'],
       );
 
   @override
@@ -362,13 +362,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientWarmCookiesConstMeta =>
       const TaskConstMeta(
-        debugName: "NtsClient_warm_cookies",
+        debugName: 'NtsClient_warm_cookies',
         argNames: [
-          "that",
-          "spec",
-          "timeoutMs",
-          "dnsConcurrencyCap",
-          "verificationTimeMs",
+          'that',
+          'spec',
+          'timeoutMs',
+          'dnsConcurrencyCap',
+          'verificationTimeMs',
         ],
       );
 
@@ -395,8 +395,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
 
   TaskConstMeta get kCrateApiNtsNtsClientWithTrustModeConstMeta =>
       const TaskConstMeta(
-        debugName: "NtsClient_with_trust_mode",
-        argNames: ["trustMode"],
+        debugName: 'NtsClient_with_trust_mode',
+        argNames: ['trustMode'],
       );
 
   @override
@@ -424,7 +424,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiSimpleInitAppConstMeta =>
-      const TaskConstMeta(debugName: "init_app", argNames: []);
+      const TaskConstMeta(debugName: 'init_app', argNames: []);
 
   @override
   PlatformInt64 crateApiNtsNtsBoottimeMicros() {
@@ -446,7 +446,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsBoottimeMicrosConstMeta =>
-      const TaskConstMeta(debugName: "nts_boottime_micros", argNames: []);
+      const TaskConstMeta(debugName: 'nts_boottime_micros', argNames: []);
 
   @override
   NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
@@ -468,7 +468,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsDnsPoolStatsConstMeta =>
-      const TaskConstMeta(debugName: "nts_dns_pool_stats", argNames: []);
+      const TaskConstMeta(debugName: 'nts_dns_pool_stats', argNames: []);
 
   @override
   Future<NtsTimeSample> crateApiNtsNtsQuery({
@@ -504,8 +504,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsQueryConstMeta => const TaskConstMeta(
-    debugName: "nts_query",
-    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap", "verificationTimeMs"],
+    debugName: 'nts_query',
+    argNames: ['spec', 'timeoutMs', 'dnsConcurrencyCap', 'verificationTimeMs'],
   );
 
   @override
@@ -528,7 +528,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsTrustStatusConstMeta =>
-      const TaskConstMeta(debugName: "nts_trust_status", argNames: []);
+      const TaskConstMeta(debugName: 'nts_trust_status', argNames: []);
 
   @override
   Future<NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
@@ -564,8 +564,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsNtsWarmCookiesConstMeta => const TaskConstMeta(
-    debugName: "nts_warm_cookies",
-    argNames: ["spec", "timeoutMs", "dnsConcurrencyCap", "verificationTimeMs"],
+    debugName: 'nts_warm_cookies',
+    argNames: ['spec', 'timeoutMs', 'dnsConcurrencyCap', 'verificationTimeMs'],
   );
 
   @override
@@ -593,7 +593,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   TaskConstMeta get kCrateApiNtsPhaseTimingsDefaultConstMeta =>
-      const TaskConstMeta(debugName: "phase_timings_default", argNames: []);
+      const TaskConstMeta(debugName: 'phase_timings_default', argNames: []);
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_NtsClient => wire

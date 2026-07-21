@@ -20,3 +20,4 @@ linter:
     avoid_print: true
     prefer_const_constructors: true
     prefer_final_locals: true
+    prefer_single_quotes: true
