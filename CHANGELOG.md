@@ -27,7 +27,10 @@
   (peer delay δ = (T4−T1)−(T3−T2), the round trip minus server
   processing time), `rootDelayMicros` / `rootDispersionMicros` (the
   reply header's 16.16 fixed-point root metrics converted to
-  microseconds), and `serverPrecision` (log₂-seconds clock precision
+  microseconds — root delay is decoded as *signed* per RFC 5905, with
+  negative on-wire values clamped to `0` since a negative delay is
+  not physically meaningful), and `serverPrecision` (log₂-seconds
+  clock precision
   from the reply header). All five Dart constructor parameters are
   optional and default to `0`, so existing hand-built fixtures and
   mocks keep compiling unchanged; a zero `peerDelayMicros` is treated

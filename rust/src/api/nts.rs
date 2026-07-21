@@ -289,8 +289,9 @@ pub struct NtsTimeSample {
     pub peer_delay_micros: i64,
     /// Server-reported root delay in microseconds: total round-trip
     /// delay from the server to the reference clock (RFC 5905 §7.3,
-    /// converted from the wire's 16.16 fixed-point seconds).
-    /// New in 7.1.
+    /// converted from the wire's *signed* 16.16 fixed-point seconds;
+    /// a negative on-wire value clamps to `0` — see
+    /// [`ntp_short_signed_to_micros`]). New in 7.1.
     pub root_delay_micros: i64,
     /// Server-reported root dispersion in microseconds: total
     /// dispersion accumulated from the server to the reference clock
@@ -3188,7 +3189,7 @@ fn nts_query_inner(
         recv_boottime_micros,
         offset_micros,
         peer_delay_micros,
-        root_delay_micros: ntp_short_to_micros(response.header.root_delay),
+        root_delay_micros: ntp_short_signed_to_micros(response.header.root_delay),
         root_dispersion_micros: ntp_short_to_micros(response.header.root_dispersion),
         server_precision: response.header.precision,
     })
@@ -3306,6 +3307,20 @@ fn ntp_short_to_micros(short: u32) -> i64 {
     let secs = i64::from(short >> 16);
     let frac = i64::from(short & 0xFFFF);
     secs * 1_000_000 + (frac * 1_000_000) / 65_536
+}
+
+/// Signed variant of [`ntp_short_to_micros`] for `root_delay`, which
+/// the RFC 5905 reference implementation types as *signed* 16.16
+/// fixed point (`s_fp rootdelay`, Appendix A.1.1) — unlike
+/// `root_dispersion`, which is unsigned (`u_fp rootdisp`). A negative
+/// on-wire root delay is rare but representable; since a negative
+/// delay is not physically meaningful for the error-bound math, it
+/// clamps to `0` instead of misdecoding as a huge positive value.
+fn ntp_short_signed_to_micros(short: u32) -> i64 {
+    if (short as i32) < 0 {
+        return 0;
+    }
+    ntp_short_to_micros(short)
 }
 
 /// RFC 5905 §8 on-wire arithmetic for a completed client/server

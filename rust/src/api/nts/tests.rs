@@ -187,6 +187,22 @@ fn ntp_short_converts_16_16_fixed_point_to_micros() {
     assert_eq!(ntp_short_to_micros(1), 15);
 }
 
+#[test]
+fn ntp_short_signed_clamps_negative_root_delay_to_zero() {
+    // Positive values pass through unchanged.
+    assert_eq!(ntp_short_signed_to_micros(0), 0);
+    assert_eq!(ntp_short_signed_to_micros(1 << 16), 1_000_000);
+    // Largest positive signed value: 32767 + 65535/65536 s.
+    assert_eq!(
+        ntp_short_signed_to_micros(0x7FFF_FFFF),
+        32_767 * 1_000_000 + (65_535 * 1_000_000) / 65_536
+    );
+    // Sign bit set (negative in signed 16.16): clamps to 0 instead of
+    // misdecoding as a huge positive delay.
+    assert_eq!(ntp_short_signed_to_micros(0x8000_0000), 0);
+    assert_eq!(ntp_short_signed_to_micros(u32::MAX), 0);
+}
+
 /// Bind a local IPv4 echo socket and verify `bind_connected_udp`
 /// resolves `127.0.0.1`, picks a matching-family local socket, and
 /// completes a round trip. This is the address-family-matching

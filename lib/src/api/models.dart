@@ -197,7 +197,9 @@ class NtsTimeSample {
 
   /// Server-reported root delay in microseconds: total round-trip
   /// delay from the server to the reference clock (RFC 5905 §7.3).
-  /// New in 7.1.
+  /// The wire value is signed 16.16 fixed point; a negative on-wire
+  /// root delay clamps to `0` in the native worker, so this is never
+  /// negative. New in 7.1.
   final int rootDelayMicros;
 
   /// Server-reported root dispersion in microseconds: total
@@ -717,8 +719,8 @@ class NtsSyncedTime {
   /// plus half the server-reported root delay, plus the
   /// server-reported root dispersion, plus [jitterMicros]. The true
   /// UTC instant at the sync moment lies within
-  /// `± errorBoundMicros` of [utcUnixMicros] under the NTP symmetric
-  /// -delay assumption. Grows stale with oscillator drift as the
+  /// `± errorBoundMicros` of [utcUnixMicros] under the NTP
+  /// symmetric-delay assumption. Grows stale with oscillator drift as the
   /// sync ages (see class doc); it describes the bound at anchor
   /// time, not at [utcNow] time. Falls back to
   /// `roundTripMicros / 2` when constructed from a pre-7.1 fixture.
