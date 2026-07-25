@@ -1,6 +1,31 @@
 # Changelog
 
 
+## 7.2
+
+### Fixed
+
+- The example package's CLI tools (`nts_cli`, `nts_health`,
+  `nts_manifest`) now warn when the native library they load predates
+  the Rust sources it was built from. These tools run under plain
+  `dart run`, outside the Native Assets pipeline, so nothing kept the
+  dylib in step with `rust/src/**`: `autoLocateDylib` resolved the
+  build path by existence alone and opened whatever file was there. A
+  library built before a subsequent Rust change was loaded silently
+  against newer bindings, and the resulting ABI mismatch surfaced as
+  an untyped `RangeError (byteOffset)` on every host — including
+  known-good ones — with nothing pointing at the real cause. The
+  loader now compares the library's mtime against `rust/src/**` and
+  `rust/Cargo.toml`, and prints a stderr warning naming `cargo build
+  --release` when it is older. The run proceeds, since the mismatch is
+  not certain. Maintainer/contributor-facing only: `rust/target/` is
+  gitignored and pubignored, and package consumers build through
+  `hook/build.dart`, whose cargo invocation tracks freshness itself.
+  Note the check is one-directional — checking out an *older* Rust
+  revision leaves a newer library that is equally wrong but
+  indistinguishable by mtime. (NTS-97)
+
+
 ## 7.1.0
 
 ### Fixed
