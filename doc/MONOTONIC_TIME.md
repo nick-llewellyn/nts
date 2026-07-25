@@ -53,7 +53,7 @@ compiled per-platform via `cfg` gates:
 | Platform | Syscall / API | Crate | Notes |
 |---|---|---|---|
 | Android / Linux | `clock_gettime(CLOCK_BOOTTIME)` | [`libc`](https://github.com/rust-lang/libc) | Counts across suspend since Linux 2.6.39. |
-| iOS / macOS | `mach_continuous_time` | [`mach2`](https://github.com/nicowillis/mach2) | Scaled to microseconds by the cached `mach_timebase_info`; `libc`'s mach time bindings are deprecated, hence the dedicated crate. |
+| iOS / macOS | `mach_continuous_time` | [`mach2`](https://github.com/JohnTitor/mach2) | Scaled to microseconds by the cached `mach_timebase_info`; `libc`'s mach time bindings are deprecated, hence the dedicated crate. |
 | Windows | `QueryInterruptTimePrecise` | [`windows-sys`](https://github.com/microsoft/windows-rs) | Interrupt time includes sleep/hibernation; 100 ns units; available since Windows 10. |
 | Other targets | `Instant` elapsed since a process anchor | — | Best-effort fallback: monotonic but suspend-frozen. |
 
