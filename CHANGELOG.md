@@ -17,7 +17,10 @@
   known-good ones — with nothing pointing at the real cause. The
   loader now compares the library's mtime against `rust/src/**` and
   `rust/Cargo.toml`, and prints a stderr warning naming `cargo build
-  --release` when it is older. The run proceeds, since the mismatch is
+  --release` and the crate directory the library came from (derived
+  from its path, so a `--library <path>` pointing at another crate is
+  named correctly) when it is older. The run proceeds, since the
+  mismatch is
   not certain. Maintainer/contributor-facing only: `rust/target/` is
   gitignored and pubignored, and package consumers build through
   `hook/build.dart`, whose cargo invocation tracks freshness itself.

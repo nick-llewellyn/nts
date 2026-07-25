@@ -141,7 +141,8 @@ String? dylibStalenessWarning(String dylibPath) {
       '         that produced it (newest: $newest).\n'
       '         The bindings and the native library may disagree,\n'
       '         which surfaces as a decode error on every call.\n'
-      '         Rebuild with `cargo build --release` from rust/.';
+      '         Rebuild with `cargo build --release` from\n'
+      '         ${crateRoot.path}.';
 }
 
 // Enumerate the crate's Rust sources, or null when `src/` is absent

@@ -152,7 +152,8 @@ which only changes when you rebuild it. If you have edited anything
 under `rust/` since the last build, the library and the Dart bindings
 can disagree about how results are laid out, and every host then fails
 with an `Unhandled: RangeError` that looks like a protocol fault. Run
-`cargo build --release` from `rust/` and try again. The run is not
+`cargo build --release` from the crate directory the warning names
+(`rust/` unless you passed `--library`) and try again. The run is not
 blocked, because the mismatch is possible rather than certain.
 
 ## JSON output

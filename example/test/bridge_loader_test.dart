@@ -70,6 +70,10 @@ void main() {
       expect(warning, contains(path));
       expect(warning, contains('cargo build --release'));
       expect(warning, contains('lib.rs'));
+      // The rebuild instruction names the crate the dylib actually
+      // came from, not a hard-coded `rust/` — a `--library <path>`
+      // can point at a different crate entirely.
+      expect(warning, contains(root.path));
     });
 
     test('detects a stale dylib from a nested source file', () {
