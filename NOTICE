@@ -122,5 +122,5 @@ Platform-gated Rust dependencies (compiled only for the named target):
     Copyright (c) The Rust Project Developers
 
 18. mach2 (MIT) -- iOS and macOS only
-    https://github.com/nicowillis/mach2
+    https://github.com/JohnTitor/mach2
     Copyright (c) 2014 The Rust Project Developers

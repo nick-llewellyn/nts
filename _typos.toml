@@ -33,6 +33,10 @@ extend-ignore-re = [
 allo = "allo"
 # Hyphenated prefix in prose: mis-parse, mis-classify, mis-attribute.
 mis = "mis"
+# Field name of the Mach kernel's `mach_timebase_info` struct
+# (numerator, paired with `denom`), used via the `mach2` crate in
+# rust/src/nts/boottime.rs.
+numer = "numer"
 # Bead ID `nts-otu` referenced in the CHANGELOG.
 otu = "otu"
 # Accepted variant spelling used deliberately in comments.
