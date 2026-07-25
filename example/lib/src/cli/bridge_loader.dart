@@ -103,10 +103,13 @@ String? autoLocateDylib() {
 ///
 /// The dylib is expected at `<crate>/target/<profile>/<file>`, so the
 /// crate root is three directories up; `src/` and `Cargo.toml` beneath
-/// it are the inputs whose mtimes matter. Only a *newer source* is
-/// reported: checking out an older revision leaves a newer dylib that
-/// is equally wrong but indistinguishable by mtime, so this catches
-/// the forward case (edit, forget to rebuild) rather than every case.
+/// it are the inputs whose mtimes matter. Both must be present — a
+/// `src/` without a `Cargo.toml` is some other project's layout, not a
+/// crate this dylib could have been built from, and the rebuild
+/// instruction would be wrong. Only a *newer source* is reported:
+/// checking out an older revision leaves a newer dylib that is equally
+/// wrong but indistinguishable by mtime, so this catches the forward
+/// case (edit, forget to rebuild) rather than every case.
 String? dylibStalenessWarning(String dylibPath) {
   final DateTime dylibStamp;
   try {
@@ -115,12 +118,11 @@ String? dylibStalenessWarning(String dylibPath) {
     return null;
   }
   final crateRoot = Directory(dylibPath).parent.parent.parent;
+  final manifest = File('${crateRoot.path}/Cargo.toml');
+  if (!manifest.existsSync()) return null;
   final srcFiles = _listSources(Directory('${crateRoot.path}/src'));
   if (srcFiles == null) return null;
-  final sources = <FileSystemEntity>[
-    File('${crateRoot.path}/Cargo.toml'),
-    ...srcFiles,
-  ];
+  final sources = <FileSystemEntity>[manifest, ...srcFiles];
   String? newest;
   DateTime? newestStamp;
   for (final s in sources) {

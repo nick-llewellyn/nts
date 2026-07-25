@@ -143,9 +143,12 @@ One warning is emitted before any host is contacted and is not about a
 server at all:
 
 ```text
-warning: .../libnts_rust.dylib is older than the Rust sources
+warning: .../libnts_rust.<ext> is older than the Rust sources
          that produced it (newest: .../rust/src/api/nts.rs).
 ```
+
+`<ext>` is whatever your platform uses — `.dylib` on macOS, `.so` on
+Linux, `.dll` on Windows (without the `lib` prefix).
 
 The CLI loads the native library straight from `rust/target/release/`,
 which only changes when you rebuild it. If you have edited anything

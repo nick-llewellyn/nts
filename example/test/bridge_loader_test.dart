@@ -110,6 +110,19 @@ void main() {
       expect(dylibStalenessWarning(loose.path), isNull);
     });
 
+    test('stays quiet when src/ exists but Cargo.toml does not', () {
+      // A `<root>/src` without a manifest is some other project's
+      // layout, not a crate this dylib could have come from, so the
+      // rebuild instruction would name the wrong directory.
+      final path = _fixture(
+        root,
+        dylib: DateTime(2026, 7, 20, 12),
+        source: DateTime(2026, 7, 25, 12),
+      );
+      File('${root.path}/Cargo.toml').deleteSync();
+      expect(dylibStalenessWarning(path), isNull);
+    });
+
     test('stays quiet when the dylib itself is missing', () {
       _fixture(
         root,
