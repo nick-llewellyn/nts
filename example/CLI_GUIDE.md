@@ -139,6 +139,26 @@ Common variants:
   checks. These usually indicate a misconfigured or non-conforming
   server.
 
+One warning is emitted before any host is contacted and is not about a
+server at all:
+
+```text
+warning: .../libnts_rust.<ext> is older than the Rust sources
+         that produced it (newest: .../rust/src/api/nts.rs).
+```
+
+`<ext>` is whatever your platform uses — `.dylib` on macOS, `.so` on
+Linux, `.dll` on Windows (without the `lib` prefix).
+
+The CLI loads the native library straight from `rust/target/release/`,
+which only changes when you rebuild it. If you have edited anything
+under `rust/` since the last build, the library and the Dart bindings
+can disagree about how results are laid out, and every host then fails
+with an `Unhandled: RangeError` that looks like a protocol fault. Run
+`cargo build --release` from the crate directory the warning names
+(`rust/` unless you passed `--library`) and try again. The run is not
+blocked, because the mismatch is possible rather than certain.
+
 ## JSON output
 
 Pass `--json` to swap the human format for newline-delimited JSON
