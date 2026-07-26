@@ -109,7 +109,7 @@ jobs:
           - parse_server_response
     steps:
       - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # cargo-fuzz requires nightly for the sanitizer-coverage
       # instrumentation `cargo fuzz {build,run}` injects into the
@@ -232,7 +232,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Explicit stable install (same pinned action as `ci.yml`)
       # rather than relying on whatever toolchain happens to be
