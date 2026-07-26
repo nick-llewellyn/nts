@@ -23,7 +23,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show BaseHandler, ExternalLibrary, PlatformInt64Util;
+    show BaseHandler, ExternalLibrary, PlatformInt64Util, SseDeserializer;
 // Not re-exported by the public FRB entrypoints; the real-bridge
 // coverage test constructs the generated `NtsRustLibApiImpl` directly
 // and needs these (file-level implementation_imports ignore above).
@@ -507,6 +507,81 @@ ffi.NtsTrustStatus _zeroFfiTrustStatus() => ffi.NtsTrustStatus(
   androidHybridFallbackCount: BigInt.zero,
 );
 
+// Drives the real generated SSE decoders over hand-built byte buffers.
+//
+// The rest of this suite reaches the wrapper through `_RecordingApi`,
+// whose `nextThrow` / `nextSyncThrow` fields let a test *assert* what
+// a decode failure looks like. That pins the wrapper's plumbing but
+// takes the failure shapes on faith. This subclass closes the gap
+// from the other side: the decoders it exposes are the same ones
+// `NtsRustLibApiImpl` installs as `decodeSuccessData` /
+// `decodeErrorData` on every dispatch, so feeding them a buffer that
+// disagrees with the layout they were generated for reproduces
+// exactly what a mismatched native library yields — no mismatched
+// dylib required.
+//
+// The decoders are `@protected`, hence the subclass. Nothing here
+// dispatches: the wire table is bound to the test process, which
+// exports none of the Rust symbols, and every method below stays on
+// the Dart side of the boundary.
+class _CodecProbe extends NtsRustLibApiImpl {
+  _CodecProbe({
+    required super.handler,
+    required super.wire,
+    required super.generalizedFrbRustBinding,
+    required super.portManager,
+  });
+
+  factory _CodecProbe.forTestProcess() {
+    final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+    final binding = GeneralizedFrbRustBinding(lib);
+    final handler = BaseHandler();
+    return _CodecProbe(
+      handler: handler,
+      wire: NtsRustLibWire.fromExternalLibrary(lib),
+      generalizedFrbRustBinding: binding,
+      portManager: PortManager(binding, handler),
+    );
+  }
+
+  // Runs [decode] over [bytes] and returns whatever it threw. Returns
+  // `null` if the decode unexpectedly succeeded, which the caller
+  // asserts against — a buffer that stops being malformed would
+  // silently hollow out the test.
+  Object? failureFrom(
+    Object? Function(SseDeserializer) decode,
+    List<int> bytes,
+  ) {
+    final deserializer = SseDeserializer(
+      Uint8List.fromList(bytes).buffer.asByteData(),
+    );
+    try {
+      decode(deserializer);
+      return null;
+    } catch (e) {
+      return e;
+    }
+  }
+
+  Object? dnsPoolStatsFailure(List<int> b) =>
+      failureFrom(sse_decode_nts_dns_pool_stats, b);
+  Object? trustStatusFailure(List<int> b) =>
+      failureFrom(sse_decode_nts_trust_status, b);
+  Object? trustModeFailure(List<int> b) =>
+      failureFrom(sse_decode_trust_mode, b);
+  // Unlike `TrustMode`, `TrustBackend` is fieldless: the generated
+  // decoder reads an `i32` and indexes `TrustBackend.values` with it.
+  Object? trustBackendFailure(List<int> b) =>
+      failureFrom(sse_decode_trust_backend, b);
+  Object? ntsErrorFailure(List<int> b) => failureFrom(sse_decode_nts_error, b);
+  Object? stringFailure(List<int> b) => failureFrom(sse_decode_String, b);
+}
+
+// A four-byte little/big-endian `i32` in the codec's native order,
+// matching what `sse_decode_i_32` reads back.
+List<int> _sseI32(int value) =>
+    (ByteData(4)..setInt32(0, value, Endian.host)).buffer.asUint8List();
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -915,6 +990,17 @@ void main() {
     // generated codec. Those failures arrive as bare Dart `Error`s,
     // not as `ffi.NtsError`, so they bypass the conversion arm; the
     // wrapper widens the catch to name the cause and the rebuild.
+    //
+    // Coverage here comes in two halves. The tests directly below arm
+    // the mock with hand-written failures, which proves each entry
+    // point is wrapped but says nothing about whether a genuine
+    // mismatch produces those shapes. The
+    // `failures produced by the real generated codec` subgroup
+    // supplies the other half by driving the real `sse_decode_*`
+    // functions over malformed buffers. Neither half loads a
+    // mismatched native library — building one in CI is not
+    // practical — so the buffers stand in for the drift a rebuilt
+    // Rust side would introduce.
 
     // The three decode-failure shapes the wrapper attributes to a
     // layout disagreement. `ArgumentError` last because `RangeError`
@@ -995,6 +1081,123 @@ void main() {
         throwsA(isA<NtsErrorAbiMismatch>()),
       );
       expect(client.clear, throwsA(isA<NtsErrorAbiMismatch>()));
+    });
+
+    group('failures produced by the real generated codec', () {
+      // The tests above arm the mock with hand-written `RangeError` /
+      // `UnimplementedError` / `ArgumentError` instances, which proves
+      // the wrapper converts those three shapes but takes on faith
+      // that a genuine layout disagreement produces them. These tests
+      // supply the missing half: each one drives a real generated
+      // `sse_decode_*` — the same function `NtsRustLibApiImpl`
+      // installs as `decodeSuccessData` / `decodeErrorData` on every
+      // dispatch — over a buffer that disagrees with the layout the
+      // decoder was generated for, captures whatever it actually
+      // throws, and feeds that object back through the wrapper.
+      //
+      // Building a truly mismatched native library in CI is not
+      // practical, so the buffers stand in for one. Each shape below
+      // corresponds to a concrete way a rebuilt Rust side can drift:
+      // a widened or narrowed struct field (short buffer), a variant
+      // added to a Rust enum (unknown tag), a variant added to a
+      // fieldless enum (out-of-range index), and a length prefix
+      // reinterpreted under a different width (nonsense length).
+
+      late _CodecProbe probe;
+
+      setUpAll(() {
+        probe = _CodecProbe.forTestProcess();
+      });
+
+      // Each entry pairs a description of the drift with the error
+      // the real codec throws for it. Resolved lazily inside the
+      // test bodies because `probe` is not built until `setUpAll`.
+      final shapes = <String, Object? Function()>{
+        // `NtsDnsPoolStats` is 4 + 4 + 8 + 8 = 24 bytes. A native
+        // side whose fields narrowed sends fewer, and the decoder
+        // reads past the end.
+        'struct shorter than the layout expects': () =>
+            probe.dnsPoolStatsFailure(List.filled(8, 0)),
+        // The extreme case: a symbol that returns nothing at all.
+        'empty buffer': () => probe.dnsPoolStatsFailure(const []),
+        // `NtsTrustStatus` leads with three `u64` counters.
+        'second struct shorter than its layout': () =>
+            probe.trustStatusFailure(List.filled(3, 0)),
+        // A variant appended to `TrustMode` on the Rust side lands
+        // in the generated `switch`'s `default` arm.
+        'unknown enum variant tag': () => probe.trustModeFailure(_sseI32(99)),
+        // Same drift on the error enum, which reaches the wrapper
+        // through `decodeErrorData` rather than `decodeSuccessData`.
+        'unknown error variant tag': () => probe.ntsErrorFailure(_sseI32(42)),
+        // A fieldless enum decodes as an index into `.values`, so a
+        // variant added Rust-side overruns the Dart list.
+        'enum index past the end of values': () =>
+            probe.trustBackendFailure(_sseI32(99)),
+        // A length prefix read under the wrong width yields a
+        // nonsense count before any payload is touched.
+        'negative length prefix': () => probe.stringFailure(_sseI32(-5)),
+        'length prefix longer than the payload': () =>
+            probe.stringFailure([..._sseI32(4), 1, 2]),
+      };
+
+      shapes.forEach((description, produce) {
+        test('$description is a shape the wrapper converts', () {
+          final failure = produce();
+          expect(
+            failure,
+            isNotNull,
+            reason:
+                'the buffer stopped being malformed for this decoder; '
+                'the test no longer proves anything',
+          );
+          // The wrapper's predicate is `RangeError || UnimplementedError
+          // || ArgumentError`. Asserting membership here is what ties
+          // the real codec's output to the conversion arm.
+          expect(
+            failure,
+            anyOf(
+              isA<RangeError>(),
+              isA<UnimplementedError>(),
+              isA<ArgumentError>(),
+            ),
+          );
+
+          // Round-trip the captured object through both guarded paths.
+          api.nextSyncThrow = failure;
+          expect(ntsDnsPoolStats, throwsA(isA<NtsErrorAbiMismatch>()));
+
+          api.nextThrow = failure;
+          expect(
+            ntsQuery(spec: spec),
+            throwsA(
+              isA<NtsErrorAbiMismatch>().having(
+                (e) => e.message,
+                'names the cause and the rebuild',
+                allOf(contains('$failure'), contains('cargo build --release')),
+              ),
+            ),
+          );
+        });
+      });
+
+      test('a malformed UTF-8 payload is NOT converted', () {
+        // Not every codec failure is a layout disagreement. A `String`
+        // whose length prefix is honest but whose bytes are not valid
+        // UTF-8 throws `FormatException`, which is neither an `Error`
+        // nor one of the three shapes — the wrapper rethrows it
+        // unchanged. Documented here so a future widening of
+        // `_isAbiDecodeFailure` has to confront the case deliberately
+        // rather than absorb it by accident.
+        final failure = probe.stringFailure([..._sseI32(3), 0xff, 0xfe, 0xfd]);
+        expect(failure, isA<FormatException>());
+        api.nextSyncThrow = failure;
+        expect(
+          ntsDnsPoolStats,
+          throwsA(
+            allOf(isA<FormatException>(), isNot(isA<NtsErrorAbiMismatch>())),
+          ),
+        );
+      });
     });
   });
 
