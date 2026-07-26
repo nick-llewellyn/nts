@@ -79,15 +79,17 @@
 
 ### Changed
 
-- Refreshed both Rust lockfiles ahead of the major, moving 35 packages
+- Refreshed both Rust lockfiles ahead of the major, moving 36 packages
   to their latest compatible versions — `tokio` 1.52.3 to 1.53.1,
-  `webpki-roots` 1.0.7 to 1.0.9, `regex` 1.12.3 to 1.13.1, `cc` 1.2.63
-  to 1.4.0, `memchr` 2.8.1 to 2.8.3, plus `anyhow`, `bytes`, and the
-  `futures` and `wasm-bindgen` families. No manifest constraint moved;
-  `rust/Cargo.toml` is untouched. Three crates are deliberately held
-  back, each pinning rather than loosening the gate that rejected the
-  update, per the guidance in the `dependency-review` job's own comment
-  block:
+  `regex` 1.12.3 to 1.13.1, `cc` 1.2.63 to 1.4.0, `memchr` 2.8.1 to
+  2.8.3, `webpki-root-certs` 1.0.7 to 1.0.9, plus `anyhow`, `bytes`,
+  and the `futures` and `wasm-bindgen` families. Two packages
+  (`wasip2`, `wit-bindgen`) drop out of the fuzz lockfile, no longer
+  reachable once `jobserver` moved from `getrandom` 0.3 to 0.4. No
+  manifest constraint moved; `rust/Cargo.toml` is untouched. Three
+  crates are deliberately held back, each pinning rather than loosening
+  the gate that rejected the update, per the guidance in the
+  `dependency-review` job's own comment block:
 
   - `thiserror` stays at 2.0.18 in both lockfiles. 2.0.19 switches
     `thiserror-impl` to `syn 3.0.3` while the rest of the graph is on
@@ -103,7 +105,7 @@
     the legacy slash form `MIT/Apache-2.0` rather than the SPDX
     expression `MIT OR Apache-2.0`; `dependency-review` cannot parse it
     and synthesises a `LicenseRef-bad-*` placeholder that can never
-    match the allow-list. The licence terms are unchanged and
+    match the allow-list. The license terms are unchanged and
     acceptable — this is a metadata-format defect upstream.
     `cargo deny` normalises the slash form and stays green either way.
     (NTS-104)
