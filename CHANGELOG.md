@@ -51,6 +51,18 @@
   from outside a crate tree, a prebuilt binary shipped without sources,
   or one built for another architecture. (NTS-98)
 
+  The three attributed shapes are no longer taken on faith. Alongside
+  the mock-driven tests that prove each entry point is wrapped, a
+  second set drives the real generated `sse_decode_*` functions over
+  hand-built buffers that disagree with the layout they were generated
+  for — a short struct, an unknown enum tag, an out-of-range fieldless
+  enum index, a nonsense length prefix — and feeds whatever they throw
+  back through the wrapper. Building a genuinely mismatched native
+  library in CI is not practical, so the buffers stand in for one. One
+  case is pinned as deliberately *not* converted: a `String` whose
+  length prefix is honest but whose bytes are not valid UTF-8 throws
+  `FormatException`, which reaches callers unchanged. (NTS-101)
+
 ### Fixed
 
 - The example package's CLI tools (`nts_cli`, `nts_health`,
