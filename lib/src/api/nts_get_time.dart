@@ -1,0 +1,207 @@
+// Shared getTime orchestration.
+//
+// Part of the nts.dart library; see that file for the imports,
+// re-exports, and defaults these declarations rely on.
+
+part of 'nts.dart';
+
+// --- getTime orchestration --------------------------------------------
+//
+// Shared engine behind the top-level `ntsGetTime` and
+// `NtsClient.getTime`. Both entry points bind their own `warm` /
+// `query` closures (top-level functions vs. per-client methods) and
+// delegate the budget accounting, burst loop, lowest-delay selection,
+// and compensation here so the two surfaces cannot drift.
+//
+// `_kGetTimeTimeout` is one total budget: a single sleep-aware
+// monotonic clock read before the handshake meters every underlying
+// call (see `clock.dart`), and each call receives only the remaining
+// balance; the budget keeps depleting across device suspend, so a
+// mid-call sleep surfaces as `timeout(ntp)` rather than a
+// stalled-then-overrun budget. The lower-level wrappers
+// validate `timeout >= 1ms`, so a depleted budget is detected here
+// (and surfaced as `timeout(ntp)`) rather than tripping their
+// `invalidSpec` range check with a confusing message.
+
+// Upper bound on the number of burst `query` samples taken after the
+// warming handshake. The effective burst size is
+// `min(_kGetTimeMaxBurst, freshCookies)` — each query spends one
+// cookie, so the burst never exhausts the pool it just filled. Eight
+// samples give a tight lowest-delay selection on steady paths and
+// enough spread to ride out jitter on cellular / Wi-Fi ones.
+const int _kGetTimeMaxBurst = 8;
+
+// Total wall-clock budget for the whole `getTime` call, shared across
+// the warming handshake and every burst query as one shrinking
+// deadline. Sized for the 8-query burst over a cold-radio cellular
+// path (DNS + TCP + TLS + KE handshake plus eight serial UDP
+// round-trips); on fast paths the call returns as soon as the burst
+// completes, so the generous cap only moves the worst-case failure
+// latency, never the happy path.
+const Duration _kGetTimeTimeout = Duration(milliseconds: 8000);
+
+Future<NtsSyncedTime> _getTime({
+  required Future<NtsWarmCookiesOutcome> Function(Duration timeout) warm,
+  required Future<NtsTimeSample> Function(Duration timeout) query,
+}) async {
+  final clock = MonotonicClock.instance;
+  final startMicros = clock.nowMicros();
+  // Exact `Duration` subtraction at microsecond resolution. The
+  // ms-precision conversion happens once per dispatch, at the FFI
+  // boundary (`_ffiTimeoutMs`), which rounds *up* so a live sub-ms
+  // remainder is never rounded down to a dead budget. The trade-off:
+  // each forwarded ms value may exceed the true remainder by <1 ms
+  // (bounded overall to <1 ms on the final dispatch), rather than the
+  // pre-Duration shape's strict floor.
+  Duration remaining() => _kGetTimeTimeout - clock.elapsedSince(startMicros);
+
+  // Warm phase: always a fresh handshake, so the burst below runs
+  // against a full cookie pool and a known-fresh AEAD session. A
+  // failure here is fatal by design — there is nothing to sample with.
+  // The handshake draws from the shared balance too (not a fresh
+  // `_kGetTimeTimeout`), so overhead accrued since `budget` started
+  // is charged against the total rather than silently extending it.
+  // The clamp keeps a fully depleted balance from tripping the
+  // lower-level `timeout >= 1ms` validation; a 1ms warm then times
+  // out on its own terms and propagates per the posture above.
+  const floor = Duration(milliseconds: 1);
+  final warmBudget = remaining();
+  final outcome = await warm(warmBudget < floor ? floor : warmBudget);
+  if (outcome.freshCookies < 1) {
+    throw NtsError.noCookies(trustBackend: outcome.trustBackend);
+  }
+
+  final burst = math.min(_kGetTimeMaxBurst, outcome.freshCookies);
+  NtsTimeSample? best;
+  // Post-`await` monotonic instant (on the shared clock's timeline,
+  // relative to `startMicros`) at which the current `best` sample's
+  // reply was observed on the Dart side. Fallback input for the
+  // anchor-lag arithmetic below when the sample's wire-level
+  // `recvBoottimeMicros` stamp fails the epoch-plausibility window
+  // (hand-built fixtures, mock-mode Stopwatch clock fallback).
+  var bestArrivalMicros = 0;
+  var samplesUsed = 0;
+  // Per-sample offsets θ for the jitter computation (RFC 5905 §10).
+  // Parallel to arrival order; the winning sample's offset is read
+  // from `best` directly.
+  final offsets = <int>[];
+  Object? lastError;
+  StackTrace? lastStack;
+  for (var i = 0; i < burst; i++) {
+    final left = remaining();
+    if (left < const Duration(milliseconds: 1)) break;
+    try {
+      final sample = await query(left);
+      samplesUsed++;
+      offsets.add(sample.offsetMicros);
+      if (best == null ||
+          _effectiveDelayMicros(sample) < _effectiveDelayMicros(best)) {
+        best = sample;
+        bestArrivalMicros = clock.nowMicros() - startMicros;
+      }
+    } on NtsError catch (err, stack) {
+      // Best-effort posture: tolerate individual burst failures as
+      // long as at least one sample lands. Keep the most recent
+      // failure so an all-fail burst rethrows something concrete.
+      lastError = err;
+      lastStack = stack;
+    }
+  }
+
+  if (best == null) {
+    if (lastError != null) {
+      Error.throwWithStackTrace(lastError, lastStack!);
+    }
+    // No query ever completed and none failed: the budget was spent
+    // by the handshake before the first sample could dispatch.
+    throw NtsError.timeout(
+      phase: TimeoutPhase.ntp,
+      trustBackend: outcome.trustBackend,
+    );
+  }
+
+  // Symmetric-path compensation: the sample's `utcUnixMicros` is the
+  // server transmit timestamp as of the reply's *send*; adding half
+  // the network delay (peer delay δ when plausible, else the measured
+  // round trip — see `_effectiveDelayMicros`) estimates the server
+  // clock at the moment the reply arrived. That estimate is only
+  // valid at the winning recv instant, while `NtsSyncedTime` captures
+  // its monotonic anchor at construction — which happens after the
+  // whole burst has run. Bridge the gap by advancing the compensated
+  // UTC across the time elapsed since the winning reply arrived
+  // (`anchorLagMicros`), so the value handed to the constructor is
+  // valid "now" even when the lowest-delay sample was not the last
+  // query in the burst.
+  //
+  // Preferred lag source: the sample's wire-level receipt stamp
+  // (`recvBoottimeMicros`), taken inside the native worker immediately
+  // after the UDP recv. It shares the `MonotonicClock` timeline by
+  // construction, and unlike the post-`await` stamp it excludes the
+  // FFI-return / worker-handoff / event-loop scheduling latency δ —
+  // the previous arithmetic under-advanced the compensated UTC by
+  // exactly δ. Plausibility window: on the production path the stamp
+  // must fall between the burst start and the post-`await` observation
+  // (recv happens after dispatch and before the `await` returns). A
+  // stamp outside that window means an epoch mismatch (hand-built
+  // fixture, mock clock on the Stopwatch fallback), in which case fall
+  // back to the post-`await` approximation rather than injecting an
+  // arbitrary cross-epoch delta.
+  final nowMicros = clock.nowMicros();
+  final postAwaitLagMicros = (nowMicros - startMicros) - bestArrivalMicros;
+  final wireLagMicros = nowMicros - best.recvBoottimeMicros;
+  final anchorLagMicros =
+      (best.recvBoottimeMicros >= startMicros &&
+          wireLagMicros >= postAwaitLagMicros)
+      ? wireLagMicros
+      : postAwaitLagMicros;
+  // Sample jitter ψ (RFC 5905 §10): RMS of the offset differences
+  // between the winning sample and every other burst sample. With a
+  // single sample the sum is empty and ψ is 0.
+  final theta0 = best.offsetMicros;
+  var sumSq = 0.0;
+  for (final theta in offsets) {
+    final d = (theta - theta0).toDouble();
+    sumSq += d * d;
+  }
+  final jitterMicros = offsets.length > 1
+      ? math.sqrt(sumSq / (offsets.length - 1)).round()
+      : 0;
+  // Worst-case error bound at the anchor instant, following the
+  // RFC 5905 root-distance recipe: half the winning sample's network
+  // delay + half the server's root delay + the server's root
+  // dispersion + sample jitter. Fixture-shaped samples (all-zero 7.1
+  // fields) degrade to the pre-7.1 `roundTrip / 2` bound.
+  final delayMicros = _effectiveDelayMicros(best);
+  final errorBoundMicros =
+      delayMicros ~/ 2 +
+      best.rootDelayMicros ~/ 2 +
+      best.rootDispersionMicros +
+      jitterMicros;
+  return NtsSyncedTime(
+    utcUnixMicros: best.utcUnixMicros + delayMicros ~/ 2 + anchorLagMicros,
+    roundTripMicros: best.roundTripMicros,
+    samplesUsed: samplesUsed,
+    trustBackend: best.trustBackend,
+    offsetMicros: best.offsetMicros,
+    jitterMicros: jitterMicros,
+    errorBoundMicros: errorBoundMicros,
+  );
+}
+
+// The network delay used for burst selection, one-way compensation,
+// and the error bound: the RFC 5905 peer delay δ when plausible
+// (excludes server processing time), else the locally measured round
+// trip. δ is implausible when outside `(0, roundTripMicros]` — a `0`
+// marks a pre-7.1 fixture, and a value above the measured round trip
+// (or negative) marks a local clock step mid-exchange.
+//
+// Wall-clock quantisation can also push δ marginally past the
+// monotonic round trip (the Rust live probe tolerates ~10 ms of it).
+// The strict upper bound is kept anyway: in that regime server
+// processing time is ≈0, so δ ≈ roundTrip and the fallback differs
+// from δ by at most the quantisation noise — whereas accepting a
+// δ above the measured round trip would overstate the one-way delay.
+int _effectiveDelayMicros(NtsTimeSample s) =>
+    (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
+    ? s.peerDelayMicros
+    : s.roundTripMicros;
