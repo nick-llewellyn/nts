@@ -34,50 +34,16 @@ part of 'nts.dart';
 
 const int _kU32Max = 0xFFFFFFFF;
 
-// --- deprecated-parameter resolution ----------------------------------
-//
-// One release of overlap: the deprecated `int` millisecond parameters
-// coexist with the typed `Duration` / `DateTime` ones. These helpers
-// collapse each pair onto the single value the rest of the pipeline
-// uses, failing fast on any *detectable* conflict.
+// --- verification-instant conversion ----------------------------------
 
-// `timeout` has a non-null default, so an un-migrated caller passing
-// only `timeoutMs` necessarily leaves `timeout` at `kDefaultTimeout` —
-// that is the silent compatibility path. An explicit non-default
-// `timeout` alongside `timeoutMs` is a demonstrable conflict and is
-// rejected. Known blind spot (accepted): `Duration` equality is
-// value-based, so any explicit `timeout` equal to [kDefaultTimeout]
-// (the constant itself or e.g. `Duration(seconds: 5)`) passed alongside
-// `timeoutMs` is indistinguishable from the default case and resolves
-// to `timeoutMs` without error.
-Duration _resolveTimeout(Duration timeout, int? timeoutMs) {
-  if (timeoutMs == null) return timeout;
-  if (timeout == kDefaultTimeout) return Duration(milliseconds: timeoutMs);
-  throw const NtsError.invalidSpec(
-    message:
-        'both timeout and the deprecated timeoutMs were provided with '
-        'conflicting values; pass one or the other (prefer timeout)',
-  );
-}
-
-// Both verification parameters are nullable with no default, so "both
-// supplied" is an unambiguous caller mistake rather than a
-// default-vs-override situation. The resolved value stays an epoch-ms
-// `int?` internally (the FFI shape).
-int? _resolveVerificationTime(DateTime? verificationTime, int? ms) {
-  if (verificationTime != null && ms != null) {
-    throw const NtsError.invalidSpec(
-      message:
-          'both verificationTime and the deprecated verificationTimeMs '
-          'were provided; pass one or the other (prefer verificationTime)',
-    );
-  }
-  return verificationTime?.toUtc().millisecondsSinceEpoch ?? ms;
-}
+// Collapses the public `DateTime?` verification instant onto the
+// epoch-ms `int?` the rest of the pipeline (and the FFI shape) uses.
+int? _verificationMs(DateTime? verificationTime) =>
+    verificationTime?.toUtc().millisecondsSinceEpoch;
 
 // Re-wraps a resolved epoch-ms verification instant as a UTC `DateTime`
-// for forwarding through the non-deprecated parameter of the underlying
-// wrappers (used by the getTime orchestration entry points).
+// for forwarding through the underlying wrappers (used by the getTime
+// orchestration entry points).
 DateTime? _verificationInstant(int? resolvedMs) => resolvedMs == null
     ? null
     : DateTime.fromMillisecondsSinceEpoch(resolvedMs, isUtc: true);
@@ -145,18 +111,16 @@ T _syncGuard<T>(T Function() body) {
   }
 }
 
-// Shared resolve -> validate -> gate -> convert -> catch scaffolding
-// for the four query/warmCookies entry points (top-level and
-// per-client). Each entry point supplies only its own FFI invocation
-// via `call`, receiving the already-converted FFI-shaped arguments.
+// Shared validate -> gate -> convert -> catch scaffolding for the four
+// query/warmCookies entry points (top-level and per-client). Each entry
+// point supplies only its own FFI invocation via `call`, receiving the
+// already-converted FFI-shaped arguments.
 Future<T> _dispatch<T>({
   required NtsServerSpec spec,
   required Duration timeout,
-  required int? timeoutMs,
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
   required DateTime? verificationTime,
-  required int? verificationTimeMs,
   required Future<T> Function(
     ffi.NtsServerSpec ffiSpec,
     int ffiTimeoutMs,
@@ -164,21 +128,17 @@ Future<T> _dispatch<T>({
   )
   call,
 }) async {
-  final resolvedTimeout = _resolveTimeout(timeout, timeoutMs);
-  final resolvedVerificationMs = _resolveVerificationTime(
-    verificationTime,
-    verificationTimeMs,
-  );
+  final resolvedVerificationMs = _verificationMs(verificationTime);
   _validateRanges(
     spec: spec,
-    timeout: resolvedTimeout,
+    timeout: timeout,
     dnsConcurrencyCap: dnsConcurrencyCap,
     bridgeConcurrencyCap: bridgeConcurrencyCap,
     verificationTimeMs: resolvedVerificationMs,
   );
   return _withBridgeSlot(
     bridgeConcurrencyCap: bridgeConcurrencyCap,
-    timeout: resolvedTimeout,
+    timeout: timeout,
     body: (remainingTimeout) async {
       try {
         return await call(
@@ -223,8 +183,8 @@ void _validateRanges({
       timeout > const Duration(milliseconds: _kU32Max)) {
     throw NtsError.invalidSpec(
       message:
-          'timeout $timeout (or the deprecated timeoutMs) is outside the '
-          'valid range 1ms..${_kU32Max}ms — sub-millisecond durations are '
+          'timeout $timeout is outside the valid range '
+          '1ms..${_kU32Max}ms — sub-millisecond durations are '
           'rejected (1 ms floor); pass kDefaultTimeout to inherit the '
           'package default',
     );
@@ -253,9 +213,9 @@ void _validateRanges({
   if (verificationTimeMs != null && verificationTimeMs < 0) {
     throw NtsError.invalidSpec(
       message:
-          'verificationTime (or the deprecated verificationTimeMs) resolves '
-          'to $verificationTimeMs ms, which is before the Unix epoch; it '
-          'must be a non-negative epoch-milliseconds instant',
+          'verificationTime resolves to $verificationTimeMs ms, which is '
+          'before the Unix epoch; it must be a non-negative '
+          'epoch-milliseconds instant',
     );
   }
 }

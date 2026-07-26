@@ -130,8 +130,7 @@ class NtsClient {
   /// session.
   ///
   /// Parameter semantics for `timeout`, `dnsConcurrencyCap`,
-  /// `bridgeConcurrencyCap`, and `verificationTime` (plus the
-  /// deprecated `timeoutMs` / `verificationTimeMs`) are identical
+  /// `bridgeConcurrencyCap`, and `verificationTime` are identical
   /// to [ntsQuery]; defaults come from [kDefaultTimeout],
   /// [kDefaultDnsConcurrencyCap], and [kDefaultBridgeConcurrencyCap],
   /// and out-of-range values cause the returned `Future` to complete
@@ -151,19 +150,15 @@ class NtsClient {
   Future<NtsTimeSample> query({
     required NtsServerSpec spec,
     Duration timeout = kDefaultTimeout,
-    @Deprecated('Use timeout instead.') int? timeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
     int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
     DateTime? verificationTime,
-    @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
   }) => _dispatch(
     spec: spec,
     timeout: timeout,
-    timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
     bridgeConcurrencyCap: bridgeConcurrencyCap,
     verificationTime: verificationTime,
-    verificationTimeMs: verificationTimeMs,
     call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicSample(
       await _inner.query(
         spec: ffiSpec,
@@ -193,19 +188,15 @@ class NtsClient {
   Future<NtsWarmCookiesOutcome> warmCookies({
     required NtsServerSpec spec,
     Duration timeout = kDefaultTimeout,
-    @Deprecated('Use timeout instead.') int? timeoutMs,
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
     int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
     DateTime? verificationTime,
-    @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
   }) => _dispatch(
     spec: spec,
     timeout: timeout,
-    timeoutMs: timeoutMs,
     dnsConcurrencyCap: dnsConcurrencyCap,
     bridgeConcurrencyCap: bridgeConcurrencyCap,
     verificationTime: verificationTime,
-    verificationTimeMs: verificationTimeMs,
     call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicWarm(
       await _inner.warmCookies(
         spec: ffiSpec,
@@ -238,12 +229,8 @@ class NtsClient {
   Future<NtsSyncedTime> getTime({
     required NtsServerSpec spec,
     DateTime? verificationTime,
-    @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
   }) async {
-    final resolvedVerificationMs = _resolveVerificationTime(
-      verificationTime,
-      verificationTimeMs,
-    );
+    final resolvedVerificationMs = _verificationMs(verificationTime);
     _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
     return _getTime(
       warm: (timeout) => warmCookies(

@@ -15,10 +15,7 @@ part of 'nts.dart';
 /// `timeout` is a single global wall-clock budget that spans DNS,
 /// NTS-KE (TCP connect, TLS handshake, record I/O) and the AEAD-NTPv4
 /// UDP exchange as one shrinking deadline. Defaults to
-/// [kDefaultTimeout] when omitted. The deprecated `timeoutMs` carries
-/// the same budget as raw milliseconds; providing it alongside an
-/// explicit non-default `timeout` is rejected with
-/// [NtsError.invalidSpec].
+/// [kDefaultTimeout] when omitted.
 ///
 /// `dnsConcurrencyCap` is a per-call ceiling on the process-wide bounded
 /// DNS resolver: if the global in-flight counter has already reached
@@ -141,27 +138,21 @@ part of 'nts.dart';
 /// mismatch, or a bad signature still fails. When omitted (the default)
 /// the system clock is used, exactly as in every prior release.
 /// Pre-epoch instants are rejected with [NtsError.invalidSpec] before
-/// dispatch. The deprecated `verificationTimeMs` carries the same
-/// instant as milliseconds since the Unix epoch; providing both
-/// parameters is rejected with [NtsError.invalidSpec].
+/// dispatch.
 ///
 /// Throws an [NtsError] on every failure path.
 Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
   Duration timeout = kDefaultTimeout,
-  @Deprecated('Use timeout instead.') int? timeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
   int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
   DateTime? verificationTime,
-  @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
 }) => _dispatch(
   spec: spec,
   timeout: timeout,
-  timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
   bridgeConcurrencyCap: bridgeConcurrencyCap,
   verificationTime: verificationTime,
-  verificationTimeMs: verificationTimeMs,
   call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicSample(
     await ffi.ntsQuery(
       spec: ffiSpec,
@@ -259,9 +250,8 @@ Future<NtsTimeSample> ntsQuery({
 /// [NtsClient] today); read [NtsSyncedTime.trustBackend] for
 /// per-call attribution.
 ///
-/// `verificationTime` (or the deprecated `verificationTimeMs`) carries
-/// the same cold-start clock-skew-rescue semantics documented on
-/// [ntsQuery] and is forwarded to every
+/// `verificationTime` carries the same cold-start clock-skew-rescue
+/// semantics documented on [ntsQuery] and is forwarded to every
 /// underlying call. All arguments are validated up front on the same
 /// terms as [ntsQuery] (out-of-range values surface as
 /// [NtsError.invalidSpec] before any FFI dispatch).
@@ -278,12 +268,8 @@ Future<NtsSyncedTime> ntsGetTime({
   TrustMode trustMode = TrustMode.platformWithFallback,
   List<int>? customRoots,
   DateTime? verificationTime,
-  @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
 }) async {
-  final resolvedVerificationMs = _resolveVerificationTime(
-    verificationTime,
-    verificationTimeMs,
-  );
+  final resolvedVerificationMs = _verificationMs(verificationTime);
   _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
   if (trustMode != TrustMode.platformWithFallback || customRoots != null) {
     // Non-default policy: run the whole warm+burst against a private,
@@ -328,8 +314,7 @@ Future<NtsSyncedTime> ntsGetTime({
 /// `timeout`, `dnsConcurrencyCap`, and `bridgeConcurrencyCap` carry
 /// the same semantics as on [ntsQuery] and default to
 /// [kDefaultTimeout] / [kDefaultDnsConcurrencyCap] /
-/// [kDefaultBridgeConcurrencyCap] when omitted. The deprecated
-/// `timeoutMs` resolves on the same terms as on [ntsQuery].
+/// [kDefaultBridgeConcurrencyCap] when omitted.
 ///
 /// The worker-pool occupancy mechanics and bridge admission gate
 /// documented on [ntsQuery] apply here on identical terms: each
@@ -356,27 +341,21 @@ Future<NtsSyncedTime> ntsGetTime({
 /// certificate validity-window check to the supplied instant
 /// (interpreted in UTC) instead of the system clock, leaving all other
 /// certificate validation intact. Pre-epoch instants are rejected with
-/// [NtsError.invalidSpec] before dispatch, and providing both
-/// `verificationTime` and the deprecated `verificationTimeMs` is
-/// rejected on the same terms as [ntsQuery].
+/// [NtsError.invalidSpec] before dispatch.
 ///
 /// Throws an [NtsError] on every failure path.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
   Duration timeout = kDefaultTimeout,
-  @Deprecated('Use timeout instead.') int? timeoutMs,
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
   int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
   DateTime? verificationTime,
-  @Deprecated('Use verificationTime instead.') int? verificationTimeMs,
 }) => _dispatch(
   spec: spec,
   timeout: timeout,
-  timeoutMs: timeoutMs,
   dnsConcurrencyCap: dnsConcurrencyCap,
   bridgeConcurrencyCap: bridgeConcurrencyCap,
   verificationTime: verificationTime,
-  verificationTimeMs: verificationTimeMs,
   call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicWarm(
     await ffi.ntsWarmCookies(
       spec: ffiSpec,
