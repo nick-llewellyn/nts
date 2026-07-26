@@ -757,7 +757,8 @@ The wrapper has three jobs:
    FFI's millisecond integers at the dispatch boundary, ceiling the
    timeout so a live sub-millisecond remainder never rounds down to
    a dead budget. The `int` twins (`timeoutMs`, `verificationTimeMs`,
-   `kDefaultTimeoutMs`) survive as `@Deprecated` for one release.
+   `kDefaultTimeoutMs`) were `@Deprecated` through the 5.x–7.x lines
+   and removed in 8.0.0.
 2. **DTOs** — `lib/src/api/models.dart` hand-writes the public DTOs
    (`NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`,
    `NtsDnsPoolStats`, `PhaseTimings`) with plain Dart `int` fields
@@ -783,9 +784,8 @@ The wrapper has three jobs:
    removed, together with the `@Deprecated` `field0` getter aliases,
    in 6.0.0.
 
-The wrapper's default constants (`kDefaultTimeout` and its deprecated
-`kDefaultTimeoutMs` twin, `kDefaultDnsConcurrencyCap`) are pinned
-against their Rust
+The wrapper's default constants (`kDefaultTimeout`,
+`kDefaultDnsConcurrencyCap`) are pinned against their Rust
 counterparts (`DEFAULT_TIMEOUT_MS` in `rust/src/api/nts.rs`,
 `DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS` in `rust/src/nts/dns.rs`) by
 paired tests: `defaults_match_dart_wrapper_constants` in

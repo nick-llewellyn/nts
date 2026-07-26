@@ -54,7 +54,7 @@ enum TimeoutPhase {
   /// calling isolate's own calls; other isolates share the same FRB
   /// worker pool but are not observed by this counter. Raising the
   /// cap or lowering the burst's fan-out is the appropriate
-  /// remediation, not lengthening `timeoutMs` — a longer budget only
+  /// remediation, not lengthening `timeout` — a longer budget only
   /// waits longer behind the same saturated worker pool. Unlike every
   /// other phase, this one fires before the Rust pipeline starts, so
   /// the carrying [NtsError.timeout]'s `trustBackend` is always
@@ -65,11 +65,11 @@ enum TimeoutPhase {
   /// arrived, so admission was refused without spawning a worker.
   /// Distinct from [dnsTimeout]: raising `dnsConcurrencyCap` or
   /// waiting for the in-flight pool to drain is the appropriate
-  /// remediation, not lengthening `timeoutMs`.
+  /// remediation, not lengthening `timeout`.
   dnsSaturation,
 
   /// System resolver took longer than the remaining budget. Lengthening
-  /// `timeoutMs` *or* swapping in a faster recursive resolver are the
+  /// `timeout` *or* swapping in a faster recursive resolver are the
   /// appropriate remediations; raising the concurrency cap would only
   /// allow more threads to wedge in the same lookup.
   dnsTimeout,
@@ -232,7 +232,7 @@ sealed class NtsError implements Exception {
 /// - **Dart wrapper, pre-FFI dispatch (new in 4.0.0).** The four
 ///   wrapper entry points ([ntsQuery], [ntsWarmCookies],
 ///   [NtsClient.query], [NtsClient.warmCookies]) reject `spec.port`
-///   outside `1..65535`, and `timeoutMs` / `dnsConcurrencyCap`
+///   outside `1..65535`, and `timeout` / `dnsConcurrencyCap`
 ///   outside `1..0xFFFFFFFF`, with a wrapper-authored message
 ///   before any FFI dispatch happens. Values that would otherwise
 ///   escape as `RangeError` from the FRB encoder land here as

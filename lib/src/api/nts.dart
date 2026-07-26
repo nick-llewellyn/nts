@@ -56,14 +56,6 @@ part 'nts_convert.dart';
 /// validated at the wrapper boundary).
 const Duration kDefaultTimeout = Duration(milliseconds: 5000);
 
-/// Deprecated alias for [kDefaultTimeout], expressed in milliseconds.
-///
-/// The literal 5000 mirrors `kDefaultTimeout.inMilliseconds`; the getter
-/// is an instance member and never const-usable, so it cannot be
-/// referenced here.
-@Deprecated('Use kDefaultTimeout instead.')
-const int kDefaultTimeoutMs = 5000;
-
 /// Default per-call ceiling on in-flight DNS resolver workers, applied
 /// process-wide by [ntsQuery] / [ntsWarmCookies] / [NtsClient.query] /
 /// [NtsClient.warmCookies].

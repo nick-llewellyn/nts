@@ -49,9 +49,9 @@ const _ptb = NtsServerSpec(host: 'ptbtime1.ptb.de', port: 4460);
 const _servers = <NtsServerSpec>[_cloudflare, _netnod, _ptb];
 
 /// Per-call budget for the happy-path probes, matching the Rust probes'
-/// `10_000`. Wider than [kDefaultTimeoutMs] to tolerate a cold DNS
+/// `10_000`. Wider than [kDefaultTimeout] to tolerate a cold DNS
 /// lookup plus the full NTS-KE handshake on a loaded CI runner.
-const _timeoutMs = 10000;
+const _timeout = Duration(milliseconds: 10000);
 
 /// IANA AEAD id for `AEAD_AES_SIV_CMAC_256`, the algorithm Cloudflare
 /// negotiates (`rust/src/nts/ke/aead.rs` `AES_SIV_CMAC_256`).
@@ -77,7 +77,7 @@ void main() {
         try {
           sample = await _queryWithRetry(
             'ntsQuery ${spec.host}',
-            () => ntsQuery(spec: spec, timeoutMs: _timeoutMs),
+            () => ntsQuery(spec: spec, timeout: _timeout),
           );
         } on NtsError catch (e) {
           // A reachability / protocol failure on one endpoint is
@@ -106,7 +106,7 @@ void main() {
     test('ntsWarmCookies harvests cookies (cloudflare)', () async {
       final outcome = await _queryWithRetry(
         'ntsWarmCookies cloudflare',
-        () => ntsWarmCookies(spec: _cloudflare, timeoutMs: _timeoutMs),
+        () => ntsWarmCookies(spec: _cloudflare, timeout: _timeout),
       );
       expect(
         outcome.freshCookies,
@@ -127,7 +127,7 @@ void main() {
       final client = NtsClient();
       final sample = await _queryWithRetry(
         'NtsClient.query cloudflare',
-        () => client.query(spec: _cloudflare, timeoutMs: _timeoutMs),
+        () => client.query(spec: _cloudflare, timeout: _timeout),
       );
       _assertHealthySample(_cloudflare, sample);
       expect(
@@ -142,7 +142,7 @@ void main() {
       final client = NtsClient(trustMode: TrustMode.platformOnly);
       final sample = await _queryWithRetry(
         'NtsClient.query platformOnly cloudflare',
-        () => client.query(spec: _cloudflare, timeoutMs: _timeoutMs),
+        () => client.query(spec: _cloudflare, timeout: _timeout),
       );
       expect(
         sample.trustBackend,
@@ -158,13 +158,13 @@ void main() {
       final client = NtsClient();
       final first = await _queryWithRetry(
         'NtsClient.query cloudflare (fresh)',
-        () => client.query(spec: _cloudflare, timeoutMs: _timeoutMs),
+        () => client.query(spec: _cloudflare, timeout: _timeout),
       );
       _assertHealthySample(_cloudflare, first);
 
       final second = await _queryWithRetry(
         'NtsClient.query cloudflare (reuse)',
-        () => client.query(spec: _cloudflare, timeoutMs: _timeoutMs),
+        () => client.query(spec: _cloudflare, timeout: _timeout),
       );
       _assertHealthySample(_cloudflare, second);
 
@@ -181,7 +181,7 @@ void main() {
       const dead = NtsServerSpec(host: '127.0.0.1', port: 1);
       Object? caught;
       try {
-        await ntsQuery(spec: dead, timeoutMs: 2000);
+        await ntsQuery(spec: dead, timeout: const Duration(milliseconds: 2000));
         fail('expected ntsQuery to throw against 127.0.0.1:1');
       } on NtsError catch (e) {
         caught = e;

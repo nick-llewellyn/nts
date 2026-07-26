@@ -10,6 +10,21 @@
   `default` or wildcard is unaffected. Nothing else about the existing
   nine variants changed.
 
+- Removed the deprecated millisecond-valued parameters and the constant
+  aliasing them, deprecated since 5.2 in favour of the `Duration` /
+  `DateTime` spellings. Gone: the `kDefaultTimeoutMs` constant; the
+  `timeoutMs` parameter on `ntsQuery`, `ntsWarmCookies`,
+  `NtsClient.query`, and `NtsClient.warmCookies`; and the
+  `verificationTimeMs` parameter on those four plus `ntsGetTime` and
+  `NtsClient.getTime`. Migration is mechanical:
+  `timeoutMs: n` becomes `timeout: Duration(milliseconds: n)`,
+  `verificationTimeMs: n` becomes
+  `verificationTime: DateTime.fromMillisecondsSinceEpoch(n, isUtc: true)`,
+  and `kDefaultTimeoutMs` becomes `kDefaultTimeout.inMilliseconds`.
+  The `NtsError.invalidSpec` failures raised when a caller supplied
+  both spellings of a parameter are gone with them — the conflict is
+  no longer representable. (NTS-99)
+
 ### Added
 
 - Failures that originate in the FFI *decode* path are now converted to
