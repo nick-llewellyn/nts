@@ -22,6 +22,7 @@ import 'package:nts/nts.dart'
     show
         NtsClient,
         NtsError,
+        NtsErrorAbiMismatch,
         NtsErrorAuthentication,
         NtsErrorInternal,
         NtsErrorInvalidSpec,
@@ -445,7 +446,8 @@ class NtsController {
       NtsErrorNoCookies(:final trustBackend) => trustBackend,
       NtsErrorInvalidSpec() ||
       NtsErrorTrustBackendUnavailable() ||
-      NtsErrorInternal() => null,
+      NtsErrorInternal() ||
+      NtsErrorAbiMismatch() => null,
     };
     if (isErrorSeverity(err)) {
       state.log.error(source, message, host: host, trustBackend: backend);

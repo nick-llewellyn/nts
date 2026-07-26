@@ -52,6 +52,12 @@ class _RecordingApi implements NtsRustLibApi {
   ffi.NtsDnsPoolStats nextDnsPoolStats = _zeroFfiDnsPoolStats();
   Object? nextThrow;
 
+  // Thrown by the five synchronous endpoint mocks when non-null. Kept
+  // separate from `nextThrow` so a test can arm a decode-shaped
+  // failure on the sync path without disturbing the async endpoints,
+  // which share this mock instance.
+  Object? nextSyncThrow;
+
   // Per-call query scripting for the `getTime` burst tests. When
   // non-null and non-empty, each query endpoint call (top-level and
   // per-client alike) consumes the head entry: an `ffi.NtsTimeSample`
@@ -134,6 +140,7 @@ class _RecordingApi implements NtsRustLibApi {
     nextWarm = _ffiWarm(0);
     nextDnsPoolStats = _zeroFfiDnsPoolStats();
     nextThrow = null;
+    nextSyncThrow = null;
     queryScript = null;
     queryTimeouts.clear();
     asyncGate = null;
@@ -245,6 +252,8 @@ class _RecordingApi implements NtsRustLibApi {
   @override
   ffi.NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
     dnsPoolStatsCalls++;
+    final t = nextSyncThrow;
+    if (t != null) throw t;
     return nextDnsPoolStats;
   }
 
@@ -292,12 +301,17 @@ class _RecordingApi implements NtsRustLibApi {
   }
 
   @override
-  ffi.TrustMode crateApiNtsNtsClientTrustMode({required ffi.NtsClient that}) =>
-      clientTrustModes[that] ?? const ffi.TrustMode.platformWithFallback();
+  ffi.TrustMode crateApiNtsNtsClientTrustMode({required ffi.NtsClient that}) {
+    final t = nextSyncThrow;
+    if (t != null) throw t;
+    return clientTrustModes[that] ?? const ffi.TrustMode.platformWithFallback();
+  }
 
   @override
   ffi.NtsTrustStatus crateApiNtsNtsTrustStatus() {
     trustStatusCalls++;
+    final t = nextSyncThrow;
+    if (t != null) throw t;
     return nextTrustStatus;
   }
 
@@ -340,6 +354,8 @@ class _RecordingApi implements NtsRustLibApi {
     clientInvalidateCalls++;
     lastClientInvalidateThat = that;
     lastClientInvalidateSpec = spec;
+    final t = nextSyncThrow;
+    if (t != null) throw t;
     return nextInvalidateResult;
   }
 
@@ -347,6 +363,8 @@ class _RecordingApi implements NtsRustLibApi {
   void crateApiNtsNtsClientClear({required ffi.NtsClient that}) {
     clientClearCalls++;
     lastClientClearThat = that;
+    final t = nextSyncThrow;
+    if (t != null) throw t;
   }
 
   @override
@@ -968,6 +986,97 @@ void main() {
     });
   });
 
+  group('ABI-mismatch conversion', () {
+    const spec = NtsServerSpec(host: 'time.example', port: 4460);
+
+    // A library built from Rust sources that disagree with these
+    // bindings dispatches fine but fails on the way back, inside the
+    // generated codec. Those failures arrive as bare Dart `Error`s,
+    // not as `ffi.NtsError`, so they bypass the conversion arm; the
+    // wrapper widens the catch to name the cause and the rebuild.
+
+    // The three decode-failure shapes the wrapper attributes to a
+    // layout disagreement. `ArgumentError` last because `RangeError`
+    // is a subtype of it — ordering here documents that the predicate
+    // covers both independently.
+    final decodeFailures = <Object>[
+      RangeError.range(9, 0, 4, 'byteOffset'),
+      UnimplementedError('unreachable tag 11'),
+      ArgumentError('malformed discriminant'),
+    ];
+
+    for (final failure in decodeFailures) {
+      test('async endpoint converts ${failure.runtimeType} to '
+          'abiMismatch', () async {
+        api.nextThrow = failure;
+        await expectLater(
+          ntsQuery(spec: spec),
+          throwsA(
+            isA<NtsErrorAbiMismatch>().having(
+              (e) => e.message,
+              'names the cause and the rebuild',
+              allOf(contains('$failure'), contains('cargo build --release')),
+            ),
+          ),
+        );
+      });
+
+      test('sync endpoint converts ${failure.runtimeType} to '
+          'abiMismatch', () {
+        api.nextSyncThrow = failure;
+        expect(ntsDnsPoolStats, throwsA(isA<NtsErrorAbiMismatch>()));
+      });
+    }
+
+    test('StateError from a missed init passes through unconverted', () async {
+      // FRB's dispatcher throws `StateError` when `NtsRustLib.init()`
+      // was never awaited. That is a bootstrap ordering mistake with
+      // its own remediation, and the entry points' dartdoc promises
+      // it reaches the caller intact — widening the catch must not
+      // swallow it.
+      api.nextThrow = StateError('Please call NtsRustLib.init() first.');
+      await expectLater(ntsQuery(spec: spec), throwsA(isA<StateError>()));
+    });
+
+    test('sync endpoint lets StateError through unconverted', () {
+      api.nextSyncThrow = StateError('Please call NtsRustLib.init() first.');
+      expect(ntsDnsPoolStats, throwsA(isA<StateError>()));
+    });
+
+    test('ffi.NtsError still converts to its public twin, not '
+        'abiMismatch', () async {
+      // The widened catch sits after the `on ffi.NtsError` arm, so a
+      // genuine protocol error must keep its typed identity rather
+      // than being reclassified as a layout disagreement.
+      api.nextThrow = const ffi.NtsError.noCookies();
+      await expectLater(
+        ntsQuery(spec: spec),
+        throwsA(
+          allOf(
+            equals(const NtsError.noCookies()),
+            isNot(isA<NtsErrorAbiMismatch>()),
+          ),
+        ),
+      );
+    });
+
+    test('every synchronous endpoint is guarded', () {
+      api.nextSyncThrow = RangeError.range(9, 0, 4, 'byteOffset');
+      final client = NtsClient();
+      // Constructing the client consumed no sync mock (the factory is
+      // not guarded — a failure there predates any decode), so all
+      // five guarded call sites are still armed.
+      expect(ntsDnsPoolStats, throwsA(isA<NtsErrorAbiMismatch>()));
+      expect(ntsTrustStatus, throwsA(isA<NtsErrorAbiMismatch>()));
+      expect(() => client.trustMode, throwsA(isA<NtsErrorAbiMismatch>()));
+      expect(
+        () => client.invalidate(spec),
+        throwsA(isA<NtsErrorAbiMismatch>()),
+      );
+      expect(client.clear, throwsA(isA<NtsErrorAbiMismatch>()));
+    });
+  });
+
   group('public DTO value semantics', () {
     test('NtsServerSpec: ==, hashCode, toString', () {
       const a = NtsServerSpec(host: 'time.example', port: 4460);
@@ -1325,6 +1434,13 @@ void main() {
         const NtsError.internal(message: 'b'),
         NtsErrorInternal,
         'NtsError.internal(a)',
+      ),
+      (
+        const NtsError.abiMismatch(message: 'a'),
+        const NtsError.abiMismatch(message: 'a'),
+        const NtsError.abiMismatch(message: 'b'),
+        NtsErrorAbiMismatch,
+        'NtsError.abiMismatch(a)',
       ),
     ];
 

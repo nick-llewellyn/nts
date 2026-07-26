@@ -120,7 +120,8 @@ class NtsClient {
   /// initialization fails with a low-level FRB error rather than a
   /// structured [NtsError]. See the "Initialization has two layers"
   /// section of `README.md` for the full bootstrap contract.
-  TrustMode get trustMode => _publicTrustMode(_inner.trustMode());
+  TrustMode get trustMode =>
+      _syncGuard(() => _publicTrustMode(_inner.trustMode()));
 
   /// Per-client equivalent of the top-level [ntsQuery]. The cookie
   /// pool, AEAD keys, and KE session live in this client's table; on
@@ -287,7 +288,7 @@ class NtsClient {
   /// the full bootstrap contract.
   bool invalidate(NtsServerSpec spec) {
     _validatePort(spec);
-    return _inner.invalidate(spec: _ffiSpec(spec));
+    return _syncGuard(() => _inner.invalidate(spec: _ffiSpec(spec)));
   }
 
   /// Drop every cached session in this client's table. Cheap;
@@ -306,7 +307,7 @@ class NtsClient {
   /// low-level FRB error rather than a structured [NtsError]. See
   /// the "Initialization has two layers" section of `README.md` for
   /// the full bootstrap contract.
-  void clear() => _inner.clear();
+  void clear() => _syncGuard(() => _inner.clear());
 
   // Release the underlying native handle (the Rust `Arc` behind the
   // FRB `RustOpaque`) eagerly instead of waiting for the GC

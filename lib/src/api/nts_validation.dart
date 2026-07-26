@@ -82,6 +82,69 @@ DateTime? _verificationInstant(int? resolvedMs) => resolvedMs == null
     ? null
     : DateTime.fromMillisecondsSinceEpoch(resolvedMs, isUtc: true);
 
+// --- ABI-mismatch interception ----------------------------------------
+//
+// A call can dispatch into the native library successfully and still
+// fail on the way back: the FRB-generated codec decodes the returned
+// bytes against the layout the bindings were generated for, and a
+// library built from different Rust sources produces bytes that do
+// not match. The failures surface from the codec as bare Dart
+// `Error`s rather than as an `ffi.NtsError`, so they escape the
+// `on ffi.NtsError catch` arms and reach consumers as a raw
+// `RangeError (byteOffset)` naming neither the cause nor the fix.
+//
+// Three shapes are attributable to a layout disagreement:
+//
+// - `RangeError` — a fixed-width decoder read past the end of a
+//   buffer shorter than the layout expects.
+// - `UnimplementedError` — an enum discriminant the generated
+//   `switch` has no arm for (see `sse_decode_nts_error`'s `default`).
+// - `ArgumentError` — a decoded value rejected as malformed before
+//   it reaches a DTO constructor.
+//
+// Deliberately *not* caught: `StateError`, which FRB's dispatcher
+// throws for a missed `NtsRustLib.init()`. That is a bootstrap
+// ordering mistake with its own documented remediation, and the four
+// entry points' dartdoc already promises it passes through
+// unconverted.
+//
+// The wrapper validates its own integer arguments up front
+// (`_validateRanges`), so an encode-side `RangeError` cannot reach
+// here; anything of these shapes crossing this boundary originates
+// in the decode path.
+bool _isAbiDecodeFailure(Object e) =>
+    e is RangeError || e is UnimplementedError || e is ArgumentError;
+
+// Rebuild guidance carried on every converted decode failure. The
+// example CLI warns about the common case ahead of the call by
+// comparing timestamps, but that check cannot fire for a library
+// loaded from outside a crate tree, a prebuilt binary shipped
+// without sources, or one built for another architecture — those
+// land here instead.
+NtsError _abiMismatchError(Object cause) => NtsError.abiMismatch(
+  message:
+      'the loaded native library and these Dart bindings disagree on '
+      'the wire layout of a value crossing the FFI boundary '
+      '($cause) — rebuild the native library from the Rust sources '
+      'matching this package version (`cargo build --release` in '
+      '`rust/`, then regenerate bindings with '
+      '`flutter_rust_bridge_codegen generate` if the Rust API '
+      'changed)',
+);
+
+// Synchronous entry points dispatch through the same FRB table and
+// decode through the same codecs, so they carry the same exposure.
+// They have no `on ffi.NtsError catch` to widen — the Rust side
+// cannot fail them — so the conversion is all they need.
+T _syncGuard<T>(T Function() body) {
+  try {
+    return body();
+  } catch (e, stack) {
+    if (!_isAbiDecodeFailure(e)) rethrow;
+    Error.throwWithStackTrace(_abiMismatchError(e), stack);
+  }
+}
+
 // Shared resolve -> validate -> gate -> convert -> catch scaffolding
 // for the four query/warmCookies entry points (top-level and
 // per-client). Each entry point supplies only its own FFI invocation
@@ -128,6 +191,13 @@ Future<T> _dispatch<T>({
         // conversion so debuggers point at the FRB dispatcher / Rust
         // boundary where the error originated, not at this catch site.
         Error.throwWithStackTrace(_publicError(err), stack);
+      } catch (e, stack) {
+        // The Rust side returned, but the generated codec could not
+        // decode what came back. Preserve the stack for the same
+        // reason as above — it points into the codec frame that
+        // detected the layout disagreement.
+        if (!_isAbiDecodeFailure(e)) rethrow;
+        Error.throwWithStackTrace(_abiMismatchError(e), stack);
       }
     },
   );

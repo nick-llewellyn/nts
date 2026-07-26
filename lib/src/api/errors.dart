@@ -97,7 +97,7 @@ enum TimeoutPhase {
 
 /// Failure surface for `ntsQuery` and `ntsWarmCookies`.
 ///
-/// Sealed: every concrete instance is one of the eight variants
+/// Sealed: every concrete instance is one of the ten variants
 /// declared below, and exhaustive `switch (err) { ... }` on an
 /// `NtsError` value is checked at compile time. Implements [Exception]
 /// so `try { ... } on NtsError catch (err)` and `try { ... } on
@@ -208,6 +208,21 @@ sealed class NtsError implements Exception {
 
   /// Bug guard for unreachable internal states.
   const factory NtsError.internal({required String message}) = NtsErrorInternal;
+
+  /// The loaded native library and these Dart bindings disagree on
+  /// the wire layout of a value crossing the FFI boundary. New in
+  /// 8.0.0; consumers using exhaustive `switch (err) { ... }` on
+  /// `NtsError` must add an arm for this variant.
+  ///
+  /// Not a server-side or network condition: no NTS exchange
+  /// reached the point of failing. The call dispatched into the
+  /// native library, which returned bytes the generated codec
+  /// could not decode against the layout it was built for. The
+  /// remediation is always to rebuild the native library from the
+  /// Rust sources matching this package version — see the
+  /// "Initialization has two layers" section of `README.md`.
+  const factory NtsError.abiMismatch({required String message}) =
+      NtsErrorAbiMismatch;
 }
 
 /// Variant: `spec` (or one of the integer arguments accompanying
@@ -476,4 +491,43 @@ final class NtsErrorInternal extends NtsError {
 
   @override
   String toString() => 'NtsError.internal($message)';
+}
+
+/// Variant: the loaded native library and these Dart bindings
+/// disagree on the wire layout of a value crossing the FFI
+/// boundary. New in 8.0.0; see [NtsError.abiMismatch].
+///
+/// Raised by the wrapper when a call into the native library
+/// completes but the FRB-generated codec fails to decode the
+/// returned bytes — an unrecognised enum discriminant, or a buffer
+/// shorter than the layout the bindings were generated for. Those
+/// failures arrive as bare Dart `Error`s (`RangeError`,
+/// `UnimplementedError`, `ArgumentError`) from the codec rather
+/// than as a structured error from the Rust side, so the wrapper
+/// converts them here to keep its single-error-surface contract.
+///
+/// The overwhelmingly common cause is a stale native library: the
+/// Rust sources changed and the library was not rebuilt. The
+/// example CLI additionally warns about this ahead of the call
+/// when it can compare timestamps, but that check cannot fire for
+/// a library loaded from outside a crate tree, a prebuilt binary
+/// shipped without sources, or a library built for another
+/// architecture.
+final class NtsErrorAbiMismatch extends NtsError {
+  /// Diagnostic naming the decode failure and the remediation.
+  final String message;
+
+  /// Construct an `AbiMismatch` variant.
+  const NtsErrorAbiMismatch({required this.message}) : super._();
+
+  @override
+  int get hashCode => Object.hash(NtsErrorAbiMismatch, message);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NtsErrorAbiMismatch && message == other.message);
+
+  @override
+  String toString() => 'NtsError.abiMismatch($message)';
 }
