@@ -77,6 +77,40 @@
   *older* Rust revision leaves a newer library that is equally wrong
   but indistinguishable by mtime. (NTS-97)
 
+### Changed
+
+- Refreshed both Rust lockfiles ahead of the major, moving 35 packages
+  to their latest compatible versions — `tokio` 1.52.3 to 1.53.1,
+  `webpki-roots` 1.0.7 to 1.0.9, `regex` 1.12.3 to 1.13.1, `cc` 1.2.63
+  to 1.4.0, `memchr` 2.8.1 to 2.8.3, plus `anyhow`, `bytes`, and the
+  `futures` and `wasm-bindgen` families. No manifest constraint moved;
+  `rust/Cargo.toml` is untouched. Three crates are deliberately held
+  back, each pinning rather than loosening the gate that rejected the
+  update, per the guidance in the `dependency-review` job's own comment
+  block:
+
+  - `thiserror` stays at 2.0.18 in both lockfiles. 2.0.19 switches
+    `thiserror-impl` to `syn 3.0.3` while the rest of the graph is on
+    `syn 2.0.119`, tripping `multiple-versions = "deny"` in
+    `rust/deny.toml`. (NTS-102)
+  - `tokio` stays at 1.52.3 in `rust/fuzz/Cargo.lock` only; the
+    production lockfile carries 1.53.1. `rustc 1.99.0-nightly` ICEs in
+    `rustc_codegen_ssa` compiling 1.53.1 under the sanitizer flag set
+    `cargo-fuzz` passes. Stable compiles the same version cleanly, so
+    only the fuzz jobs are affected, and the fuzz harness never ships.
+    (NTS-103)
+  - `rustc-demangle` stays at 0.1.27 in both lockfiles. 0.1.28 declares
+    the legacy slash form `MIT/Apache-2.0` rather than the SPDX
+    expression `MIT OR Apache-2.0`; `dependency-review` cannot parse it
+    and synthesises a `LicenseRef-bad-*` placeholder that can never
+    match the allow-list. The licence terms are unchanged and
+    acceptable — this is a metadata-format defect upstream.
+    `cargo deny` normalises the slash form and stays green either way.
+    (NTS-104)
+
+  `generic-array` also stays at 0.14.7, constrained transitively by the
+  RustCrypto AEAD stack rather than by anything this crate declares.
+
 
 ## 7.1.0
 
