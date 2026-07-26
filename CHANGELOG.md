@@ -104,10 +104,10 @@
   - `rustc-demangle` stays at 0.1.27 in both lockfiles. 0.1.28 declares
     the legacy slash form `MIT/Apache-2.0` rather than the SPDX
     expression `MIT OR Apache-2.0`; `dependency-review` cannot parse it
-    and synthesises a `LicenseRef-bad-*` placeholder that can never
+    and synthesizes a `LicenseRef-bad-*` placeholder that can never
     match the allow-list. The license terms are unchanged and
     acceptable — this is a metadata-format defect upstream.
-    `cargo deny` normalises the slash form and stays green either way.
+    `cargo deny` normalizes the slash form and stays green either way.
     (NTS-104)
 
   `generic-array` also stays at 0.14.7, constrained transitively by the
