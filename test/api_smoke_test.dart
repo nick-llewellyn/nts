@@ -569,6 +569,10 @@ class _CodecProbe extends NtsRustLibApiImpl {
       failureFrom(sse_decode_nts_trust_status, b);
   Object? trustModeFailure(List<int> b) =>
       failureFrom(sse_decode_trust_mode, b);
+  // Unlike `TrustMode`, `TrustBackend` is fieldless: the generated
+  // decoder reads an `i32` and indexes `TrustBackend.values` with it.
+  Object? trustBackendFailure(List<int> b) =>
+      failureFrom(sse_decode_trust_backend, b);
   Object? ntsErrorFailure(List<int> b) => failureFrom(sse_decode_nts_error, b);
   Object? stringFailure(List<int> b) => failureFrom(sse_decode_String, b);
 }
@@ -1128,7 +1132,7 @@ void main() {
         // A fieldless enum decodes as an index into `.values`, so a
         // variant added Rust-side overruns the Dart list.
         'enum index past the end of values': () =>
-            probe.trustModeFailure([..._sseI32(3), ..._sseI32(-5)]),
+            probe.trustBackendFailure(_sseI32(99)),
         // A length prefix read under the wrong width yields a
         // nonsense count before any payload is touched.
         'negative length prefix': () => probe.stringFailure(_sseI32(-5)),
