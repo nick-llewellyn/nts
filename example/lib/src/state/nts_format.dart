@@ -12,6 +12,7 @@
 import 'package:nts/nts.dart'
     show
         NtsError,
+        NtsErrorAbiMismatch,
         NtsErrorAuthentication,
         NtsErrorInternal,
         NtsErrorInvalidSpec,
@@ -129,18 +130,22 @@ String formatGetTimeSuccess(NtsSyncedTime time) {
 
 /// Severity classification for an [NtsError]. Network / timeout / spec
 /// errors are routine when probing arbitrary hosts and warrant warn;
-/// authentication, KE-/NTP-protocol, internal, and trust-backend
-/// errors are genuinely interesting and stay at error. The trust-backend
+/// authentication, KE-/NTP-protocol, internal, ABI-mismatch, and
+/// trust-backend errors are genuinely interesting and stay at error.
+/// The trust-backend
 /// case is a deliberate caller-side configuration choice (`PlatformOnly`)
 /// the runtime cannot honour; loud surfacing is appropriate so an
 /// operator notices the misconfiguration rather than treating it as a
-/// transient network blip.
+/// transient network blip. The ABI-mismatch case means the loaded
+/// native library does not match these bindings at all, so every
+/// subsequent call will fail the same way until it is rebuilt.
 bool isErrorSeverity(NtsError err) =>
     err is NtsErrorAuthentication ||
     err is NtsErrorKeProtocol ||
     err is NtsErrorNtpProtocol ||
     err is NtsErrorTrustBackendUnavailable ||
-    err is NtsErrorInternal;
+    err is NtsErrorInternal ||
+    err is NtsErrorAbiMismatch;
 
 /// Human-readable rendering of an [NtsError] suitable for the live log
 /// or stderr.
@@ -187,6 +192,7 @@ String describeError(NtsError err) => switch (err) {
   NtsErrorTrustBackendUnavailable(:final message) =>
     'TrustBackendUnavailable: $message',
   NtsErrorInternal(:final message) => 'Internal: $message',
+  NtsErrorAbiMismatch(:final message) => 'AbiMismatch: $message',
 };
 
 /// Structured timeout-phase tag for an [NtsError], or `null` for any
@@ -214,6 +220,7 @@ String errorTypeName(NtsError err) => switch (err) {
   NtsErrorNoCookies() => 'NoCookies',
   NtsErrorTrustBackendUnavailable() => 'TrustBackendUnavailable',
   NtsErrorInternal() => 'Internal',
+  NtsErrorAbiMismatch() => 'AbiMismatch',
 };
 
 /// JSON-shaped success payload for an `ntsQuery` result. Carries

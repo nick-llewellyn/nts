@@ -767,12 +767,17 @@ The wrapper has three jobs:
    downstream callers; it surfaces as a compile error in the
    conversion layer instead.
 3. **Errors** — `lib/src/api/errors.dart` hand-writes `NtsError` as a
-   Dart 3 `sealed class implements Exception` with eight final
+   Dart 3 `sealed class implements Exception` with ten final
    variant subclasses (`NtsErrorInvalidSpec`, `NtsErrorNetwork`, …)
    and the `TimeoutPhase` enum. The wrapper catches the FFI-side
    `NtsError` and rethrows the public twin via an exhaustive
    conversion `switch`, so the FFI's freezed-generated shape is
-   contained at the boundary. The pre-3.0 underscore-prefixed
+   contained at the boundary. `NtsErrorAbiMismatch` is the one
+   variant with no FFI-side counterpart: it is synthesised by the
+   wrapper when the generated codec cannot decode what the native
+   library returned, which signals that the library and these
+   bindings were built from different Rust sources. The pre-3.0
+   underscore-prefixed
    variant names (`NtsError_InvalidSpec`, …) survived as
    `@Deprecated` typedef aliases through the 3.x–5.x lines and were
    removed, together with the `@Deprecated` `field0` getter aliases,

@@ -1,7 +1,40 @@
 # Changelog
 
 
-## 7.2
+## 8.0
+
+### Breaking
+
+- `NtsError` gains an `abiMismatch` variant. The class is `sealed`, so
+  any exhaustive `switch` over it must add an arm; a `switch` with a
+  `default` or wildcard is unaffected. Nothing else about the existing
+  nine variants changed.
+
+### Added
+
+- Failures that originate in the FFI *decode* path are now converted to
+  `NtsError.abiMismatch` instead of escaping as raw Dart errors. A
+  native library built from Rust sources that disagree with these
+  bindings dispatches successfully and only fails on the way back,
+  inside the generated codec — and because those failures are bare
+  `Error`s rather than `NtsError`s, they bypassed the wrapper's
+  conversion arm entirely. The result was a `RangeError (byteOffset)`
+  naming neither the cause nor the fix. All four asynchronous entry
+  points and all five synchronous ones (`ntsDnsPoolStats`,
+  `ntsTrustStatus`, `NtsClient.trustMode`, `NtsClient.invalidate`,
+  `NtsClient.clear`) now surface a typed error whose message names the
+  rebuild (`cargo build --release` in `rust/`, plus
+  `flutter_rust_bridge_codegen generate` if the Rust API changed).
+  Three decode-failure shapes are attributed to a layout disagreement:
+  `RangeError`, `UnimplementedError` (an enum discriminant the
+  generated `switch` has no arm for), and `ArgumentError`. `StateError`
+  is deliberately excluded — it signals a missed `NtsRustLib.init()`,
+  a bootstrap ordering mistake with its own remediation, and continues
+  to reach callers unconverted as the entry points' dartdoc promises.
+  This complements the CLI loader warning below, which catches the
+  common case ahead of the call but cannot fire for a library loaded
+  from outside a crate tree, a prebuilt binary shipped without sources,
+  or one built for another architecture. (NTS-98)
 
 ### Fixed
 

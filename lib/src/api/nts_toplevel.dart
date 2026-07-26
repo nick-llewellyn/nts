@@ -435,7 +435,8 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 ///   progress; raising the cap would only push more threads into the
 ///   same wedge. This is the saturation signature operators should
 ///   alert on.
-NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
+NtsDnsPoolStats ntsDnsPoolStats() =>
+    _syncGuard(() => _publicStats(ffi.ntsDnsPoolStats()));
 
 /// Snapshot the process-global trust-anchor diagnostic state.
 /// Synchronous (no future / isolate hop): backed by seven atomic
@@ -497,4 +498,5 @@ NtsDnsPoolStats ntsDnsPoolStats() => _publicStats(ffi.ntsDnsPoolStats());
 /// `defaultBackend*Count` fields can be observed to lag the
 /// [NtsTrustStatus.defaultClientBackend] pointer by a single
 /// store-pair across concurrent snapshots.
-NtsTrustStatus ntsTrustStatus() => _publicTrustStatus(ffi.ntsTrustStatus());
+NtsTrustStatus ntsTrustStatus() =>
+    _syncGuard(() => _publicTrustStatus(ffi.ntsTrustStatus()));
