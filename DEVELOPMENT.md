@@ -191,6 +191,66 @@ flutter test --run-skipped test/live/
 directory without it still skips, because the tag-skip config applies
 regardless of the path selector.
 
+### Cross-platform live probes (weekly, advisory)
+
+`.github/workflows/cross-platform.yml` runs both live suites — the Rust
+probes in `rust/src/api/nts/tests.rs` and the Dart suite above — on
+`ubuntu-latest` and `windows-latest`, weekly (Mondays 07:00 UTC, offset
+an hour from `fuzz.yml`'s daily 06:00 so the two do not start together)
+plus `workflow_dispatch`. The offset is not a hard guarantee against
+overlap — a fuzz run configured past an hour would still run into this
+window — but the cron default is 60 s per target, so in practice fuzz
+has long finished by 07:00. A `pull_request` trigger scoped to the
+workflow file itself allows an edit to be validated before its first
+scheduled run, mirroring `fuzz.yml`'s idiom.
+
+The workflow is intentionally **not** in branch protection's required
+status checks on `main`. Every step in it can go red because
+Cloudflare, Netnod, or PTB is unreachable rather than because the tree
+is broken, so a red run is a signal to triage, not a merge blocker.
+`fail-fast: false` keeps a Windows-only break from hiding the Linux
+result.
+
+What the Windows leg uniquely covers: `rust/Cargo.toml` declares a
+Windows-conditional `windows-sys` dependency backing the sleep-aware
+monotonic clock in `nts::boottime`, and while
+`x86_64-pc-windows-msvc` is listed in `rust/rust-toolchain.toml`,
+nothing else in CI builds — let alone runs — that arm. The Dart live
+suite, separately, has never run in CI on any platform because
+`dart_test.yaml` skips the `live` tag by default. The Rust probes are
+*not* new Linux coverage: the four Cloudflare probes in
+`rust/src/api/nts/tests.rs` are plain `#[test]`, so `ci.yml`'s existing
+`cargo test --lib --locked` already runs them on every Rust-touching
+PR.
+
+Two implementation constraints worth not re-breaking:
+
+- **No `--ignored` on the cargo invocation.** The two `#[ignore]`d live
+  tests should stay ignored: `nts_query_live_ipv6_ptb` because GHA
+  runners have inconsistent IPv6 by Azure region (its semantics are
+  "skip gracefully on network failure", not "retry then fail", so under
+  `--ignored` it becomes a per-region coin-flip), and
+  `ke_live_cloudflare` because it is a KE-only probe already subsumed by
+  the four `api/nts` probes.
+- **The release dylib must be built before the Dart step.**
+  `NtsRustLib.init()` loads from `rust/target/release/` and `flutter
+  test` does not run the Native Assets hook, so without the explicit
+  `cargo build --release --locked` the Dart suite fails at load.
+
+Reproduce a leg locally with the same commands the workflow runs:
+
+```bash
+(cd rust && cargo test --lib --locked -- --nocapture)
+flutter pub get
+(cd rust && cargo build --release --locked)
+flutter test --run-skipped test/live/
+```
+
+Out of scope: macOS runners (the dev box's own platform, and GHA macOS
+minutes are 10× Linux), coverage upload (network-dependent coverage
+would make the Codecov dashboard drift with Cloudflare's uptime), and
+promoting the workflow to a required check.
+
 ### Fuzzing the Rust parsers (cargo-fuzz)
 
 The Rust crate ships a `cargo-fuzz` workspace under `rust/fuzz/` that
@@ -330,7 +390,7 @@ that push events don't have:
 | `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: [changes, build]` + `if: always()` so it runs whether the matrix executed, was skipped, or failed. Passes when `needs.changes.result == 'success'` AND `needs.build.result` is `success` or `skipped`; fails otherwise. The `changes`-success precondition discriminates a legitimate doc-only matrix skip from a `changes`-failure cascade-skip — without it, a transient paths-filter failure would silently green-light branch protection. Required-status-check entry on `main` for the Dart side. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated on `rust`/`bindings`/`ci`. |
-| `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `moderate`-or-higher advisories across pubspec + Cargo.toml. |
+| `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `moderate`-or-higher advisories across pubspec + Cargo.toml. Also enforces the NTS-72 SPDX `allow-licenses` list, kept in lockstep with `[licenses].allow` in `rust/deny.toml`. That list is a *distribution* policy — what may be linked into the published package or the `nts_rust` cdylib. Because this action also walks the workflow dependency graph (`pkg:githubactions/...`), which `cargo-deny` never sees, build-time actions are exempted individually via `allow-dependencies-licenses` rather than by widening `allow-licenses`: an action runs on an ephemeral runner and is never conveyed to a user, so its licence imposes no obligation on anything shipped. Currently one entry, `Swatinem/rust-cache` (LGPL-3.0). Adding to that carve-out is not a reason to touch `allow-licenses` or `deny.toml`. |
 | `hooks-syntax` | ~5 s | POSIX-shell syntax (`sh -n`), presence, and exec-bit check for the repo-tracked git hooks under `tool/hooks/` (`pre-commit`, `pre-merge-commit`, `pre-push`). The validation step enumerates the required hooks explicitly rather than globbing — git treats missing or non-executable hook files as no-ops, so a glob would silently pass on a PR that deletes, renames, or chmod-strips a hook, and the explicit list fails closed for that shape. A second drift check then loops over `tool/hooks/*`, skips `test_hooks.sh`, and fails CI if any file matching a recognised git client-hook name (per `git help hooks`) is missing from `required_hooks`, so the list cannot silently fall behind when a new hook is added to the directory. Gated on `hooks`/`ci`/`workflow_dispatch`. Required-status-check entry on `main`. |
 | `hooks-behaviour` | ~10 s | Runtime functional check that complements `hooks-syntax`. Runs `tool/hooks/test_hooks.sh`, which provisions a throwaway repo, points `core.hooksPath` at `tool/hooks/`, stages real commits and real merges, and invokes `pre-push` directly with synthetic refs/SHAs on stdin (git's documented pre-push contract: read updates from stdin, exit non-zero to abort — running an actual `git push` would also need a remote target without exercising any additional hook logic). Asserts on exit codes plus stderr content. Catches the regression shape `sh -n` cannot — a script that parses but no longer enforces policy at runtime — including the round-9 unquoted-heredoc bug where `set -u` aborted `pre-commit` before the recovery recipe printed (the recipe assertion is the explicit sentinel). Gated on `hooks`/`ci`/`workflow_dispatch`. Required-status-check entry on `main`. |
 

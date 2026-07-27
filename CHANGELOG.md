@@ -3,6 +3,34 @@
 
 ## 8.1
 
+### Added
+
+- New advisory CI workflow `.github/workflows/cross-platform.yml` runs
+  the Rust live probes and the `test/live/` Dart suite on both
+  `ubuntu-latest` and `windows-latest`, weekly (Mondays 07:00 UTC) and
+  on manual dispatch. It adds the first CI coverage of the
+  Windows-conditional `windows-sys` arm behind `nts::boottime`, and the
+  first CI run of the Dart live suite on any platform. The workflow is
+  not a required status check: its steps depend on public NTS server
+  reachability, so a red run is a signal to triage rather than a merge
+  blocker. Repository infrastructure only — no packaged code changed.
+  (NTS-12)
+
+- The `dependency-review` job now carries an `allow-dependencies-licenses`
+  carve-out for build-time GitHub Actions, separating them from the
+  NTS-72 SPDX `allow-licenses` list. That list is a distribution policy
+  governing what may be linked into the published package or the
+  `nts_rust` cdylib, which is why it is kept in lockstep with
+  `[licenses].allow` in `rust/deny.toml`; actions are a different
+  population, executed on an ephemeral runner and never conveyed to a
+  user. Exemptions are named per-action rather than per-licence so a
+  future copyleft action must be added deliberately. One entry today:
+  `Swatinem/rust-cache` (LGPL-3.0), already used by `ci.yml` and
+  `fuzz.yml` and surfaced only because the new workflow above
+  introduced it "newly" from the diff's perspective. Repository
+  infrastructure only — no packaged code changed, and the distribution
+  policy is unchanged. (NTS-12)
+
 ### Changed
 
 - `ntsGetTime` and `NtsClient.getTime` now share one preamble and one
