@@ -269,8 +269,14 @@ Future<NtsSyncedTime> ntsGetTime({
   List<int>? customRoots,
   DateTime? verificationTime,
 }) async {
-  final resolvedVerificationMs = _verificationMs(verificationTime);
-  _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
+  // Validate ahead of the branch below so an out-of-range spec still
+  // surfaces as `invalidSpec` rather than as the pair-validation
+  // `ArgumentError` the NtsClient factory would raise first.
+  // `_getTimeFor` re-runs the same checks on both paths.
+  _validateGetTime(
+    spec: spec,
+    verificationTimeMs: _verificationMs(verificationTime),
+  );
   if (trustMode != TrustMode.platformWithFallback || customRoots != null) {
     // Non-default policy: run the whole warm+burst against a private,
     // call-scoped client so the singleton's session table (and its
@@ -281,30 +287,16 @@ Future<NtsSyncedTime> ntsGetTime({
     // rather than waiting for the GC finalizer.
     final client = NtsClient(trustMode: trustMode, customRoots: customRoots);
     try {
-      return await client.getTime(
+      return await _getTimeFor(
         spec: spec,
-        verificationTime: _verificationInstant(resolvedVerificationMs),
+        verificationTime: verificationTime,
+        client: client,
       );
     } finally {
       client._dispose();
     }
   }
-  return _getTime(
-    warm: (timeout) => ntsWarmCookies(
-      spec: spec,
-      timeout: timeout,
-      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
-      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-      verificationTime: _verificationInstant(resolvedVerificationMs),
-    ),
-    query: (timeout) => ntsQuery(
-      spec: spec,
-      timeout: timeout,
-      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
-      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-      verificationTime: _verificationInstant(resolvedVerificationMs),
-    ),
-  );
+  return _getTimeFor(spec: spec, verificationTime: verificationTime);
 }
 
 /// Force a fresh NTS-KE handshake against `spec` and return the cookie

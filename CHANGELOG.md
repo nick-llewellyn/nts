@@ -1,6 +1,27 @@
 # Changelog
 
 
+## 8.1
+
+### Changed
+
+- `ntsGetTime` and `NtsClient.getTime` now share one preamble and one
+  closure binding. Both previously repeated the same three-step
+  verification-instant conversion, validation, and re-wrap, then bound a
+  structurally identical `warm` / `query` closure pair forwarding five
+  arguments apiece — the only difference between the two blocks being
+  whether the closures called the top-level functions or the client
+  methods. Both now delegate to a shared `_getTimeFor` helper that
+  selects the endpoint pair by tear-off and binds the arguments once, so
+  the forwarded arguments cannot drift between the two surfaces. The
+  burst-orchestration engine is unchanged, as is the `ntsGetTime` branch
+  that runs a non-default trust policy against a private, call-scoped
+  client. Internal only — both public signatures and all observable
+  behaviour, including the promise that validation failures arrive as a
+  rejected future rather than a synchronous throw, are unchanged.
+  (NTS-77)
+
+
 ## 8.0.0
 
 ### Breaking

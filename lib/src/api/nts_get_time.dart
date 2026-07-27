@@ -40,6 +40,67 @@ const int _kGetTimeMaxBurst = 8;
 // latency, never the happy path.
 const Duration _kGetTimeTimeout = Duration(milliseconds: 8000);
 
+// The shape shared by the top-level `ntsWarmCookies` / `ntsQuery`
+// functions and their `NtsClient` method counterparts, so `_getTimeFor`
+// can select an endpoint pair by tear-off and bind the arguments once.
+typedef _WarmEndpoint =
+    Future<NtsWarmCookiesOutcome> Function({
+      required NtsServerSpec spec,
+      Duration timeout,
+      int dnsConcurrencyCap,
+      int bridgeConcurrencyCap,
+      DateTime? verificationTime,
+    });
+
+typedef _QueryEndpoint =
+    Future<NtsTimeSample> Function({
+      required NtsServerSpec spec,
+      Duration timeout,
+      int dnsConcurrencyCap,
+      int bridgeConcurrencyCap,
+      DateTime? verificationTime,
+    });
+
+// Shared preamble and closure binding for the two `getTime` entry
+// points. `client` selects which pair of endpoints the burst runs
+// against: its own methods when non-null (per-client session table),
+// the top-level functions when null (the process-wide default client).
+// Binding the forwarded arguments once here is what keeps the two
+// surfaces from drifting.
+//
+// `async` deliberately: both entry points promise their validation
+// failures arrive as a rejected future, not as a synchronous throw,
+// and `NtsClient.getTime` delegates here with an expression body.
+Future<NtsSyncedTime> _getTimeFor({
+  required NtsServerSpec spec,
+  required DateTime? verificationTime,
+  NtsClient? client,
+}) async {
+  final resolvedVerificationMs = _verificationMs(verificationTime);
+  _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
+  final resolved = _verificationInstant(resolvedVerificationMs);
+  final _WarmEndpoint warmEndpoint = client == null
+      ? ntsWarmCookies
+      : client.warmCookies;
+  final _QueryEndpoint queryEndpoint = client == null ? ntsQuery : client.query;
+  return _getTime(
+    warm: (timeout) => warmEndpoint(
+      spec: spec,
+      timeout: timeout,
+      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
+      verificationTime: resolved,
+    ),
+    query: (timeout) => queryEndpoint(
+      spec: spec,
+      timeout: timeout,
+      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
+      verificationTime: resolved,
+    ),
+  );
+}
+
 Future<NtsSyncedTime> _getTime({
   required Future<NtsWarmCookiesOutcome> Function(Duration timeout) warm,
   required Future<NtsTimeSample> Function(Duration timeout) query,
