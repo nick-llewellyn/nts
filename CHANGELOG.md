@@ -16,6 +16,21 @@
   blocker. Repository infrastructure only — no packaged code changed.
   (NTS-12)
 
+- The `dependency-review` job now carries an `allow-dependencies-licenses`
+  carve-out for build-time GitHub Actions, separating them from the
+  NTS-72 SPDX `allow-licenses` list. That list is a distribution policy
+  governing what may be linked into the published package or the
+  `nts_rust` cdylib, which is why it is kept in lockstep with
+  `[licenses].allow` in `rust/deny.toml`; actions are a different
+  population, executed on an ephemeral runner and never conveyed to a
+  user. Exemptions are named per-action rather than per-licence so a
+  future copyleft action must be added deliberately. One entry today:
+  `Swatinem/rust-cache` (LGPL-3.0), already used by `ci.yml` and
+  `fuzz.yml` and surfaced only because the new workflow above
+  introduced it "newly" from the diff's perspective. Repository
+  infrastructure only — no packaged code changed, and the distribution
+  policy is unchanged. (NTS-12)
+
 ### Changed
 
 - `ntsGetTime` and `NtsClient.getTime` now share one preamble and one

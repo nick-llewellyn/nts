@@ -616,6 +616,44 @@ jobs:
             Unlicense,
             Unicode-3.0,
             CDLA-Permissive-2.0
+          # Build-tooling carve-out, deliberately *not* an extension of
+          # `allow-licenses` above. That list is a distribution policy:
+          # it governs what may be linked into the published Dart
+          # package or the `nts_rust` cdylib, which is why it is kept in
+          # lockstep with rust/deny.toml. GitHub Actions are a different
+          # population -- they are JavaScript executed on an ephemeral
+          # runner and discarded, never conveyed to a user, so a
+          # copyleft licence on one imposes no obligation on anything we
+          # ship. `cargo-deny` never sees them at all; this action does,
+          # because it walks the workflow dependency graph
+          # (`pkg:githubactions/...`) alongside the package graphs and
+          # applies one licence list to both.
+          #
+          # Entries are per-action rather than per-licence on purpose:
+          # five actions is a reviewable set, and naming them one at a
+          # time means a future copyleft action has to be added
+          # deliberately instead of being waved through by a blanket
+          # `LGPL-3.0` allowance. Adding to this list is NOT a reason to
+          # touch `allow-licenses` or rust/deny.toml.
+          #
+          # Swatinem/rust-cache is LGPL-3.0 (cargo registry + target-dir
+          # caching). It has been in ci.yml and fuzz.yml since before
+          # this gate existed; it surfaced only when
+          # cross-platform.yml introduced it "newly" from the diff's
+          # perspective, since this action reviews added deps only.
+          #
+          # Both casings are listed deliberately. purl matching here is
+          # case-sensitive (actions/dependency-review-action#991) and
+          # the graph reports an action as it is *referenced* in the
+          # workflow -- `Swatinem/rust-cache`, capital S -- while the
+          # purl spec's default normalisation is lowercase. Upstream
+          # intends to make the comparison case-insensitive (PR #1057),
+          # which would make the lowercase entry alone sufficient; until
+          # that ships in a release we pin to, listing both is the
+          # documented workaround and costs nothing.
+          allow-dependencies-licenses: >-
+            pkg:githubactions/Swatinem/rust-cache,
+            pkg:githubactions/swatinem/rust-cache
 
   cargo-deny:
     # Rust supply-chain policy gate (NTS-72): runs the `bans`,
