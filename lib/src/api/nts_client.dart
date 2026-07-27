@@ -229,26 +229,8 @@ class NtsClient {
   Future<NtsSyncedTime> getTime({
     required NtsServerSpec spec,
     DateTime? verificationTime,
-  }) async {
-    final resolvedVerificationMs = _verificationMs(verificationTime);
-    _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
-    return _getTime(
-      warm: (timeout) => warmCookies(
-        spec: spec,
-        timeout: timeout,
-        dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
-        bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-        verificationTime: _verificationInstant(resolvedVerificationMs),
-      ),
-      query: (timeout) => query(
-        spec: spec,
-        timeout: timeout,
-        dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
-        bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-        verificationTime: _verificationInstant(resolvedVerificationMs),
-      ),
-    );
-  }
+  }) =>
+      _getTimeFor(spec: spec, verificationTime: verificationTime, client: this);
 
   /// Drop this client's cached session for `spec`'s `host:port`, if
   /// any. Returns `true` when an entry was removed, `false` when no
