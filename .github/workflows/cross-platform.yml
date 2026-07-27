@@ -85,6 +85,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     timeout-minutes: 30
+    env:
+      # Pin the pub cache to one path on both legs. Left unset, pub
+      # defaults to `~/.pub-cache` on Linux but `%LOCALAPPDATA%\Pub\
+      # Cache` on Windows, so a `~/.pub-cache` cache path would save an
+      # empty directory on the Windows leg and restore nothing.
+      # `runner.temp` rather than `github.workspace`: the latter is the
+      # checkout root, and a stray dependency tree inside it would be
+      # visible to `flutter test`'s file walk.
+      PUB_CACHE: ${{ runner.temp }}/pub-cache
     defaults:
       run:
         # Uniform shell on both legs, so the `run:` blocks execute
@@ -130,11 +139,12 @@ jobs:
 
       # pubspec.lock is gitignored, so the key hashes pubspec.yaml. The
       # `-live-` segment keeps this workflow's cache disjoint from
-      # `ci.yml`'s.
+      # `ci.yml`'s. The path tracks the job-level `PUB_CACHE` rather
+      # than `~/.pub-cache`, which is Linux-only.
       - name: Cache pub
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
-          path: ~/.pub-cache
+          path: ${{ env.PUB_CACHE }}
           key: pub-${{ runner.os }}-live-${{ hashFiles('**/pubspec.yaml') }}
           restore-keys: |
             pub-${{ runner.os }}-live-

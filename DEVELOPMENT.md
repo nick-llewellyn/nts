@@ -241,6 +241,7 @@ Reproduce a leg locally with the same commands the workflow runs:
 
 ```bash
 (cd rust && cargo test --lib --locked -- --nocapture)
+flutter pub get
 (cd rust && cargo build --release --locked)
 flutter test --run-skipped test/live/
 ```
