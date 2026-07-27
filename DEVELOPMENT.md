@@ -196,10 +196,13 @@ regardless of the path selector.
 `.github/workflows/cross-platform.yml` runs both live suites — the Rust
 probes in `rust/src/api/nts/tests.rs` and the Dart suite above — on
 `ubuntu-latest` and `windows-latest`, weekly (Mondays 07:00 UTC, offset
-an hour from `fuzz.yml`'s daily 06:00 so the two never contend) plus
-`workflow_dispatch`. A `pull_request` trigger scoped to the workflow
-file itself allows an edit to be validated before its first scheduled
-run, mirroring `fuzz.yml`'s idiom.
+an hour from `fuzz.yml`'s daily 06:00 so the two do not start together)
+plus `workflow_dispatch`. The offset is not a hard guarantee against
+overlap — a fuzz run configured past an hour would still run into this
+window — but the cron default is 60 s per target, so in practice fuzz
+has long finished by 07:00. A `pull_request` trigger scoped to the
+workflow file itself allows an edit to be validated before its first
+scheduled run, mirroring `fuzz.yml`'s idiom.
 
 The workflow is intentionally **not** in branch protection's required
 status checks on `main`. Every step in it can go red because

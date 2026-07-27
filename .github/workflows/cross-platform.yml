@@ -52,7 +52,10 @@ name: Cross-platform live probes
 
 on:
   # Weekly, Monday 07:00 UTC. Offset an hour from `fuzz.yml`'s daily
-  # 06:00 so the two never contend for the same window.
+  # 06:00 so the two do not start together. The offset is not a hard
+  # guarantee against overlap -- a fuzz run configured past an hour
+  # would still run into this window -- but the cron default is 60 s
+  # per target, so in practice fuzz has long finished by 07:00.
   schedule:
     - cron: '0 7 * * 1'
   workflow_dispatch:
