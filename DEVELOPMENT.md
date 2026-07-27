@@ -191,6 +191,62 @@ flutter test --run-skipped test/live/
 directory without it still skips, because the tag-skip config applies
 regardless of the path selector.
 
+### Cross-platform live probes (weekly, advisory)
+
+`.github/workflows/cross-platform.yml` runs both live suites — the Rust
+probes in `rust/src/api/nts/tests.rs` and the Dart suite above — on
+`ubuntu-latest` and `windows-latest`, weekly (Mondays 07:00 UTC, offset
+an hour from `fuzz.yml`'s daily 06:00 so the two never contend) plus
+`workflow_dispatch`. A `pull_request` trigger scoped to the workflow
+file itself allows an edit to be validated before its first scheduled
+run, mirroring `fuzz.yml`'s idiom.
+
+The workflow is intentionally **not** in branch protection's required
+status checks on `main`. Every step in it can go red because
+Cloudflare, Netnod, or PTB is unreachable rather than because the tree
+is broken, so a red run is a signal to triage, not a merge blocker.
+`fail-fast: false` keeps a Windows-only break from hiding the Linux
+result.
+
+What the Windows leg uniquely covers: `rust/Cargo.toml` declares a
+Windows-conditional `windows-sys` dependency backing the sleep-aware
+monotonic clock in `nts::boottime`, and while
+`x86_64-pc-windows-msvc` is listed in `rust/rust-toolchain.toml`,
+nothing else in CI builds — let alone runs — that arm. The Dart live
+suite, separately, has never run in CI on any platform because
+`dart_test.yaml` skips the `live` tag by default. The Rust probes are
+*not* new Linux coverage: the four Cloudflare probes in
+`rust/src/api/nts/tests.rs` are plain `#[test]`, so `ci.yml`'s existing
+`cargo test --lib --locked` already runs them on every Rust-touching
+PR.
+
+Two implementation constraints worth not re-breaking:
+
+- **No `--ignored` on the cargo invocation.** The two `#[ignore]`d live
+  tests should stay ignored: `nts_query_live_ipv6_ptb` because GHA
+  runners have inconsistent IPv6 by Azure region (its semantics are
+  "skip gracefully on network failure", not "retry then fail", so under
+  `--ignored` it becomes a per-region coin-flip), and
+  `ke_live_cloudflare` because it is a KE-only probe already subsumed by
+  the four `api/nts` probes.
+- **The release dylib must be built before the Dart step.**
+  `NtsRustLib.init()` loads from `rust/target/release/` and `flutter
+  test` does not run the Native Assets hook, so without the explicit
+  `cargo build --release --locked` the Dart suite fails at load.
+
+Reproduce a leg locally with the same commands the workflow runs:
+
+```bash
+(cd rust && cargo test --lib --locked -- --nocapture)
+(cd rust && cargo build --release --locked)
+flutter test --run-skipped test/live/
+```
+
+Out of scope: macOS runners (the dev box's own platform, and GHA macOS
+minutes are 10× Linux), coverage upload (network-dependent coverage
+would make the Codecov dashboard drift with Cloudflare's uptime), and
+promoting the workflow to a required check.
+
 ### Fuzzing the Rust parsers (cargo-fuzz)
 
 The Rust crate ships a `cargo-fuzz` workspace under `rust/fuzz/` that

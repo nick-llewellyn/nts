@@ -3,6 +3,19 @@
 
 ## 8.1
 
+### Added
+
+- New advisory CI workflow `.github/workflows/cross-platform.yml` runs
+  the Rust live probes and the `test/live/` Dart suite on both
+  `ubuntu-latest` and `windows-latest`, weekly (Mondays 07:00 UTC) and
+  on manual dispatch. It adds the first CI coverage of the
+  Windows-conditional `windows-sys` arm behind `nts::boottime`, and the
+  first CI run of the Dart live suite on any platform. The workflow is
+  not a required status check: its steps depend on public NTS server
+  reachability, so a red run is a signal to triage rather than a merge
+  blocker. Repository infrastructure only — no packaged code changed.
+  (NTS-12)
+
 ### Changed
 
 - `ntsGetTime` and `NtsClient.getTime` now share one preamble and one

@@ -1,0 +1,160 @@
+name: Cross-platform live probes
+
+# Weekly cross-platform run of the live (real-network) NTS probes --
+# both the Rust ones in `rust/src/api/nts/tests.rs` and the Dart suite
+# in `test/live/nts_live_test.dart` -- on `ubuntu-latest` and
+# `windows-latest`.
+#
+# Separate workflow from `ci.yml` because:
+#   - Trigger shape differs: cron + manual dispatch, not every push/PR.
+#   - Network-dependent: every step here can go red because Cloudflare,
+#     Netnod, or PTB is unreachable, not because the tree is broken.
+#     That must never block a merge.
+#   - Status-check semantics differ: this workflow is NOT in branch
+#     protection's required status checks on `main`. That list stays at
+#     its six entries (`Detect changed paths`, `Dart tests gate`,
+#     `Verify FRB bindings are in sync`, `Rust build + tests +
+#     coverage`, `Hooks shell-syntax check`, `Hooks behaviour check`).
+#
+# ## Two premises worth stating so they are not re-broken
+#
+# 1. The Rust live probes are ALREADY un-ignored and ALREADY run on
+#    Linux. The four Cloudflare probes in `rust/src/api/nts/tests.rs`
+#    (`nts_query_live_cloudflare`, `..._via_client`,
+#    `nts_warm_cookies_live_cloudflare`, `..._via_client`) are plain
+#    `#[test]`, so `ci.yml`'s `cargo test --lib --locked` step already
+#    executes them on every Rust-touching PR. The new coverage this
+#    workflow adds is Windows, not Linux.
+#
+# 2. Do NOT add `--ignored` to the cargo invocation below. There are
+#    exactly two `#[ignore]`d live tests and running them here would be
+#    actively harmful:
+#      - `nts_query_live_ipv6_ptb` is ignored because GHA runners have
+#        inconsistent IPv6 by Azure region, and its semantics are "skip
+#        gracefully on network failure", not "retry then fail". Under
+#        `--ignored` it becomes a per-region coin-flip. It stays ignored.
+#      - `ke_live_cloudflare` (`rust/src/nts/ke/tests.rs`) is a KE-only
+#        probe already subsumed by the four `api/nts` probes.
+#
+# ## What the Windows leg uniquely covers
+#
+# `rust/Cargo.toml` declares a Windows-conditional `windows-sys`
+# dependency backing the sleep-aware monotonic clock in `nts::boottime`.
+# `x86_64-pc-windows-msvc` is listed in `rust/rust-toolchain.toml`, but
+# nothing in CI has ever built -- let alone run -- that arm. Separately,
+# the Dart live suite has never run in CI on any platform, because
+# `dart_test.yaml` skips the `live` tag by default.
+#
+# Out of scope: macOS runners (that is the dev box's own platform, and
+# GHA macOS minutes are 10x Linux); uploading coverage (network-
+# dependent coverage would make the Codecov dashboard drift with
+# Cloudflare's uptime); promoting this workflow to a required check.
+
+on:
+  # Weekly, Monday 07:00 UTC. Offset an hour from `fuzz.yml`'s daily
+  # 06:00 so the two never contend for the same window.
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+  # Scoped to this file only, mirroring `fuzz.yml`'s idiom. It is the
+  # only mechanism that validates an edit to this workflow before it
+  # lands, and the path filter means it costs nothing on unrelated PRs.
+  pull_request:
+    paths:
+      - '.github/workflows/cross-platform.yml'
+
+permissions:
+  contents: read
+
+# `cancel-in-progress: false` matches `fuzz.yml`: a network-flake
+# signal from a partially-complete run is still worth having.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  live-probes:
+    name: Live probes (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # A Windows-only break must not hide the Linux result.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 30
+    defaults:
+      run:
+        # Uniform shell on both legs, so the `run:` blocks execute
+        # byte-identical scripts with no PowerShell-vs-POSIX
+        # divergence. bash is preinstalled on `windows-latest` via
+        # Git for Windows.
+        shell: bash
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No `with: targets:` -- each leg builds for its own host triple.
+      # On `windows-latest` that is `x86_64-pc-windows-msvc`, so the
+      # `windows-sys` arm of `rust/Cargo.toml` compiles for the first
+      # time in CI.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      # The action keys on `runner.os` automatically, so the two legs
+      # get separate caches without a manual discriminator.
+      - name: Cache cargo registry + crate target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: rust
+
+      # Deliberately the whole `--lib` suite, not a name filter: (a) it
+      # is the identical command `ci.yml` runs, so the Windows leg
+      # doubles as first-ever Windows coverage of the entire unit suite;
+      # (b) a name filter would silently stop matching if a probe were
+      # renamed. `--nocapture` surfaces `retry_on_transient`'s stderr
+      # retry notices so a flaky run is diagnosable from the log.
+      - name: Run Rust live probes
+        working-directory: rust
+        run: cargo test --lib --locked -- --nocapture
+
+      # No `flutter-version` matrix: this workflow validates *platform*.
+      # The SDK-floor matrix already lives in `ci.yml`.
+      - name: Setup Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      # pubspec.lock is gitignored, so the key hashes pubspec.yaml. The
+      # `-live-` segment keeps this workflow's cache disjoint from
+      # `ci.yml`'s.
+      - name: Cache pub
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-live-${{ hashFiles('**/pubspec.yaml') }}
+          restore-keys: |
+            pub-${{ runner.os }}-live-
+
+      - name: Resolve package dependencies
+        run: flutter pub get
+
+      # Mandatory, and easy to miss: `NtsRustLib.init()` loads the dylib
+      # from `rust/target/release/`, and `flutter test` does NOT run the
+      # Native Assets hook (`hook/build.dart`). Without this step the
+      # Dart live suite fails at load with a missing-library error. FRB
+      # also validates its `rustContentHash` against the built dylib, so
+      # the two must come from the same checkout -- they do, since both
+      # are built from the PR head.
+      - name: Build native dylib for the live suite
+        working-directory: rust
+        run: cargo build --release --locked
+
+      # `--run-skipped` is what overrides `dart_test.yaml`'s
+      # `tags.live.skip`; pointing at the directory alone is not enough.
+      # Plain `flutter`, not `fvm flutter`: `subosito/flutter-action`
+      # already puts the SDK on PATH, and the FVM dance in `ci.yml`
+      # exists only because `tool/check_bindings.dart` shells out to
+      # `fvm`. Nothing in the live suite does.
+      - name: Run Dart live probes
+        run: flutter test --run-skipped test/live/
