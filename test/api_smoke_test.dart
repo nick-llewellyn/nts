@@ -2050,16 +2050,26 @@ void main() {
           trustMode: TrustMode.platformOnly,
           customRoots: [1, 2, 3],
         ),
-        throwsA(isA<NtsError>()),
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains('customRoots can only be set when trustMode is'),
+          ),
+        ),
       );
-      expect(
-        () => NtsClient(trustMode: TrustMode.custom, customRoots: null),
-        throwsA(isA<NtsError>()),
-      );
-      expect(
-        () => NtsClient(trustMode: TrustMode.custom, customRoots: []),
-        throwsA(isA<NtsError>()),
-      );
+      for (final roots in const [null, <int>[]]) {
+        expect(
+          () => NtsClient(trustMode: TrustMode.custom, customRoots: roots),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('customRoots must be provided and non-empty'),
+            ),
+          ),
+        );
+      }
     });
 
     test('trustMode override delegates to the default factory when '
@@ -2756,20 +2766,30 @@ void main() {
           trustMode: TrustMode.platformOnly,
           customRoots: [1, 2, 3],
         ),
-        throwsA(isA<NtsError>()),
-      );
-      await expectLater(
-        ntsGetTime(spec: spec, trustMode: TrustMode.custom),
-        throwsA(isA<NtsError>()),
-      );
-      await expectLater(
-        ntsGetTime(
-          spec: spec,
-          trustMode: TrustMode.custom,
-          customRoots: const [],
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains('customRoots can only be set when trustMode is'),
+          ),
         ),
-        throwsA(isA<NtsError>()),
       );
+      for (final roots in const [null, <int>[]]) {
+        await expectLater(
+          ntsGetTime(
+            spec: spec,
+            trustMode: TrustMode.custom,
+            customRoots: roots,
+          ),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('customRoots must be provided and non-empty'),
+            ),
+          ),
+        );
+      }
       expect(api.clientWithTrustModeCalls, 0);
       expect(api.lastWarmTimeoutMs, isNull);
       expect(api.lastClientWarmTimeoutMs, isNull);
