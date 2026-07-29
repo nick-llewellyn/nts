@@ -196,17 +196,30 @@ Future<NtsTimeSample> ntsQuery({
 /// beyond `spec`, the trust-policy pair (`trustMode` /
 /// `customRoots`), and `verificationTime`. The internal values are
 /// sized to serve phones and desktops alike: an 8-sample burst for a
-/// tight lowest-delay selection, one **total** 8-second wall-clock
-/// budget shared across the handshake and every burst query as a
-/// single shrinking deadline (generous enough for a cold-radio
-/// cellular handshake plus the full serial burst; effectively free
-/// on fast paths, where the call returns as soon as the burst
-/// completes), and the package-default concurrency caps
+/// tight lowest-delay selection, one **total** 8-second budget
+/// shared across the handshake and every burst query as a single
+/// shrinking deadline (generous enough for a cold-radio cellular
+/// handshake plus the full serial burst; effectively free on fast
+/// paths, where the call returns as soon as the burst completes),
+/// and the package-default concurrency caps
 /// ([kDefaultDnsConcurrencyCap] / [kDefaultBridgeConcurrencyCap])
 /// forwarded to every underlying call. Deployments that need
 /// different numbers compose [ntsWarmCookies] + [ntsQuery] directly;
 /// this convenience path deliberately trades configurability for a
 /// zero-decision call.
+///
+/// That budget is metered on a **sleep-aware** monotonic clock, so it
+/// keeps depleting while the device is suspended: a call that sleeps
+/// mid-flight resumes with the suspended interval already charged and
+/// may find the budget spent. Each underlying call receives only the
+/// balance remaining when it dispatches, and a balance that has
+/// fallen below the 1ms floor the lower-level wrappers accept is
+/// **refused rather than rounded up** — the call fails with the
+/// synthetic [NtsError.timeout] described below instead of
+/// dispatching protocol work on a budget it does not have. A
+/// consequence worth relying on: a call refused this way leaves no
+/// trace, since the handshake that would replace the cached session
+/// for `spec` never runs.
 ///
 /// Error posture is best-effort across the burst: individual burst
 /// query failures are tolerated, and the call succeeds if **at least
@@ -220,10 +233,15 @@ Future<NtsTimeSample> ntsQuery({
 ///   [NtsError.timeout] is the error that surfaces, not the
 ///   synthetic one below;
 /// - the handshake delivers zero cookies — [NtsError.noCookies];
-/// - the budget is exhausted after the handshake before the first
-///   query can even **dispatch** — a synthetic [NtsError.timeout]
-///   with [TimeoutPhase.ntp] (the UDP exchange is the phase the
-///   budget ran out in front of).
+/// - the budget is exhausted before anything can **dispatch** — a
+///   synthetic [NtsError.timeout] with [TimeoutPhase.ntp]. This
+///   covers exhaustion before the handshake (only reachable when a
+///   suspend lands in the instant between the budget starting and
+///   the handshake dispatching) as well as the ordinary case of
+///   exhaustion after the handshake but before the first query. The
+///   phase names the UDP exchange the budget ran out in front of in
+///   both cases; [NtsError.timeout] carries no `trustBackend` in the
+///   pre-handshake case, since no handshake ran to attribute one.
 ///
 /// `trustMode` selects the trust-anchor policy applied to the warming
 /// handshake and defaults to [TrustMode.platformWithFallback] — the

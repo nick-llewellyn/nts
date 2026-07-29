@@ -204,18 +204,19 @@ class NtsClient {
   /// Behaviour, parameter semantics, internal tuning, error posture,
   /// and validation are identical to [ntsGetTime] — see its dartdoc
   /// for the full contract (fixed 8-sample serial burst clamped to
-  /// `freshCookies`, one total 8-second shared budget, lowest-delay
-  /// selection with `delay / 2` compensation, best-effort success
-  /// when at least one sample lands). The differences are state scope
-  /// and trust policy: the handshake replaces the cached session for
-  /// `spec` in **this client's** table, the burst spends this
-  /// client's cookies (leaving the process-wide default client
-  /// untouched), and the handshake runs under this client's
-  /// construction-time trust policy — there is no per-call
-  /// `trustMode` parameter here, because the policy is already a
-  /// property of the client ([ntsGetTime]'s `trustMode` /
-  /// `customRoots` parameters are the convenience spelling of
-  /// constructing such a client for one call).
+  /// `freshCookies`, one total 8-second sleep-aware shared budget
+  /// that refuses to dispatch once spent, lowest-delay selection with
+  /// `delay / 2` compensation, best-effort success when at least one
+  /// sample lands). The differences are state scope and trust policy:
+  /// the handshake replaces the cached session for `spec` in **this
+  /// client's** table, the burst spends this client's cookies
+  /// (leaving the process-wide default client untouched), and the
+  /// handshake runs under this client's construction-time trust
+  /// policy — there is no per-call `trustMode` parameter here,
+  /// because the policy is already a property of the client
+  /// ([ntsGetTime]'s `trustMode` / `customRoots` parameters are the
+  /// convenience spelling of constructing such a client for one
+  /// call).
   Future<NtsSyncedTime> getTime({
     required NtsServerSpec spec,
     DateTime? verificationTime,

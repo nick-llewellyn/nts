@@ -167,6 +167,7 @@ class _RecordingApi implements NtsRustLibApi {
     clientTrustModes.clear();
     trustStatusCalls = 0;
     nextTrustStatus = _zeroFfiTrustStatus();
+    onBoottimeRead = null;
     // Do NOT reset `_bootSw` or `suspendOffsetMicros` — the mocked
     // boottime source feeds the isolate-wide MonotonicClock.instance,
     // so zeroing the offset here would jump the clock backwards after
@@ -264,9 +265,17 @@ class _RecordingApi implements NtsRustLibApi {
   final Stopwatch _bootSw = Stopwatch()..start();
   int suspendOffsetMicros = 0;
 
+  // Fires before each boottime read, letting a test inject a suspend
+  // at a specific read rather than only between `await` points. This
+  // is the only way to reach a code path guarded by two *synchronous*
+  // reads with no suspension point between them.
+  void Function()? onBoottimeRead;
+
   @override
-  int crateApiNtsNtsBoottimeMicros() =>
-      _bootSw.elapsedMicroseconds + suspendOffsetMicros;
+  int crateApiNtsNtsBoottimeMicros() {
+    onBoottimeRead?.call();
+    return _bootSw.elapsedMicroseconds + suspendOffsetMicros;
+  }
 
   // --- NtsClient surface ----------------------------------------------
   //
@@ -2636,6 +2645,33 @@ void main() {
           ),
         ),
       );
+      expect(api.queryDispatches, 0);
+    });
+
+    test('a budget spent before the handshake fails with timeout(ntp) '
+        'and dispatches nothing', () async {
+      api.nextWarm = _ffiWarm(8);
+      // Suspend on the *second* boottime read — the one backing the
+      // pre-warm `remaining()`. The first read anchors `startMicros`,
+      // so the whole 8s budget is consumed between the two, with no
+      // suspension point in between for a test to hook otherwise.
+      var reads = 0;
+      api.onBoottimeRead = () {
+        if (++reads == 2) api.suspendOffsetMicros += 8_000_000;
+      };
+      await expectLater(
+        ntsGetTime(spec: spec),
+        throwsA(
+          isA<NtsErrorTimeout>()
+              .having((e) => e.phase, 'phase', TimeoutPhase.ntp)
+              .having((e) => e.trustBackend, 'trustBackend', isNull),
+        ),
+      );
+      // The point of the fix: no dispatch at all. Rounding the dead
+      // balance up to 1ms would have run a handshake here, and a
+      // successful one would have replaced the cached session.
+      expect(api.lastWarmTimeoutMs, isNull);
+      expect(api.lastClientWarmTimeoutMs, isNull);
       expect(api.queryDispatches, 0);
     });
 

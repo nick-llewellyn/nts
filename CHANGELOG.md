@@ -87,6 +87,34 @@
   rejected rather than normalised, since the session key is `host:port`
   verbatim. (NTS-108)
 
+- `getTime` no longer inflates an already-spent budget to dispatch the
+  handshake. The warm phase clamped its share of the shared 8-second
+  budget up to 1ms when the balance had fallen below the `timeout >= 1ms`
+  floor the lower-level wrappers enforce, so a call whose budget was
+  gone still ran a full KE handshake — extending the documented total
+  budget, and, when that handshake succeeded, replacing the cached
+  session for `spec` (the process-wide one on the default-client path)
+  on a call that should never have reached protocol work. The balance
+  is now checked before dispatch and a spent one fails immediately with
+  the same synthetic `NtsError.timeout(phase: TimeoutPhase.ntp)` the
+  post-handshake exhaustion path already used, dispatching nothing. The
+  1ms floor is now a single `_kMinDispatchBudget` constant shared with
+  the burst loop, which already broke on the same threshold. Only
+  reachable when a device suspend lands between the budget starting and
+  the handshake dispatching — the budget is metered on a sleep-aware
+  clock, which is what makes that window observable at all. (NTS-110)
+
+- The `ntsGetTime` dartdoc now describes the budget it actually
+  enforces. It documented the 8-second total as plain wall-clock and
+  listed only post-handshake exhaustion under its failure modes,
+  omitting that the budget is sleep-aware (so a suspended call resumes
+  with the suspended interval already charged), that a spent balance is
+  refused rather than rounded up, and that an exhausted call therefore
+  leaves the cached session untouched. `NtsClient.getTime`, which
+  delegates to the same helper and defers to that dartdoc for its
+  contract, gains a matching one-line pointer. Documentation only.
+  (NTS-119)
+
 ### Changed
 
 - **Breaking (error type):** the `trustMode` / `customRoots` pair
