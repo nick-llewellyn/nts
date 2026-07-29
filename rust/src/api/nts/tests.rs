@@ -3920,7 +3920,7 @@ fn query_context_cookie_is_zeroizing_wrapped() {
 /// CSPRNG UID, must never trip the replay guard.
 #[test]
 fn seen_uid_cache_accepts_distinct_uids() {
-    let base = Instant::now();
+    let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
     assert!(cache.note(&[0x01u8; UID_LEN], base));
     assert!(cache.note(&[0x02u8; UID_LEN], base));
@@ -3935,7 +3935,7 @@ fn seen_uid_cache_accepts_distinct_uids() {
 /// stale cookies are deposited.
 #[test]
 fn seen_uid_cache_rejects_duplicate_within_ttl() {
-    let base = Instant::now();
+    let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
     let uid = [0xABu8; UID_LEN];
     assert!(cache.note(&uid, base), "first sighting must be accepted");
@@ -3945,7 +3945,8 @@ fn seen_uid_cache_rejects_duplicate_within_ttl() {
     );
     // A near-but-still-inside-window repeat is also a replay. Use a
     // checked subtraction for the offset so neither the `Duration` nor
-    // the `Instant` arithmetic trips clippy::unchecked_time_subtraction.
+    // the `BootInstant` arithmetic trips
+    // clippy::unchecked_time_subtraction.
     let just_inside = base
         + SEEN_UID_TTL
             .checked_sub(Duration::from_millis(1))
@@ -3961,7 +3962,7 @@ fn seen_uid_cache_rejects_duplicate_within_ttl() {
 /// does not retain UIDs forever.
 #[test]
 fn seen_uid_cache_reaccepts_after_ttl_expiry() {
-    let base = Instant::now();
+    let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
     let uid = [0xCDu8; UID_LEN];
     assert!(cache.note(&uid, base));
@@ -3970,6 +3971,29 @@ fn seen_uid_cache_reaccepts_after_ttl_expiry() {
         "a UID whose prior sighting has aged past the TTL must be accepted again",
     );
     // The expired entry was pruned, not accumulated alongside the new one.
+    assert_eq!(cache.order.len(), 1);
+    assert_eq!(cache.seen.len(), 1);
+}
+
+/// NTS-122: entries age across device suspend. The cache stamps
+/// [`BootInstant`] readings, which keep advancing while the device is
+/// asleep, so a UID inserted before a long suspend is TTL-eligible on
+/// wake. Under the previous `std::time::Instant` stamping the clock
+/// froze for the duration of the sleep and the entry survived it,
+/// holding memory for suspend-time plus the TTL.
+#[test]
+fn seen_uid_cache_ages_across_a_suspend_gap() {
+    let base = BootInstant::from_micros(1_000_000);
+    let mut cache = SeenUidCache::new();
+    let uid = [0x7Fu8; UID_LEN];
+    assert!(cache.note(&uid, base));
+    // Four hours of suspend: `Instant` would have advanced by ~0 here,
+    // keeping the entry live; the boot clock advances in full.
+    let after_sleep = base + Duration::from_secs(4 * 3600);
+    assert!(
+        cache.note(&uid, after_sleep),
+        "an entry older than the TTL across suspend must be pruned",
+    );
     assert_eq!(cache.order.len(), 1);
     assert_eq!(cache.seen.len(), 1);
 }
@@ -3984,7 +4008,7 @@ fn seen_uid_cache_reaccepts_after_ttl_expiry() {
 /// panic.
 #[test]
 fn seen_uid_cache_prune_tolerates_earlier_now() {
-    let base = Instant::now();
+    let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
     let uid = [0xEFu8; UID_LEN];
     assert!(cache.note(&uid, base + SEEN_UID_TTL));
@@ -4010,7 +4034,7 @@ fn seen_uid_cache_prune_tolerates_earlier_now() {
 /// recent `SEEN_UID_CAP` UIDs are retained.
 #[test]
 fn seen_uid_cache_enforces_capacity_bound() {
-    let base = Instant::now();
+    let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
     let total = SEEN_UID_CAP + 5;
     let uids: Vec<[u8; UID_LEN]> = (0..total)
@@ -4052,7 +4076,7 @@ fn seen_uid_cache_enforces_capacity_bound() {
 /// than on the insertion path.
 #[test]
 fn seen_uid_cache_replay_at_capacity_does_not_evict() {
-    let base = Instant::now();
+    let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
     let uids: Vec<[u8; UID_LEN]> = (0..SEEN_UID_CAP)
         .map(|i| {
@@ -4091,7 +4115,7 @@ fn seen_uid_cache_replay_at_capacity_does_not_evict() {
 /// End-to-end through the `SessionTable` wrapper: the first sighting of
 /// a UID is accepted, an immediate repeat is rejected as a replay, and
 /// a distinct UID is independently accepted. Exercises the production
-/// `note_unique_id` path (which stamps `Instant::now()` internally;
+/// `note_unique_id` path (which stamps `BootInstant::now()` internally;
 /// the intra-test elapsed time is far below `SEEN_UID_TTL`, so dedup
 /// holds).
 #[test]

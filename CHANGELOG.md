@@ -31,6 +31,42 @@
   infrastructure only — no packaged code changed, and the distribution
   policy is unchanged. (NTS-12)
 
+### Fixed
+
+- Per-call timeout budgets now keep elapsing while the device is
+  asleep. The KE handshake deadline (`nts::ke::Deadline`), the UDP
+  setup deadline (`api::nts::UdpDeadline`), the singleflight
+  leader/waiter budgets in `checkout_with` and `warm_cookies_with`, the
+  `HandshakeSlot` condvar waiter, and the call-wide anchor in
+  `nts_query` were all anchored on `std::time::Instant`, which is
+  suspend-frozen on every platform this package targets
+  (`CLOCK_MONOTONIC` / `mach_absolute_time` / QPC). A mobile call with
+  `timeoutMs: 5000` that suspended mid-handshake resumed after wake
+  with most of its original budget still nominally unspent, while wall
+  clock had already blown past the caller's limit — and the Dart layer,
+  which charges residual against a sleep-aware clock, disagreed with
+  the native side about how much budget was left. All six now anchor on
+  the new `nts::boottime::BootInstant`, an `Instant`-shaped wrapper
+  around the existing suspend-inclusive `boottime_micros` reading
+  (`CLOCK_BOOTTIME` / `mach_continuous_time` /
+  `QueryInterruptTimePrecise`). The condvar waiter additionally
+  re-reads the boot clock on every wake, because `wait_timeout` is
+  itself suspend-frozen and would otherwise under-count a suspend that
+  spanned a park. Short in-call measurements — the per-phase durations
+  reported in `NtsDiagnostics` and the RTT bracket around a single
+  `send`/`recv` — deliberately stay on `Instant`. (NTS-122)
+
+- `SeenUidCache` entries now age across device suspend. The replay
+  guard's 5-minute TTL stamped `Instant` readings, so a cache populated
+  before a long sleep retained its Unique Identifiers for the sleep
+  duration plus the TTL rather than the TTL alone. The behaviour was
+  conservative for replay detection (the window stayed open longer than
+  documented) and bounded by the existing `SEEN_UID_CAP` ceiling, but
+  it pinned memory across suspend and put the cache on a different
+  clock from the budgets above. Timestamps are now `BootInstant`.
+  (NTS-129, landed with NTS-122 so the clock abstraction was reviewed
+  against both a deadline consumer and a TTL consumer at once)
+
 ### Changed
 
 - `ntsGetTime` and `NtsClient.getTime` now share one preamble and one

@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::boottime::BootInstant;
 use super::dns::{resolve_with_global, system_lookup};
 
 use rustls::client::danger::ServerCertVerifier;
@@ -72,27 +73,33 @@ const TLS_PROTOCOL_VERSIONS: &[&SupportedProtocolVersion] = &[&rustls::version::
 /// Single wall-clock budget shared across every blocking phase of one
 /// NTS-KE handshake — DNS lookup, per-address TCP connect attempts, TLS
 /// handshake, and the chunked record-exchange read loop. Captured once
-/// from `Instant::now() + total` at the top of `perform_handshake` so
-/// the budget shrinks monotonically as those phases consume time, in
+/// from `BootInstant::now() + total` at the top of `perform_handshake`
+/// so the budget shrinks monotonically as those phases consume time, in
 /// place of the prior pattern where each phase received a fresh
 /// `Duration` and the wall-clock cost of a single handshake could
 /// overshoot the caller's `req.timeout` by 2-3x.
+///
+/// Anchored on the sleep-aware [`BootInstant`] rather than
+/// `std::time::Instant`: the latter is suspend-frozen on every platform
+/// this package targets, so a handshake interrupted by device sleep
+/// would resume with most of its original budget intact even though the
+/// caller's wall-clock limit had already passed.
 #[derive(Debug, Clone, Copy)]
-struct Deadline(Instant);
+struct Deadline(BootInstant);
 
 impl Deadline {
     /// Anchor a deadline `total` from `now`. Callers pass the entire
     /// caller-visible budget (`req.timeout`); subsequent phases consult
     /// [`Deadline::remaining`] before issuing any blocking syscall.
     fn new(total: Duration) -> Self {
-        Self(Instant::now() + total)
+        Self(BootInstant::now() + total)
     }
 
     /// Time left before the deadline expires. Saturates at
     /// [`Duration::ZERO`] so callers can branch on `is_zero()` without
     /// handling a negative-duration case.
     fn remaining(&self) -> Duration {
-        self.0.saturating_duration_since(Instant::now())
+        self.0.saturating_duration_since(BootInstant::now())
     }
 
     /// Refresh `tcp`'s read+write timeouts so the *next* blocking
