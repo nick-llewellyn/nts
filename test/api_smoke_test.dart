@@ -724,6 +724,61 @@ void main() {
     });
 
     test(
+      'ntsQuery accepts verificationTime at the year-9999 ceiling',
+      () async {
+        await ntsQuery(
+          spec: spec,
+          verificationTime: DateTime.fromMillisecondsSinceEpoch(
+            253402300799000,
+            isUtc: true,
+          ),
+        );
+        expect(api.lastQueryVerificationTimeMs, 253402300799000);
+      },
+    );
+
+    test('ntsQuery rejects a verificationTime above the year-9999 ceiling '
+        'with NtsError.invalidSpec', () async {
+      // Mirrors MAX_VERIFICATION_TIME_MS in rust/src/api/nts.rs so a
+      // far-future instant carries a wrapper-authored message instead
+      // of a Rust-authored one after a futile FFI hop.
+      await expectLater(
+        ntsQuery(
+          spec: spec,
+          verificationTime: DateTime.fromMillisecondsSinceEpoch(
+            253402300799001,
+            isUtc: true,
+          ),
+        ),
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains('exceeds 253402300799000 (9999-12-31T23:59:59Z)'),
+          ),
+        ),
+      );
+      expect(api.lastQueryVerificationTimeMs, isNull);
+      expect(api.lastQueryTimeoutMs, isNull);
+    });
+
+    test('ntsQuery rejects a blank host with NtsError.invalidSpec', () async {
+      for (final host in const ['', '  ']) {
+        await expectLater(
+          ntsQuery(spec: NtsServerSpec(host: host, port: 4460)),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('host must be non-empty'),
+            ),
+          ),
+        );
+      }
+      expect(api.lastQueryTimeoutMs, isNull);
+    });
+
+    test(
       'ntsQuery rejects port outside 1..65535 with NtsError.invalidSpec',
       () async {
         // Port=0 used to fall through to Rust's `port must be non-zero`
@@ -1880,6 +1935,27 @@ void main() {
       },
     );
 
+    test('invalidate rejects a blank host with NtsError.invalidSpec', () {
+      // A spec that cannot name a server fails closed rather than
+      // soft-failing as "no cached entry"; the FFI is never reached.
+      final client = NtsClient();
+      final invalidatesBefore = api.clientInvalidateCalls;
+      for (final host in const ['', '   ']) {
+        expect(
+          () => client.invalidate(NtsServerSpec(host: host, port: 4460)),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('host must be non-empty'),
+            ),
+          ),
+        );
+      }
+      expect(api.clientInvalidateCalls, invalidatesBefore);
+      expect(api.lastClientInvalidateSpec, isNull);
+    });
+
     test('clear delegates to the FFI', () {
       final client = NtsClient();
       client.clear();
@@ -1967,26 +2043,34 @@ void main() {
       );
     });
 
-    test(
-      'trustMode validation throws ArgumentError on mismatched arguments',
-      () {
-        expect(
-          () => NtsClient(
-            trustMode: TrustMode.platformOnly,
-            customRoots: [1, 2, 3],
+    test('trustMode validation throws NtsError.invalidSpec on mismatched '
+        'arguments', () {
+      expect(
+        () => NtsClient(
+          trustMode: TrustMode.platformOnly,
+          customRoots: [1, 2, 3],
+        ),
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains('customRoots can only be set when trustMode is'),
           ),
-          throwsArgumentError,
-        );
+        ),
+      );
+      for (final roots in const [null, <int>[]]) {
         expect(
-          () => NtsClient(trustMode: TrustMode.custom, customRoots: null),
-          throwsArgumentError,
+          () => NtsClient(trustMode: TrustMode.custom, customRoots: roots),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('customRoots must be provided and non-empty'),
+            ),
+          ),
         );
-        expect(
-          () => NtsClient(trustMode: TrustMode.custom, customRoots: []),
-          throwsArgumentError,
-        );
-      },
-    );
+      }
+    });
 
     test('trustMode override delegates to the default factory when '
         'platformWithFallback is requested', () {
@@ -2682,20 +2766,30 @@ void main() {
           trustMode: TrustMode.platformOnly,
           customRoots: [1, 2, 3],
         ),
-        throwsArgumentError,
-      );
-      await expectLater(
-        ntsGetTime(spec: spec, trustMode: TrustMode.custom),
-        throwsArgumentError,
-      );
-      await expectLater(
-        ntsGetTime(
-          spec: spec,
-          trustMode: TrustMode.custom,
-          customRoots: const [],
+        throwsA(
+          isA<NtsErrorInvalidSpec>().having(
+            (e) => e.message,
+            'message',
+            contains('customRoots can only be set when trustMode is'),
+          ),
         ),
-        throwsArgumentError,
       );
+      for (final roots in const [null, <int>[]]) {
+        await expectLater(
+          ntsGetTime(
+            spec: spec,
+            trustMode: TrustMode.custom,
+            customRoots: roots,
+          ),
+          throwsA(
+            isA<NtsErrorInvalidSpec>().having(
+              (e) => e.message,
+              'message',
+              contains('customRoots must be provided and non-empty'),
+            ),
+          ),
+        );
+      }
       expect(api.clientWithTrustModeCalls, 0);
       expect(api.lastWarmTimeoutMs, isNull);
       expect(api.lastClientWarmTimeoutMs, isNull);
