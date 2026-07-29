@@ -32,13 +32,13 @@ part of 'nts.dart';
 // enough spread to ride out jitter on cellular / Wi-Fi ones.
 const int _kGetTimeMaxBurst = 8;
 
-// Total wall-clock budget for the whole `getTime` call, shared across
-// the warming handshake and every burst query as one shrinking
-// deadline. Sized for the 8-query burst over a cold-radio cellular
-// path (DNS + TCP + TLS + KE handshake plus eight serial UDP
-// round-trips); on fast paths the call returns as soon as the burst
-// completes, so the generous cap only moves the worst-case failure
-// latency, never the happy path.
+// Total budget for the whole `getTime` call, shared across the
+// warming handshake and every burst query as one shrinking deadline
+// metered on the sleep-aware clock above. Sized for the 8-query
+// burst over a cold-radio cellular path (DNS + TCP + TLS + KE
+// handshake plus eight serial UDP round-trips); on fast paths the
+// call returns as soon as the burst completes, so the generous cap
+// only moves the worst-case failure latency, never the happy path.
 const Duration _kGetTimeTimeout = Duration(milliseconds: 8000);
 
 // Smallest remaining balance worth dispatching on. Mirrors the

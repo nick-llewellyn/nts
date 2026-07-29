@@ -196,12 +196,12 @@ Future<NtsTimeSample> ntsQuery({
 /// beyond `spec`, the trust-policy pair (`trustMode` /
 /// `customRoots`), and `verificationTime`. The internal values are
 /// sized to serve phones and desktops alike: an 8-sample burst for a
-/// tight lowest-delay selection, one **total** 8-second wall-clock
-/// budget shared across the handshake and every burst query as a
-/// single shrinking deadline (generous enough for a cold-radio
-/// cellular handshake plus the full serial burst; effectively free
-/// on fast paths, where the call returns as soon as the burst
-/// completes), and the package-default concurrency caps
+/// tight lowest-delay selection, one **total** 8-second budget
+/// shared across the handshake and every burst query as a single
+/// shrinking deadline (generous enough for a cold-radio cellular
+/// handshake plus the full serial burst; effectively free on fast
+/// paths, where the call returns as soon as the burst completes),
+/// and the package-default concurrency caps
 /// ([kDefaultDnsConcurrencyCap] / [kDefaultBridgeConcurrencyCap])
 /// forwarded to every underlying call. Deployments that need
 /// different numbers compose [ntsWarmCookies] + [ntsQuery] directly;
