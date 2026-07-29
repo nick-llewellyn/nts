@@ -18,10 +18,11 @@ part of 'nts.dart';
 // call (see `clock.dart`), and each call receives only the remaining
 // balance; the budget keeps depleting across device suspend, so a
 // mid-call sleep surfaces as `timeout(ntp)` rather than a
-// stalled-then-overrun budget. The lower-level wrappers
-// validate `timeout >= 1ms`, so a depleted budget is detected here
-// (and surfaced as `timeout(ntp)`) rather than tripping their
-// `invalidSpec` range check with a confusing message.
+// stalled-then-overrun budget. The lower-level wrappers validate
+// `timeout >= 1ms`, so a balance below that floor is refused here —
+// surfaced as `timeout(ntp)`, never rounded up and dispatched —
+// rather than tripping their `invalidSpec` range check with a
+// confusing message.
 
 // Upper bound on the number of burst `query` samples taken after the
 // warming handshake. The effective burst size is
@@ -39,6 +40,15 @@ const int _kGetTimeMaxBurst = 8;
 // completes, so the generous cap only moves the worst-case failure
 // latency, never the happy path.
 const Duration _kGetTimeTimeout = Duration(milliseconds: 8000);
+
+// Smallest remaining balance worth dispatching on. Mirrors the
+// `timeout >= 1ms` range check the lower-level wrappers enforce: a
+// balance below this cannot be forwarded without either tripping that
+// check (`invalidSpec`, a misleading surface for an exhausted budget)
+// or being rounded up, which would extend the total budget. Both the
+// warm phase and every burst iteration gate on it, so the two never
+// disagree about when the budget is spent.
+const Duration _kMinDispatchBudget = Duration(milliseconds: 1);
 
 // The shape shared by the top-level `ntsWarmCookies` / `ntsQuery`
 // functions and their `NtsClient` method counterparts, so `_getTimeFor`
@@ -122,12 +132,24 @@ Future<NtsSyncedTime> _getTime({
   // The handshake draws from the shared balance too (not a fresh
   // `_kGetTimeTimeout`), so overhead accrued since `budget` started
   // is charged against the total rather than silently extending it.
-  // The clamp keeps a fully depleted balance from tripping the
-  // lower-level `timeout >= 1ms` validation; a 1ms warm then times
-  // out on its own terms and propagates per the posture above.
-  const floor = Duration(milliseconds: 1);
+  //
+  // A balance already below the lower-level `timeout >= 1ms` floor is
+  // refused rather than rounded up to 1ms: dispatching would extend
+  // the documented total budget, and a handshake that then *succeeds*
+  // would replace the cached session for `spec` (the process-wide
+  // one on the default-client path) on a call that should never have
+  // reached protocol work. Only a suspend landing inside the few
+  // instructions between `startMicros` and here can drain the balance
+  // this early, which is exactly the case the sleep-aware clock exists
+  // to charge for. The phase matches the post-handshake exhaustion
+  // below — `ntp` is this path's one synthetic "budget gone, no sample
+  // produced" signal — and `trustBackend` is absent because no
+  // handshake ran to attribute one.
   final warmBudget = remaining();
-  final outcome = await warm(warmBudget < floor ? floor : warmBudget);
+  if (warmBudget < _kMinDispatchBudget) {
+    throw const NtsError.timeout(phase: TimeoutPhase.ntp);
+  }
+  final outcome = await warm(warmBudget);
   if (outcome.freshCookies < 1) {
     throw NtsError.noCookies(trustBackend: outcome.trustBackend);
   }
@@ -150,7 +172,7 @@ Future<NtsSyncedTime> _getTime({
   StackTrace? lastStack;
   for (var i = 0; i < burst; i++) {
     final left = remaining();
-    if (left < const Duration(milliseconds: 1)) break;
+    if (left < _kMinDispatchBudget) break;
     try {
       final sample = await query(left);
       samplesUsed++;
