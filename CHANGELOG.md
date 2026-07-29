@@ -67,7 +67,40 @@
   (NTS-129, landed with NTS-122 so the clock abstraction was reviewed
   against both a deadline consumer and a TTL consumer at once)
 
+- The Dart wrapper now rejects a `verificationTime` above the year-9999
+  ceiling before dispatch. `_validateRanges` checked only for negatives,
+  so a far-future instant crossed the FFI boundary and came back with a
+  Rust-authored `invalidSpec` message from
+  `validate_verification_time_ms`. The Dart side now mirrors
+  `MAX_VERIFICATION_TIME_MS` (`253402300799000`, 9999-12-31T23:59:59Z)
+  and authors its own message, restoring the front-loaded single error
+  surface the port, timeout, and concurrency caps already use. The
+  ceiling is inclusive on both sides. (NTS-107)
+
+- A blank `NtsServerSpec.host` is now rejected on the Dart boundary.
+  Only `port` was range-checked; an empty host was left to Rust's
+  `validate`, costing an FFI hop for a Rust-authored message, and
+  `NtsClient.invalidate` soft-failed such a spec as `false` rather than
+  failing closed. `_validateSpec` now rejects `host.trim().isEmpty` with
+  a wrapper-authored `NtsError.invalidSpec` across the four async
+  wrappers, `getTime`, and `invalidate`. Whitespace-only hosts are
+  rejected rather than normalised, since the session key is `host:port`
+  verbatim. (NTS-108)
+
 ### Changed
+
+- **Breaking (error type):** the `trustMode` / `customRoots` pair
+  validation now throws `NtsError.invalidSpec` instead of
+  `ArgumentError`. Both violations — a non-null `customRoots` without
+  `TrustMode.custom`, and `TrustMode.custom` without non-empty roots —
+  previously escaped the documented "single structured failure type"
+  contract, so a caller with only an `on NtsError catch` arm missed them
+  on the async `ntsGetTime` path. The checks move to
+  `_validateTrustPolicy` in `nts_validation.dart` so the `NtsClient`
+  factory and every entry point routing through it share one
+  implementation. Messages are unchanged; only the thrown type differs.
+  Callers catching `ArgumentError` for these two cases must switch to
+  `NtsError` (or `NtsErrorInvalidSpec`). (NTS-109)
 
 - `ntsGetTime` and `NtsClient.getTime` now share one preamble and one
   closure binding. Both previously repeated the same three-step

@@ -91,17 +91,7 @@ class NtsClient {
     TrustMode trustMode = TrustMode.platformWithFallback,
     List<int>? customRoots,
   }) {
-    if (customRoots != null && trustMode != TrustMode.custom) {
-      throw ArgumentError(
-        'customRoots can only be set when trustMode is TrustMode.custom',
-      );
-    }
-    if (trustMode == TrustMode.custom &&
-        (customRoots == null || customRoots.isEmpty)) {
-      throw ArgumentError(
-        'customRoots must be provided and non-empty when trustMode is TrustMode.custom',
-      );
-    }
+    _validateTrustPolicy(trustMode: trustMode, customRoots: customRoots);
     final inner = trustMode == TrustMode.platformWithFallback
         ? ffi.NtsClient()
         : ffi.NtsClient.withTrustMode(
@@ -239,13 +229,12 @@ class NtsClient {
   ///
   /// Synchronous: backed by one mutex acquisition and one
   /// `HashMap::remove` on the Rust side; no isolate hop. The
-  /// wrapper validates `spec.port` against the FRB-encodable range
-  /// `1..65535` first; out-of-range ports throw
+  /// wrapper validates `spec` first — a blank host or a port outside
+  /// the FRB-encodable range `1..65535` throws
   /// [NtsError.invalidSpec] with a wrapper-authored message before
   /// any FFI dispatch (matching the surface the four async wrappers
-  /// expose via [ntsQuery] / [ntsWarmCookies]). Empty host and any
-  /// other semantically-invalid-but-encodable spec trivially have
-  /// no cached entry and return `false`.
+  /// expose via [ntsQuery] / [ntsWarmCookies]) rather than
+  /// soft-failing as `false`.
   ///
   /// Requires `await NtsRustLib.init()` to have completed on the
   /// calling isolate before invocation: the mutex acquisition and
@@ -256,7 +245,7 @@ class NtsClient {
   /// the "Initialization has two layers" section of `README.md` for
   /// the full bootstrap contract.
   bool invalidate(NtsServerSpec spec) {
-    _validatePort(spec);
+    _validateSpec(spec);
     return _syncGuard(() => _inner.invalidate(spec: _ffiSpec(spec)));
   }
 

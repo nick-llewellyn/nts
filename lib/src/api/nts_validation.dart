@@ -34,6 +34,15 @@ part of 'nts.dart';
 
 const int _kU32Max = 0xFFFFFFFF;
 
+// Upper bound on a resolved verification instant, mirroring
+// `MAX_VERIFICATION_TIME_MS` in `rust/src/api/nts.rs`
+// (9999-12-31T23:59:59Z). Anything above it cannot denote a real
+// instant; front-loading the ceiling keeps far-future values on the
+// same wrapper-authored `invalidSpec` surface as the other range
+// checks instead of returning a Rust-authored message after a futile
+// FFI hop.
+const int _kMaxVerificationTimeMs = 253402300799000;
+
 // --- verification-instant conversion ----------------------------------
 
 // Collapses the public `DateTime?` verification instant onto the
@@ -163,10 +172,50 @@ Future<T> _dispatch<T>({
   );
 }
 
+// Reject a spec that cannot name a server before it reaches the FFI
+// boundary. Rust's own `validate` rejects an empty host, but only
+// after the dispatch; front-loading it keeps the wrapper-authored
+// message and, on the synchronous `invalidate` path, fails closed
+// instead of soft-failing as "no cached entry".
+//
+// Whitespace-only hosts are rejected rather than normalised: the
+// session key is `host:port` verbatim, so silently trimming here
+// would make the wrapper and the Rust-side cache disagree about
+// which key a call addresses.
+void _validateSpec(NtsServerSpec spec) {
+  if (spec.host.trim().isEmpty) {
+    throw const NtsError.invalidSpec(message: 'host must be non-empty');
+  }
+  _validatePort(spec);
+}
+
 void _validatePort(NtsServerSpec spec) {
   if (spec.port < 1 || spec.port > 65535) {
     throw NtsError.invalidSpec(
       message: 'port ${spec.port} is outside the valid range 1..65535',
+    );
+  }
+}
+
+// Reject a `trustMode` / `customRoots` pair that does not describe a
+// constructible trust policy. Shared by the [NtsClient] factory and
+// every entry point that routes through it, so the two surfaces
+// cannot drift.
+void _validateTrustPolicy({
+  required TrustMode trustMode,
+  required List<int>? customRoots,
+}) {
+  if (customRoots != null && trustMode != TrustMode.custom) {
+    throw const NtsError.invalidSpec(
+      message: 'customRoots can only be set when trustMode is TrustMode.custom',
+    );
+  }
+  if (trustMode == TrustMode.custom &&
+      (customRoots == null || customRoots.isEmpty)) {
+    throw const NtsError.invalidSpec(
+      message:
+          'customRoots must be provided and non-empty when trustMode is '
+          'TrustMode.custom',
     );
   }
 }
@@ -178,7 +227,7 @@ void _validateRanges({
   required int bridgeConcurrencyCap,
   int? verificationTimeMs,
 }) {
-  _validatePort(spec);
+  _validateSpec(spec);
   if (timeout < const Duration(milliseconds: 1) ||
       timeout > const Duration(milliseconds: _kU32Max)) {
     throw NtsError.invalidSpec(
@@ -210,13 +259,23 @@ void _validateRanges({
   // so a negative value cannot encode a real instant. Reject it here with
   // the same `invalidSpec` surface as the other range checks rather than
   // letting it silently fall back to the system clock on the Rust side.
-  if (verificationTimeMs != null && verificationTimeMs < 0) {
-    throw NtsError.invalidSpec(
-      message:
-          'verificationTime resolves to $verificationTimeMs ms, which is '
-          'before the Unix epoch; it must be a non-negative '
-          'epoch-milliseconds instant',
-    );
+  if (verificationTimeMs != null) {
+    if (verificationTimeMs < 0) {
+      throw NtsError.invalidSpec(
+        message:
+            'verificationTime resolves to $verificationTimeMs ms, which is '
+            'before the Unix epoch; it must be a non-negative '
+            'epoch-milliseconds instant',
+      );
+    }
+    if (verificationTimeMs > _kMaxVerificationTimeMs) {
+      throw NtsError.invalidSpec(
+        message:
+            'verificationTime resolves to $verificationTimeMs ms, which '
+            'exceeds $_kMaxVerificationTimeMs (9999-12-31T23:59:59Z); it '
+            'must be a plausible epoch-milliseconds instant',
+      );
+    }
   }
 }
 

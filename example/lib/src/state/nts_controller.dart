@@ -120,7 +120,7 @@ class NtsController {
       return NtsClient(trustMode: mode, customRoots: roots);
     }
     // customRoots must NOT be passed for non-custom modes — the
-    // NtsClient factory throws ArgumentError if it is.
+    // NtsClient factory throws NtsError.invalidSpec if it is.
     return NtsClient(trustMode: mode);
   }
 

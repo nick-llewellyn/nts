@@ -536,7 +536,7 @@ void main() {
 
     // Switch away while roots are still populated. The regression this
     // guards: _mintClient passing customRoots to a non-custom NtsClient
-    // constructor, which throws ArgumentError.
+    // constructor, which throws NtsError.invalidSpec.
     h.state.trustMode.value = TrustMode.platformOnly;
     await tester.pump();
 

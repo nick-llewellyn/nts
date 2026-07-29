@@ -244,7 +244,7 @@ Future<NtsTimeSample> ntsQuery({
 /// validation matches that constructor too: a non-null `customRoots`
 /// requires [TrustMode.custom], and [TrustMode.custom] requires a
 /// non-empty `customRoots`; violations complete the returned
-/// `Future` with an [ArgumentError] before any FFI dispatch. Calls
+/// `Future` with [NtsError.invalidSpec] before any FFI dispatch. Calls
 /// routed through the call-scoped client do not update the default
 /// singleton's [ntsTrustStatus] counters (same as any explicit
 /// [NtsClient] today); read [NtsSyncedTime.trustBackend] for
@@ -269,10 +269,9 @@ Future<NtsSyncedTime> ntsGetTime({
   List<int>? customRoots,
   DateTime? verificationTime,
 }) async {
-  // Validate ahead of the branch below so an out-of-range spec still
-  // surfaces as `invalidSpec` rather than as the pair-validation
-  // `ArgumentError` the NtsClient factory would raise first.
-  // `_getTimeFor` re-runs the same checks on both paths.
+  // Validate ahead of the branch below so an out-of-range spec is
+  // reported before the pair-validation the NtsClient factory would
+  // raise first. `_getTimeFor` re-runs the same checks on both paths.
   _validateGetTime(
     spec: spec,
     verificationTimeMs: _verificationMs(verificationTime),
