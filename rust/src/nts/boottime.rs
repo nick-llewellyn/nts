@@ -6,7 +6,12 @@
 //! device is suspended, so Dart-side projections and timeout budgets
 //! anchored to this clock stay correct across deep sleep. Only
 //! differences between readings are meaningful; the absolute value is
-//! not comparable across processes or reboots.
+//! not comparable across processes or reboots. [`BootInstant`] wraps a
+//! reading in an `Instant`-shaped API for call sites that need a
+//! sleep-aware deadline or time-to-live.
+
+use std::ops::Add;
+use std::time::Duration;
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
 #[expect(
@@ -111,6 +116,68 @@ pub(crate) fn boottime_micros() -> i64 {
     instant_fallback_micros()
 }
 
+/// A point on the sleep-aware clock read by [`boottime_micros`].
+///
+/// Drop-in replacement for `std::time::Instant` on the paths where a
+/// budget or a time-to-live must keep elapsing while the device is
+/// suspended. `Instant` is deliberately suspend-frozen on every
+/// platform this package targets, so an `Instant`-anchored deadline
+/// silently extends by the duration of a sleep — a `timeout_ms = 5000`
+/// call that suspends mid-handshake resumes with most of its original
+/// budget intact even though the caller's wall-clock limit has long
+/// since passed.
+///
+/// Only differences between values are meaningful; the absolute value
+/// is not comparable across processes or reboots. Both the
+/// difference and the offset operations saturate rather than panic or
+/// wrap, so callers can branch on `Duration::is_zero()` without
+/// handling a negative case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct BootInstant(i64);
+
+impl BootInstant {
+    /// Read the sleep-aware clock now.
+    pub(crate) fn now() -> Self {
+        Self(boottime_micros())
+    }
+
+    /// Construct from a raw microsecond reading on the same epoch as
+    /// [`boottime_micros`]. Exists so tests can drive deadline and TTL
+    /// logic across a synthetic suspend gap without sleeping.
+    #[cfg(test)]
+    pub(crate) fn from_micros(micros: i64) -> Self {
+        Self(micros)
+    }
+
+    /// Time elapsed from `earlier` to `self`, saturating at
+    /// [`Duration::ZERO`] when `earlier` is the later of the two.
+    /// Mirrors `Instant::saturating_duration_since`.
+    pub(crate) fn saturating_duration_since(self, earlier: Self) -> Duration {
+        let delta = self.0.saturating_sub(earlier.0);
+        u64::try_from(delta).map_or(Duration::ZERO, Duration::from_micros)
+    }
+
+    /// Time elapsed since `self`, saturating at [`Duration::ZERO`].
+    /// Mirrors `Instant::elapsed`.
+    pub(crate) fn elapsed(self) -> Duration {
+        Self::now().saturating_duration_since(self)
+    }
+}
+
+impl Add<Duration> for BootInstant {
+    type Output = Self;
+
+    /// Offset forward by `rhs`, saturating at [`i64::MAX`] rather than
+    /// wrapping. A `Duration` large enough to saturate is ~292k years,
+    /// so the clamp is unreachable for any real budget or TTL; it
+    /// exists so a caller-supplied `timeout_ms` cannot produce a
+    /// deadline in the past.
+    fn add(self, rhs: Duration) -> Self {
+        let micros = i64::try_from(rhs.as_micros()).unwrap_or(i64::MAX);
+        Self(self.0.saturating_add(micros))
+    }
+}
+
 /// Plain monotonic elapsed time since a process-wide anchor.
 ///
 /// Suspend-frozen (`Instant` semantics), so it does NOT count time
@@ -128,7 +195,8 @@ fn instant_fallback_micros() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::boottime_micros;
+    use super::{boottime_micros, BootInstant};
+    use std::time::Duration;
 
     #[test]
     fn non_decreasing_across_consecutive_reads() {
@@ -163,5 +231,41 @@ mod tests {
         assert!(v >= 0);
         // ~10k years of uptime in micros still leaves i64 headroom.
         assert!(v < i64::MAX / 4);
+    }
+
+    #[test]
+    fn boot_instant_difference_matches_offset() {
+        let base = BootInstant::from_micros(1_000_000);
+        let later = base + Duration::from_millis(250);
+        assert_eq!(
+            later.saturating_duration_since(base),
+            Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn boot_instant_difference_saturates_when_reversed() {
+        let base = BootInstant::from_micros(1_000_000);
+        let later = base + Duration::from_secs(5);
+        assert_eq!(base.saturating_duration_since(later), Duration::ZERO);
+    }
+
+    #[test]
+    fn boot_instant_add_saturates_instead_of_wrapping() {
+        let base = BootInstant::from_micros(i64::MAX - 10);
+        let bumped = base + Duration::from_secs(3600);
+        assert_eq!(bumped, BootInstant::from_micros(i64::MAX));
+        // The clamp must not produce a deadline in the past.
+        assert_eq!(base.saturating_duration_since(bumped), Duration::ZERO);
+    }
+
+    #[test]
+    fn boot_instant_now_advances_across_a_wait() {
+        let a = BootInstant::now();
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(50) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(a.elapsed() >= Duration::from_millis(45));
     }
 }

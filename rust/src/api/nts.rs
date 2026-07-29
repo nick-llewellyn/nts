@@ -54,6 +54,7 @@ use rustls::pki_types::UnixTime;
 use zeroize::Zeroizing;
 
 use crate::nts::aead::{AeadError, AeadKey};
+use crate::nts::boottime::BootInstant;
 use crate::nts::cookies::CookieJar;
 use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
 use crate::nts::ke::{
@@ -1208,19 +1209,26 @@ impl HandshakeSlot {
     /// Returns `Some(result_clone)` when a result is available, `None`
     /// on deadline expiry. Each waiter receives an independent
     /// `Clone` of the leader's `Result`.
-    fn wait_until(&self, deadline: Instant) -> Option<Result<HandshakeSlotOk, NtsError>> {
+    fn wait_until(&self, deadline: BootInstant) -> Option<Result<HandshakeSlotOk, NtsError>> {
         let mut g = lock_recover(&self.result);
         loop {
             if let Some(r) = g.as_ref() {
                 return Some(r.clone());
             }
-            let now = Instant::now();
-            if now >= deadline {
+            // Sleep-aware remaining: a waiter parked across device
+            // suspend must unpark against the caller's wall-clock
+            // budget, not an `Instant` budget that froze while the
+            // device slept. `Condvar::wait_timeout` itself is
+            // suspend-frozen, hence the surrounding loop re-reads the
+            // boot clock on every wake and re-parks for whatever is
+            // genuinely left.
+            let remaining = deadline.saturating_duration_since(BootInstant::now());
+            if remaining.is_zero() {
                 return None;
             }
             let (next_g, _) = self
                 .cv
-                .wait_timeout(g, deadline - now)
+                .wait_timeout(g, remaining)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             g = next_g;
         }
@@ -1377,7 +1385,13 @@ struct SeenUidCache {
     /// front is always the oldest entry. The UID bytes are held behind
     /// an `Arc<[u8]>` shared with `seen`, so each UID is heap-allocated
     /// once and both collections only carry a refcount bump.
-    order: VecDeque<(Arc<[u8]>, Instant)>,
+    ///
+    /// Timestamps are [`BootInstant`] readings rather than
+    /// `std::time::Instant` so entries keep ageing while the device is
+    /// suspended. Under `Instant` a cache populated before a long sleep
+    /// retained its UIDs for the sleep duration plus the TTL, holding
+    /// memory that the ceiling below only bounds in the worst case.
+    order: VecDeque<(Arc<[u8]>, BootInstant)>,
     /// Membership index over the same UIDs for O(1) duplicate
     /// detection. Kept in lockstep with `order` and sharing its
     /// backing allocation via `Arc<[u8]>`.
@@ -1409,7 +1423,7 @@ impl SeenUidCache {
     /// guards insertion, so the non-decreasing invariant holds in
     /// practice; the saturating call hardens the path against any
     /// future caller that violates it.
-    fn prune(&mut self, now: Instant) {
+    fn prune(&mut self, now: BootInstant) {
         while let Some((_, inserted)) = self.order.front() {
             if now.saturating_duration_since(*inserted) >= SEEN_UID_TTL {
                 if let Some((uid, _)) = self.order.pop_front() {
@@ -1431,7 +1445,7 @@ impl SeenUidCache {
     /// inserted, so a rejected duplicate leaves the existing window
     /// untouched. The UID is heap-allocated once as an `Arc<[u8]>` and
     /// shared between `seen` and `order`.
-    fn note(&mut self, uid: &[u8], now: Instant) -> bool {
+    fn note(&mut self, uid: &[u8], now: BootInstant) -> bool {
         self.prune(now);
         if self.seen.contains(uid) {
             return false;
@@ -2083,7 +2097,7 @@ impl SessionTable {
         do_handshake: &HandshakeFn,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         let key = session_key(spec);
-        let started = Instant::now();
+        let started = BootInstant::now();
         loop {
             // Phase A: try the cache. Return immediately on a hit with
             // at least one cookie. Drop the `map` lock before any
@@ -2360,7 +2374,7 @@ impl SessionTable {
         do_handshake: &HandshakeFn,
     ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
         let key = session_key(spec);
-        let started = Instant::now();
+        let started = BootInstant::now();
         // Phase B: leader-or-waiter election. No Phase A — the
         // contract is "force a fresh handshake," so the cache is
         // intentionally bypassed on the leader path. Waiters
@@ -2534,7 +2548,7 @@ impl SessionTable {
     /// keeping [`SeenUidCache`]'s non-decreasing-`now` invariant intact.
     fn note_unique_id(&self, uid: &[u8]) -> bool {
         let mut cache = lock_recover(&self.seen_uids);
-        cache.note(uid, Instant::now())
+        cache.note(uid, BootInstant::now())
     }
 
     /// Deposit fresh cookies harvested from a verified server reply.
@@ -2691,18 +2705,23 @@ fn evict_session(spec_key: &str, expected_generation: u64) {
 ///
 /// Single wall-clock budget shared across the UDP setup phase — the
 /// bounded DNS lookup *and* the read/write timeouts written onto the
-/// returned socket. Anchored once from `Instant::now() + total` at the
-/// top of [`bind_connected_udp_using`] so the budget shrinks
+/// returned socket. Anchored once from `BootInstant::now() + total` at
+/// the top of [`bind_connected_udp_using`] so the budget shrinks
 /// monotonically as DNS consumes time, in place of the prior pattern
 /// where the caller's `timeout` was passed verbatim to both phases and
 /// the wall-clock cost of one UDP setup could overshoot it by up to 2x.
+///
+/// Anchored on the sleep-aware [`BootInstant`] for the same reason as
+/// the KE-side `Deadline`: `std::time::Instant` freezes across device
+/// suspend, so a UDP leg interrupted by sleep would resume with a
+/// budget the caller's wall clock no longer has.
 ///
 /// This is the UDP companion to the `Deadline` newtype private to
 /// [`crate::nts::ke`]; the two intentionally do not share an
 /// implementation because `apply_to` must be socket-type-aware
 /// (`TcpStream` vs `UdpSocket`) and the duplicated surface is small.
 #[derive(Debug, Clone, Copy)]
-struct UdpDeadline(Instant);
+struct UdpDeadline(BootInstant);
 
 impl UdpDeadline {
     /// Anchor a deadline `total` from `now`. Callers pass the entire
@@ -2710,14 +2729,14 @@ impl UdpDeadline {
     /// [`UdpDeadline::remaining_or_timeout`] before issuing any
     /// blocking syscall or arming a socket-level timeout.
     fn new(total: Duration) -> Self {
-        Self(Instant::now() + total)
+        Self(BootInstant::now() + total)
     }
 
     /// Time left before the deadline expires. Saturates at
     /// [`Duration::ZERO`] so callers can branch on `is_zero()` without
     /// handling a negative-duration case.
     fn remaining(&self) -> Duration {
-        self.0.saturating_duration_since(Instant::now())
+        self.0.saturating_duration_since(BootInstant::now())
     }
 
     /// Convenience wrapper that yields the remaining budget when there
@@ -2998,8 +3017,9 @@ fn nts_query_inner(
     // this anchor a cold query could overshoot the caller's budget by
     // up to 2x (KE: ~`timeout` then UDP: another fresh `timeout`),
     // which contradicts the documented "single global wall-clock
-    // budget" contract on `timeout_ms`.
-    let started = Instant::now();
+    // budget" contract on `timeout_ms`. Anchored on the sleep-aware
+    // clock so the budget keeps elapsing across device suspend.
+    let started = BootInstant::now();
     let (ctx, ke_timings) =
         table.checkout(&spec, timeout, cap, trust_mode, verification_time_ms)?;
     let session_generation = ctx.session_generation;

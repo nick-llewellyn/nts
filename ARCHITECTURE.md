@@ -192,7 +192,7 @@ Two
 private newtypes carry the resulting deadline through the blocking
 I/O paths:
 
-- `nts::ke::Deadline` (TCP) wraps an `Instant` and exposes
+- `nts::ke::Deadline` (TCP) wraps a `BootInstant` and exposes
   `remaining()` plus `apply_to(&TcpStream)`. `perform_handshake`
   builds one `Deadline` at the top of the call and threads it through
   DNS resolution, TCP connect, post-connect socket-timeout setup,
@@ -209,6 +209,24 @@ I/O paths:
   `UdpDeadline` and threads it through DNS resolution and the UDP
   socket-timeout setup so the downstream `socket.send` / `socket.recv`
   in `nts_query` trip no later than the global deadline.
+
+Both newtypes anchor on `nts::boottime::BootInstant`, the sleep-aware
+counterpart to `std::time::Instant` described in the clock section
+below. `Instant` is suspend-frozen on every target platform, so an
+`Instant`-anchored budget silently extends by the duration of any
+device sleep that interrupts the query — a `timeout_ms` of 5000 that
+suspends mid-handshake would resume with most of its budget intact
+even though the caller's wall clock had long since passed it. The
+same reasoning covers the two other long-lived timestamps on this
+path: the `HandshakeSlot` condvar waiter's deadline (which re-reads
+the boot clock on each wake, because `Condvar::wait_timeout` is itself
+suspend-frozen) and the `SeenUidCache` TTL stamps (so replay-cache
+entries keep ageing while the device is asleep instead of pinning
+memory for suspend-time plus the TTL). Short in-call measurements —
+per-phase durations reported in `NtsDiagnostics`, and the client-side
+RTT bracket around a single `send`/`recv` — stay on `Instant`: they
+begin and end inside one blocking call, and a suspend spanning one
+would corrupt the measurement under either clock.
 
 `nts::dns` provides the resolver shared by both paths. It offloads
 `getaddrinfo` to a detached worker and bounds the wait via
