@@ -5,6 +5,35 @@
 
 ### Added
 
+- `NtsTimeSample.keWarnings` and `NtsWarmCookiesOutcome.keWarnings`
+  expose the non-fatal NTS-KE warning codes a server sent with the
+  handshake (RFC 8915 §4.1.4 record type 3) as `List<int>` raw code
+  values, in the order received. Previously the KE layer parsed these
+  records but discarded them, so a server signalling a warning was
+  indistinguishable from one that sent none. Empty for every server
+  observed in practice — the IANA NTS-KE warning registry has no
+  assignments as of RFC 8915 — so a non-empty list means the peer sent
+  a code this client version cannot interpret. Codes are surfaced, not
+  acted on: nothing here fails a query, since by definition a warning
+  did not stop the handshake. A non-empty list is also logged once per
+  handshake at `warn` on target `nts::ke`.
+
+  A warning describes the *handshake*, so on `NtsTimeSample` the value
+  follows the session across cached-session queries rather than
+  resetting to empty like `phaseTimings` — matching how `trustBackend`
+  already behaves. A caller polling in steady state therefore cannot
+  miss codes by having started after the cookie pool went warm. On
+  `NtsWarmCookiesOutcome` there is no cached-path nuance, since that
+  call always runs a fresh handshake; a singleflight waiter that
+  collapsed onto a concurrent leader reports the leader's codes, as
+  `freshCookies` and `trustBackend` already do.
+
+  Additive and source-compatible: both fields default to `const []`,
+  so existing constructor calls and `NtsTimeSample` fixtures compile
+  unchanged. Callers that destructure exhaustively or compare DTOs
+  against hand-built expected values will observe the new field in
+  `==`, `hashCode`, and `toString`. (NTS-127)
+
 - New advisory CI workflow `.github/workflows/cross-platform.yml` runs
   the Rust live probes and the `test/live/` Dart suite on both
   `ubuntu-latest` and `windows-latest`, weekly (Mondays 07:00 UTC) and

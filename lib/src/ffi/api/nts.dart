@@ -600,6 +600,26 @@ class NtsTimeSample {
   /// negative in practice for real servers. New in 7.1.
   final int serverPrecision;
 
+  /// Non-fatal NTS-KE warning codes the server sent with the
+  /// handshake that established this query's session (RFC 8915
+  /// §4.1.4 record type 3), as raw `u16` values in the order
+  /// received. Empty for every server observed in practice: the
+  /// IANA NTS-KE warning registry has no assignments as of RFC
+  /// 8915, so a non-empty list today means the peer sent a code
+  /// this client cannot interpret.
+  ///
+  /// A warning is a property of the *handshake*, not of this call,
+  /// so — like `trust_backend` and unlike `phase_timings` — the
+  /// value follows the original handshake across cached-session
+  /// queries rather than resetting to empty. Every sample drawn
+  /// from a session whose KE response carried warnings reports
+  /// them, so a caller polling in steady state cannot miss them by
+  /// having started after the cookie pool went warm. Codes are
+  /// surfaced rather than acted on: nothing here fails a query,
+  /// since by definition a warning did not stop the handshake.
+  /// New in 8.1.
+  final Uint16List keWarnings;
+
   const NtsTimeSample({
     required this.utcUnixMicros,
     required this.roundTripMicros,
@@ -614,6 +634,7 @@ class NtsTimeSample {
     required this.rootDelayMicros,
     required this.rootDispersionMicros,
     required this.serverPrecision,
+    required this.keWarnings,
   });
 
   @override
@@ -630,7 +651,8 @@ class NtsTimeSample {
       peerDelayMicros.hashCode ^
       rootDelayMicros.hashCode ^
       rootDispersionMicros.hashCode ^
-      serverPrecision.hashCode;
+      serverPrecision.hashCode ^
+      keWarnings.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -649,7 +671,8 @@ class NtsTimeSample {
           peerDelayMicros == other.peerDelayMicros &&
           rootDelayMicros == other.rootDelayMicros &&
           rootDispersionMicros == other.rootDispersionMicros &&
-          serverPrecision == other.serverPrecision;
+          serverPrecision == other.serverPrecision &&
+          keWarnings == other.keWarnings;
 }
 
 /// Process-global trust-anchor diagnostic snapshot returned by
@@ -783,15 +806,34 @@ class NtsWarmCookiesOutcome {
   /// the just-completed handshake's resolution. New in 3.0.0.
   final TrustBackend trustBackend;
 
+  /// Non-fatal NTS-KE warning codes the server sent with this
+  /// handshake (RFC 8915 §4.1.4 record type 3), as raw `u16`
+  /// values in the order received. Empty for every server observed
+  /// in practice — the IANA registry has no assignments as of RFC
+  /// 8915 — so a non-empty list means the peer sent a code this
+  /// client cannot interpret.
+  ///
+  /// Unlike [`NtsTimeSample::ke_warnings`] there is no cached-path
+  /// nuance to state: this call always performs a fresh handshake,
+  /// so the codes are always that handshake's own. A singleflight
+  /// *waiter* that collapsed onto a concurrent leader reports the
+  /// leader's codes, matching how `fresh_cookies` and
+  /// `trust_backend` already cross that boundary. New in 8.1.
+  final Uint16List keWarnings;
+
   const NtsWarmCookiesOutcome({
     required this.freshCookies,
     required this.phaseTimings,
     required this.trustBackend,
+    required this.keWarnings,
   });
 
   @override
   int get hashCode =>
-      freshCookies.hashCode ^ phaseTimings.hashCode ^ trustBackend.hashCode;
+      freshCookies.hashCode ^
+      phaseTimings.hashCode ^
+      trustBackend.hashCode ^
+      keWarnings.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -800,7 +842,8 @@ class NtsWarmCookiesOutcome {
           runtimeType == other.runtimeType &&
           freshCookies == other.freshCookies &&
           phaseTimings == other.phaseTimings &&
-          trustBackend == other.trustBackend;
+          trustBackend == other.trustBackend &&
+          keWarnings == other.keWarnings;
 }
 
 /// Microsecond-resolution wall-clock breakdown of a successful

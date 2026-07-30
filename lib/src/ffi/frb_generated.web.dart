@@ -70,6 +70,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   int dco_decode_i_8(dynamic raw);
 
   @protected
+  Uint16List dco_decode_list_prim_u_16_strict(dynamic raw);
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -174,6 +177,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
 
   @protected
   int sse_decode_i_8(SseDeserializer deserializer);
+
+  @protected
+  Uint16List sse_decode_list_prim_u_16_strict(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -295,6 +301,12 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
 
   @protected
   void sse_encode_i_8(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_prim_u_16_strict(
+    Uint16List self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_strict(

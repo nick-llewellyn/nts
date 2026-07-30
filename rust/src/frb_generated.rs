@@ -671,6 +671,18 @@ impl SseDecode for i8 {
     }
 }
 
+impl SseDecode for Vec<u16> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<u16>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -803,6 +815,7 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
         let mut var_rootDelayMicros = <i64>::sse_decode(deserializer);
         let mut var_rootDispersionMicros = <i64>::sse_decode(deserializer);
         let mut var_serverPrecision = <i8>::sse_decode(deserializer);
+        let mut var_keWarnings = <Vec<u16>>::sse_decode(deserializer);
         return crate::api::nts::NtsTimeSample {
             utc_unix_micros: var_utcUnixMicros,
             round_trip_micros: var_roundTripMicros,
@@ -817,6 +830,7 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
             root_delay_micros: var_rootDelayMicros,
             root_dispersion_micros: var_rootDispersionMicros,
             server_precision: var_serverPrecision,
+            ke_warnings: var_keWarnings,
         };
     }
 }
@@ -850,10 +864,12 @@ impl SseDecode for crate::api::nts::NtsWarmCookiesOutcome {
         let mut var_freshCookies = <u32>::sse_decode(deserializer);
         let mut var_phaseTimings = <crate::api::nts::PhaseTimings>::sse_decode(deserializer);
         let mut var_trustBackend = <crate::api::nts::TrustBackend>::sse_decode(deserializer);
+        let mut var_keWarnings = <Vec<u16>>::sse_decode(deserializer);
         return crate::api::nts::NtsWarmCookiesOutcome {
             fresh_cookies: var_freshCookies,
             phase_timings: var_phaseTimings,
             trust_backend: var_trustBackend,
+            ke_warnings: var_keWarnings,
         };
     }
 }
@@ -1181,6 +1197,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTimeSample {
             self.root_delay_micros.into_into_dart().into_dart(),
             self.root_dispersion_micros.into_into_dart().into_dart(),
             self.server_precision.into_into_dart().into_dart(),
+            self.ke_warnings.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1241,6 +1258,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsWarmCookiesOutcome {
             self.fresh_cookies.into_into_dart().into_dart(),
             self.phase_timings.into_into_dart().into_dart(),
             self.trust_backend.into_into_dart().into_dart(),
+            self.ke_warnings.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1394,6 +1412,16 @@ impl SseEncode for i8 {
     }
 }
 
+impl SseEncode for Vec<u16> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <u16>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for Vec<u8> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1505,6 +1533,7 @@ impl SseEncode for crate::api::nts::NtsTimeSample {
         <i64>::sse_encode(self.root_delay_micros, serializer);
         <i64>::sse_encode(self.root_dispersion_micros, serializer);
         <i8>::sse_encode(self.server_precision, serializer);
+        <Vec<u16>>::sse_encode(self.ke_warnings, serializer);
     }
 }
 
@@ -1530,6 +1559,7 @@ impl SseEncode for crate::api::nts::NtsWarmCookiesOutcome {
         <u32>::sse_encode(self.fresh_cookies, serializer);
         <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
         <crate::api::nts::TrustBackend>::sse_encode(self.trust_backend, serializer);
+        <Vec<u16>>::sse_encode(self.ke_warnings, serializer);
     }
 }
 

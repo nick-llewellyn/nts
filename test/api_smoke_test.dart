@@ -475,6 +475,7 @@ ffi.NtsTimeSample _ffiSample({
   int rootDelayMicros = 0,
   int rootDispersionMicros = 0,
   int serverPrecision = 0,
+  Uint16List? keWarnings,
 }) => ffi.NtsTimeSample(
   utcUnixMicros: PlatformInt64Util.from(utcUnixMicros),
   roundTripMicros: PlatformInt64Util.from(roundTripMicros),
@@ -489,15 +490,18 @@ ffi.NtsTimeSample _ffiSample({
   rootDelayMicros: PlatformInt64Util.from(rootDelayMicros),
   rootDispersionMicros: PlatformInt64Util.from(rootDispersionMicros),
   serverPrecision: serverPrecision,
+  keWarnings: keWarnings ?? Uint16List(0),
 );
 
 ffi.NtsWarmCookiesOutcome _ffiWarm(
   int cookies, {
   ffi.TrustBackend trustBackend = ffi.TrustBackend.platform,
+  Uint16List? keWarnings,
 }) => ffi.NtsWarmCookiesOutcome(
   freshCookies: cookies,
   phaseTimings: _zeroFfiPhaseTimings(),
   trustBackend: trustBackend,
+  keWarnings: keWarnings ?? Uint16List(0),
 );
 
 ffi.NtsDnsPoolStats _zeroFfiDnsPoolStats() => ffi.NtsDnsPoolStats(
@@ -1046,6 +1050,51 @@ void main() {
     });
   });
 
+  group('KE warning-code conversion (nts-r11f.6)', () {
+    const spec = NtsServerSpec(host: 'time.example', port: 4460);
+
+    test('ntsQuery surfaces the codes as a plain, unmodifiable '
+        'List<int>', () async {
+      api.nextSample = _ffiSample(
+        keWarnings: Uint16List.fromList(const [0x1234, 0x5678]),
+      );
+      final sample = await ntsQuery(spec: spec);
+      expect(sample.keWarnings, const [0x1234, 0x5678]);
+      // The FFI field is a `Uint16List`; the public surface must not
+      // leak that typed-data view, nor a mutable handle to the
+      // boundary allocation.
+      expect(sample.keWarnings, isNot(isA<Uint16List>()));
+      expect(() => sample.keWarnings.add(9), throwsUnsupportedError);
+    });
+
+    test('ntsWarmCookies surfaces the codes the same way', () async {
+      api.nextWarm = _ffiWarm(
+        8,
+        keWarnings: Uint16List.fromList(const [0x0001]),
+      );
+      final outcome = await ntsWarmCookies(spec: spec);
+      expect(outcome.keWarnings, const [0x0001]);
+      expect(() => outcome.keWarnings.add(9), throwsUnsupportedError);
+    });
+
+    test('the common no-warnings case converts to an empty list', () async {
+      api.nextSample = _ffiSample();
+      api.nextWarm = _ffiWarm(8);
+      expect((await ntsQuery(spec: spec)).keWarnings, isEmpty);
+      expect((await ntsWarmCookies(spec: spec)).keWarnings, isEmpty);
+    });
+
+    test('u16 codes round-trip at the top of the range without '
+        'sign confusion', () async {
+      // 0xFFFF would come back as -1 if anything on the path treated
+      // the code as signed.
+      api.nextSample = _ffiSample(
+        keWarnings: Uint16List.fromList(const [0xFFFF, 0x8000]),
+      );
+      expect((await ntsQuery(spec: spec)).keWarnings, const [0xFFFF, 0x8000]);
+    });
+  });
+
   group('ABI-mismatch conversion', () {
     const spec = NtsServerSpec(host: 'time.example', port: 4460);
 
@@ -1371,6 +1420,7 @@ void main() {
         rootDelayMicros: 3_000,
         rootDispersionMicros: 1_500,
         serverPrecision: -20,
+        keWarnings: [1, 2],
       );
       const sameValue = NtsTimeSample(
         utcUnixMicros: 1_777_334_400_000_000,
@@ -1386,6 +1436,10 @@ void main() {
         rootDelayMicros: 3_000,
         rootDispersionMicros: 1_500,
         serverPrecision: -20,
+        // Deliberately a *different* list instance with equal
+        // contents: `List` is identity-compared, so this is what
+        // proves the DTO does element-wise comparison.
+        keWarnings: [1, 2],
       );
       expect(base, equals(sameValue));
       expect(base.hashCode, sameValue.hashCode);
@@ -1407,6 +1461,7 @@ void main() {
         int rootDelayMicros = 3_000,
         int rootDispersionMicros = 1_500,
         int serverPrecision = -20,
+        List<int> keWarnings = const [1, 2],
       }) => NtsTimeSample(
         utcUnixMicros: utcUnixMicros,
         roundTripMicros: roundTripMicros,
@@ -1421,6 +1476,7 @@ void main() {
         rootDelayMicros: rootDelayMicros,
         rootDispersionMicros: rootDispersionMicros,
         serverPrecision: serverPrecision,
+        keWarnings: keWarnings,
       );
       expect(base, equals(variant()));
       final perturbations = <NtsTimeSample>[
@@ -1437,6 +1493,11 @@ void main() {
         variant(rootDelayMicros: 0),
         variant(rootDispersionMicros: 0),
         variant(serverPrecision: 0),
+        variant(keWarnings: const []),
+        // Same length, different contents.
+        variant(keWarnings: const [1, 3]),
+        // Prefix of the base list: catches a length-only comparison.
+        variant(keWarnings: const [1]),
       ];
       for (final p in perturbations) {
         expect(base, isNot(equals(p)));
@@ -1451,7 +1512,7 @@ void main() {
         'trustBackend: platform, recvBoottimeMicros: 555000, '
         'offsetMicros: -250, peerDelayMicros: 11000, '
         'rootDelayMicros: 3000, rootDispersionMicros: 1500, '
-        'serverPrecision: -20)',
+        'serverPrecision: -20, keWarnings: [1, 2])',
       );
     });
 
@@ -1496,16 +1557,25 @@ void main() {
         phaseTimings: phase,
         trustBackend: TrustBackend.webpkiRoots,
       );
+      // `base` omits keWarnings, so it defaults to const []; this
+      // perturbation also pins that default.
+      const differentWarnings = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: phase,
+        trustBackend: TrustBackend.platform,
+        keWarnings: [7],
+      );
       expect(base, isNot(equals(differentCookies)));
       expect(base, isNot(equals(differentPhase)));
       expect(base, isNot(equals(differentTrust)));
+      expect(base, isNot(equals(differentWarnings)));
 
       expect(
         base.toString(),
         'NtsWarmCookiesOutcome(freshCookies: 8, '
         'phaseTimings: PhaseTimings(dnsMicros: 1, connectMicros: 2, '
         'tlsHandshakeMicros: 3, keRecordIoMicros: 4), '
-        'trustBackend: platform)',
+        'trustBackend: platform, keWarnings: [])',
       );
     });
 

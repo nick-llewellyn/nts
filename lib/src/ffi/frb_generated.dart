@@ -685,6 +685,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  Uint16List dco_decode_list_prim_u_16_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as Uint16List;
+  }
+
+  @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
@@ -766,8 +772,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 13)
-      throw Exception('unexpected arr length: expect 13 but see ${arr.length}');
+    if (arr.length != 14)
+      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
     return NtsTimeSample(
       utcUnixMicros: dco_decode_i_64(arr[0]),
       roundTripMicros: dco_decode_i_64(arr[1]),
@@ -782,6 +788,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       rootDelayMicros: dco_decode_i_64(arr[10]),
       rootDispersionMicros: dco_decode_i_64(arr[11]),
       serverPrecision: dco_decode_i_8(arr[12]),
+      keWarnings: dco_decode_list_prim_u_16_strict(arr[13]),
     );
   }
 
@@ -806,12 +813,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   NtsWarmCookiesOutcome dco_decode_nts_warm_cookies_outcome(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return NtsWarmCookiesOutcome(
       freshCookies: dco_decode_u_32(arr[0]),
       phaseTimings: dco_decode_phase_timings(arr[1]),
       trustBackend: dco_decode_trust_backend(arr[2]),
+      keWarnings: dco_decode_list_prim_u_16_strict(arr[3]),
     );
   }
 
@@ -1004,6 +1012,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  Uint16List sse_decode_list_prim_u_16_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getUint16List(len_);
+  }
+
+  @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     final len_ = sse_decode_i_32(deserializer);
@@ -1121,6 +1136,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_rootDelayMicros = sse_decode_i_64(deserializer);
     final var_rootDispersionMicros = sse_decode_i_64(deserializer);
     final var_serverPrecision = sse_decode_i_8(deserializer);
+    final var_keWarnings = sse_decode_list_prim_u_16_strict(deserializer);
     return NtsTimeSample(
       utcUnixMicros: var_utcUnixMicros,
       roundTripMicros: var_roundTripMicros,
@@ -1135,6 +1151,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       rootDelayMicros: var_rootDelayMicros,
       rootDispersionMicros: var_rootDispersionMicros,
       serverPrecision: var_serverPrecision,
+      keWarnings: var_keWarnings,
     );
   }
 
@@ -1169,10 +1186,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_freshCookies = sse_decode_u_32(deserializer);
     final var_phaseTimings = sse_decode_phase_timings(deserializer);
     final var_trustBackend = sse_decode_trust_backend(deserializer);
+    final var_keWarnings = sse_decode_list_prim_u_16_strict(deserializer);
     return NtsWarmCookiesOutcome(
       freshCookies: var_freshCookies,
       phaseTimings: var_phaseTimings,
       trustBackend: var_trustBackend,
+      keWarnings: var_keWarnings,
     );
   }
 
@@ -1392,6 +1411,16 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  void sse_encode_list_prim_u_16_strict(
+    Uint16List self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer.putUint16List(self);
+  }
+
+  @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
     SseSerializer serializer,
@@ -1496,6 +1525,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     sse_encode_i_64(self.rootDelayMicros, serializer);
     sse_encode_i_64(self.rootDispersionMicros, serializer);
     sse_encode_i_8(self.serverPrecision, serializer);
+    sse_encode_list_prim_u_16_strict(self.keWarnings, serializer);
   }
 
   @protected
@@ -1525,6 +1555,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     sse_encode_u_32(self.freshCookies, serializer);
     sse_encode_phase_timings(self.phaseTimings, serializer);
     sse_encode_trust_backend(self.trustBackend, serializer);
+    sse_encode_list_prim_u_16_strict(self.keWarnings, serializer);
   }
 
   @protected
