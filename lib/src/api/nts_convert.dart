@@ -80,10 +80,12 @@ NtsDnsPoolStats _publicStats(ffi.NtsDnsPoolStats s) => NtsDnsPoolStats(
   highWaterMark: s.highWaterMark,
   recovered: s.recovered,
   refused: s.refused,
+  spawnFailed: s.spawnFailed,
 );
 
 TimeoutPhase _publicTimeoutPhase(ffi.TimeoutPhase phase) => switch (phase) {
   ffi.TimeoutPhase.dnsSaturation => TimeoutPhase.dnsSaturation,
+  ffi.TimeoutPhase.dnsSpawnFailed => TimeoutPhase.dnsSpawnFailed,
   ffi.TimeoutPhase.dnsTimeout => TimeoutPhase.dnsTimeout,
   ffi.TimeoutPhase.connect => TimeoutPhase.connect,
   ffi.TimeoutPhase.tls => TimeoutPhase.tls,

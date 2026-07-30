@@ -702,11 +702,13 @@ impl SseDecode for crate::api::nts::NtsDnsPoolStats {
         let mut var_highWaterMark = <u32>::sse_decode(deserializer);
         let mut var_recovered = <u64>::sse_decode(deserializer);
         let mut var_refused = <u64>::sse_decode(deserializer);
+        let mut var_spawnFailed = <u64>::sse_decode(deserializer);
         return crate::api::nts::NtsDnsPoolStats {
             in_flight: var_inFlight,
             high_water_mark: var_highWaterMark,
             recovered: var_recovered,
             refused: var_refused,
+            spawn_failed: var_spawnFailed,
         };
     }
 }
@@ -918,11 +920,12 @@ impl SseDecode for crate::api::nts::TimeoutPhase {
         let mut inner = <i32>::sse_decode(deserializer);
         return match inner {
             0 => crate::api::nts::TimeoutPhase::DnsSaturation,
-            1 => crate::api::nts::TimeoutPhase::DnsTimeout,
-            2 => crate::api::nts::TimeoutPhase::Connect,
-            3 => crate::api::nts::TimeoutPhase::Tls,
-            4 => crate::api::nts::TimeoutPhase::KeRecordIo,
-            5 => crate::api::nts::TimeoutPhase::Ntp,
+            1 => crate::api::nts::TimeoutPhase::DnsSpawnFailed,
+            2 => crate::api::nts::TimeoutPhase::DnsTimeout,
+            3 => crate::api::nts::TimeoutPhase::Connect,
+            4 => crate::api::nts::TimeoutPhase::Tls,
+            5 => crate::api::nts::TimeoutPhase::KeRecordIo,
+            6 => crate::api::nts::TimeoutPhase::Ntp,
             _ => unreachable!("Invalid variant for TimeoutPhase: {}", inner),
         };
     }
@@ -1071,6 +1074,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsDnsPoolStats {
             self.high_water_mark.into_into_dart().into_dart(),
             self.recovered.into_into_dart().into_dart(),
             self.refused.into_into_dart().into_dart(),
+            self.spawn_failed.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1299,11 +1303,12 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::TimeoutPhase {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
             Self::DnsSaturation => 0.into_dart(),
-            Self::DnsTimeout => 1.into_dart(),
-            Self::Connect => 2.into_dart(),
-            Self::Tls => 3.into_dart(),
-            Self::KeRecordIo => 4.into_dart(),
-            Self::Ntp => 5.into_dart(),
+            Self::DnsSpawnFailed => 1.into_dart(),
+            Self::DnsTimeout => 2.into_dart(),
+            Self::Connect => 3.into_dart(),
+            Self::Tls => 4.into_dart(),
+            Self::KeRecordIo => 5.into_dart(),
+            Self::Ntp => 6.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -1439,6 +1444,7 @@ impl SseEncode for crate::api::nts::NtsDnsPoolStats {
         <u32>::sse_encode(self.high_water_mark, serializer);
         <u64>::sse_encode(self.recovered, serializer);
         <u64>::sse_encode(self.refused, serializer);
+        <u64>::sse_encode(self.spawn_failed, serializer);
     }
 }
 
@@ -1599,11 +1605,12 @@ impl SseEncode for crate::api::nts::TimeoutPhase {
         <i32>::sse_encode(
             match self {
                 crate::api::nts::TimeoutPhase::DnsSaturation => 0,
-                crate::api::nts::TimeoutPhase::DnsTimeout => 1,
-                crate::api::nts::TimeoutPhase::Connect => 2,
-                crate::api::nts::TimeoutPhase::Tls => 3,
-                crate::api::nts::TimeoutPhase::KeRecordIo => 4,
-                crate::api::nts::TimeoutPhase::Ntp => 5,
+                crate::api::nts::TimeoutPhase::DnsSpawnFailed => 1,
+                crate::api::nts::TimeoutPhase::DnsTimeout => 2,
+                crate::api::nts::TimeoutPhase::Connect => 3,
+                crate::api::nts::TimeoutPhase::Tls => 4,
+                crate::api::nts::TimeoutPhase::KeRecordIo => 5,
+                crate::api::nts::TimeoutPhase::Ntp => 6,
                 _ => {
                     unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
                 }

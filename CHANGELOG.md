@@ -3,7 +3,53 @@
 
 ## 8.1
 
+### Fixed
+
+- DNS worker-thread spawn failure is no longer misreported as a network
+  error. When the bounded resolver pool granted a slot but the OS then
+  refused to create the `nts-dns` worker thread, the `io::Error` from
+  `thread::Builder::spawn` escaped through the same path as a genuine
+  lookup failure. Because the two mapping sites keyed only off
+  `ErrorKind`, an `ENOMEM` refusal (`ErrorKind::OutOfMemory`) surfaced
+  as `NtsError.network` with the message `DNS lookup failed for
+  host:port: …`, pointing operators at the network or the server when
+  the actual cause was a process-local thread or memory ceiling. An
+  `EAGAIN` refusal (`ErrorKind::WouldBlock`) was silently conflated with
+  cap saturation instead.
+
+  Spawn refusal now reports as the new `TimeoutPhase.dnsSpawnFailed`
+  (see Added). It is kept distinct from `dnsSaturation` because the
+  remediations are opposed: saturation means the cap is the binding
+  constraint and raising `dnsConcurrencyCap` helps, whereas a spawn
+  refusal means admission already succeeded, so raising the cap would
+  admit more work the process cannot service.
+
+- The DNS pool's `recovered` counter no longer credits workers that
+  never started. `thread::Builder::spawn` takes ownership of the closure
+  and drops it when the spawn fails, so the `SlotGuard` moved into the
+  closure ran its `Drop` on that path — incrementing the counter that
+  `ARCHITECTURE.md` designates as the "libc is wedged" signal for a
+  thread that never ran, and blunting exactly the signal operators are
+  told to alert on. The slot now travels to the worker as a
+  `Drop`-free `PendingSlot` and is re-armed there, leaving the
+  spawn-failure branch to release the slot explicitly.
+
 ### Added
+
+- `TimeoutPhase.dnsSpawnFailed` distinguishes "the OS refused to create
+  a DNS worker thread" from the pool-cap refusal already reported as
+  `TimeoutPhase.dnsSaturation`. Additive enum growth: `switch`
+  statements over `TimeoutPhase` that were previously exhaustive will
+  now need a case for it (or a `default`).
+
+- `NtsDnsPoolStats.spawnFailed` counts those refusals, disjoint from
+  both `refused` (admission blocked by the cap) and `recovered` (a
+  detached worker that actually ran). The pair `refused` vs
+  `spawnFailed` is what makes the cap-vs-ceiling distinction observable
+  without parsing error strings, since both refusals surface as
+  `WouldBlock` internally. Callers constructing `NtsDnsPoolStats`
+  directly — test fixtures, chiefly — must pass the new required
+  field.
 
 - `NtsTimeSample.keWarnings` and `NtsWarmCookiesOutcome.keWarnings`
   expose the non-fatal NTS-KE warning codes a server sent with the

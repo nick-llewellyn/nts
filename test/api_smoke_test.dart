@@ -509,6 +509,7 @@ ffi.NtsDnsPoolStats _zeroFfiDnsPoolStats() => ffi.NtsDnsPoolStats(
   highWaterMark: 0,
   recovered: BigInt.zero,
   refused: BigInt.zero,
+  spawnFailed: BigInt.zero,
 );
 
 ffi.NtsTrustStatus _zeroFfiTrustStatus() => ffi.NtsTrustStatus(
@@ -926,6 +927,7 @@ void main() {
         highWaterMark: 7,
         recovered: BigInt.from(42),
         refused: BigInt.from(2),
+        spawnFailed: BigInt.from(5),
       );
       // Sync: the call must return a value, not a Future.
       final stats = ntsDnsPoolStats();
@@ -935,6 +937,7 @@ void main() {
       expect(stats.highWaterMark, 7);
       expect(stats.recovered, BigInt.from(42));
       expect(stats.refused, BigInt.from(2));
+      expect(stats.spawnFailed, BigInt.from(5));
     });
   });
 
@@ -1587,12 +1590,14 @@ void main() {
         highWaterMark: 7,
         recovered: BigInt.from(42),
         refused: BigInt.from(2),
+        spawnFailed: BigInt.from(5),
       );
       final sameValue = NtsDnsPoolStats(
         inFlight: 3,
         highWaterMark: 7,
         recovered: BigInt.from(42),
         refused: BigInt.from(2),
+        spawnFailed: BigInt.from(5),
       );
       expect(base, equals(sameValue));
       expect(base.hashCode, sameValue.hashCode);
@@ -1603,24 +1608,35 @@ void main() {
           highWaterMark: 7,
           recovered: BigInt.from(42),
           refused: BigInt.from(2),
+          spawnFailed: BigInt.from(5),
         ),
         NtsDnsPoolStats(
           inFlight: 3,
           highWaterMark: 99,
           recovered: BigInt.from(42),
           refused: BigInt.from(2),
+          spawnFailed: BigInt.from(5),
         ),
         NtsDnsPoolStats(
           inFlight: 3,
           highWaterMark: 7,
           recovered: BigInt.from(99),
           refused: BigInt.from(2),
+          spawnFailed: BigInt.from(5),
         ),
         NtsDnsPoolStats(
           inFlight: 3,
           highWaterMark: 7,
           recovered: BigInt.from(42),
           refused: BigInt.from(99),
+          spawnFailed: BigInt.from(5),
+        ),
+        NtsDnsPoolStats(
+          inFlight: 3,
+          highWaterMark: 7,
+          recovered: BigInt.from(42),
+          refused: BigInt.from(2),
+          spawnFailed: BigInt.from(99),
         ),
       ];
       for (final p in perturbations) {
@@ -1630,7 +1646,7 @@ void main() {
       expect(
         base.toString(),
         'NtsDnsPoolStats(inFlight: 3, highWaterMark: 7, '
-        'recovered: 42, refused: 2)',
+        'recovered: 42, refused: 2, spawnFailed: 5)',
       );
     });
   });

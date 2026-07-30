@@ -257,12 +257,12 @@ so callers see a single uniform "would-block / try-later" signal
 rather than having to distinguish DNS-pool exhaustion from a true
 `getaddrinfo` stall.
 
-The synchronous `ntsDnsPoolStats()` entry point exposes four
+The synchronous `ntsDnsPoolStats()` entry point exposes five
 process-wide counters from the resolver pool — `inFlight`,
-`highWaterMark`, `recovered`, and `refused` — so operators can
-distinguish, *outside* the hot-path error contract, the three failure
-modes that all collapse onto `NtsError::Timeout`. The snapshot is
-backed by relaxed-atomic loads (cheap enough to call from a UI poll
+`highWaterMark`, `recovered`, `refused`, and `spawnFailed` — so
+operators can distinguish, *outside* the hot-path error contract, the
+failure modes that all collapse onto `NtsError::Timeout`. The snapshot
+is backed by relaxed-atomic loads (cheap enough to call from a UI poll
 loop) and does not reset cumulative counters; windowed measurements
 are obtained by snapshotting at `t0` and `t1` and subtracting.
 `recovered` climbing alongside a non-zero `inFlight` is the signature
@@ -270,6 +270,12 @@ of "libc is timing out internally as expected"; flat `recovered` with
 `inFlight == cap` and `refused` climbing is the saturation signature
 operators should alert on (the system resolver is wedged and raising
 the cap would only push more threads into the same wedge).
+`spawnFailed` climbing is the opposite signal and is deliberately
+disjoint from `refused`: admission succeeded, so the cap was not the
+binding constraint and raising it would make matters worse — the
+process is at a thread or memory ceiling. It is also disjoint from
+`recovered`, which counts only detached workers that actually ran, so a
+spawn that never happened must not inflate the wedge signature above.
 
 Test-side isolation: tests under `rust/src/nts/dns.rs::tests` that
 assert on pool counters or expect to acquire a slot construct their
@@ -426,15 +432,30 @@ inspecting free-form diagnostic strings.
 
 `TimeoutPhase` is the failure-side surface. It tags the
 single-payload `NtsError::Timeout(TimeoutPhase)` with one of
-`DnsSaturation`, `DnsTimeout`, `Connect`, `Tls`, `KeRecordIo`, or
-`Ntp`. The two `Dns*` variants intentionally split the bounded
-resolver pool's two refusal modes — `DnsSaturation` is the
-`io::ErrorKind::WouldBlock` path published by `try_acquire_slot`
-(cap reached, no worker dispatched) and points operators at
-raising `dns_concurrency_cap`, whereas `DnsTimeout` is the
-`recv_timeout` shape (worker dispatched, resolver slow) and points
-operators at lengthening `timeout_ms` or replacing the recursive
-resolver. `Connect`, `Tls`, and `KeRecordIo` correspond one-for-one
+`DnsSaturation`, `DnsSpawnFailed`, `DnsTimeout`, `Connect`, `Tls`,
+`KeRecordIo`, or `Ntp`. The three `Dns*` variants intentionally split
+the bounded resolver pool's three refusal modes, each with a different
+remediation — `DnsSaturation` is the `io::ErrorKind::WouldBlock` path
+published by `try_acquire_slot` (cap reached, no worker dispatched) and
+points operators at raising `dns_concurrency_cap`; `DnsSpawnFailed` is
+the slot-granted-but-`thread::Builder::spawn`-refused path (`EAGAIN` /
+`ENOMEM`) and points the opposite way, since the cap was not the
+binding constraint and raising it would admit more work the process
+cannot service — the process is at a thread or memory ceiling; whereas
+`DnsTimeout` is the `recv_timeout` shape (worker dispatched, resolver
+slow) and points operators at lengthening `timeout_ms` or replacing the
+recursive resolver.
+
+Because a refused spawn is reported by the OS as either `EAGAIN`
+(→ `WouldBlock`, indistinguishable from cap saturation) or `ENOMEM`
+(→ `OutOfMemory`, which would otherwise fall through the phase mapping
+and reach callers mislabelled as a plain `Network` lookup failure),
+`resolve_with` normalises both to `WouldBlock` and tags the message with
+a stable `SPAWN_FAILED_PREFIX`. The two mapping sites (`dns_error_to_ke`
+and the inline match in `api/nts.rs`) discriminate on that prefix, and
+`NtsDnsPoolStats.spawnFailed` counts the occurrences separately from
+`refused` so the cap-vs-ceiling distinction is observable without
+parsing error strings. `Connect`, `Tls`, and `KeRecordIo` correspond one-for-one
 with the three blocking phases inside `perform_handshake` — the
 per-address `connect_timeout` loop, the rustls `Stream::write_all` /
 `flush` window (which in TLS 1.3 contains the

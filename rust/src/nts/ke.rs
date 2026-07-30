@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::boottime::BootInstant;
-use super::dns::{resolve_with_global, system_lookup};
+use super::dns::{resolve_with_global, system_lookup, SPAWN_FAILED_PREFIX};
 
 use rustls::client::danger::ServerCertVerifier;
 use rustls::client::WebPkiServerVerifier;
@@ -156,14 +156,26 @@ impl Deadline {
 
 /// Translate an `io::Error` raised inside the bounded DNS resolver
 /// into the matching [`KeError::PhaseTimeout`] tag. `WouldBlock` is
-/// the cap-saturation signal published by
-/// [`crate::nts::dns::try_acquire_slot`]; `TimedOut` is the
+/// the resolver-refusal signal, split by message prefix into the
+/// cap-saturation shape published by
+/// [`crate::nts::dns::try_acquire_slot`] and the thread-spawn refusal
+/// marked with [`SPAWN_FAILED_PREFIX`]; `TimedOut` is the
 /// budget-exceeded signal from `recv_timeout`. Anything else is a
 /// real lookup failure (NXDOMAIN, network unreachable, …) and stays
 /// as `KeError::Io` so the `From<KeError> for NtsError` mapping can
 /// route it onto `NtsError::Network` with the diagnostic preserved.
+///
+/// The prefix match is deliberate: the OS reports a refused
+/// `thread::Builder::spawn` as `EAGAIN` (→ `WouldBlock`) or `ENOMEM`
+/// (→ `OutOfMemory`), so keying off `ErrorKind` alone would both
+/// conflate the `EAGAIN` case with cap saturation and let the `ENOMEM`
+/// case fall through to `KeError::Io` and reach Dart mislabelled as a
+/// network failure. The resolver normalises the kind so both land here.
 fn dns_error_to_ke(e: std::io::Error) -> KeError {
     match e.kind() {
+        std::io::ErrorKind::WouldBlock if e.to_string().starts_with(SPAWN_FAILED_PREFIX) => {
+            KeError::PhaseTimeout(KeTimeoutPhase::DnsSpawnFailed)
+        }
         std::io::ErrorKind::WouldBlock => KeError::PhaseTimeout(KeTimeoutPhase::DnsSaturation),
         std::io::ErrorKind::TimedOut => KeError::PhaseTimeout(KeTimeoutPhase::DnsTimeout),
         _ => KeError::Io(e),
@@ -402,6 +414,14 @@ pub enum KeTimeoutPhase {
     /// arrived. Surfaces as `io::ErrorKind::WouldBlock` from
     /// [`crate::nts::dns::resolve_with_global`].
     DnsSaturation,
+    /// Pool slot was granted but the OS refused to create the resolver
+    /// worker thread (`EAGAIN` / `ENOMEM`). Distinct from
+    /// [`Self::DnsSaturation`] because the cap was *not* the limiting
+    /// factor: raising `dns_concurrency_cap` would make it worse. Also
+    /// surfaces as `io::ErrorKind::WouldBlock`, tagged with
+    /// [`crate::nts::dns::SPAWN_FAILED_PREFIX`], and is counted by
+    /// `PoolStats::spawn_failed`.
+    DnsSpawnFailed,
     /// Resolver took longer than the remaining budget. Surfaces as
     /// `io::ErrorKind::TimedOut` from the bounded resolver.
     DnsTimeout,
@@ -469,13 +489,15 @@ impl PhaseReporter {
     /// Record that the leader has entered `phase`. Called at each phase
     /// boundary inside [`perform_handshake`] and
     /// [`connect_with_deadline_using`]. `Relaxed` because the value is
-    /// advisory (see the type-level docs). `DnsSaturation` and
-    /// `DnsTimeout` both fold onto the DNS milestone — neither is a
-    /// distinct lingering state a waiter must disambiguate from the
-    /// default.
+    /// advisory (see the type-level docs). `DnsSaturation`,
+    /// `DnsSpawnFailed`, and `DnsTimeout` all fold onto the DNS
+    /// milestone — none is a distinct lingering state a waiter must
+    /// disambiguate from the default.
     pub fn enter(&self, phase: KeTimeoutPhase) {
         let code = match phase {
-            KeTimeoutPhase::DnsSaturation | KeTimeoutPhase::DnsTimeout => PHASE_DNS,
+            KeTimeoutPhase::DnsSaturation
+            | KeTimeoutPhase::DnsSpawnFailed
+            | KeTimeoutPhase::DnsTimeout => PHASE_DNS,
             KeTimeoutPhase::Connect => PHASE_CONNECT,
             KeTimeoutPhase::Tls => PHASE_TLS,
             KeTimeoutPhase::KeRecordIo => PHASE_KE_RECORD_IO,

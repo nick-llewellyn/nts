@@ -918,6 +918,20 @@ class NtsDnsPoolStats {
   /// the resolver is healthy is zero.
   final BigInt refused;
 
+  /// Cumulative count of admitted lookups the operating system then
+  /// refused to spawn a worker thread for (`EAGAIN` / `ENOMEM`) since
+  /// process start.
+  ///
+  /// Disjoint from [refused], and the pair carries the actionable
+  /// distinction: [refused] climbing means the cap is the binding
+  /// constraint and raising `dnsConcurrencyCap` would help, whereas
+  /// this counter climbing means the process is at a thread or memory
+  /// ceiling and raising the cap would make matters worse. Not counted
+  /// in [recovered] either, since no worker ran. Pairs with
+  /// [TimeoutPhase.dnsSpawnFailed] on the error channel. `BigInt` for
+  /// the same wraparound reason as [recovered].
+  final BigInt spawnFailed;
+
   /// Construct a snapshot. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures.
   const NtsDnsPoolStats({
@@ -925,10 +939,12 @@ class NtsDnsPoolStats {
     required this.highWaterMark,
     required this.recovered,
     required this.refused,
+    required this.spawnFailed,
   });
 
   @override
-  int get hashCode => Object.hash(inFlight, highWaterMark, recovered, refused);
+  int get hashCode =>
+      Object.hash(inFlight, highWaterMark, recovered, refused, spawnFailed);
 
   @override
   bool operator ==(Object other) =>
@@ -937,10 +953,11 @@ class NtsDnsPoolStats {
           inFlight == other.inFlight &&
           highWaterMark == other.highWaterMark &&
           recovered == other.recovered &&
-          refused == other.refused);
+          refused == other.refused &&
+          spawnFailed == other.spawnFailed);
 
   @override
   String toString() =>
       'NtsDnsPoolStats(inFlight: $inFlight, highWaterMark: $highWaterMark, '
-      'recovered: $recovered, refused: $refused)';
+      'recovered: $recovered, refused: $refused, spawnFailed: $spawnFailed)';
 }

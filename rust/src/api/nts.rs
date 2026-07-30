@@ -56,7 +56,9 @@ use zeroize::Zeroizing;
 use crate::nts::aead::{AeadError, AeadKey};
 use crate::nts::boottime::BootInstant;
 use crate::nts::cookies::CookieJar;
-use crate::nts::dns::{resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS};
+use crate::nts::dns::{
+    resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS, SPAWN_FAILED_PREFIX,
+};
 use crate::nts::ke::{
     perform_handshake, KeError, KeFailure, KeOutcome, KePhaseTimings, KeRequest, KeTimeoutPhase,
     KeTrustMode, PhaseReporter, OFFERED_AEAD_IDS,
@@ -105,8 +107,9 @@ pub struct NtsServerSpec {
 /// Rust-side KE-pipeline taxonomy (`KeTimeoutPhase`, internal to
 /// the crate) maps onto this enum via `From`; the `Ntp` variant
 /// is added at this layer for the UDP send/recv phase, and the
-/// two `Dns*` variants distinguish saturation (cap full) from
-/// timeout (resolver slow). See `ARCHITECTURE.md`'s "Phase
+/// three `Dns*` variants distinguish saturation (cap full) from
+/// spawn refusal (OS would not create the worker) from timeout
+/// (resolver slow). See `ARCHITECTURE.md`'s "Phase
 /// attribution and timings" section for the full diagnostic
 /// shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +121,15 @@ pub enum TimeoutPhase {
     /// drain is the appropriate remediation, not lengthening
     /// `timeout_ms`.
     DnsSaturation,
+    /// A pool slot was granted, but the OS refused to create the
+    /// resolver worker thread (`EAGAIN` / `ENOMEM`). Distinct from
+    /// `DnsSaturation`: the cap was *not* the limiting factor, so
+    /// raising `dns_concurrency_cap` would make matters worse. The
+    /// process is at a thread or memory ceiling — reducing concurrent
+    /// load elsewhere, or raising the process thread limit, are the
+    /// appropriate remediations. Counted by
+    /// `NtsDnsPoolStats.spawnFailed`.
+    DnsSpawnFailed,
     /// System resolver took longer than the remaining budget.
     /// Lengthening `timeout_ms` *or* swapping in a faster recursive
     /// resolver are the appropriate remediations; raising the
@@ -146,6 +158,7 @@ impl From<KeTimeoutPhase> for TimeoutPhase {
     fn from(p: KeTimeoutPhase) -> Self {
         match p {
             KeTimeoutPhase::DnsSaturation => Self::DnsSaturation,
+            KeTimeoutPhase::DnsSpawnFailed => Self::DnsSpawnFailed,
             KeTimeoutPhase::DnsTimeout => Self::DnsTimeout,
             KeTimeoutPhase::Connect => Self::Connect,
             KeTimeoutPhase::Tls => Self::Tls,
@@ -421,6 +434,18 @@ pub struct NtsDnsPoolStats {
     /// because the cap was reached since process start. The expected
     /// delta when the resolver is healthy is zero.
     pub refused: u64,
+    /// Cumulative count of admitted lookups the OS then refused to
+    /// spawn a worker thread for (`EAGAIN` / `ENOMEM`) since process
+    /// start. Disjoint from [`Self::refused`], and the actionable
+    /// distinction between them: `refused` climbing means the cap is
+    /// the binding constraint and raising `dns_concurrency_cap` would
+    /// help, whereas `spawn_failed` climbing means the process is at a
+    /// thread or memory ceiling and raising the cap would make it
+    /// worse. Not counted in [`Self::recovered`] either, since no
+    /// worker ran. Pairs with `TimeoutPhase::DnsSpawnFailed` on the
+    /// error channel. `u64` for the same wraparound reason as
+    /// [`Self::recovered`].
+    pub spawn_failed: u64,
 }
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
@@ -430,7 +455,7 @@ pub struct NtsDnsPoolStats {
 /// `ARCHITECTURE.md`'s "Timeout budget and bounded DNS" section for
 /// the operational shape.
 ///
-/// Marked `#[frb(sync)]` so reading four atomics does not pay the
+/// Marked `#[frb(sync)]` so reading five atomics does not pay the
 /// future-marshalling overhead a default FRB binding would impose;
 /// the function is cheap enough to call from a UI poll loop without
 /// thinking about isolate hops.
@@ -442,6 +467,7 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
         high_water_mark: snap.high_water_mark as u32,
         recovered: snap.recovered,
         refused: snap.refused,
+        spawn_failed: snap.spawn_failed,
     }
 }
 
@@ -2923,12 +2949,29 @@ where
             Ok(v) => v,
             Err(e) => {
                 // Distinguish saturation (pool already full, no worker
-                // dispatched) from a slow resolver (worker dispatched
-                // but `recv_timeout` fired) so callers can pick the
-                // right remediation. Other I/O kinds are real lookup
-                // failures and surface as `Network` with the
-                // diagnostic preserved.
+                // dispatched) from spawn refusal (slot granted, but the
+                // OS would not create the worker) from a slow resolver
+                // (worker dispatched but `recv_timeout` fired) so
+                // callers can pick the right remediation. Other I/O
+                // kinds are real lookup failures and surface as
+                // `Network` with the diagnostic preserved.
+                //
+                // The spawn-refusal arm keys off the message prefix
+                // rather than the kind: a refused spawn is `EAGAIN`
+                // (→ `WouldBlock`, indistinguishable from saturation)
+                // or `ENOMEM` (→ `OutOfMemory`, which would otherwise
+                // fall through to `Network` and reach callers labelled
+                // as a lookup failure). The resolver normalises the
+                // kind so both arrive here as `WouldBlock`.
                 return Err(match e.kind() {
+                    std::io::ErrorKind::WouldBlock
+                        if e.to_string().starts_with(SPAWN_FAILED_PREFIX) =>
+                    {
+                        NtsError::Timeout {
+                            phase: TimeoutPhase::DnsSpawnFailed,
+                            trust_backend: None,
+                        }
+                    }
                     std::io::ErrorKind::WouldBlock => NtsError::Timeout {
                         phase: TimeoutPhase::DnsSaturation,
                         trust_backend: None,

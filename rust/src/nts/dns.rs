@@ -50,11 +50,24 @@
 //! the global counter via [`resolve_with_timeout`].
 
 use std::io;
+use std::mem;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+/// Stable prefix on the `io::ErrorKind::WouldBlock` error returned when
+/// the OS refuses to create an `nts-dns` worker thread.
+///
+/// The kind alone cannot distinguish this from a cap-reached refusal
+/// (both are `WouldBlock`, deliberately: see [`resolve_with`]), so the
+/// prefix is what the `nts::ke` and `api::nts` mapping layers match on
+/// to reach their spawn-failure error variants, and what
+/// [`PoolStats::spawn_failed`] is cross-checked against in tests. Treat
+/// it as load-bearing — changing the text changes the classification of
+/// the resulting public error.
+pub(crate) const SPAWN_FAILED_PREFIX: &str = "DNS worker spawn failed for ";
 
 /// Maximum number of `nts-dns` worker threads that may be alive
 /// simultaneously when the caller does not specify a cap of its own.
@@ -106,6 +119,15 @@ pub(crate) struct PoolStats {
     /// `dns_concurrency_cap` would have lowered the error rate"; the
     /// expected delta when the resolver is healthy is zero.
     pub(crate) refused: AtomicU64,
+    /// Cumulative count of admitted lookups the OS then refused to
+    /// spawn a worker thread for. Disjoint from [`Self::refused`]: the
+    /// slot was granted, so the cap was *not* the limiting factor and
+    /// raising `dns_concurrency_cap` would make matters worse. A
+    /// non-zero value means the process is at a thread or memory limit
+    /// (`EAGAIN` / `ENOMEM`), which is the actionable distinction —
+    /// both refusal shapes surface as `WouldBlock` on the error
+    /// channel, so this counter is the only way to tell them apart.
+    pub(crate) spawn_failed: AtomicU64,
 }
 
 impl PoolStats {
@@ -115,6 +137,7 @@ impl PoolStats {
             high_water_mark: AtomicUsize::new(0),
             recovered: AtomicU64::new(0),
             refused: AtomicU64::new(0),
+            spawn_failed: AtomicU64::new(0),
         }
     }
 }
@@ -140,6 +163,7 @@ pub(crate) struct PoolSnapshot {
     pub(crate) high_water_mark: usize,
     pub(crate) recovered: u64,
     pub(crate) refused: u64,
+    pub(crate) spawn_failed: u64,
 }
 
 /// Snapshot the global resolver pool counters. Backs the FFI-level
@@ -156,6 +180,7 @@ pub(crate) fn snapshot_of(stats: &PoolStats) -> PoolSnapshot {
         high_water_mark: stats.high_water_mark.load(Ordering::Relaxed),
         recovered: stats.recovered.load(Ordering::Relaxed),
         refused: stats.refused.load(Ordering::Relaxed),
+        spawn_failed: stats.spawn_failed.load(Ordering::Relaxed),
     }
 }
 
@@ -169,14 +194,58 @@ pub(crate) fn system_lookup(host: &str, port: u16) -> io::Result<Vec<SocketAddr>
 }
 
 /// RAII slot in the bounded resolver pool. The slot is acquired by
-/// [`try_acquire_slot`] before the worker thread is spawned and moved
-/// into the worker's closure so the count is held until the resolver
-/// actually returns — even when the calling thread has already given
-/// up on `recv_timeout` and detached the worker. Construction outside
-/// `try_acquire_slot` is impossible (the field is private to the
-/// module), which keeps the increment/decrement balance auditable.
+/// [`try_acquire_slot`] before the worker thread is spawned and — via
+/// the [`PendingSlot`] handoff described on [`Self::into_pending`] —
+/// re-armed on the worker so the count is held until the resolver
+/// actually returns, even when the calling thread has already given up
+/// on `recv_timeout` and detached the worker. Construction is confined
+/// to `try_acquire_slot` and [`PendingSlot::arm`] (the field is private
+/// to the module), which keeps the increment/decrement balance
+/// auditable.
 struct SlotGuard {
     stats: &'static PoolStats,
+}
+
+impl SlotGuard {
+    /// Suspend the guard's `Drop`-time accounting so the slot can be
+    /// handed to a worker thread that may never start.
+    ///
+    /// [`thread::Builder::spawn`] takes ownership of the closure and
+    /// drops it when the spawn fails, so a `SlotGuard` moved directly
+    /// into the closure would run [`SlotGuard::drop`] — crediting
+    /// [`PoolStats::recovered`] for a worker that never existed and
+    /// blunting the counter's documented libc-wedge signal. Callers
+    /// therefore move a [`PendingSlot`] into the closure and re-arm it
+    /// on the worker, handling the spawn-failure release themselves.
+    fn into_pending(self) -> PendingSlot {
+        // Suppress this guard's `Drop`; the slot stays accounted for in
+        // `in_flight` and its release becomes the `PendingSlot`'s
+        // responsibility.
+        let this = mem::ManuallyDrop::new(self);
+        PendingSlot { stats: this.stats }
+    }
+}
+
+/// A pool slot in transit to a worker thread that has not started yet.
+///
+/// Deliberately has no `Drop` impl, so being dropped inside the closure
+/// that `thread::Builder::spawn` discards on failure is a no-op. That
+/// leaves the slot accounted for in [`PoolStats::in_flight`] and makes
+/// releasing it the spawn call site's responsibility — which is what
+/// lets that path skip the `recovered` credit. The only two terminal
+/// outcomes both live in [`resolve_with`]: [`Self::arm`] on the worker,
+/// or a direct `in_flight` decrement on the spawn-failure branch.
+struct PendingSlot {
+    stats: &'static PoolStats,
+}
+
+impl PendingSlot {
+    /// Re-arm on the worker thread. The returned guard releases the
+    /// slot — and credits [`PoolStats::recovered`] — when the worker
+    /// returns, exactly as if it had been moved in directly.
+    fn arm(self) -> SlotGuard {
+        SlotGuard { stats: self.stats }
+    }
 }
 
 impl Drop for SlotGuard {
@@ -307,19 +376,35 @@ where
     };
     let (tx, rx) = mpsc::channel();
     let host_owned = host.to_owned();
-    // Detached worker — see module docs. The `SlotGuard` is moved
-    // into the closure so the in-flight count tracks live threads,
-    // not pending callers.
-    thread::Builder::new()
+    // Detached worker — see module docs. The slot is re-armed inside the
+    // closure so the in-flight count tracks live threads, not pending
+    // callers. It travels as a `PendingSlot` rather than a live
+    // `SlotGuard` because `spawn` drops the closure when it fails, and a
+    // guard dropped there would credit `recovered` for a worker that
+    // never ran. See [`SlotGuard::into_pending`].
+    let pending = slot.into_pending();
+    if let Err(e) = thread::Builder::new()
         .name("nts-dns".to_owned())
         .spawn(move || {
-            let _slot = slot;
+            let _slot = pending.arm();
             let result = lookup(host_owned.as_str(), port);
             // Receiver may have gone away after the timeout fired; the
             // send fails silently in that case and the thread exits,
             // which drops `_slot` and releases the pool slot.
             let _ = tx.send(result);
-        })?;
+        })
+    {
+        // The closure — and the `PendingSlot` it captured — is gone, so
+        // release the slot directly and record the refusal against
+        // `spawn_failed` rather than `refused` (the cap was not
+        // reached) or `recovered` (no worker ran).
+        stats.spawn_failed.fetch_add(1, Ordering::Relaxed);
+        stats.in_flight.fetch_sub(1, Ordering::Release);
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            format!("{SPAWN_FAILED_PREFIX}{host}:{port}: {e}"),
+        ));
+    }
     match rx.recv_timeout(timeout) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
@@ -598,6 +683,118 @@ mod tests {
             snapshot_of(&STATS).refused,
             before + 2,
             "refused must increment once per rejected admission",
+        );
+    }
+
+    /// The cap-rejection path must leave `spawn_failed` untouched.
+    ///
+    /// Both refusal shapes surface as `WouldBlock`, so these two
+    /// counters are the only thing separating "raise the cap" from
+    /// "the process cannot create threads". A cap rejection that also
+    /// bumped `spawn_failed` would make the pair useless for that
+    /// decision. The converse direction — a spawn failure leaving
+    /// `refused` alone — cannot be exercised here because
+    /// `thread::Builder::spawn` is not injectable; it is pinned
+    /// structurally instead by `spawn_failure_does_not_credit_recovered`
+    /// and by the single `refused` increment living in
+    /// `try_acquire_slot`.
+    #[test]
+    fn cap_rejection_does_not_credit_spawn_failed() {
+        static STATS: PoolStats = PoolStats::new();
+        const CAP: usize = 1;
+
+        let _ = resolve_with(
+            &STATS,
+            CAP,
+            "ignored.invalid",
+            0,
+            Duration::from_millis(20),
+            |_host, _port| {
+                thread::sleep(Duration::from_millis(500));
+                Ok(vec![])
+            },
+        )
+        .expect_err("filler must time out");
+
+        let before = snapshot_of(&STATS);
+        let blocked = resolve_with(
+            &STATS,
+            CAP,
+            "ignored.invalid",
+            0,
+            Duration::from_secs(60),
+            |_host, _port| panic!("lookup must not run when cap is reached"),
+        )
+        .expect_err("saturated pool must reject new work");
+        assert_eq!(blocked.kind(), io::ErrorKind::WouldBlock);
+
+        let after = snapshot_of(&STATS);
+        assert_eq!(
+            after.refused,
+            before.refused + 1,
+            "cap rejection must bump refused",
+        );
+        assert_eq!(
+            after.spawn_failed, before.spawn_failed,
+            "cap rejection must not bump spawn_failed; the counters must stay disjoint",
+        );
+    }
+
+    /// The `SlotGuard` -> `PendingSlot` handoff must not credit
+    /// `recovered` on the way to the worker.
+    ///
+    /// `thread::Builder::spawn` takes ownership of the closure and
+    /// drops it when the spawn fails. Moving a live `SlotGuard` in
+    /// would therefore run `SlotGuard::drop` on that path and credit
+    /// `recovered` — the counter module docs designate as the
+    /// detached-worker-completion (libc wedge) signal — for a worker
+    /// that never existed. `PendingSlot` has no `Drop` impl precisely
+    /// so that discard is inert.
+    ///
+    /// Spawn failure cannot be induced portably, so this asserts the
+    /// property that makes the failure path correct: `into_pending`
+    /// followed by dropping the `PendingSlot` (standing in for the
+    /// closure `spawn` discards) leaves `recovered` alone, while
+    /// `in_flight` stays held — which is what obliges the spawn-failure
+    /// branch in `resolve_with` to release it explicitly.
+    #[test]
+    fn spawn_failure_does_not_credit_recovered() {
+        static STATS: PoolStats = PoolStats::new();
+
+        let slot = try_acquire_slot(&STATS, 1).expect("cap of 1 must admit the first caller");
+        let before = snapshot_of(&STATS);
+        assert_eq!(before.in_flight, 1, "admission must be reflected in-flight");
+
+        // Stand in for the closure that a failed `spawn` drops. Bound
+        // in an inner scope rather than passed to `drop`, because
+        // `PendingSlot` deliberately has no `Drop` impl — which is the
+        // property under test, and which `clippy::drop_non_drop`
+        // rightly flags at an explicit `drop` call site.
+        {
+            let _discarded = slot.into_pending();
+        }
+
+        let after = snapshot_of(&STATS);
+        assert_eq!(
+            after.recovered, before.recovered,
+            "discarding a PendingSlot must not credit recovered",
+        );
+        assert_eq!(
+            after.in_flight, 1,
+            "PendingSlot must keep the slot accounted for, leaving release to the caller",
+        );
+
+        // Mirror what the spawn-failure branch in `resolve_with` does,
+        // and confirm it drains without touching `recovered`.
+        STATS.in_flight.fetch_sub(1, Ordering::Release);
+        let drained = snapshot_of(&STATS);
+        assert_eq!(
+            drained.in_flight, 0,
+            "explicit release must drain in_flight"
+        );
+        assert_eq!(
+            drained.recovered, before.recovered,
+            "explicit release must not credit recovered",
         );
     }
 

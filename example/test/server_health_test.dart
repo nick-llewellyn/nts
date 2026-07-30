@@ -1,9 +1,10 @@
 // Phase-aware classification coverage for `summarizeServer`.
 //
 // Pins the `phase -> verdict` mapping (NTS-56): a probe wave that only
-// fast-failed on the local DNS-pool cap (`dnsSaturation`) must surface
-// as the distinct, non-drop `dnsExhausted` bucket rather than reading
-// as a server-side `notReplying`.
+// fast-failed inside the local DNS resolver — on the pool cap
+// (`dnsSaturation`) or on a refused worker thread (`dnsSpawnFailed`) —
+// must surface as the distinct, non-drop `dnsExhausted` bucket rather
+// than reading as a server-side `notReplying`.
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts_example/src/health/server_health.dart';
@@ -36,8 +37,39 @@ void main() {
       expect(h.verdict, HealthVerdict.dnsExhausted);
       expect(h.isDropCandidate, isFalse);
       expect(h.dominantErrorType, 'Timeout(dnsSaturation)');
-      expect(h.reasons.single, contains('DNS resolver pool exhausted'));
+      expect(h.reasons.single, contains('DNS resolver refused every lookup'));
       expect(h.successes, 0);
+    });
+
+    test('all dnsSpawnFailed timeouts -> dnsExhausted, not a drop', () {
+      final h = _summarize([
+        _timeout('dnsSpawnFailed'),
+        _timeout('dnsSpawnFailed'),
+      ]);
+      expect(h.verdict, HealthVerdict.dnsExhausted);
+      expect(h.isDropCandidate, isFalse);
+      expect(h.dominantErrorType, 'Timeout(dnsSpawnFailed)');
+      expect(h.successes, 0);
+    });
+
+    test('mixed resolver-refusal phases -> dnsExhausted, not a drop', () {
+      // Neither phase reached the server, so the wave carries no
+      // evidence about it even though the two refusals have different
+      // probe-side remediations.
+      final h = _summarize([
+        _timeout('dnsSaturation'),
+        _timeout('dnsSpawnFailed'),
+      ]);
+      expect(h.verdict, HealthVerdict.dnsExhausted);
+      expect(h.isDropCandidate, isFalse);
+    });
+
+    test('dnsSpawnFailed mixed with a server-side phase -> drop', () {
+      // A non-resolver outcome means we did get signal about the
+      // server, so the resolver-refusal shortcut must not apply.
+      final h = _summarize([_timeout('dnsSpawnFailed'), _timeout('ntp')]);
+      expect(h.verdict, HealthVerdict.notReplying);
+      expect(h.isDropCandidate, isTrue);
     });
 
     test('all generic Network failures -> notReplying drop', () {

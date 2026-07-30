@@ -19,7 +19,7 @@ part 'nts.freezed.dart';
 /// `ARCHITECTURE.md`'s "Timeout budget and bounded DNS" section for
 /// the operational shape.
 ///
-/// Marked `#[frb(sync)]` so reading four atomics does not pay the
+/// Marked `#[frb(sync)]` so reading five atomics does not pay the
 /// future-marshalling overhead a default FRB binding would impose;
 /// the function is cheap enough to call from a UI poll loop without
 /// thinking about isolate hops.
@@ -356,11 +356,25 @@ class NtsDnsPoolStats {
   /// delta when the resolver is healthy is zero.
   final BigInt refused;
 
+  /// Cumulative count of admitted lookups the OS then refused to
+  /// spawn a worker thread for (`EAGAIN` / `ENOMEM`) since process
+  /// start. Disjoint from [`Self::refused`], and the actionable
+  /// distinction between them: `refused` climbing means the cap is
+  /// the binding constraint and raising `dns_concurrency_cap` would
+  /// help, whereas `spawn_failed` climbing means the process is at a
+  /// thread or memory ceiling and raising the cap would make it
+  /// worse. Not counted in [`Self::recovered`] either, since no
+  /// worker ran. Pairs with `TimeoutPhase::DnsSpawnFailed` on the
+  /// error channel. `u64` for the same wraparound reason as
+  /// [`Self::recovered`].
+  final BigInt spawnFailed;
+
   const NtsDnsPoolStats({
     required this.inFlight,
     required this.highWaterMark,
     required this.recovered,
     required this.refused,
+    required this.spawnFailed,
   });
 
   @override
@@ -368,7 +382,8 @@ class NtsDnsPoolStats {
       inFlight.hashCode ^
       highWaterMark.hashCode ^
       recovered.hashCode ^
-      refused.hashCode;
+      refused.hashCode ^
+      spawnFailed.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -378,7 +393,8 @@ class NtsDnsPoolStats {
           inFlight == other.inFlight &&
           highWaterMark == other.highWaterMark &&
           recovered == other.recovered &&
-          refused == other.refused;
+          refused == other.refused &&
+          spawnFailed == other.spawnFailed;
 }
 
 @freezed
@@ -933,8 +949,9 @@ class PhaseTimings {
 /// Rust-side KE-pipeline taxonomy (`KeTimeoutPhase`, internal to
 /// the crate) maps onto this enum via `From`; the `Ntp` variant
 /// is added at this layer for the UDP send/recv phase, and the
-/// two `Dns*` variants distinguish saturation (cap full) from
-/// timeout (resolver slow). See `ARCHITECTURE.md`'s "Phase
+/// three `Dns*` variants distinguish saturation (cap full) from
+/// spawn refusal (OS would not create the worker) from timeout
+/// (resolver slow). See `ARCHITECTURE.md`'s "Phase
 /// attribution and timings" section for the full diagnostic
 /// shape.
 enum TimeoutPhase {
@@ -945,6 +962,16 @@ enum TimeoutPhase {
   /// drain is the appropriate remediation, not lengthening
   /// `timeout_ms`.
   dnsSaturation,
+
+  /// A pool slot was granted, but the OS refused to create the
+  /// resolver worker thread (`EAGAIN` / `ENOMEM`). Distinct from
+  /// `DnsSaturation`: the cap was *not* the limiting factor, so
+  /// raising `dns_concurrency_cap` would make matters worse. The
+  /// process is at a thread or memory ceiling — reducing concurrent
+  /// load elsewhere, or raising the process thread limit, are the
+  /// appropriate remediations. Counted by
+  /// `NtsDnsPoolStats.spawnFailed`.
+  dnsSpawnFailed,
 
   /// System resolver took longer than the remaining budget.
   /// Lengthening `timeout_ms` *or* swapping in a faster recursive
