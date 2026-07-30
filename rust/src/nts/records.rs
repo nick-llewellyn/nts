@@ -230,14 +230,36 @@ impl fmt::Display for WarningCode {
 
 #[derive(Debug)]
 pub enum CodecError {
-    MessageTooLarge { actual: usize },
+    MessageTooLarge {
+        actual: usize,
+    },
     TruncatedHeader,
-    BodyOverflow { claimed: usize, remaining: usize },
-    OddU16Array { len: usize },
-    BodyLengthMismatch { actual: usize, expected: usize },
+    BodyOverflow {
+        claimed: usize,
+        remaining: usize,
+    },
+    OddU16Array {
+        len: usize,
+    },
+    BodyLengthMismatch {
+        actual: usize,
+        expected: usize,
+    },
     InvalidUtf8,
     MissingTerminator,
     NonEmptyEndOfMessage,
+    /// A NewCookie record body exceeded
+    /// [`crate::nts::cookies::MAX_COOKIE_LEN`]. RFC 8915 §4.1.6 sets no
+    /// upper bound, so without this check a cookie is limited only by
+    /// the enclosing message and its length propagates into every
+    /// subsequent NTP request via the placeholder sizing in
+    /// [`crate::nts::ntp::build_client_request`]. Rejecting the whole
+    /// message (rather than skipping the record) keeps the handshake
+    /// atomic: a server issuing cookies this large is misbehaving, and
+    /// a partial harvest would silently degrade the pool.
+    CookieTooLarge {
+        actual: usize,
+    },
 }
 
 impl fmt::Display for CodecError {
@@ -261,6 +283,11 @@ impl fmt::Display for CodecError {
             Self::InvalidUtf8 => f.write_str("NTPv4-Server record contained invalid UTF-8"),
             Self::MissingTerminator => f.write_str("NTS-KE message has no End-of-Message record"),
             Self::NonEmptyEndOfMessage => f.write_str("End-of-Message record body must be empty"),
+            Self::CookieTooLarge { actual } => write!(
+                f,
+                "NTS-KE cookie too large: {actual} bytes (cap {})",
+                crate::nts::cookies::MAX_COOKIE_LEN,
+            ),
         }
     }
 }
@@ -447,7 +474,14 @@ fn decode_kind(record_type: u16, body: &[u8]) -> Result<RecordKind, CodecError> 
         // intermediates that could leave residual copies. See bd
         // nts-8ey and the `AGENTS.md` "Security: Zeroization"
         // conventions.
-        record_type::NEW_COOKIE => Ok(RecordKind::NewCookie(Zeroizing::new(body.to_vec()))),
+        record_type::NEW_COOKIE => {
+            // Bound the cookie before the copy, so an oversized body is
+            // never allocated at all (see `CookieTooLarge`).
+            if body.len() > crate::nts::cookies::MAX_COOKIE_LEN {
+                return Err(CodecError::CookieTooLarge { actual: body.len() });
+            }
+            Ok(RecordKind::NewCookie(Zeroizing::new(body.to_vec())))
+        }
         record_type::NTPV4_SERVER => std::str::from_utf8(body)
             .map(|s| RecordKind::Server(s.to_owned()))
             .map_err(|_| CodecError::InvalidUtf8),
@@ -827,6 +861,54 @@ mod tests {
                 remaining: 2,
             }) => {}
             other => panic!("under-supplied NewCookie: expected BodyOverflow, got {other:?}"),
+        }
+    }
+
+    /// A NewCookie body at exactly [`crate::nts::cookies::MAX_COOKIE_LEN`]
+    /// must still parse: the cap is an inclusive upper bound, and an
+    /// off-by-one here would reject conforming servers that happen to
+    /// sit on the boundary.
+    #[test]
+    fn accepts_new_cookie_at_size_cap() {
+        let body = vec![0xAB; crate::nts::cookies::MAX_COOKIE_LEN];
+        let bytes = serialize_message(&[
+            Record {
+                critical: true,
+                kind: RecordKind::NewCookie(Zeroizing::new(body.clone())),
+            },
+            Record {
+                critical: true,
+                kind: RecordKind::EndOfMessage,
+            },
+        ]);
+        let records = parse_message(&bytes).expect("cookie at the cap must parse");
+        match &records[0].kind {
+            RecordKind::NewCookie(c) => assert_eq!(c.len(), body.len()),
+            other => panic!("expected NewCookie, got {other:?}"),
+        }
+    }
+
+    /// One octet past [`crate::nts::cookies::MAX_COOKIE_LEN`] must fail
+    /// the whole message. Without this bound a cookie is limited only by
+    /// [`MAX_MESSAGE_BYTES`], and its length propagates into every
+    /// subsequent NTP request through the placeholder sizing in
+    /// `crate::nts::ntp::build_client_request` (bd nts-r11f.4).
+    #[test]
+    fn rejects_oversized_new_cookie_record() {
+        let over = crate::nts::cookies::MAX_COOKIE_LEN + 1;
+        let bytes = serialize_message(&[
+            Record {
+                critical: true,
+                kind: RecordKind::NewCookie(Zeroizing::new(vec![0xAB; over])),
+            },
+            Record {
+                critical: true,
+                kind: RecordKind::EndOfMessage,
+            },
+        ]);
+        match parse_message(&bytes) {
+            Err(CodecError::CookieTooLarge { actual }) => assert_eq!(actual, over),
+            other => panic!("oversized NewCookie: expected CookieTooLarge, got {other:?}"),
         }
     }
 

@@ -3145,6 +3145,29 @@ fn fresh_request_uid_and_nonce(nonce_len: usize) -> Result<([u8; UID_LEN], Vec<u
     Ok((uid, nonce))
 }
 
+/// Warn when the server issued cookies past
+/// [`crate::nts::cookies::MAX_COOKIE_LEN`].
+///
+/// `parse_server_response` filters those entries rather than failing
+/// the packet: the sample is AEAD-authenticated and sound, and
+/// discarding it would trade a real synchronisation for cookies the
+/// client is free to ignore. The trade-off is that the pool refills
+/// slower than the placeholder count implies, so the drop is logged
+/// rather than left silent.
+fn log_oversized_cookie_drops(response: &crate::nts::ntp::ServerResponse, key: &str) {
+    if response.oversized_cookies_dropped == 0 {
+        return;
+    }
+    log::warn!(
+        target: "nts::ntp",
+        "server sent {} cookie(s) over the {}-byte cap; dropped: host={} kept={}",
+        response.oversized_cookies_dropped,
+        crate::nts::cookies::MAX_COOKIE_LEN,
+        key,
+        response.fresh_cookies.len(),
+    );
+}
+
 /// `trust_mode` is the caller's [`TrustMode`] policy (the default
 /// singleton uses `PlatformWithFallback`; caller-minted clients use
 /// whatever they were constructed with). `is_default_client` selects
@@ -3338,6 +3361,8 @@ fn nts_query_inner(
             trust_backend: None,
         }));
     }
+
+    log_oversized_cookie_drops(&response, &key);
 
     let fresh_count = response.fresh_cookies.len() as u32;
     table.deposit_cookies(&key, session_generation, response.fresh_cookies);
