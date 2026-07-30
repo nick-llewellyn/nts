@@ -464,7 +464,7 @@ bd linear sync --push          # then export local changes
 
 | Flag | Purpose |
 |---|---|
-| `--prefer-linear` / `--prefer-local` | Conflict resolution — force one side to win when timestamps diverge. `--prefer-linear` is the *intended* way to make a pull adopt Linear's terminal state, but it is **not reliable** in practice: when local edits bumped the local `updatedAt`, an observed `--prefer-linear` pull still kept the local non-terminal state (see "Pull won't adopt Linear's state" and "Issue State Synchronization"). |
+| `--prefer-linear` / `--prefer-local` | Conflict resolution — force one side to win when timestamps diverge. `--prefer-linear` is the *intended* way to make a pull adopt Linear's terminal state, but its behaviour is **unreliable in both directions**: it may fail to adopt Linear's state at all (see "Pull won't adopt Linear's state"), and when it *does* take it can flatten local-only fields such as `issue_type` as collateral (see "`--prefer-linear` flattens `issue_type`"). Verify both status *and* type after every `--prefer-linear` pull. |
 | `--pull-if-stale [--threshold 20m]` | Pull only if the local Linear cache is older than the threshold (default 20m). This is the source of the recurring `⚠ Linear data is … stale` warning. |
 | `--state` (`open`, `closed`, or `all`) | Restrict the sync to issues in a given local state (default `all`). |
 | `--issues a,b` / `--parent TICKET` | Scope a push to specific beads or a ticket subtree. **Required** for any push that must succeed reliably — see Gotcha #4. |
@@ -520,6 +520,10 @@ local `CLOSED` (see "Issue State Synchronization"), but in practice the pull is
 **unreliable** — see the "Pull won't adopt Linear's state" troubleshooting entry
 and the manual `bd close` fallback below, which is the expected reconciliation,
 not an exceptional one.
+
+When the pull *does* adopt Linear's state, audit `issue_type` on every bead it
+reports as updated before pushing to DoltHub — `--prefer-linear` flattens that
+field to `task`. See "`--prefer-linear` flattens `issue_type`".
 
 **Manual fallback** (the `--prefer-linear` pull did not adopt Linear's state —
 the common case — or the issue was abandoned, or the GitHub integration did not
@@ -680,6 +684,47 @@ locally rather than on the push. This is the same manual reconciliation as in
 upstream `bd` limitation, not a repo-fixable bug (investigated under NTS-8;
 push-side counterpart under NTS-29).
 
+#### `--prefer-linear` flattens `issue_type` on the beads it updates
+
+This is the **inverse** failure mode of the entry above, and it bites on the
+runs where `--prefer-linear` *works*. Linear has no equivalent of the beads
+`issue_type` field (`epic`, `bug`, `chore`, `task`, …), so "Linear wins"
+resolves that field to the default `task` rather than leaving it untouched.
+Every bead the pull reports as updated loses its type.
+
+Observed during the NTS-126 close: a `--prefer-linear` pull correctly adopted
+Linear's **Done** for `nts-r11f.5`, reported `✓ Pulled 2 issues (0 created, 2
+updated)`, and silently reset `nts-r11f` from `epic` → `task` and
+`nts-r11f.5` from `bug` → `task`. Only the status change was intended.
+
+The `N updated` count is the signal — it includes beads touched purely as
+collateral, such as the parent epic, not just the one whose status changed.
+
+**Always audit types after a `--prefer-linear` pull, before `bd dolt push`:**
+
+```bash
+bd linear sync --pull --prefer-linear    # note the "N updated" count
+
+# Inspect every bead the pull touched, not just the one you were closing.
+bd show <id>                             # header shows e.g. "[EPIC] … Type: epic"
+
+# Restore any flattened type, then persist.
+bd update <id> -t epic                   # or: bug, chore, task
+bd dolt pull                             # MANDATORY before any push
+bd dolt push --remote origin
+```
+
+Catching this **before** the DoltHub push matters: pushing first propagates the
+flattened types to the authoritative database, so the epic/bug distinction has
+to be reconstructed from memory rather than read back off the local state.
+
+`bd show <id> --json` returns a **list**, not an object, so a `json.load(...)`
+that assumes a dict fails with `AttributeError: 'list' object has no attribute
+'items'`. Unwrap it (`d[0] if isinstance(d, list) else d`) when scripting the
+audit.
+
+Upstream `bd` limitation like its sibling above, tracked under NTS-8.
+
 #### Recurring `⚠ Linear data is … stale` warning
 
 The local Linear cache has a staleness clock. Either pull, or gate pulls on the
@@ -810,13 +855,19 @@ a **pull-centric** synchronization flow:
    importing it as a local `CLOSED`. In practice this is **unreliable** — see
    "Pull won't adopt Linear's state" in Troubleshooting; an observed
    `--prefer-linear` pull left the local bead `in_progress` despite Linear
-   showing **Done**. Treat the manual `bd close` reconciliation in step 3 as the
+   showing **Done**. Treat the manual `bd close` reconciliation in step 4 as the
    expected fallback, not an exceptional one.
-2. **DoltHub Sync.** After the pull, persist the closed state to the
-   authoritative database using the mandatory pull-then-push order from
-   "DoltHub Session Completion" — `bd dolt pull` first to surface any
-   conflicts locally, then `bd dolt push --remote origin`.
-3. **Manual Fallback.** Manually run `bd close` whenever the `--prefer-linear`
+2. **Audit `issue_type`.** When the pull *does* take, it flattens
+   `issue_type` to `task` on every bead it reports as updated — including
+   ones touched only as collateral, such as the parent epic. Check each with
+   `bd show <id>` and restore with `bd update <id> -t <type>` **before** the
+   DoltHub push, or the flattened types become authoritative. See
+   "`--prefer-linear` flattens `issue_type`" in Troubleshooting.
+3. **DoltHub Sync.** After the pull and the type audit, persist the closed
+   state to the authoritative database using the mandatory pull-then-push
+   order from "DoltHub Session Completion" — `bd dolt pull` first to surface
+   any conflicts locally, then `bd dolt push --remote origin`.
+4. **Manual Fallback.** Manually run `bd close` whenever the `--prefer-linear`
    pull does not adopt Linear's terminal state (the common case when local edits
    bumped the local timestamp), as well as when the issue was abandoned or the
    GitHub integration failed to trigger. Do **not** rely on
