@@ -314,19 +314,36 @@ pub fn encode_extension(field_type: u16, body: &[u8]) -> Vec<u8> {
 /// `body_len` octets, without building the extension.
 ///
 /// Mirrors the padding arithmetic in [`encode_extension`] exactly; the
-/// `build_client_request_projection_matches_encoded_length` test pins the
-/// two together.
+/// `build_request_projection_matches_encoded_length` test pins the two
+/// together.
+///
+/// Saturating rather than wrapping. A `body_len` near [`usize::MAX`] is
+/// unreachable from a real `Vec` — the allocation would have failed
+/// first — but the projection in [`build_client_request`] is a
+/// *security* check, and a wrap here would hand it a small total that
+/// slips under [`MAX_CLIENT_PACKET_BYTES`]. Saturating fails safe: the
+/// total stays above the cap and the request is refused.
 #[must_use]
 pub fn extension_total_len(body_len: usize) -> usize {
-    ((EXT_HEADER_LEN + body_len).div_ceil(4) * 4).max(EXT_MIN_TOTAL)
+    (EXT_HEADER_LEN
+        .saturating_add(body_len)
+        .div_ceil(4)
+        .saturating_mul(4))
+    .max(EXT_MIN_TOTAL)
 }
 
 /// Length [`encode_authenticator_body`] will produce for a nonce of
 /// `nonce_len` octets and a [`TAG_LEN`] ciphertext, with no additional
 /// padding — the shape [`build_client_request`] always emits.
+///
+/// Saturating for the same reason as [`extension_total_len`].
 #[must_use]
 fn authenticator_body_len(nonce_len: usize) -> usize {
-    4 + nonce_len.div_ceil(4) * 4 + TAG_LEN.div_ceil(4) * 4
+    nonce_len
+        .div_ceil(4)
+        .saturating_mul(4)
+        .saturating_add(TAG_LEN.div_ceil(4) * 4)
+        .saturating_add(4)
 }
 
 /// A single decoded extension field. `body` includes any zero padding bytes.
@@ -526,15 +543,18 @@ pub fn build_client_request(req: &ClientRequest, c2s_key: &AeadKey) -> Result<Ve
     // Project the on-wire size before allocating anything, so an
     // oversized request is refused without first materialising the
     // placeholder bodies it would need. `placeholder_count` is
-    // caller-supplied and otherwise unbounded, so a saturating sum keeps
-    // the projection itself overflow-free.
+    // caller-supplied and otherwise unbounded, so every term saturates:
+    // a wrap here would produce a *small* total that slips under the cap
+    // and defeats the guard, whereas saturation pins the total at
+    // `usize::MAX` and the request is refused.
     let projected = HEADER_LEN
-        + extension_total_len(req.unique_id.len())
-        + extension_total_len(req.cookie.len())
-        + req
-            .placeholder_count
-            .saturating_mul(extension_total_len(req.cookie.len()))
-        + extension_total_len(authenticator_body_len(req.nonce.len()));
+        .saturating_add(extension_total_len(req.unique_id.len()))
+        .saturating_add(extension_total_len(req.cookie.len()))
+        .saturating_add(
+            req.placeholder_count
+                .saturating_mul(extension_total_len(req.cookie.len())),
+        )
+        .saturating_add(extension_total_len(authenticator_body_len(req.nonce.len())));
     if projected > MAX_CLIENT_PACKET_BYTES {
         return Err(NtpError::PacketTooLarge { actual: projected });
     }

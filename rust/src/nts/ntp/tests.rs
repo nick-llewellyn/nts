@@ -269,6 +269,38 @@ mod request_build {
         }
     }
 
+    /// A `placeholder_count` large enough to overflow the projection must
+    /// still be refused. The failure mode this guards is subtle: the
+    /// projection is a sum, so a term that wraps produces a *small*
+    /// total that slips under [`MAX_CLIENT_PACKET_BYTES`] and passes the
+    /// check. Saturating arithmetic pins the total at [`usize::MAX`]
+    /// instead, so the request is refused. Release builds wrap silently,
+    /// which is exactly where the guard would matter.
+    #[test]
+    fn build_request_rejects_overflowing_placeholder_count() {
+        let (c2s, _) = fresh_keys();
+        let mut req = sample_request();
+        req.placeholder_count = usize::MAX;
+        match build_client_request(&req, &c2s) {
+            Err(NtpError::PacketTooLarge { actual }) => {
+                assert!(
+                    actual > MAX_CLIENT_PACKET_BYTES,
+                    "overflowed projection must saturate above the cap, got {actual}",
+                );
+            }
+            other => panic!("expected PacketTooLarge, got {other:?}"),
+        }
+    }
+
+    /// The projection helpers saturate rather than wrap, so a body length
+    /// near [`usize::MAX`] cannot produce a small total. Unreachable from
+    /// a real `Vec` — the allocation would fail first — but the helper is
+    /// `pub`, and the guard depends on it failing safe.
+    #[test]
+    fn extension_total_len_saturates_instead_of_wrapping() {
+        assert_eq!(extension_total_len(usize::MAX), usize::MAX);
+    }
+
     /// Pins the headroom relationship the two caps are chosen for: a
     /// cookie at [`crate::nts::cookies::MAX_COOKIE_LEN`] with the
     /// production `PLACEHOLDERS_PER_QUERY` of 1 must fit inside
