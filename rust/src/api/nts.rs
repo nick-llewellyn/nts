@@ -1994,11 +1994,29 @@ fn establish_session(
         // error path. Logged at `warn` because an unrecognised code
         // means the peer is signalling something this client version
         // cannot interpret, which is worth an operator's attention.
+        //
+        // The warnings came from the KE peer, so the attributed host is
+        // `spec.host` — the endpoint TLS was spoken to — under the same
+        // `host=` key the "KE handshake ok" line and the `nts::query` /
+        // `nts::warm` sites already use. `outcome.ntpv4_host` is the
+        // *redirect target* whenever the response carried a Server
+        // record (RFC 8915 §4.1.7), which is a different machine that
+        // emitted nothing. It is appended under `ntp_host=`, again
+        // matching the handshake-ok line, but only when it diverges, so
+        // an operator can correlate the warning with the endpoint the
+        // subsequent samples will name without the common non-redirect
+        // case printing the same host twice.
+        let redirect_note = if outcome.ntpv4_host == spec.host {
+            String::new()
+        } else {
+            format!(" ntp_host={}", outcome.ntpv4_host)
+        };
         log::warn!(
             target: "nts::ke",
-            "NTS-KE server sent {} warning record(s): host={} codes={:?}",
+            "NTS-KE server sent {} warning record(s): host={}{} codes={:?}",
             ke_warnings.len(),
-            outcome.ntpv4_host,
+            spec.host,
+            redirect_note,
             ke_warnings,
         );
     }
