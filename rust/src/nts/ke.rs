@@ -728,6 +728,34 @@ pub enum KeError {
     /// on-path tamper) downgrade the client to an algorithm it
     /// would otherwise reject.
     DuplicateAeadAlgorithm,
+    /// RFC 8915 §4.1.6 — the NTPv4 Server Negotiation record
+    /// redirects the NTP phase to a different host. An empty body
+    /// names no host at all, so honouring it would hand an empty
+    /// string to the resolver and surface the malformation as an
+    /// opaque DNS failure well after the handshake succeeded.
+    /// Rejected here so the response is refused before any
+    /// post-handshake I/O, matching the non-empty-host contract
+    /// [`crate::api::nts::NtsServerSpec`] already enforces for the
+    /// caller-supplied KE host.
+    EmptyServer,
+    /// RFC 8915 §4.1.7 — the NTPv4 Port Negotiation record redirects
+    /// the NTP phase to a different port. Port 0 is not a routable
+    /// UDP destination, so honouring it would surface as a connect
+    /// or send failure after the handshake rather than as a protocol
+    /// violation. Same rationale and same contract as
+    /// [`Self::EmptyServer`].
+    ZeroPort,
+    /// RFC 8915 §4.1.6 — at most one NTPv4 Server Negotiation record
+    /// may appear in a response. Same threat shape as
+    /// [`Self::DuplicateNextProtocol`]: the `find_map` walk below
+    /// would silently pin the first-seen host, hiding an ambiguity
+    /// that is either a server bug or an on-path attempt to steer
+    /// the NTP phase to an attacker-chosen endpoint.
+    DuplicateServer,
+    /// RFC 8915 §4.1.7 — at most one NTPv4 Port Negotiation record
+    /// may appear in a response. Same rationale as
+    /// [`Self::DuplicateServer`].
+    DuplicatePort,
     /// Streaming-read accumulator in [`read_to_end_capped`] would
     /// exceed [`NTS_KE_READ_BUDGET`] if the next chunk were appended.
     /// `received` is the post-append length the offending read would
@@ -850,6 +878,20 @@ impl std::fmt::Display for KeError {
             ),
             Self::DuplicateAeadAlgorithm => f.write_str(
                 "response contains more than one AEAD Algorithm record (RFC 8915 §4.1.5)",
+            ),
+            Self::EmptyServer => f.write_str(
+                "server sent an empty NTPv4 Server Negotiation record (RFC 8915 §4.1.6)",
+            ),
+            Self::ZeroPort => f.write_str(
+                "server sent NTPv4 Port Negotiation record with port 0 (RFC 8915 §4.1.7)",
+            ),
+            Self::DuplicateServer => f.write_str(
+                "response contains more than one NTPv4 Server Negotiation record \
+                 (RFC 8915 §4.1.6)",
+            ),
+            Self::DuplicatePort => f.write_str(
+                "response contains more than one NTPv4 Port Negotiation record \
+                 (RFC 8915 §4.1.7)",
             ),
             Self::ResponseTooLarge { received, cap } => write!(
                 f,
@@ -1043,19 +1085,24 @@ pub(crate) fn validate_response(
     records: &[Record],
 ) -> Result<KeOutcomePartial, KeError> {
     scan_for_fatal_or_log_deviations(records)?;
-    // RFC 8915 §4.1.2 / §4.1.5: the NextProtocol and AEAD Algorithm
-    // records MUST appear exactly once in a server response. Detect
-    // duplicates before the `find_map` walks below — those would
+    // RFC 8915 §4.1.2 / §4.1.5 / §4.1.6 / §4.1.7: the NextProtocol and
+    // AEAD Algorithm records MUST appear exactly once in a server
+    // response, and the Server / Port redirects at most once each.
+    // Detect duplicates before the `find_map` walks below — those would
     // otherwise silently take the first occurrence and mask the
     // violation, allowing a duplicate record (server bug or on-path
-    // tamper) to seed a downgrade or other shape attack the typed
+    // tamper) to seed a downgrade or endpoint-steering attack the typed
     // `Duplicate*` variants make visible to the caller.
     let mut np_seen = 0usize;
     let mut aead_seen = 0usize;
+    let mut server_seen = 0usize;
+    let mut port_seen = 0usize;
     for r in records {
         match &r.kind {
             RecordKind::NextProtocol(_) => np_seen += 1,
             RecordKind::AeadAlgorithm(_) => aead_seen += 1,
+            RecordKind::Server(_) => server_seen += 1,
+            RecordKind::Port(_) => port_seen += 1,
             _ => {}
         }
     }
@@ -1064,6 +1111,12 @@ pub(crate) fn validate_response(
     }
     if aead_seen > 1 {
         return Err(KeError::DuplicateAeadAlgorithm);
+    }
+    if server_seen > 1 {
+        return Err(KeError::DuplicateServer);
+    }
+    if port_seen > 1 {
+        return Err(KeError::DuplicatePort);
     }
     // RFC 8915 §4.1.2 — the NextProtocol record MUST carry the Critical
     // bit. We capture the bit alongside the value (rather than checking
@@ -1125,20 +1178,31 @@ pub(crate) fn validate_response(
     if cookies.is_empty() {
         return Err(KeError::NoCookies);
     }
-    let ntpv4_host = records
-        .iter()
-        .find_map(|r| match &r.kind {
-            RecordKind::Server(s) => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| request_host.to_owned());
-    let ntpv4_port = records
-        .iter()
-        .find_map(|r| match &r.kind {
-            RecordKind::Port(p) => Some(*p),
-            _ => None,
-        })
-        .unwrap_or(DEFAULT_NTPV4_PORT);
+    // RFC 8915 §4.1.6 / §4.1.7 — the Server and Port records redirect
+    // the NTP phase away from the KE endpoint. Only the *redirected*
+    // values are checked here: the fallbacks are a `request_host` the
+    // API layer already validated as non-empty and the constant
+    // [`DEFAULT_NTPV4_PORT`]. An empty host or port 0 taken raw would
+    // reach the resolver or the UDP socket and fail there, turning a
+    // protocol violation into an opaque `Network`/timeout long after
+    // the handshake succeeded; rejecting before any post-handshake I/O
+    // keeps the same contract the KE host itself is held to.
+    let redirect_host = records.iter().find_map(|r| match &r.kind {
+        RecordKind::Server(s) => Some(s.clone()),
+        _ => None,
+    });
+    if redirect_host.as_deref().is_some_and(str::is_empty) {
+        return Err(KeError::EmptyServer);
+    }
+    let ntpv4_host = redirect_host.unwrap_or_else(|| request_host.to_owned());
+    let redirect_port = records.iter().find_map(|r| match &r.kind {
+        RecordKind::Port(p) => Some(*p),
+        _ => None,
+    });
+    if redirect_port == Some(0) {
+        return Err(KeError::ZeroPort);
+    }
+    let ntpv4_port = redirect_port.unwrap_or(DEFAULT_NTPV4_PORT);
     let warnings = records
         .iter()
         .filter_map(|r| match r.kind {
