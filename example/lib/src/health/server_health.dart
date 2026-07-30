@@ -165,14 +165,14 @@ ServerHealth summarizeServer({
     // means we got *some* signal, so we fall back to the ordinary
     // no-reply / non-conforming split below.
     const resolverRefusalPhases = {'dnsSaturation', 'dnsSpawnFailed'};
-    final allSaturated =
+    final allResolverRefused =
         fails.isNotEmpty &&
         fails.every(
           (f) =>
               f.errorType == 'Timeout' &&
               resolverRefusalPhases.contains(f.phase),
         );
-    if (allSaturated) {
+    if (allResolverRefused) {
       return ServerHealth(
         hostname: hostname,
         verdict: HealthVerdict.dnsExhausted,

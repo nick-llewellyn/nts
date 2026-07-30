@@ -128,7 +128,8 @@ pub enum TimeoutPhase {
     /// process is at a thread or memory ceiling — reducing concurrent
     /// load elsewhere, or raising the process thread limit, are the
     /// appropriate remediations. Counted by
-    /// `NtsDnsPoolStats.spawnFailed`.
+    /// [`NtsDnsPoolStats::spawn_failed`] (Dart:
+    /// `NtsDnsPoolStats.spawnFailed`).
     DnsSpawnFailed,
     /// System resolver took longer than the remaining budget.
     /// Lengthening `timeout_ms` *or* swapping in a faster recursive
@@ -439,12 +440,12 @@ pub struct NtsDnsPoolStats {
     /// start. Disjoint from [`Self::refused`], and the actionable
     /// distinction between them: `refused` climbing means the cap is
     /// the binding constraint and raising `dns_concurrency_cap` would
-    /// help, whereas `spawn_failed` climbing means the process is at a
+    /// help, whereas this counter climbing means the process is at a
     /// thread or memory ceiling and raising the cap would make it
     /// worse. Not counted in [`Self::recovered`] either, since no
-    /// worker ran. Pairs with `TimeoutPhase::DnsSpawnFailed` on the
-    /// error channel. `u64` for the same wraparound reason as
-    /// [`Self::recovered`].
+    /// worker ran. Pairs with [`TimeoutPhase::DnsSpawnFailed`] (Dart:
+    /// `TimeoutPhase.dnsSpawnFailed`) on the error channel. `u64` for
+    /// the same wraparound reason as [`Self::recovered`].
     pub spawn_failed: u64,
 }
 
