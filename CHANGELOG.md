@@ -33,6 +33,33 @@
 
 ### Fixed
 
+- KE responses that redirect the NTP phase are now validated before
+  any post-handshake I/O. `validate_response` in `nts::ke` took the
+  NTPv4 Server and Port records raw: an empty Server body reached the
+  resolver as an empty host, and `Port(0)` reached the UDP socket as an
+  unroutable destination. Both surfaced as an opaque `Network` failure
+  or timeout well after the handshake had succeeded, even though the
+  same host/port shape is rejected up front when it arrives from the
+  caller via `NtsServerSpec`. A KE peer that completes TLS — a buggy
+  server, or one whose certificate an attacker holds — could therefore
+  steer the client into failing I/O rather than being refused as a
+  protocol violation. Both now fail the handshake with new `KeError`
+  variants `EmptyServer` / `ZeroPort`, surfacing to callers as
+  `NtsError::KeProtocol` with a stable RFC-citing message. Only the
+  *redirected* values are checked: an absent Server record still falls
+  back to the already-validated request host, and an absent Port record
+  to `DEFAULT_NTPV4_PORT` (123). (NTS-123)
+
+- Duplicate NTPv4 Server and Port records in a KE response are now
+  rejected. `validate_response` already refused duplicate NextProtocol
+  and AEAD Algorithm records, but Server and Port still resolved via a
+  first-match `find_map` — so an ambiguous response silently pinned one
+  endpoint with no signal that the response was malformed, the same
+  pre-hardening pattern deliberately removed for the other two records.
+  New `KeError::DuplicateServer` / `DuplicatePort` variants are raised
+  from the existing duplicate-detection loop, ahead of the walks that
+  would otherwise mask the violation. (NTS-128)
+
 - Per-call timeout budgets now keep elapsing while the device is
   asleep. The KE handshake deadline (`nts::ke::Deadline`), the UDP
   setup deadline (`api::nts::UdpDeadline`), the singleflight

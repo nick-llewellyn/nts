@@ -700,6 +700,69 @@ mod validate_response {
         }
     }
 
+    /// RFC 8915 §4.1.6 — a Server record with an empty body names no
+    /// host. Taken raw it would reach the resolver as an empty string
+    /// and fail there, so the violation must surface as a KE protocol
+    /// error before any post-handshake I/O. The `request_host` passed
+    /// here is deliberately non-empty: the fallback is not what is
+    /// under test, the redirect is.
+    #[test]
+    fn validate_response_rejects_empty_server_record() {
+        let mut records = well_formed_response();
+        records.insert(2, rec(false, RecordKind::Server(String::new())));
+        match validate_response("ke.example.com", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::EmptyServer) => {}
+            other => panic!("expected EmptyServer, got {other:?}"),
+        }
+    }
+
+    /// RFC 8915 §4.1.7 — port 0 is not a routable UDP destination.
+    /// Distinct from an absent Port record, which falls back to
+    /// [`DEFAULT_NTPV4_PORT`]; the explicit zero is a malformation.
+    #[test]
+    fn validate_response_rejects_zero_port_record() {
+        let mut records = well_formed_response();
+        records.insert(2, rec(false, RecordKind::Port(0)));
+        match validate_response("ke.example.com", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::ZeroPort) => {}
+            other => panic!("expected ZeroPort, got {other:?}"),
+        }
+    }
+
+    /// RFC 8915 §4.1.6 — two Server records leave the NTP endpoint
+    /// ambiguous. The duplicate carries a *different* host so a
+    /// regression that silently took the first occurrence would still
+    /// produce a plausible outcome rather than an obvious one; only
+    /// the record count drives the rejection.
+    #[test]
+    fn validate_response_rejects_duplicate_server() {
+        let mut records = well_formed_response();
+        records.insert(
+            2,
+            rec(false, RecordKind::Server("ntp.alt.example".to_owned())),
+        );
+        records.insert(
+            3,
+            rec(false, RecordKind::Server("ntp.other.example".to_owned())),
+        );
+        match validate_response("ke.example.com", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::DuplicateServer) => {}
+            other => panic!("expected DuplicateServer, got {other:?}"),
+        }
+    }
+
+    /// RFC 8915 §4.1.7 — symmetric to the Server case above.
+    #[test]
+    fn validate_response_rejects_duplicate_port() {
+        let mut records = well_formed_response();
+        records.insert(2, rec(false, RecordKind::Port(4123)));
+        records.insert(3, rec(false, RecordKind::Port(4124)));
+        match validate_response("ke.example.com", &[aead::AES_SIV_CMAC_256], &records) {
+            Err(KeError::DuplicatePort) => {}
+            other => panic!("expected DuplicatePort, got {other:?}"),
+        }
+    }
+
     /// An Error record appearing alongside otherwise-valid response
     /// records must short-circuit the handshake. RFC 8915 is silent
     /// on the precise interaction (the spec treats Error as the
