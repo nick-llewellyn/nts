@@ -700,13 +700,14 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   NtsDnsPoolStats dco_decode_nts_dns_pool_stats(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return NtsDnsPoolStats(
       inFlight: dco_decode_u_32(arr[0]),
       highWaterMark: dco_decode_u_32(arr[1]),
       recovered: dco_decode_u_64(arr[2]),
       refused: dco_decode_u_64(arr[3]),
+      spawnFailed: dco_decode_u_64(arr[4]),
     );
   }
 
@@ -1032,11 +1033,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_highWaterMark = sse_decode_u_32(deserializer);
     final var_recovered = sse_decode_u_64(deserializer);
     final var_refused = sse_decode_u_64(deserializer);
+    final var_spawnFailed = sse_decode_u_64(deserializer);
     return NtsDnsPoolStats(
       inFlight: var_inFlight,
       highWaterMark: var_highWaterMark,
       recovered: var_recovered,
       refused: var_refused,
+      spawnFailed: var_spawnFailed,
     );
   }
 
@@ -1440,6 +1443,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     sse_encode_u_32(self.highWaterMark, serializer);
     sse_encode_u_64(self.recovered, serializer);
     sse_encode_u_64(self.refused, serializer);
+    sse_encode_u_64(self.spawnFailed, serializer);
   }
 
   @protected

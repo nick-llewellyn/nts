@@ -65,8 +65,22 @@ enum TimeoutPhase {
   /// arrived, so admission was refused without spawning a worker.
   /// Distinct from [dnsTimeout]: raising `dnsConcurrencyCap` or
   /// waiting for the in-flight pool to drain is the appropriate
-  /// remediation, not lengthening `timeout`.
+  /// remediation, not lengthening `timeout`. Counted by
+  /// [NtsDnsPoolStats.refused].
   dnsSaturation,
+
+  /// A resolver pool slot was granted, but the operating system refused
+  /// to create the worker thread (`EAGAIN` / `ENOMEM`).
+  ///
+  /// Distinct from [dnsSaturation] in remediation, not just in cause:
+  /// the cap was *not* the binding constraint here, so raising
+  /// `dnsConcurrencyCap` would make matters worse by admitting more
+  /// lookups the process cannot service. The process is at a thread or
+  /// memory ceiling — shedding concurrent load elsewhere, or raising
+  /// the process thread limit, is what helps. Lengthening `timeout`
+  /// does not, since nothing is waiting. Counted by
+  /// [NtsDnsPoolStats.spawnFailed].
+  dnsSpawnFailed,
 
   /// System resolver took longer than the remaining budget. Lengthening
   /// `timeout` *or* swapping in a faster recursive resolver are the
@@ -173,7 +187,8 @@ sealed class NtsError implements Exception {
   /// `build_tls_config` before any DNS, connect, or TLS I/O begins,
   /// then attaches the resolved backend (via the per-call
   /// `attribute` closure) to every subsequent failure site —
-  /// `dnsSaturation` and `dnsTimeout` from the bounded resolver,
+  /// `dnsSaturation`, `dnsSpawnFailed`, and `dnsTimeout` from the
+  /// bounded resolver,
   /// `connect` from the per-address `TcpStream::connect_timeout`
   /// loop, `tls` from the rustls handshake / write / flush window,
   /// `keRecordIo` from the chunked record-read loop, and the
@@ -392,7 +407,8 @@ final class NtsErrorTimeout extends NtsError {
   /// fired. Typed as nullable to keep the Rust `KeFailure`
   /// attribution contract honest at the FFI boundary, but in
   /// practice every Rust-authored `TimeoutPhase` value
-  /// (`dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`,
+  /// (`dnsSaturation`, `dnsSpawnFailed`, `dnsTimeout`, `connect`,
+  /// `tls`, `keRecordIo`,
   /// post-handshake `ntp`) fires after `build_tls_config` returned
   /// `Ok` and therefore carries the resolved backend — see the
   /// constructor-level [NtsError.timeout] dartdoc above for the

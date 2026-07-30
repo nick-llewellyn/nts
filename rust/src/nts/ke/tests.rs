@@ -1232,17 +1232,30 @@ mod deadline {
 mod error_translation {
     use super::*;
 
-    /// Pins the three branches of `dns_error_to_ke`. The
-    /// bounded-DNS resolver surfaces three distinct `io::Error`
-    /// kinds and each must route to a distinct `KeError` shape so
-    /// the `From<KeError> for NtsError` mapping in `api/nts.rs`
-    /// preserves the difference between pool saturation, deadline
-    /// expiry, and a real lookup failure.
+    /// Pins the four branches of `dns_error_to_ke`. The bounded-DNS
+    /// resolver surfaces distinct refusal shapes and each must route
+    /// to a distinct `KeError` so the `From<KeError> for NtsError`
+    /// mapping in `api/nts.rs` preserves the difference between pool
+    /// saturation, worker-spawn refusal, deadline expiry, and a real
+    /// lookup failure.
+    ///
+    /// Saturation and spawn refusal share `ErrorKind::WouldBlock`
+    /// deliberately (see `resolve_with`), so the discriminator is the
+    /// `SPAWN_FAILED_PREFIX` message tag — asserted here in both
+    /// directions so a prefix drift on either side is caught.
     #[test]
     fn dns_error_to_ke_translates_each_io_kind() {
         match dns_error_to_ke(std::io::Error::from(std::io::ErrorKind::WouldBlock)) {
             KeError::PhaseTimeout(KeTimeoutPhase::DnsSaturation) => {}
             other => panic!("WouldBlock -> {other:?}; expected DnsSaturation"),
+        }
+        let spawn = std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            format!("{SPAWN_FAILED_PREFIX}host.invalid:4460: EAGAIN"),
+        );
+        match dns_error_to_ke(spawn) {
+            KeError::PhaseTimeout(KeTimeoutPhase::DnsSpawnFailed) => {}
+            other => panic!("prefixed WouldBlock -> {other:?}; expected DnsSpawnFailed"),
         }
         match dns_error_to_ke(std::io::Error::from(std::io::ErrorKind::TimedOut)) {
             KeError::PhaseTimeout(KeTimeoutPhase::DnsTimeout) => {}

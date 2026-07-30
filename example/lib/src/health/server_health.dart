@@ -13,11 +13,14 @@ import '../state/nts_format.dart' show aeadLabel;
 /// other verdict is a drop candidate (see [ServerHealth.isDropCandidate]).
 ///
 /// [dnsExhausted] is deliberately *not* a drop candidate: it means every
-/// probe fast-failed with `dnsSaturation` — the process-wide
-/// DNS resolver pool was full on the probe side and the server was never
-/// contacted. That is a measurement artifact of our own concurrency, not
-/// evidence the server is unhealthy, so condemning it would wrongly weed
-/// a server we never actually reached.
+/// probe fast-failed inside the probe-side DNS resolver — either
+/// `dnsSaturation` (the process-wide pool was full) or `dnsSpawnFailed`
+/// (the OS refused a worker thread) — and the server was never
+/// contacted. Both are measurement artifacts of our own resource limits,
+/// not evidence the server is unhealthy, so condemning it would wrongly
+/// weed a server we never actually reached. The two are grouped here
+/// because the verdict only turns on "no packet was sent"; they differ in
+/// remediation, which is a probe-side concern reported separately.
 enum HealthVerdict {
   healthy,
   nonStandard,
@@ -152,23 +155,31 @@ ServerHealth summarizeServer({
     // identity, so `Timeout(dnsSaturation)` is distinguishable from a
     // bare `Network` no-reply in the dominant-error column.
     final dominant = _mode(fails.map(_failureTag));
-    // Every probe fast-failed on the local DNS-pool cap and the server
-    // was never reached — a probe-side artifact, not a server fault.
-    // Stronger than "dnsSaturation was the mode": a single non-
-    // saturation outcome means we got *some* signal, so we fall back to
-    // the ordinary no-reply / non-conforming split below.
-    final allSaturated =
+    // Every probe fast-failed inside the local DNS resolver and the
+    // server was never reached — a probe-side artifact, not a server
+    // fault. `dnsSpawnFailed` counts alongside `dnsSaturation`: the
+    // causes differ (thread/memory ceiling vs. pool cap) and so does
+    // the remediation, but both fast-fail before any packet is sent, so
+    // neither carries evidence about the server. Stronger than
+    // "resolver refusal was the mode": a single non-refusal outcome
+    // means we got *some* signal, so we fall back to the ordinary
+    // no-reply / non-conforming split below.
+    const resolverRefusalPhases = {'dnsSaturation', 'dnsSpawnFailed'};
+    final allResolverRefused =
         fails.isNotEmpty &&
         fails.every(
-          (f) => f.errorType == 'Timeout' && f.phase == 'dnsSaturation',
+          (f) =>
+              f.errorType == 'Timeout' &&
+              resolverRefusalPhases.contains(f.phase),
         );
-    if (allSaturated) {
+    if (allResolverRefused) {
       return ServerHealth(
         hostname: hostname,
         verdict: HealthVerdict.dnsExhausted,
         reasons: const [
-          'local DNS resolver pool exhausted; probe throttled before '
-              'the server was contacted (not a server fault)',
+          'local DNS resolver refused every lookup (pool exhausted or '
+              'worker thread unavailable); probe fast-failed before the '
+              'server was contacted (not a server fault)',
         ],
         probes: probes,
         successes: successes,
