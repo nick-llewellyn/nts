@@ -693,9 +693,10 @@ resolves that field to the default `task` rather than leaving it untouched.
 Every bead the pull reports as updated loses its type.
 
 Observed during the NTS-126 close: a `--prefer-linear` pull correctly adopted
-Linear's **Done** for `nts-r11f.5`, reported `✓ Pulled 2 issues (0 created, 2
-updated)`, and silently reset `nts-r11f` from `epic` → `task` and
-`nts-r11f.5` from `bug` → `task`. Only the status change was intended.
+Linear's **Done** for `nts-r11f.5`, reported
+`✓ Pulled 2 issues (0 created, 2 updated)`, and silently reset `nts-r11f` from
+`epic` → `task` and `nts-r11f.5` from `bug` → `task`. Only the status change
+was intended.
 
 The `N updated` count is the signal — it includes beads touched purely as
 collateral, such as the parent epic, not just the one whose status changed.
@@ -719,9 +720,9 @@ flattened types to the authoritative database, so the epic/bug distinction has
 to be reconstructed from memory rather than read back off the local state.
 
 `bd show <id> --json` returns a **list**, not an object, so a `json.load(...)`
-that assumes a dict fails with `AttributeError: 'list' object has no attribute
-'items'`. Unwrap it (`d[0] if isinstance(d, list) else d`) when scripting the
-audit.
+that assumes a dict fails with
+`AttributeError: 'list' object has no attribute 'items'`.
+Unwrap it (`d[0] if isinstance(d, list) else d`) when scripting the audit.
 
 Upstream `bd` limitation like its sibling above, tracked under NTS-8.
 
