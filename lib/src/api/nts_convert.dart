@@ -47,6 +47,7 @@ NtsTimeSample _publicSample(ffi.NtsTimeSample s) => NtsTimeSample(
   rootDelayMicros: s.rootDelayMicros.toInt(),
   rootDispersionMicros: s.rootDispersionMicros.toInt(),
   serverPrecision: s.serverPrecision,
+  keWarnings: _publicKeWarnings(s.keWarnings),
 );
 
 NtsWarmCookiesOutcome _publicWarm(ffi.NtsWarmCookiesOutcome o) =>
@@ -54,7 +55,18 @@ NtsWarmCookiesOutcome _publicWarm(ffi.NtsWarmCookiesOutcome o) =>
       freshCookies: o.freshCookies,
       phaseTimings: _publicPhase(o.phaseTimings),
       trustBackend: _publicTrustBackend(o.trustBackend),
+      keWarnings: _publicKeWarnings(o.keWarnings),
     );
+
+// `Vec<u16>` crosses the boundary as a `Uint16List`. The public DTOs
+// expose the platform-independent `List<int>` instead, so copy into an
+// unmodifiable plain list: the typed-data view is backed by the FFI
+// allocation, and handing it out directly would leak both a mutable
+// handle and a typed-data-specific runtime type through the public
+// surface. Empty stays `const []` so the overwhelmingly common
+// no-warnings case allocates nothing.
+List<int> _publicKeWarnings(Uint16List codes) =>
+    codes.isEmpty ? const [] : List<int>.unmodifiable(codes);
 
 PhaseTimings _publicPhase(ffi.PhaseTimings p) => PhaseTimings(
   dnsMicros: p.dnsMicros.toInt(),

@@ -14,6 +14,7 @@
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
 import 'dart:math';
+import 'dart:typed_data' show Uint16List;
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
@@ -291,6 +292,10 @@ class MockNtsApi implements NtsRustLibApi {
       rootDelayMicros: PlatformInt64Util.from(0),
       rootDispersionMicros: PlatformInt64Util.from(150),
       serverPrecision: -20,
+      // No warning records: what every real server sends today, since
+      // the IANA NTS-KE warning registry has no assignments as of
+      // RFC 8915.
+      keWarnings: Uint16List(0),
     );
   }
 
@@ -299,6 +304,7 @@ class MockNtsApi implements NtsRustLibApi {
         freshCookies: 8,
         phaseTimings: _mockPhaseTimings(),
         trustBackend: backend,
+        keWarnings: Uint16List(0),
       );
 
   @override

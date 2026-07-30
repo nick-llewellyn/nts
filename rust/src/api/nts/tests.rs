@@ -281,6 +281,7 @@ fn make_test_session(host: &str, ntpv4_port: u16, generation: u64) -> Session {
         ntpv4_port,
         jar: CookieJar::new(),
         trust_backend: TrustBackend::Platform,
+        ke_warnings: Vec::new(),
     }
 }
 
@@ -2483,6 +2484,83 @@ fn checkout_consecutive_handshakes_get_distinct_generations() {
     assert_ne!(generations[0], generations[2]);
 }
 
+/// KE warning codes recorded on a session must be reported by *every*
+/// sample drawn from it, not only the query that ran the handshake
+/// (nts-r11f.6, 8.1).
+///
+/// This is the cached-path guarantee documented on
+/// `NtsTimeSample::ke_warnings`: a warning describes the handshake, so
+/// it follows the session like `trust_backend` rather than resetting
+/// to empty like `phase_timings`. Without it, a caller polling in
+/// steady state would only ever see codes if it happened to issue the
+/// one query that established the session.
+#[test]
+fn ke_warnings_propagate_to_cached_session_queries() {
+    let table = Arc::new(SessionTable::new());
+    let spec = NtsServerSpec {
+        host: "ke-warnings-cached.test".into(),
+        port: 4460,
+    };
+    // Two cookies, so the second checkout is served from the cache
+    // without re-running the handshake. The counter is what proves the
+    // second sample came from the cache rather than a second KE.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_inner = Arc::clone(&calls);
+    let do_handshake =
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
+            calls_inner.fetch_add(1, Ordering::SeqCst);
+            let mut s =
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 2);
+            s.ke_warnings = vec![0x1234, 0x5678];
+            Ok((s, KePhaseTimings::default()))
+        };
+
+    let (first, _) = table
+        .checkout_with(&spec, Duration::from_secs(5), 4, &do_handshake)
+        .unwrap_or_else(|e| panic!("first checkout failed: {e:?}"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(first.ke_warnings, vec![0x1234, 0x5678]);
+
+    let (second, _) = table
+        .checkout_with(&spec, Duration::from_secs(5), 4, &do_handshake)
+        .unwrap_or_else(|e| panic!("second checkout failed: {e:?}"));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "second checkout should be served from the cached session"
+    );
+    assert_eq!(
+        second.ke_warnings,
+        vec![0x1234, 0x5678],
+        "cached-session query must report the original handshake's warnings"
+    );
+    assert_eq!(
+        second.session_generation, first.session_generation,
+        "both samples must come from the same session"
+    );
+}
+
+/// The overwhelmingly common case: no warning records, empty list.
+#[test]
+fn ke_warnings_empty_when_server_sends_none() {
+    let table = Arc::new(SessionTable::new());
+    let spec = NtsServerSpec {
+        host: "ke-warnings-absent.test".into(),
+        port: 4460,
+    };
+    let do_handshake =
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 2),
+                KePhaseTimings::default(),
+            ))
+        };
+    let (ctx, _) = table
+        .checkout_with(&spec, Duration::from_secs(5), 4, &do_handshake)
+        .unwrap_or_else(|e| panic!("checkout failed: {e:?}"));
+    assert!(ctx.ke_warnings.is_empty());
+}
+
 // ------------------------------------------------------------------
 // Trust-anchor diagnostics + strict-mode tests (nts-21j, 3.0.0).
 //
@@ -2737,7 +2815,7 @@ fn warm_cookies_collapses_concurrent_forced_refreshes_onto_one_handshake() {
     let mut leader_count = 0;
     let mut waiter_count = 0;
     for h in handles {
-        let (count, timings, _backend) = h
+        let (count, timings, _backend, _warnings) = h
             .join()
             .expect("warm_cookies thread panicked")
             .expect("warm_cookies returned Err");
@@ -3319,7 +3397,7 @@ fn warm_cookies_leader_refuses_zero_cookie_session() {
             trust_backend: Some(_),
         }) => {}
         Err(other) => panic!("expected NoCookies(Some(_)); got {other:?}"),
-        Ok((count, _, _)) => {
+        Ok((count, _, _, _)) => {
             panic!("warm_cookies returned Ok with count={count} despite a 0-cookie handshake",)
         }
     }
@@ -3907,6 +3985,7 @@ fn query_context_cookie_is_zeroizing_wrapped() {
         ntpv4_port: 0,
         aead_id: AES_SIV_CMAC_256,
         trust_backend: super::TrustBackend::Platform,
+        ke_warnings: Vec::new(),
     };
     assert_zeroizing_vec(&ctx.cookie);
 }

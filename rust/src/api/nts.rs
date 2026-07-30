@@ -305,6 +305,25 @@ pub struct NtsTimeSample {
     /// log₂ seconds (RFC 5905 §7.3), e.g. `-20` ≈ 0.95 µs. Always
     /// negative in practice for real servers. New in 7.1.
     pub server_precision: i8,
+    /// Non-fatal NTS-KE warning codes the server sent with the
+    /// handshake that established this query's session (RFC 8915
+    /// §4.1.4 record type 3), as raw `u16` values in the order
+    /// received. Empty for every server observed in practice: the
+    /// IANA NTS-KE warning registry has no assignments as of RFC
+    /// 8915, so a non-empty list today means the peer sent a code
+    /// this client cannot interpret.
+    ///
+    /// A warning is a property of the *handshake*, not of this call,
+    /// so — like `trust_backend` and unlike `phase_timings` — the
+    /// value follows the original handshake across cached-session
+    /// queries rather than resetting to empty. Every sample drawn
+    /// from a session whose KE response carried warnings reports
+    /// them, so a caller polling in steady state cannot miss them by
+    /// having started after the cookie pool went warm. Codes are
+    /// surfaced rather than acted on: nothing here fails a query,
+    /// since by definition a warning did not stop the handshake.
+    /// New in 8.1.
+    pub ke_warnings: Vec<u16>,
 }
 
 /// Successful outcome of `nts_warm_cookies` (Dart: `ntsWarmCookies`).
@@ -326,6 +345,20 @@ pub struct NtsWarmCookiesOutcome {
     /// (no cached-session short-circuit), so the value is always
     /// the just-completed handshake's resolution. New in 3.0.0.
     pub trust_backend: TrustBackend,
+    /// Non-fatal NTS-KE warning codes the server sent with this
+    /// handshake (RFC 8915 §4.1.4 record type 3), as raw `u16`
+    /// values in the order received. Empty for every server observed
+    /// in practice — the IANA registry has no assignments as of RFC
+    /// 8915 — so a non-empty list means the peer sent a code this
+    /// client cannot interpret.
+    ///
+    /// Unlike [`NtsTimeSample::ke_warnings`] there is no cached-path
+    /// nuance to state: this call always performs a fresh handshake,
+    /// so the codes are always that handshake's own. A singleflight
+    /// *waiter* that collapsed onto a concurrent leader reports the
+    /// leader's codes, matching how `fresh_cookies` and
+    /// `trust_backend` already cross that boundary. New in 8.1.
+    pub ke_warnings: Vec<u16>,
 }
 
 /// Snapshot of the bounded DNS resolver pool counters.
@@ -1085,6 +1118,15 @@ struct Session {
     /// always see a concrete attribution rather than `None` /
     /// "n/a" for cached samples.
     trust_backend: TrustBackend,
+    /// Non-fatal warning codes the KE response that established this
+    /// session carried, as raw `u16`. Cached here for the same reason
+    /// as `trust_backend` immediately above: a warning describes the
+    /// handshake, so every sample drawn from this session should
+    /// report it rather than only the one query that happened to run
+    /// the handshake. Stored pre-converted from
+    /// [`crate::nts::WarningCode`] so the hot cached path clones a
+    /// plain `Vec<u16>` instead of re-mapping typed codes per query.
+    ke_warnings: Vec<u16>,
 }
 
 impl Session {
@@ -1119,6 +1161,10 @@ fn next_session_generation() -> u64 {
 struct HandshakeSlotOk {
     fresh_cookies: u32,
     trust_backend: TrustBackend,
+    /// Warning codes from the leader's KE response, so a warm-cookies
+    /// waiter reports the handshake it actually collapsed onto rather
+    /// than an empty list. Same rationale as `trust_backend` above.
+    ke_warnings: Vec<u16>,
 }
 
 /// Recover the inner `MutexGuard` from a poisoned mutex instead of
@@ -1936,6 +1982,44 @@ fn establish_session(
         });
     }
     jar.put_many(&outcome.ntpv4_host, outcome.cookies);
+    // Flatten the typed `WarningCode`s to their raw `u16` wire values
+    // once, here, rather than at each per-query read: the KE layer
+    // keeps the typed representation so a future IANA assignment can
+    // become a named variant without touching consumers, while the
+    // API surface publishes the code numbers a caller can match
+    // against that registry.
+    let ke_warnings: Vec<u16> = outcome.warnings.iter().map(|w| w.as_u16()).collect();
+    if !ke_warnings.is_empty() {
+        // The handshake succeeded despite these, so this is not an
+        // error path. Logged at `warn` because an unrecognised code
+        // means the peer is signalling something this client version
+        // cannot interpret, which is worth an operator's attention.
+        //
+        // The warnings came from the KE peer, so the attributed host is
+        // `spec.host` — the endpoint TLS was spoken to — under the same
+        // `host=` key the "KE handshake ok" line and the `nts::query` /
+        // `nts::warm` sites already use. `outcome.ntpv4_host` is the
+        // *redirect target* whenever the response carried a Server
+        // record (RFC 8915 §4.1.7), which is a different machine that
+        // emitted nothing. It is appended under `ntp_host=`, again
+        // matching the handshake-ok line, but only when it diverges, so
+        // an operator can correlate the warning with the endpoint the
+        // subsequent samples will name without the common non-redirect
+        // case printing the same host twice.
+        let redirect_note = if outcome.ntpv4_host == spec.host {
+            String::new()
+        } else {
+            format!(" ntp_host={}", outcome.ntpv4_host)
+        };
+        log::warn!(
+            target: "nts::ke",
+            "NTS-KE server sent {} warning record(s): host={}{} codes={:?}",
+            ke_warnings.len(),
+            spec.host,
+            redirect_note,
+            ke_warnings,
+        );
+    }
     let session = Session {
         generation: next_session_generation(),
         aead_id: outcome.aead_id,
@@ -1945,6 +2029,7 @@ fn establish_session(
         ntpv4_port: outcome.ntpv4_port,
         jar,
         trust_backend,
+        ke_warnings,
     };
     Ok((session, outcome.phase_timings))
 }
@@ -1976,6 +2061,11 @@ struct QueryContext {
     /// handshake's backend on cached-session paths and the
     /// just-completed handshake's backend on fresh-KE paths.
     trust_backend: TrustBackend,
+    /// Warning codes carried verbatim from the [`Session`] this
+    /// context was checked out from, so a cached-session sample
+    /// reports the original handshake's codes. Same cached-value
+    /// provenance as `trust_backend` above.
+    ke_warnings: Vec<u16>,
 }
 
 /// Outcome of `checkout`'s role-election step. The leader will run the
@@ -2027,6 +2117,7 @@ fn build_query_context(s: &Session, cookie: Zeroizing<Vec<u8>>) -> QueryContext 
         ntpv4_port: s.ntpv4_port,
         aead_id: s.aead_id,
         trust_backend: s.trust_backend,
+        ke_warnings: s.ke_warnings.clone(),
     }
 }
 
@@ -2228,6 +2319,12 @@ impl SessionTable {
                             // racing a query waiter that might pop
                             // a cookie before the warm waiter wakes.
                             let harvested_cookies = session.cookies_remaining() as u32;
+                            // Snapshot before the move below, for the
+                            // same reason as `harvested_cookies`: the
+                            // warm-cookies waiter reads this off the
+                            // slot payload rather than re-acquiring
+                            // `map`.
+                            let session_warnings = session.ke_warnings.clone();
                             // Same defensive `take`-shape as the
                             // cache-hit branch: the leader's
                             // `cookies_remaining() == 0` check above
@@ -2254,6 +2351,7 @@ impl SessionTable {
                                     guard.complete(Ok(HandshakeSlotOk {
                                         fresh_cookies: harvested_cookies,
                                         trust_backend: session_backend,
+                                        ke_warnings: session_warnings,
                                     }));
                                     return Ok((ctx, ke_timings));
                                 }
@@ -2359,20 +2457,29 @@ impl SessionTable {
     /// caller arrived first becoming the leader. A `nts_query`
     /// waiter ignores the slot's `HandshakeSlotOk` payload and loops
     /// back to the cache to pop a cookie of its own; a
-    /// `nts_warm_cookies` waiter returns `payload.fresh_cookies` and
-    /// `payload.trust_backend` directly. The warm waiter never
+    /// `nts_warm_cookies` waiter returns `payload.fresh_cookies`,
+    /// `payload.trust_backend`, and `payload.ke_warnings` directly.
+    /// The warm waiter never
     /// re-reads the cache, so a concurrent `nts_query` waiter that
     /// pops one cookie out of the freshly installed jar between the
     /// leader's install and the warm waiter's wake cannot reduce the
     /// "delivered with the KE response" count surfaced as
     /// [`NtsWarmCookiesOutcome::fresh_cookies`].
+    ///
+    /// The fourth tuple element is the KE response's warning codes as
+    /// raw `u16`, surfaced as [`NtsWarmCookiesOutcome::ke_warnings`].
+    /// Unlike the timings it is *not* defaulted to empty on the
+    /// waiter path: a waiter collapsed onto a real handshake, so
+    /// reporting the leader's codes is the accurate answer, matching
+    /// how `fresh_cookies` and `trust_backend` already cross that
+    /// boundary.
     fn warm_cookies_with(
         &self,
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
         do_handshake: &HandshakeFn,
-    ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
+    ) -> Result<(u32, KePhaseTimings, TrustBackend, Vec<u16>), NtsError> {
         let key = session_key(spec);
         let started = BootInstant::now();
         // Phase B: leader-or-waiter election. No Phase A — the
@@ -2447,6 +2554,8 @@ impl SessionTable {
                         // `cookies_remaining() == 0` guard above
                         // exists to suppress.
                         let count = session.cookies_remaining() as u32;
+                        // Snapshot before the move, same as `count`.
+                        let session_warnings = session.ke_warnings.clone();
                         lock_recover(&self.map).insert(key.clone(), session);
                         // Publish the leader's harvested count
                         // and trust-backend on the singleflight
@@ -2459,8 +2568,9 @@ impl SessionTable {
                         guard.complete(Ok(HandshakeSlotOk {
                             fresh_cookies: count,
                             trust_backend: session_backend,
+                            ke_warnings: session_warnings.clone(),
                         }));
-                        Ok((count, ke_timings, session_backend))
+                        Ok((count, ke_timings, session_backend, session_warnings))
                     }
                     Err(e) => {
                         guard.complete(Err(e.clone()));
@@ -2487,6 +2597,7 @@ impl SessionTable {
                             payload.fresh_cookies,
                             KePhaseTimings::default(),
                             payload.trust_backend,
+                            payload.ke_warnings,
                         ))
                     }
                     Some(Err(e)) => Err(e),
@@ -2517,7 +2628,7 @@ impl SessionTable {
         dns_concurrency_cap: usize,
         trust_mode: KeTrustMode,
         verification_time_ms: Option<i64>,
-    ) -> Result<(u32, KePhaseTimings, TrustBackend), NtsError> {
+    ) -> Result<(u32, KePhaseTimings, TrustBackend, Vec<u16>), NtsError> {
         self.warm_cookies_with(
             spec,
             timeout,
@@ -3222,6 +3333,7 @@ fn nts_query_inner(
         root_delay_micros: ntp_short_signed_to_micros(response.header.root_delay),
         root_dispersion_micros: ntp_short_to_micros(response.header.root_dispersion),
         server_precision: response.header.precision,
+        ke_warnings: ctx.ke_warnings,
     })
 }
 
@@ -3280,13 +3392,14 @@ fn nts_warm_cookies_inner(
     // refreshes against the same `host:port` collapse onto one KE
     // handshake via the singleflight machinery shared with `checkout`.
     // The leader runs a fresh handshake, installs its session, and
-    // publishes its harvested cookie count + resolved trust-backend
+    // publishes its harvested cookie count + resolved trust-backend +
+    // KE warning codes
     // on the singleflight slot via `HandshakeSlotOk`; waiters return
     // those values verbatim from the slot payload (no cache re-read)
     // and report `KePhaseTimings::default()` because they did not
     // perform KE work themselves. See `SessionTable::warm_cookies_with`
     // for the full state-machine documentation.
-    let (count, ke_timings, trust_backend) =
+    let (count, ke_timings, trust_backend, ke_warnings) =
         table.warm_cookies(&spec, timeout, cap, trust_mode, verification_time_ms)?;
     if is_default_client {
         crate::nts::trust_state::TRUST_STATE.record_default_backend(trust_backend.into());
@@ -3302,6 +3415,7 @@ fn nts_warm_cookies_inner(
         fresh_cookies: count,
         phase_timings: PhaseTimings::from(ke_timings),
         trust_backend,
+        ke_warnings,
     })
 }
 

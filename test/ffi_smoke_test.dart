@@ -16,6 +16,8 @@
 // `test/api_smoke_test.dart`.
 // ignore_for_file: implementation_imports
 
+import 'dart:typed_data' show Uint16List;
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
 import 'package:flutter_test/flutter_test.dart';
@@ -56,6 +58,7 @@ class _FakeNtsRustLibApi implements NtsRustLibApi {
     rootDelayMicros: PlatformInt64Util.from(0),
     rootDispersionMicros: PlatformInt64Util.from(0),
     serverPrecision: 0,
+    keWarnings: Uint16List(0),
   );
 
   @override
@@ -68,6 +71,7 @@ class _FakeNtsRustLibApi implements NtsRustLibApi {
     freshCookies: 8,
     phaseTimings: _zeroPhaseTimings(),
     trustBackend: TrustBackend.platform,
+    keWarnings: Uint16List(0),
   );
 
   @override

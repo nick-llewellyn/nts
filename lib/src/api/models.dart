@@ -214,6 +214,25 @@ class NtsTimeSample {
   /// practice for real servers. New in 7.1.
   final int serverPrecision;
 
+  /// Non-fatal NTS-KE warning codes the server sent with the
+  /// handshake that established this query's session (RFC 8915
+  /// §4.1.4 record type 3), as raw values in the order received.
+  ///
+  /// Empty for every server observed in practice: the IANA NTS-KE
+  /// warning registry has no assignments as of RFC 8915, so a
+  /// non-empty list means the peer sent a code this client version
+  /// cannot interpret. Nothing here fails a query — by definition a
+  /// warning did not stop the handshake — so treat it as a
+  /// diagnostic to surface, not a condition to branch on.
+  ///
+  /// A warning describes the *handshake*, not this call, so — like
+  /// [trustBackend] and unlike [phaseTimings] — the value follows the
+  /// original handshake across cached-session queries instead of
+  /// resetting to empty once the cookie pool is warm. A caller
+  /// polling in steady state therefore cannot miss codes by having
+  /// started after the first query. New in 8.1.
+  final List<int> keWarnings;
+
   /// Construct a sample. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures; production code receives instances
   /// from `ntsQuery`.
@@ -227,7 +246,9 @@ class NtsTimeSample {
   /// [rootDelayMicros], [rootDispersionMicros], [serverPrecision])
   /// default to `0` for the same fixture-compatibility reason; a
   /// zero [peerDelayMicros] fails the documented plausibility check,
-  /// so consumers fall back to [roundTripMicros].
+  /// so consumers fall back to [roundTripMicros]. [keWarnings]
+  /// defaults to `const []` for the same reason; an empty list is
+  /// also the value every real server produces today.
   const NtsTimeSample({
     required this.utcUnixMicros,
     required this.roundTripMicros,
@@ -242,6 +263,7 @@ class NtsTimeSample {
     this.rootDelayMicros = 0,
     this.rootDispersionMicros = 0,
     this.serverPrecision = 0,
+    this.keWarnings = const [],
   });
 
   @override
@@ -259,6 +281,7 @@ class NtsTimeSample {
     rootDelayMicros,
     rootDispersionMicros,
     serverPrecision,
+    Object.hashAll(keWarnings),
   );
 
   @override
@@ -277,7 +300,8 @@ class NtsTimeSample {
           peerDelayMicros == other.peerDelayMicros &&
           rootDelayMicros == other.rootDelayMicros &&
           rootDispersionMicros == other.rootDispersionMicros &&
-          serverPrecision == other.serverPrecision);
+          serverPrecision == other.serverPrecision &&
+          _intListEquals(keWarnings, other.keWarnings));
 
   @override
   String toString() =>
@@ -291,7 +315,23 @@ class NtsTimeSample {
       'peerDelayMicros: $peerDelayMicros, '
       'rootDelayMicros: $rootDelayMicros, '
       'rootDispersionMicros: $rootDispersionMicros, '
-      'serverPrecision: $serverPrecision)';
+      'serverPrecision: $serverPrecision, '
+      'keWarnings: $keWarnings)';
+}
+
+/// Element-wise equality for the `List<int>` DTO fields.
+///
+/// `List` uses identity equality, so relying on `==` would make two
+/// otherwise-equal DTOs carrying distinct-but-equal lists compare
+/// unequal. Hand-rolled rather than pulling in `package:collection`
+/// so these DTOs stay dependency-free.
+bool _intListEquals(List<int> a, List<int> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 /// Successful outcome of `ntsWarmCookies`.
@@ -315,16 +355,38 @@ class NtsWarmCookiesOutcome {
   /// just-completed handshake's resolution. New in 3.0.0.
   final TrustBackend trustBackend;
 
+  /// Non-fatal NTS-KE warning codes the server sent with this
+  /// handshake (RFC 8915 §4.1.4 record type 3), as raw values in the
+  /// order received.
+  ///
+  /// Empty for every server observed in practice — the IANA registry
+  /// has no assignments as of RFC 8915 — so a non-empty list means
+  /// the peer sent a code this client version cannot interpret.
+  /// Nothing here fails the call; a warning by definition did not
+  /// stop the handshake.
+  ///
+  /// Unlike [NtsTimeSample.keWarnings] there is no cached-path nuance:
+  /// this call always performs a fresh handshake, so the codes are
+  /// always that handshake's own. New in 8.1.
+  final List<int> keWarnings;
+
   /// Construct an outcome. Intended for the wrapper-layer conversion
-  /// boundary and for test fixtures.
+  /// boundary and for test fixtures. [keWarnings] defaults to
+  /// `const []`, which is also what every real server produces today.
   const NtsWarmCookiesOutcome({
     required this.freshCookies,
     required this.phaseTimings,
     required this.trustBackend,
+    this.keWarnings = const [],
   });
 
   @override
-  int get hashCode => Object.hash(freshCookies, phaseTimings, trustBackend);
+  int get hashCode => Object.hash(
+    freshCookies,
+    phaseTimings,
+    trustBackend,
+    Object.hashAll(keWarnings),
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -332,12 +394,14 @@ class NtsWarmCookiesOutcome {
       (other is NtsWarmCookiesOutcome &&
           freshCookies == other.freshCookies &&
           phaseTimings == other.phaseTimings &&
-          trustBackend == other.trustBackend);
+          trustBackend == other.trustBackend &&
+          _intListEquals(keWarnings, other.keWarnings));
 
   @override
   String toString() =>
       'NtsWarmCookiesOutcome(freshCookies: $freshCookies, '
-      'phaseTimings: $phaseTimings, trustBackend: ${trustBackend.name})';
+      'phaseTimings: $phaseTimings, trustBackend: ${trustBackend.name}, '
+      'keWarnings: $keWarnings)';
 }
 
 /// Trust-anchor backend that authenticated a TLS chain, or that a
