@@ -333,6 +333,49 @@ fn deposit_cookies_writes_when_generation_matches() {
         .remove(key);
 }
 
+/// Pins the single-queue jar invariant (bd nts-r11f.9) at the shape
+/// that motivated it: a KE response carrying a Server record (RFC
+/// 8915 §4.1.7) leaves the session filed under the KE `host:port`
+/// while `ntpv4_host` names the redirect target. Under the previous
+/// host-keyed jar, a deposit under one of those two hosts and a draw
+/// under the other stranded the cookies behind a second key and
+/// presented a phantom empty jar — no type error, no panic. With one
+/// queue the mismatch is unrepresentable, so this asserts the
+/// round-trip end to end rather than merely that a count is
+/// non-zero.
+#[test]
+fn deposit_and_draw_round_trip_when_ke_and_ntpv4_hosts_diverge() {
+    let key = "ke-endpoint.invalid:4460";
+    let gen = next_session_generation();
+    // `make_test_session` names the NTPv4 host; the table key above
+    // names the KE endpoint. The two deliberately differ.
+    let session = make_test_session("ntp-redirect-target.invalid", 123, gen);
+    sessions()
+        .lock()
+        .expect("session table poisoned")
+        .insert(key.to_owned(), session);
+
+    deposit_cookies(key, gen, vec![Zeroizing::new(vec![7, 7, 7])]);
+
+    let mut guard = sessions().lock().expect("session table poisoned");
+    let s = guard.get_mut(key).expect("session present");
+    assert_eq!(
+        s.cookies_remaining(),
+        1,
+        "a deposit against a redirected session must be visible to the draw"
+    );
+    assert_eq!(
+        s.jar.take(),
+        Some(Zeroizing::new(vec![7, 7, 7])),
+        "the deposited cookie itself must come back out"
+    );
+    drop(guard);
+    sessions()
+        .lock()
+        .expect("session table poisoned")
+        .remove(key);
+}
+
 /// Race-fix invariant: when a concurrent handshake replaces the
 /// cached session between checkout and deposit, the in-flight
 /// query's cookies are bound to the old C2S/S2C keys and must be
@@ -426,10 +469,9 @@ fn evict_session_drops_entry_when_generation_matches() {
     let mut session = make_test_session("evict-match.invalid", 123, gen);
     // Pre-seed the jar so we can assert the *whole* entry is gone,
     // not just its cookie queue.
-    let host = session.ntpv4_host.clone();
     session
         .jar
-        .put_many(&host, [vec![1u8; 16], vec![2; 16], vec![3; 16]]);
+        .put_many([vec![1u8; 16], vec![2; 16], vec![3; 16]]);
     sessions()
         .lock()
         .expect("session table poisoned")
@@ -543,7 +585,7 @@ fn nts_query_evicts_session_on_aead_authentication_failure() {
     // packet that the faux server can mutate.
     let generation = next_session_generation();
     let mut session = make_test_session(host, server_port, generation);
-    session.jar.put_many(host, [vec![0xAB; 32]]);
+    session.jar.put_many([vec![0xAB; 32]]);
     sessions()
         .lock()
         .expect("session table poisoned")
@@ -609,7 +651,7 @@ fn nts_query_preserves_session_on_non_authentication_failure() {
 
     let generation = next_session_generation();
     let mut session = make_test_session(host, server_port, generation);
-    session.jar.put_many(host, [vec![0xCD; 32]]);
+    session.jar.put_many([vec![0xCD; 32]]);
     sessions()
         .lock()
         .expect("session table poisoned")
@@ -696,7 +738,7 @@ fn nts_query_evicts_session_on_ntsn_kod_with_matching_uid() {
 
     let generation = next_session_generation();
     let mut session = make_test_session(host, server_port, generation);
-    session.jar.put_many(host, [vec![0xEF; 32]]);
+    session.jar.put_many([vec![0xEF; 32]]);
     sessions()
         .lock()
         .expect("session table poisoned")
@@ -783,7 +825,7 @@ fn nts_query_preserves_session_on_ntsn_kod_with_wrong_uid() {
 
     let generation = next_session_generation();
     let mut session = make_test_session(host, server_port, generation);
-    session.jar.put_many(host, [vec![0x12; 32]]);
+    session.jar.put_many([vec![0x12; 32]]);
     sessions()
         .lock()
         .expect("session table poisoned")
@@ -1563,7 +1605,7 @@ fn nts_client_query_evicts_session_on_aead_failure_in_client_table() {
     let client = NtsClient::new();
     let generation = next_session_generation();
     let mut session = make_test_session(host, server_port, generation);
-    session.jar.put_many(host, [vec![0xAB; 32]]);
+    session.jar.put_many([vec![0xAB; 32]]);
     client
         .table
         .map
@@ -1978,7 +2020,7 @@ fn make_test_session_with_cookies(
     let cookies: Vec<Vec<u8>> = (0..cookie_count)
         .map(|i| (i as u64).to_le_bytes().to_vec())
         .collect();
-    s.jar.put_many(host, cookies);
+    s.jar.put_many(cookies);
     s
 }
 

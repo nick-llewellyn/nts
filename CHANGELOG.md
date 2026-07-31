@@ -291,6 +291,19 @@
 
 ### Changed
 
+- The internal cookie store is now a single FIFO queue rather than a
+  map keyed by host. Its only owner, a cached session, is 1:1 with a
+  negotiated `host:port`, so the key duplicated a value the session
+  already held and every call site passed `session.ntpv4_host` to get
+  it back. What the key did add was a way to get it wrong: the KE
+  endpoint and the NTPv4 host diverge whenever a KE response carries a
+  Server record (RFC 8915 §4.1.7), so a deposit filed under one and a
+  draw made under the other would strand the cookies behind a second
+  key and present an empty jar — no type error, no panic, just a
+  session that re-handshakes on every query. Removing the key makes
+  that mismatch unrepresentable. Internal only; no public API or
+  observable behaviour changes. (NTS-130)
+
 - **Breaking (error type):** the `trustMode` / `customRoots` pair
   validation now throws `NtsError.invalidSpec` instead of
   `ArgumentError`. Both violations — a non-null `customRoots` without
