@@ -50,10 +50,11 @@
   as a remedy.
 
   Two bounds now apply. A hard ceiling of 64 entries evicts the
-  least-recently-used session to make room, ranked by a per-session
-  stamp that each successful cookie draw refreshes so an actively-used
-  session is never the victim. Independently, any session idle for 24
-  hours is dropped. That stamp is a `BootInstant` rather than an
+  least-recently-used session to make room for a new host, ranked by a
+  per-session stamp that each successful cookie draw refreshes so an
+  actively-used session is never the victim; re-handshaking a host
+  already cached replaces it in place and evicts nothing.
+  Independently, any session idle for 24 hours is dropped. That stamp is a `BootInstant` rather than an
   `Instant`, so idle time keeps accruing across device suspend — under
   `Instant` a table populated before a long sleep would hold its keys
   for the sleep duration on top of the TTL, which is exactly the

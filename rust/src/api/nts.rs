@@ -1584,9 +1584,13 @@ const SESSION_TABLE_IDLE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// [`Session::atime`] is at least [`SESSION_TABLE_IDLE_TTL`] old. The
 /// second, only if the table is still at or above the cap, repeatedly
 /// removes the entry with the oldest `atime` until `cap_headroom`
-/// slots remain free — `1` when the caller is about to insert a new
-/// session, `0` when it only needs the existing table brought back
-/// within bounds.
+/// slots remain free — `1` when the caller's insert will grow the
+/// table, `0` when it replaces an existing key or only needs the
+/// table brought back within bounds. Install sites derive that from
+/// `contains_key` rather than passing `1` unconditionally: an
+/// overwrite leaves the length unchanged, so reserving a slot for it
+/// would evict an unrelated entry and hold the table one below the
+/// cap for no gain.
 ///
 /// Dropping the [`Session`] releases its AEAD keys (`ZeroizeOnDrop`)
 /// and its [`CookieJar`], so eviction is also the secret-retention
@@ -2491,10 +2495,15 @@ impl SessionTable {
                             // `expect`.
                             let cookie_opt = {
                                 let mut g = lock_recover(&self.map);
-                                // Bound the table before growing it:
-                                // one slot of headroom so the insert
-                                // below cannot push past the cap.
-                                prune_sessions(&mut g, BootInstant::now(), 1);
+                                // Bound the table before the insert.
+                                // Ask for a free slot only when the
+                                // insert will actually grow the map:
+                                // re-handshaking a key already cached
+                                // replaces in place, and demanding
+                                // headroom there would evict an
+                                // unrelated LRU entry for nothing.
+                                let headroom = usize::from(!g.contains_key(&key));
+                                prune_sessions(&mut g, BootInstant::now(), headroom);
                                 g.insert(key.clone(), session);
                                 let s = g.get_mut(&key).expect("just inserted under this key");
                                 s.jar
@@ -2714,8 +2723,11 @@ impl SessionTable {
                         {
                             let mut g = lock_recover(&self.map);
                             // Same pre-insert bound as the
-                            // `checkout_with` leader path.
-                            prune_sessions(&mut g, BootInstant::now(), 1);
+                            // `checkout_with` leader path, headroom
+                            // included: only a growing insert needs a
+                            // slot freed for it.
+                            let headroom = usize::from(!g.contains_key(&key));
+                            prune_sessions(&mut g, BootInstant::now(), headroom);
                             g.insert(key.clone(), session);
                         }
                         // Publish the leader's harvested count
@@ -2910,7 +2922,8 @@ impl SessionTable {
     fn install(&self, spec: &NtsServerSpec, session: Session) {
         let key = session_key(spec);
         let mut g = lock_recover(&self.map);
-        prune_sessions(&mut g, BootInstant::now(), 1);
+        let headroom = usize::from(!g.contains_key(&key));
+        prune_sessions(&mut g, BootInstant::now(), headroom);
         g.insert(key, session);
     }
 

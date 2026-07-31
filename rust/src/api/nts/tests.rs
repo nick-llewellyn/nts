@@ -4327,6 +4327,48 @@ fn session_table_install_stays_within_the_capacity_bound() {
     );
 }
 
+/// Re-installing an already-cached key replaces in place, so it must
+/// not evict anything. Reserving a slot unconditionally would trim a
+/// full table to `SESSION_TABLE_CAP - 1` on every re-handshake — the
+/// common path once a session's cookies are exhausted — shrinking the
+/// effective cache for no gain, and could evict the very key being
+/// reinstalled when that key is itself the LRU.
+#[test]
+fn reinstalling_a_cached_key_evicts_nothing() {
+    let table = SessionTable::new();
+    let specs: Vec<NtsServerSpec> = (0..SESSION_TABLE_CAP)
+        .map(|i| NtsServerSpec {
+            host: format!("overwrite-{i}.invalid"),
+            port: 4460,
+        })
+        .collect();
+    for (i, spec) in specs.iter().enumerate() {
+        table.install(spec, make_test_session(&spec.host, 123, i as u64 + 1));
+    }
+    assert_eq!(
+        table.map.lock().expect("test session table poisoned").len(),
+        SESSION_TABLE_CAP,
+        "the table must fill to the cap before the overwrite",
+    );
+
+    let target = &specs[SESSION_TABLE_CAP - 1];
+    table.install(target, make_test_session(&target.host, 123, 9_999));
+
+    let g = table.map.lock().expect("test session table poisoned");
+    assert_eq!(
+        g.len(),
+        SESSION_TABLE_CAP,
+        "an overwrite must not shrink the table below the cap",
+    );
+    for spec in &specs {
+        assert!(
+            g.contains_key(&session_key(spec)),
+            "an overwrite must not evict {}",
+            spec.host,
+        );
+    }
+}
+
 /// A cache hit refreshes the entry's LRU stamp, so an actively-drawn
 /// session is never the eviction victim and never ages out under the
 /// idle TTL while still in use.

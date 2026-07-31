@@ -577,10 +577,12 @@ itself is `pub(crate)` and FRB-ignored — Dart only ever sees
 Every `SessionTable` — the process-wide default included — is
 bounded on two axes:
 
-- **Capacity.** At most `SESSION_TABLE_CAP` (64) entries. Installing
-  into a full table evicts the least-recently-used entry, ranked by
-  the `Session::atime` stamp that each successful cookie draw
-  refreshes.
+- **Capacity.** At most `SESSION_TABLE_CAP` (64) entries. Installing a
+  *new* host into a full table evicts the least-recently-used entry,
+  ranked by the `Session::atime` stamp that each successful cookie
+  draw refreshes. Re-installing a host already cached — the
+  re-handshake that follows cookie exhaustion — replaces in place and
+  evicts nothing.
 - **Idle TTL.** An entry not drawn from within
   `SESSION_TABLE_IDLE_TTL` (24 hours) is dropped. The stamp is a
   `BootInstant`, so idle time keeps accruing while the device is
