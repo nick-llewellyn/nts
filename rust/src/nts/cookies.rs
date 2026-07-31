@@ -101,7 +101,13 @@ pub const MAX_COOKIE_LEN: usize = 512;
 /// [`crate::api::nts`]'s `SessionTable` already does this by owning
 /// every jar inside its `Mutex<HashMap<String, Session>>` and only
 /// touching it under that lock.
-#[derive(Clone)]
+///
+/// Deliberately **not** `Clone`. A clone would deep-copy every cookie
+/// into a second set of heap allocations with an independent drop
+/// point, so the wipe-on-drop guarantee above would hold for each copy
+/// separately rather than for the material as a whole — widening the
+/// window in which the bytes are resident. Nothing needs it: the jar
+/// is owned by exactly one `Session` and reached only through `&mut`.
 pub struct CookieJar {
     capacity: usize,
     inner: VecDeque<Zeroizing<Vec<u8>>>,
