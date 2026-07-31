@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
 
@@ -206,8 +206,14 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<NtsClient>>
 abstract class NtsClient implements RustOpaqueInterface {
   /// Drop every cached session. Cheap; intended for test cleanup
-  /// and for apps that want to bound long-lived process memory by
-  /// resetting the cache between work batches.
+  /// and for apps that want to release cached key material at a
+  /// specific point rather than waiting for the table's own bounds.
+  ///
+  /// The table is already bounded — at most 64 sessions,
+  /// least-recently-used evicted, each dropped once idle for 24
+  /// hours — so `clear` is an eager control, not the only thing
+  /// standing between a long-lived process and unbounded retention
+  /// of cached keys and cookies.
   ///
   /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
   /// reason as `invalidate`: one mutex acquisition and one

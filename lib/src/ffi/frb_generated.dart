@@ -1681,8 +1681,14 @@ class NtsClientImpl extends RustOpaque implements NtsClient {
   );
 
   /// Drop every cached session. Cheap; intended for test cleanup
-  /// and for apps that want to bound long-lived process memory by
-  /// resetting the cache between work batches.
+  /// and for apps that want to release cached key material at a
+  /// specific point rather than waiting for the table's own bounds.
+  ///
+  /// The table is already bounded — at most 64 sessions,
+  /// least-recently-used evicted, each dropped once idle for 24
+  /// hours — so `clear` is an eager control, not the only thing
+  /// standing between a long-lived process and unbounded retention
+  /// of cached keys and cookies.
   ///
   /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
   /// reason as `invalidate`: one mutex acquisition and one

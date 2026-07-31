@@ -40,6 +40,41 @@
   margin for tunnel encapsulation. The projection doubles as the
   allocation hint, replacing a fixed guess. (NTS-125)
 
+- The per-client session table is now bounded, so cached AEAD keys and
+  cookie jars are no longer retained for the life of the process.
+  `SessionTable` previously held every `host:port` it had ever
+  handshaken with until an explicit `invalidate` / `clear` or a rekey
+  signal for that exact key — a caller that rotated through many
+  servers, or that derived host strings from untrusted input,
+  accumulated key material without limit and had only manual `clear()`
+  as a remedy.
+
+  Two bounds now apply. A hard ceiling of 64 entries evicts the
+  least-recently-used session to make room for a new host, ranked by a
+  per-session stamp that each successful cookie draw refreshes so an
+  actively-used session is never the victim; re-handshaking a host
+  already cached replaces it in place and evicts nothing.
+  Independently, any session idle for 24 hours is dropped. That stamp
+  is a `BootInstant` rather than an `Instant`, so idle time keeps
+  accruing across device suspend — under `Instant` a table populated
+  before a long sleep would hold its keys for the sleep duration on
+  top of the TTL, which is exactly the backgrounded-app case the TTL
+  exists to cover.
+
+  Both bounds are swept whenever a session is installed, and the TTL
+  is additionally checked when a cached session is drawn from. The
+  second check is what makes the TTL bind for a process that goes
+  quiet and then queries the same host again: that path installs
+  nothing, so without it the stale session would be served and its
+  stamp refreshed, and the entry would never age out.
+
+  Eviction drops the `Session`, releasing its `ZeroizeOnDrop` AEAD
+  keys and its cookie jar, so the bound is on secret retention and not
+  merely on memory. `invalidate(spec)` and `clear()` are unchanged and
+  remain the eager controls for callers that need a session gone at a
+  specific moment. No public API changes; the bounds are internal
+  policy. (NTS-124)
+
 ### Fixed
 
 - DNS worker-thread spawn failure is no longer misreported as a network

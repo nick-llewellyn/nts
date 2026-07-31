@@ -562,8 +562,8 @@ Use cases for the per-instance shape:
   triggers a re-handshake).
 - Apps that want a clear scope-bounded lifetime for cached
   sessions, e.g. discarding the cache between work batches via
-  `clear()` rather than letting it grow unboundedly across the
-  process lifetime.
+  `clear()` rather than waiting for the automatic bounds described
+  under "Bounded retention" below to reclaim them.
 
 Internally, the per-client and process-wide-default code paths
 share their bodies through internal `*_inner` helpers parameterised
@@ -571,6 +571,42 @@ on `&SessionTable`, so a behaviour change to the cache layer
 applies to both surfaces without duplication. The `SessionTable`
 itself is `pub(crate)` and FRB-ignored — Dart only ever sees
 `NtsClient`.
+
+### Bounded retention
+
+Every `SessionTable` — the process-wide default included — is
+bounded on two axes:
+
+- **Capacity.** At most `SESSION_TABLE_CAP` (64) entries. Installing a
+  *new* host into a full table evicts the least-recently-used entry,
+  ranked by the `Session::atime` stamp that each successful cookie
+  draw refreshes. Re-installing a host already cached — the
+  re-handshake that follows cookie exhaustion — replaces in place and
+  evicts nothing.
+- **Idle TTL.** An entry not drawn from within
+  `SESSION_TABLE_IDLE_TTL` (24 hours) is dropped. The stamp is a
+  `BootInstant`, so idle time keeps accruing while the device is
+  suspended rather than freezing for the duration of the sleep.
+
+`prune_sessions` applies both on each install — a full sweep, kept
+off the hot path because its LRU pass is a linear scan. The TTL is
+additionally checked per-key on the cache-hit path, at the cost of
+one comparison against the entry already looked up. Without that
+second check the TTL would not bind the case it exists for: a
+process that goes quiet past the TTL and then queries the same host
+performs no install, so it would draw from the stale session and
+refresh its `atime`, and the entry would never age out.
+
+Eviction drops the `Session`, which releases its AEAD keys
+(`ZeroizeOnDrop`) and its cookie jar — so this is a
+secret-retention bound, not only a memory one. Without it, a
+long-lived process that rotates through many `host:port` values
+(or derives them from untrusted input) retained key material for
+every server it had ever queried until process exit.
+
+`invalidate(spec)` and `clear()` remain the eager controls for
+callers that need a session gone at a specific moment rather than
+whenever the bounds next require it.
 
 ## Singleflight: collapsing concurrent cold queries
 

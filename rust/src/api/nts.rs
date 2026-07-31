@@ -36,7 +36,12 @@
 //! keyed by `host:port` — and that table is the only persistent
 //! NTS-protocol state the bridge maintains. Two `NtsClient`
 //! instances never share table state with each other or with the
-//! process-wide default.
+//! process-wide default. The table is bounded: at most
+//! `SESSION_TABLE_CAP` entries, evicted least-recently-used, and
+//! each entry dropped once idle for `SESSION_TABLE_IDLE_TTL`, so a
+//! long-lived process that rotates through many servers does not
+//! retain keys and cookies for all of them. `invalidate` / `clear`
+//! remain the eager controls.
 //!
 //! `nts_dns_pool_stats` (`ntsDnsPoolStats` on the Dart side) is also
 //! exposed from this module as a synchronous diagnostic snapshot of
@@ -1154,6 +1159,16 @@ struct Session {
     /// [`crate::nts::WarningCode`] so the hot cached path clones a
     /// plain `Vec<u16>` instead of re-mapping typed codes per query.
     ke_warnings: Vec<u16>,
+    /// Last time this session was installed or drawn from on a
+    /// successful checkout. Drives both eviction policies in
+    /// [`prune_sessions`]: the [`SESSION_TABLE_IDLE_TTL`] age check
+    /// and the [`SESSION_TABLE_CAP`] least-recently-used ordering.
+    ///
+    /// A [`BootInstant`] rather than `std::time::Instant` so an idle
+    /// session keeps ageing while the device is suspended — under
+    /// `Instant` a table populated before a long sleep would retain
+    /// its keys and cookies for the sleep duration plus the TTL.
+    atime: BootInstant,
 }
 
 impl Session {
@@ -1535,8 +1550,92 @@ impl SeenUidCache {
     }
 }
 
+/// Hard ceiling on the number of cached sessions a single
+/// [`SessionTable`] retains. Once the table is full, installing a new
+/// session evicts the least-recently-used entry (by [`Session::atime`])
+/// to make room.
+///
+/// Without a ceiling the process-wide default client retains every
+/// `host:port` ever queried until process death; the AEAD keys and
+/// cookie jars are individually small, but a caller that rotates
+/// through many servers (or that derives host strings from untrusted
+/// input) accumulates them without bound. 64 entries comfortably
+/// exceeds any plausible working set — the documented usage pattern is
+/// a handful of NTS servers — while keeping worst-case retention
+/// bounded and predictable.
+const SESSION_TABLE_CAP: usize = 64;
+
+/// Idle time-to-live for a cached session. An entry not drawn from by
+/// a successful checkout within this window is dropped on the next
+/// table mutation, releasing its AEAD keys and cookie jar.
+///
+/// Complements [`SESSION_TABLE_CAP`]: the cap bounds a table under
+/// churn, the TTL bounds one that went quiet. 24 hours is long enough
+/// that a normally-scheduled periodic sync never pays a re-handshake
+/// it would not otherwise have paid, and short enough that a
+/// backgrounded app does not hold key material across days of
+/// inactivity.
+const SESSION_TABLE_IDLE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Enforce the [`SESSION_TABLE_IDLE_TTL`] and [`SESSION_TABLE_CAP`]
+/// bounds on `map`, relative to `now`.
+///
+/// Runs in two passes. The first drops every entry whose
+/// [`Session::atime`] is at least [`SESSION_TABLE_IDLE_TTL`] old. The
+/// second, only if the table is still at or above the cap, repeatedly
+/// removes the entry with the oldest `atime` until `cap_headroom`
+/// slots remain free — `1` when the caller's insert will grow the
+/// table, `0` when it replaces an existing key or only needs the
+/// table brought back within bounds. Install sites derive that from
+/// `contains_key` rather than passing `1` unconditionally: an
+/// overwrite leaves the length unchanged, so reserving a slot for it
+/// would evict an unrelated entry and hold the table one below the
+/// cap for no gain.
+///
+/// Dropping the [`Session`] releases its AEAD keys (`ZeroizeOnDrop`)
+/// and its [`CookieJar`], so eviction is also the secret-retention
+/// bound, not merely a memory one.
+///
+/// The LRU pass is a linear scan per eviction rather than an
+/// order-maintaining structure. With [`SESSION_TABLE_CAP`] at 64 and
+/// evictions occurring only on the (already handshake-bound) install
+/// path, an O(n) scan under a lock already held is far cheaper than
+/// the bookkeeping a `VecDeque` shadow order would add to every cache
+/// hit — and it cannot desynchronise from the map.
+///
+/// This full sweep is install-only for that reason. The TTL is also
+/// enforced per-key on the cache-hit path in `checkout_with`, which
+/// costs one comparison against the entry already looked up: without
+/// it a table that went quiet past the TTL would serve the stale
+/// session and refresh its `atime`, so the entry would never age out.
+///
+/// Uses `saturating_duration_since` so an `atime` somehow later than
+/// `now` yields [`Duration::ZERO`] (treated as fresh) rather than
+/// panicking. Callers sample `now` under the same `map` lock that
+/// guards installation, so this is defensive only.
+fn prune_sessions(map: &mut HashMap<String, Session>, now: BootInstant, cap_headroom: usize) {
+    map.retain(|_, s| now.saturating_duration_since(s.atime) < SESSION_TABLE_IDLE_TTL);
+    let limit = SESSION_TABLE_CAP.saturating_sub(cap_headroom);
+    while map.len() > limit {
+        let Some(oldest) = map
+            .iter()
+            .min_by_key(|(_, s)| s.atime)
+            .map(|(k, _)| k.clone())
+        else {
+            break;
+        };
+        map.remove(&oldest);
+    }
+}
+
 /// Per-host session table keyed by `host:port` so two specs with
 /// different KE ports stay isolated even when they share a hostname.
+///
+/// Bounded: at most [`SESSION_TABLE_CAP`] entries, each dropped once
+/// idle for [`SESSION_TABLE_IDLE_TTL`]. See [`prune_sessions`] for the
+/// eviction policy. [`invalidate`](Self::invalidate) and
+/// [`clear`](Self::clear) remain the eager controls for callers that
+/// want a session gone immediately.
 ///
 /// Each [`NtsClient`] owns one `SessionTable`; the convenience
 /// top-level entry points ([`nts_query`], [`nts_warm_cookies`])
@@ -1760,8 +1859,14 @@ impl NtsClient {
     }
 
     /// Drop every cached session. Cheap; intended for test cleanup
-    /// and for apps that want to bound long-lived process memory by
-    /// resetting the cache between work batches.
+    /// and for apps that want to release cached key material at a
+    /// specific point rather than waiting for the table's own bounds.
+    ///
+    /// The table is already bounded — at most 64 sessions,
+    /// least-recently-used evicted, each dropped once idle for 24
+    /// hours — so `clear` is an eager control, not the only thing
+    /// standing between a long-lived process and unbounded retention
+    /// of cached keys and cookies.
     ///
     /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
     /// reason as `invalidate`: one mutex acquisition and one
@@ -2057,6 +2162,7 @@ fn establish_session(
         jar,
         trust_backend,
         ke_warnings,
+        atime: BootInstant::now(),
     };
     Ok((session, outcome.phase_timings))
 }
@@ -2223,6 +2329,24 @@ impl SessionTable {
             // unrelated cache hits behind itself.
             {
                 let mut g = lock_recover(&self.map);
+                // Enforce the idle TTL before serving. `prune_sessions`
+                // runs only on installs, so without this check a table
+                // that went quiet past the TTL would serve the stale
+                // session on the next draw and refresh its `atime` —
+                // the entry would never age out and the
+                // secret-retention bound would not hold for the
+                // query-after-long-idle shape the TTL exists for.
+                // Scoped to the looked-up key so the hot path stays
+                // O(1); the full sweep still happens on install.
+                // Removing under the `map` lock alone is the same
+                // discipline `invalidate` and `evict_session` use.
+                // With the entry gone, the cache lookup below misses
+                // and the caller falls through to a re-handshake.
+                if g.get(&key).is_some_and(|s| {
+                    BootInstant::now().saturating_duration_since(s.atime) >= SESSION_TABLE_IDLE_TTL
+                }) {
+                    g.remove(&key);
+                }
                 if let Some(s) = g.get_mut(&key) {
                     if s.cookies_remaining() > 0 {
                         // `cookies_remaining > 0` implies `take` returns
@@ -2236,6 +2360,11 @@ impl SessionTable {
                         // the same shape on this path.
                         match s.jar.take(&s.ntpv4_host) {
                             Some(cookie) => {
+                                // Successful draw: refresh the LRU
+                                // stamp so an actively-used session is
+                                // never the eviction victim and never
+                                // ages out under the idle TTL.
+                                s.atime = BootInstant::now();
                                 let ctx = build_query_context(s, cookie);
                                 return Ok((ctx, KePhaseTimings::default()));
                             }
@@ -2367,6 +2496,15 @@ impl SessionTable {
                             // `expect`.
                             let cookie_opt = {
                                 let mut g = lock_recover(&self.map);
+                                // Bound the table before the insert.
+                                // Ask for a free slot only when the
+                                // insert will actually grow the map:
+                                // re-handshaking a key already cached
+                                // replaces in place, and demanding
+                                // headroom there would evict an
+                                // unrelated LRU entry for nothing.
+                                let headroom = usize::from(!g.contains_key(&key));
+                                prune_sessions(&mut g, BootInstant::now(), headroom);
                                 g.insert(key.clone(), session);
                                 let s = g.get_mut(&key).expect("just inserted under this key");
                                 s.jar
@@ -2583,7 +2721,16 @@ impl SessionTable {
                         let count = session.cookies_remaining() as u32;
                         // Snapshot before the move, same as `count`.
                         let session_warnings = session.ke_warnings.clone();
-                        lock_recover(&self.map).insert(key.clone(), session);
+                        {
+                            let mut g = lock_recover(&self.map);
+                            // Same pre-insert bound as the
+                            // `checkout_with` leader path, headroom
+                            // included: only a growing insert needs a
+                            // slot freed for it.
+                            let headroom = usize::from(!g.contains_key(&key));
+                            prune_sessions(&mut g, BootInstant::now(), headroom);
+                            g.insert(key.clone(), session);
+                        }
                         // Publish the leader's harvested count
                         // and trust-backend on the singleflight
                         // slot so warm-cookies waiters can return
@@ -2775,7 +2922,10 @@ impl SessionTable {
     #[cfg(test)]
     fn install(&self, spec: &NtsServerSpec, session: Session) {
         let key = session_key(spec);
-        lock_recover(&self.map).insert(key, session);
+        let mut g = lock_recover(&self.map);
+        let headroom = usize::from(!g.contains_key(&key));
+        prune_sessions(&mut g, BootInstant::now(), headroom);
+        g.insert(key, session);
     }
 
     /// Drop the cached session for `spec`'s `host:port`. Returns whether

@@ -282,6 +282,7 @@ fn make_test_session(host: &str, ntpv4_port: u16, generation: u64) -> Session {
         jar: CookieJar::new(),
         trust_backend: TrustBackend::Platform,
         ke_warnings: Vec::new(),
+        atime: BootInstant::now(),
     }
 }
 
@@ -1959,6 +1960,7 @@ fn nts_query_live_ipv6_ptb() {
 // a cloned `NtsError`. See `nts-o8u` for the full design.
 // ------------------------------------------------------------------
 
+use crate::nts::boottime::boottime_micros;
 use std::sync::atomic::AtomicUsize;
 use std::thread;
 
@@ -4210,5 +4212,241 @@ fn session_table_note_unique_id_dedups() {
     assert!(
         table.note_unique_id(&uid_b),
         "a distinct UID must be accepted independently",
+    );
+}
+
+/// Build a `Session` whose LRU stamp is `atime` rather than "now", so
+/// the bounded-table tests can position an entry anywhere in the
+/// eviction order (or past the idle TTL) without sleeping.
+fn make_test_session_at(host: &str, generation: u64, atime: BootInstant) -> Session {
+    let mut s = make_test_session(host, 123, generation);
+    s.atime = atime;
+    s
+}
+
+/// `prune_sessions` drops entries idle for at least
+/// `SESSION_TABLE_IDLE_TTL` and keeps everything younger, independent
+/// of the capacity bound. Dropping the `Session` is what releases its
+/// AEAD keys and cookie jar, so this is the secret-retention bound for
+/// a table that went quiet rather than one under churn.
+#[test]
+fn prune_sessions_drops_entries_past_the_idle_ttl() {
+    let ttl_micros = i64::try_from(SESSION_TABLE_IDLE_TTL.as_micros()).expect("TTL fits in i64");
+    let now = BootInstant::from_micros(10 * ttl_micros);
+    let mut map = HashMap::new();
+    map.insert(
+        "expired.invalid:4460".to_owned(),
+        make_test_session_at(
+            "expired.invalid",
+            1,
+            BootInstant::from_micros(9 * ttl_micros),
+        ),
+    );
+    map.insert(
+        "fresh.invalid:4460".to_owned(),
+        make_test_session_at(
+            "fresh.invalid",
+            2,
+            BootInstant::from_micros(9 * ttl_micros + 1_000_000),
+        ),
+    );
+
+    prune_sessions(&mut map, now, 0);
+
+    assert!(
+        !map.contains_key("expired.invalid:4460"),
+        "an entry idle for the full TTL must be evicted",
+    );
+    assert!(
+        map.contains_key("fresh.invalid:4460"),
+        "an entry one second short of the TTL must survive",
+    );
+}
+
+/// With `cap_headroom = 1` (the install-path call shape),
+/// `prune_sessions` leaves room for exactly one insert: a full table
+/// is trimmed to `SESSION_TABLE_CAP - 1`, and the entry with the
+/// oldest `atime` is the one that goes.
+#[test]
+fn prune_sessions_evicts_least_recently_used_to_make_install_room() {
+    let ttl_micros = i64::try_from(SESSION_TABLE_IDLE_TTL.as_micros()).expect("TTL fits in i64");
+    let now = BootInstant::from_micros(10 * ttl_micros);
+    let mut map = HashMap::new();
+    // Fill to the cap. Entry `i` was last used `i` seconds ago, so
+    // the highest index is the least-recently-used.
+    for i in 0..SESSION_TABLE_CAP {
+        let host = format!("lru-{i}.invalid");
+        let age = i64::try_from(i).expect("index fits in i64") * 1_000_000;
+        map.insert(
+            format!("{host}:4460"),
+            make_test_session_at(
+                &host,
+                i as u64 + 1,
+                BootInstant::from_micros(10 * ttl_micros - age),
+            ),
+        );
+    }
+
+    prune_sessions(&mut map, now, 1);
+
+    assert_eq!(
+        map.len(),
+        SESSION_TABLE_CAP - 1,
+        "a full table must be trimmed to leave one install slot free",
+    );
+    let oldest = format!("lru-{}.invalid:4460", SESSION_TABLE_CAP - 1);
+    assert!(
+        !map.contains_key(&oldest),
+        "the least-recently-used entry must be the eviction victim",
+    );
+    assert!(
+        map.contains_key("lru-0.invalid:4460"),
+        "the most-recently-used entry must survive",
+    );
+}
+
+/// Installing past the cap through the real table surface keeps the
+/// entry count bounded, so a caller that rotates through many servers
+/// cannot grow the process-wide table without limit.
+#[test]
+fn session_table_install_stays_within_the_capacity_bound() {
+    let table = SessionTable::new();
+    for i in 0..(SESSION_TABLE_CAP + 16) {
+        let spec = NtsServerSpec {
+            host: format!("cap-{i}.invalid"),
+            port: 4460,
+        };
+        table.install(&spec, make_test_session(&spec.host, 123, i as u64 + 1));
+    }
+
+    let g = table.map.lock().expect("test session table poisoned");
+    assert!(
+        g.len() <= SESSION_TABLE_CAP,
+        "table must stay within the cap; got {} entries",
+        g.len(),
+    );
+}
+
+/// Re-installing an already-cached key replaces in place, so it must
+/// not evict anything. Reserving a slot unconditionally would trim a
+/// full table to `SESSION_TABLE_CAP - 1` on every re-handshake — the
+/// common path once a session's cookies are exhausted — shrinking the
+/// effective cache for no gain, and could evict the very key being
+/// reinstalled when that key is itself the LRU.
+#[test]
+fn reinstalling_a_cached_key_evicts_nothing() {
+    let table = SessionTable::new();
+    let specs: Vec<NtsServerSpec> = (0..SESSION_TABLE_CAP)
+        .map(|i| NtsServerSpec {
+            host: format!("overwrite-{i}.invalid"),
+            port: 4460,
+        })
+        .collect();
+    for (i, spec) in specs.iter().enumerate() {
+        table.install(spec, make_test_session(&spec.host, 123, i as u64 + 1));
+    }
+    assert_eq!(
+        table.map.lock().expect("test session table poisoned").len(),
+        SESSION_TABLE_CAP,
+        "the table must fill to the cap before the overwrite",
+    );
+
+    let target = &specs[SESSION_TABLE_CAP - 1];
+    table.install(target, make_test_session(&target.host, 123, 9_999));
+
+    let g = table.map.lock().expect("test session table poisoned");
+    assert_eq!(
+        g.len(),
+        SESSION_TABLE_CAP,
+        "an overwrite must not shrink the table below the cap",
+    );
+    for spec in &specs {
+        assert!(
+            g.contains_key(&session_key(spec)),
+            "an overwrite must not evict {}",
+            spec.host,
+        );
+    }
+}
+
+/// A cache hit refreshes the entry's LRU stamp, so an actively-drawn
+/// session is never the eviction victim and never ages out under the
+/// idle TTL while still in use.
+#[test]
+fn checkout_cache_hit_refreshes_the_lru_stamp() {
+    let table = SessionTable::new();
+    let spec = NtsServerSpec {
+        host: "atime-refresh.invalid".into(),
+        port: 4460,
+    };
+    let key = session_key(&spec);
+    let mut session = make_test_session_with_cookies("atime-refresh.invalid", 123, 1, 2);
+    // Old enough to be the LRU victim, but inside the idle TTL: the
+    // cache-hit path evicts anything past the TTL rather than serving
+    // it, so a stamp older than that would test the wrong branch.
+    let stale = BootInstant::from_micros(boottime_micros().saturating_sub(60_000_000));
+    session.atime = stale;
+    table.install(&spec, session);
+
+    table
+        .checkout_with(
+            &spec,
+            Duration::from_secs(1),
+            DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+            &|_, _, _, _| panic!("cache hit must not run a handshake"),
+        )
+        .expect("cached session with cookies must serve the checkout");
+
+    let g = table.map.lock().expect("test session table poisoned");
+    let s = g.get(&key).expect("session must still be cached");
+    assert!(
+        s.atime > stale,
+        "a successful cookie draw must refresh the LRU stamp",
+    );
+}
+
+/// A session idle past `SESSION_TABLE_IDLE_TTL` is dropped on the
+/// cache-hit path rather than served. `prune_sessions` runs only on
+/// installs, so without this the query-after-long-idle shape would
+/// draw from the stale session and refresh its `atime`, and the entry
+/// would never age out — the TTL's secret-retention bound would not
+/// hold for exactly the case it exists to cover.
+#[test]
+fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
+    let table = SessionTable::new();
+    let spec = NtsServerSpec {
+        host: "ttl-expired.invalid".into(),
+        port: 4460,
+    };
+    let key = session_key(&spec);
+    let mut session = make_test_session_with_cookies("ttl-expired.invalid", 123, 1, 2);
+    let ttl_micros = i64::try_from(SESSION_TABLE_IDLE_TTL.as_micros()).expect("TTL fits in i64");
+    session.atime = BootInstant::from_micros(boottime_micros().saturating_sub(ttl_micros));
+    table.install(&spec, session);
+
+    let handshake_ran = Arc::new(AtomicUsize::new(0));
+    let do_handshake = {
+        let handshake_ran = handshake_ran.clone();
+        move |_: &NtsServerSpec, _: Duration, _: usize, _: Option<&PhaseReporter>| {
+            handshake_ran.fetch_add(1, Ordering::SeqCst);
+            Err(NtsError::Internal("stub".into()))
+        }
+    };
+    let _ = table.checkout_with(
+        &spec,
+        Duration::from_millis(1),
+        DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+        &do_handshake,
+    );
+
+    assert_eq!(
+        handshake_ran.load(Ordering::SeqCst),
+        1,
+        "an expired session must fall through to a fresh handshake",
+    );
+    let g = table.map.lock().expect("test session table poisoned");
+    assert!(
+        !g.contains_key(&key),
+        "the expired entry must be dropped, releasing its keys and jar",
     );
 }
