@@ -18,6 +18,29 @@ use zeroize::Zeroizing;
 /// given server is per RFC 8915 §4 a matter of server policy.
 pub const DEFAULT_CAPACITY: usize = 8;
 
+/// Hard cap on a single cookie's length, in octets.
+///
+/// RFC 8915 specifies no maximum: §4.1.6 makes the NTS-KE NewCookie body
+/// an opaque blob, and §5.4 makes the NTP NTS Cookie extension the same.
+/// Real deployments are an order of magnitude below this cap —
+/// Cloudflare, Netnod and NTS.net.nz all issue cookies around 100 octets
+/// (the `ntpd-rs` reference cookie encoding is 104 for AES-SIV-CMAC-256).
+///
+/// Without a client-side bound, a cookie is limited only by the enclosing
+/// message: up to [`super::ke::NTS_KE_READ_BUDGET`] (16 KiB) from a KE
+/// response, or the datagram size from an NTP reply. That length then
+/// propagates into the *next* request, because
+/// [`super::ntp::build_client_request`] sizes each NTS Cookie Placeholder
+/// to `req.cookie.len()` for the RFC 8915 §5.7 amplification defence — so
+/// one multi-KiB cookie inflates every subsequent client datagram by
+/// roughly twice its size, risking path-MTU black holes, fragmentation,
+/// and send failures surfacing as opaque network errors.
+///
+/// 512 leaves ~5× headroom over observed cookie sizes while keeping the
+/// worst-case request comfortably inside
+/// [`super::ntp::MAX_CLIENT_PACKET_BYTES`].
+pub const MAX_COOKIE_LEN: usize = 512;
+
 /// FIFO cookie store keyed by NTS-KE host.
 ///
 /// Eviction is FIFO: when the queue is at capacity, the oldest cookie is
@@ -226,6 +249,24 @@ mod tests {
 
     const HOST_A: &str = "time.cloudflare.com";
     const HOST_B: &str = "nts.netnod.se";
+
+    /// Pins the headroom relationship between the two caps added for bd
+    /// nts-r11f.4. [`crate::nts::ntp::build_client_request`] emits the
+    /// cookie once plus once per placeholder, so the worst-case
+    /// production request (one placeholder) carries two cookie-sized
+    /// extensions. Raising [`MAX_COOKIE_LEN`] past roughly half of
+    /// [`crate::nts::ntp::MAX_CLIENT_PACKET_BYTES`] would make the packet
+    /// guard fire on every ordinary request; fail here rather than in
+    /// production if that relationship is ever broken.
+    #[test]
+    fn cookie_cap_leaves_headroom_under_packet_cap() {
+        let packet_cap = crate::nts::ntp::MAX_CLIENT_PACKET_BYTES;
+        assert!(
+            MAX_COOKIE_LEN * 2 < packet_cap,
+            "two cookie-sized extensions ({}) must fit inside the {packet_cap}-byte packet cap",
+            MAX_COOKIE_LEN * 2,
+        );
+    }
 
     #[test]
     fn defaults_to_capacity_eight() {

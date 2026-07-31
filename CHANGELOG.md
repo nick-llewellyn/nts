@@ -3,6 +3,43 @@
 
 ## 8.1
 
+### Security
+
+- NTS cookies are now capped at 512 octets and client NTP requests at
+  1200 octets. RFC 8915 deliberately leaves the cookie opaque and
+  unbounded (§4.1.6, §5.4) because only the issuing server needs to
+  interpret it; deployed servers issue roughly 100 octets. The client
+  previously accepted whatever a KE server sent, bounded only by the
+  overall KE message budget. That mattered beyond the one allocation
+  because `build_client_request` sizes each cookie placeholder to the
+  cookie it is standing in for, so a single oversized cookie inflated
+  *every subsequent* NTP request by roughly twice its length — a
+  KE-side input silently driving UDP datagram growth on the query path,
+  past the point of IP fragmentation and into MTU black-holing.
+
+  Oversized cookies are rejected at two points, with deliberately
+  different policies. During KE record decoding the whole message
+  fails with the new `CodecError::CookieTooLarge`, checked before the
+  body is copied, so the handshake stays atomic — a partial harvest
+  would silently degrade the pool. In an AEAD-authenticated NTP
+  response the oversized entries are *filtered* instead: the time
+  sample is sound, and discarding it would trade a real
+  synchronisation for cookies the client is free to ignore.
+  Conforming cookies in the same packet are still deposited, the drop
+  count is reported on `ServerResponse::oversized_cookies_dropped`,
+  and a `nts::ntp` warning is logged so the slower-than-expected pool
+  refill is observable rather than silent.
+
+  `build_client_request` also projects the full on-wire packet size —
+  header, unique identifier, cookie, placeholders, and authenticator,
+  each padded to the 4-octet extension alignment — and refuses with
+  the new `NtpError::PacketTooLarge` before allocating. The cookie cap
+  alone does not bound the packet, because `placeholder_count` is
+  caller-supplied and each placeholder is sized to the cookie. The
+  1200-octet limit is the RFC 8200 §5 minimum MTU less headers, with
+  margin for tunnel encapsulation. The projection doubles as the
+  allocation hint, replacing a fixed guess. (NTS-125)
+
 ### Fixed
 
 - DNS worker-thread spawn failure is no longer misreported as a network

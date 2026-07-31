@@ -58,6 +58,24 @@ pub const STRATUM_KISS_OF_DEATH: u8 = 0;
 /// time regardless of the Leap Indicator and must be rejected.
 pub const STRATUM_UNSYNCHRONIZED_FLOOR: u8 = 16;
 
+/// Refuse to emit a client request larger than this many octets.
+///
+/// 1200 is the conventional "safe" IPv6 UDP payload: RFC 8085 §3.2 advises
+/// staying at or below the minimum path MTU, and RFC 8200 §5 sets the IPv6
+/// minimum link MTU at 1280, leaving 1232 after the 40-octet IPv6 header
+/// and 8-octet UDP header. 1200 keeps a small margin for tunnel overhead.
+///
+/// This is a belt-and-braces backstop rather than the primary control:
+/// [`crate::nts::cookies::MAX_COOKIE_LEN`] already bounds the only
+/// caller-influenced input that scales, so a request built from a
+/// conforming cookie with one placeholder tops out near 1156 octets and
+/// can never reach this ceiling. The guard exists to catch the
+/// combinations the cookie cap alone does not constrain — an unusually
+/// large `unique_id`, or a `placeholder_count` above the production
+/// `PLACEHOLDERS_PER_QUERY` of 1 — before the datagram hits the wire and
+/// fails as an opaque send error or a silent path-MTU black hole.
+pub const MAX_CLIENT_PACKET_BYTES: usize = 1200;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NtpHeader {
     pub li_vn_mode: u8,
@@ -208,6 +226,21 @@ pub enum NtpError {
     /// can evict the now-stale cached session without trusting an
     /// unauthenticated header for any other purpose.
     StaleCookie,
+    /// The cookie supplied for this request exceeded
+    /// [`crate::nts::cookies::MAX_COOKIE_LEN`]. Only reachable when a
+    /// caller mints a [`ClientRequest`] directly: the production path
+    /// sources cookies from the [`crate::nts::cookies::CookieJar`],
+    /// which only ever admits cookies that already cleared the same cap
+    /// at KE parse or NTP response parse.
+    CookieTooLarge {
+        actual: usize,
+    },
+    /// The request would serialise to more than
+    /// [`MAX_CLIENT_PACKET_BYTES`] octets. See that constant for why the
+    /// cookie cap alone does not make this unreachable.
+    PacketTooLarge {
+        actual: usize,
+    },
     Aead(AeadError),
 }
 
@@ -239,6 +272,15 @@ impl std::fmt::Display for NtpError {
             Self::StaleCookie => f.write_str(
                 "server reports stale cookie (RFC 8915 §5.7 unauthenticated NTSN with matching UID)",
             ),
+            Self::CookieTooLarge { actual } => write!(
+                f,
+                "cookie too large: {actual} bytes (cap {})",
+                crate::nts::cookies::MAX_COOKIE_LEN,
+            ),
+            Self::PacketTooLarge { actual } => write!(
+                f,
+                "client request too large: {actual} bytes (cap {MAX_CLIENT_PACKET_BYTES})",
+            ),
             Self::Aead(e) => write!(f, "AEAD: {e}"),
         }
     }
@@ -266,6 +308,42 @@ pub fn encode_extension(field_type: u16, body: &[u8]) -> Vec<u8> {
     out.extend_from_slice(body);
     out.resize(total, 0);
     out
+}
+
+/// On-wire length [`encode_extension`] will produce for a body of
+/// `body_len` octets, without building the extension.
+///
+/// Mirrors the padding arithmetic in [`encode_extension`] exactly; the
+/// `build_request_projection_matches_encoded_length` test pins the two
+/// together.
+///
+/// Saturating rather than wrapping. A `body_len` near [`usize::MAX`] is
+/// unreachable from a real `Vec` — the allocation would have failed
+/// first — but the projection in [`build_client_request`] is a
+/// *security* check, and a wrap here would hand it a small total that
+/// slips under [`MAX_CLIENT_PACKET_BYTES`]. Saturating fails safe: the
+/// total stays above the cap and the request is refused.
+#[must_use]
+pub fn extension_total_len(body_len: usize) -> usize {
+    (EXT_HEADER_LEN
+        .saturating_add(body_len)
+        .div_ceil(4)
+        .saturating_mul(4))
+    .max(EXT_MIN_TOTAL)
+}
+
+/// Length [`encode_authenticator_body`] will produce for a nonce of
+/// `nonce_len` octets and a [`TAG_LEN`] ciphertext, with no additional
+/// padding — the shape [`build_client_request`] always emits.
+///
+/// Saturating for the same reason as [`extension_total_len`].
+#[must_use]
+fn authenticator_body_len(nonce_len: usize) -> usize {
+    nonce_len
+        .div_ceil(4)
+        .saturating_mul(4)
+        .saturating_add(TAG_LEN.div_ceil(4) * 4)
+        .saturating_add(4)
 }
 
 /// A single decoded extension field. `body` includes any zero padding bytes.
@@ -457,8 +535,31 @@ pub fn build_client_request(req: &ClientRequest, c2s_key: &AeadKey) -> Result<Ve
     if req.nonce.is_empty() {
         return Err(NtpError::EmptyNonce);
     }
+    if req.cookie.len() > crate::nts::cookies::MAX_COOKIE_LEN {
+        return Err(NtpError::CookieTooLarge {
+            actual: req.cookie.len(),
+        });
+    }
+    // Project the on-wire size before allocating anything, so an
+    // oversized request is refused without first materialising the
+    // placeholder bodies it would need. `placeholder_count` is
+    // caller-supplied and otherwise unbounded, so every term saturates:
+    // a wrap here would produce a *small* total that slips under the cap
+    // and defeats the guard, whereas saturation pins the total at
+    // `usize::MAX` and the request is refused.
+    let projected = HEADER_LEN
+        .saturating_add(extension_total_len(req.unique_id.len()))
+        .saturating_add(extension_total_len(req.cookie.len()))
+        .saturating_add(
+            req.placeholder_count
+                .saturating_mul(extension_total_len(req.cookie.len())),
+        )
+        .saturating_add(extension_total_len(authenticator_body_len(req.nonce.len())));
+    if projected > MAX_CLIENT_PACKET_BYTES {
+        return Err(NtpError::PacketTooLarge { actual: projected });
+    }
     let header = NtpHeader::client_request(req.transmit_timestamp);
-    let mut packet = Vec::with_capacity(HEADER_LEN + 256);
+    let mut packet = Vec::with_capacity(projected);
     packet.extend_from_slice(&header.to_bytes());
     packet.extend_from_slice(&encode_extension(
         ext_type::UNIQUE_IDENTIFIER,
@@ -499,6 +600,18 @@ pub struct ServerResponse {
     /// [`crate::nts::cookies::CookieJar`], which previously dropped
     /// naked `Vec<u8>` allocations (bd nts-wpvd / NTS-61).
     pub fresh_cookies: Vec<Zeroizing<Vec<u8>>>,
+    /// Count of encrypted NTS Cookie extensions dropped for exceeding
+    /// [`crate::nts::cookies::MAX_COOKIE_LEN`].
+    ///
+    /// Oversized cookies are filtered rather than rejecting the packet:
+    /// the response is AEAD-authenticated by the time the encrypted
+    /// extensions are parsed, so the time sample it carries is sound and
+    /// discarding it would trade a real synchronisation for a cookie the
+    /// client was free to ignore. Dropping the cookie instead starves the
+    /// jar, which the existing empty-jar path already handles by
+    /// re-running NTS-KE. The count keeps that degradation observable
+    /// rather than silent.
+    pub oversized_cookies_dropped: usize,
 }
 
 impl std::fmt::Debug for ServerResponse {
@@ -515,6 +628,7 @@ impl std::fmt::Debug for ServerResponse {
                 "fresh_cookies",
                 &format_args!("<redacted; {} cookies>", self.fresh_cookies.len()),
             )
+            .field("oversized_cookies_dropped", &self.oversized_cookies_dropped)
             .finish()
     }
 }
@@ -686,17 +800,30 @@ pub fn parse_server_response(
     // `to_vec()` in `parse_extensions` (no growth history) and is moved
     // — not copied — into the wrapper, so the growth-free construction
     // discipline holds and no unwiped intermediate is left behind.
+    // Drop oversized cookies rather than failing the packet — see
+    // `ServerResponse::oversized_cookies_dropped` for why the sample is
+    // still worth keeping. The bound is applied after the `Zeroizing`
+    // wrap so a rejected cookie is still wiped on discard.
+    let mut oversized_cookies_dropped = 0usize;
     let fresh_cookies = encrypted_exts
         .into_iter()
         .map(|ext| (ext.field_type, Zeroizing::new(ext.body)))
         .filter(|(field_type, _)| *field_type == ext_type::NTS_COOKIE)
         .map(|(_, body)| body)
+        .filter(|body| {
+            if body.len() > crate::nts::cookies::MAX_COOKIE_LEN {
+                oversized_cookies_dropped += 1;
+                return false;
+            }
+            true
+        })
         .collect();
 
     Ok(ServerResponse {
         header,
         unique_id,
         fresh_cookies,
+        oversized_cookies_dropped,
     })
 }
 

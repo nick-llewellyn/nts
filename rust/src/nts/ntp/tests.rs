@@ -195,6 +195,132 @@ mod request_build {
             assert_eq!(ext.body.len(), COOKIE.len());
         }
     }
+
+    /// The size projection driving the [`MAX_CLIENT_PACKET_BYTES`] guard
+    /// must agree exactly with what the encoder actually emits. A
+    /// projection that under-counts would let an oversized datagram
+    /// through; one that over-counts would refuse conforming requests.
+    /// Pinned across a spread of placeholder counts because the
+    /// placeholder term is the only one that scales.
+    #[test]
+    fn build_request_projection_matches_encoded_length() {
+        let (c2s, _) = fresh_keys();
+        for placeholder_count in [0usize, 1, 4] {
+            let mut req = sample_request();
+            req.placeholder_count = placeholder_count;
+            let packet = build_client_request(&req, &c2s).unwrap();
+            let projected = HEADER_LEN
+                + extension_total_len(req.unique_id.len())
+                + extension_total_len(req.cookie.len())
+                + placeholder_count * extension_total_len(req.cookie.len())
+                + extension_total_len(authenticator_body_len(req.nonce.len()));
+            assert_eq!(
+                projected,
+                packet.len(),
+                "projection diverged at placeholder_count={placeholder_count}",
+            );
+        }
+    }
+
+    /// A cookie at exactly the cap must still build — inclusive bound.
+    #[test]
+    fn build_request_accepts_cookie_at_size_cap() {
+        let (c2s, _) = fresh_keys();
+        let mut req = sample_request();
+        req.cookie = Zeroizing::new(vec![0xAB; crate::nts::cookies::MAX_COOKIE_LEN]);
+        req.placeholder_count = 1;
+        build_client_request(&req, &c2s).expect("cookie at the cap must build");
+    }
+
+    /// One octet past the cap is refused before any packet bytes are
+    /// allocated. Only reachable via a hand-minted [`ClientRequest`];
+    /// the jar-sourced production path cannot hold such a cookie.
+    #[test]
+    fn build_request_rejects_oversized_cookie() {
+        let (c2s, _) = fresh_keys();
+        let over = crate::nts::cookies::MAX_COOKIE_LEN + 1;
+        let mut req = sample_request();
+        req.cookie = Zeroizing::new(vec![0xAB; over]);
+        match build_client_request(&req, &c2s) {
+            Err(NtpError::CookieTooLarge { actual }) => assert_eq!(actual, over),
+            other => panic!("expected CookieTooLarge, got {other:?}"),
+        }
+    }
+
+    /// The cookie cap alone does not bound the packet: `placeholder_count`
+    /// is caller-supplied and each placeholder is sized to the cookie, so
+    /// a conforming cookie with enough placeholders still overruns
+    /// [`MAX_CLIENT_PACKET_BYTES`]. This is the case the packet guard
+    /// exists for.
+    #[test]
+    fn build_request_rejects_oversized_packet_from_placeholder_count() {
+        let (c2s, _) = fresh_keys();
+        let mut req = sample_request();
+        req.cookie = Zeroizing::new(vec![0xAB; crate::nts::cookies::MAX_COOKIE_LEN]);
+        req.placeholder_count = 8;
+        match build_client_request(&req, &c2s) {
+            Err(NtpError::PacketTooLarge { actual }) => {
+                assert!(
+                    actual > MAX_CLIENT_PACKET_BYTES,
+                    "reported size {actual} must exceed the cap",
+                );
+            }
+            other => panic!("expected PacketTooLarge, got {other:?}"),
+        }
+    }
+
+    /// A `placeholder_count` large enough to overflow the projection must
+    /// still be refused. The failure mode this guards is subtle: the
+    /// projection is a sum, so a term that wraps produces a *small*
+    /// total that slips under [`MAX_CLIENT_PACKET_BYTES`] and passes the
+    /// check. Saturating arithmetic pins the total at [`usize::MAX`]
+    /// instead, so the request is refused. Release builds wrap silently,
+    /// which is exactly where the guard would matter.
+    #[test]
+    fn build_request_rejects_overflowing_placeholder_count() {
+        let (c2s, _) = fresh_keys();
+        let mut req = sample_request();
+        req.placeholder_count = usize::MAX;
+        match build_client_request(&req, &c2s) {
+            Err(NtpError::PacketTooLarge { actual }) => {
+                assert!(
+                    actual > MAX_CLIENT_PACKET_BYTES,
+                    "overflowed projection must saturate above the cap, got {actual}",
+                );
+            }
+            other => panic!("expected PacketTooLarge, got {other:?}"),
+        }
+    }
+
+    /// The projection helpers saturate rather than wrap, so a body length
+    /// near [`usize::MAX`] cannot produce a small total. Unreachable from
+    /// a real `Vec` — the allocation would fail first — but the helper is
+    /// `pub`, and the guard depends on it failing safe.
+    #[test]
+    fn extension_total_len_saturates_instead_of_wrapping() {
+        assert_eq!(extension_total_len(usize::MAX), usize::MAX);
+    }
+
+    /// Pins the headroom relationship the two caps are chosen for: a
+    /// cookie at [`crate::nts::cookies::MAX_COOKIE_LEN`] with the
+    /// production `PLACEHOLDERS_PER_QUERY` of 1 must fit inside
+    /// [`MAX_CLIENT_PACKET_BYTES`]. Raising the cookie cap without
+    /// raising the packet cap would make every production request fail
+    /// the packet guard; this test fails first if that happens.
+    #[test]
+    fn worst_case_production_request_fits_packet_cap() {
+        let (c2s, _) = fresh_keys();
+        let mut req = sample_request();
+        req.cookie = Zeroizing::new(vec![0xAB; crate::nts::cookies::MAX_COOKIE_LEN]);
+        req.placeholder_count = 1;
+        let packet = build_client_request(&req, &c2s)
+            .expect("max-size cookie with one placeholder must fit the packet cap");
+        assert!(
+            packet.len() <= MAX_CLIENT_PACKET_BYTES,
+            "worst-case production request is {} bytes, over the {MAX_CLIENT_PACKET_BYTES} cap",
+            packet.len(),
+        );
+    }
 }
 
 mod parse_response {
@@ -212,6 +338,39 @@ mod parse_response {
         assert_eq!(*parsed.fresh_cookies[2], cookies[2]);
         assert_eq!(parsed.header.mode(), mode::SERVER);
         assert_eq!(parsed.header.origin_timestamp, CLIENT_TX);
+    }
+
+    /// An oversized cookie in an AEAD-authenticated response is filtered
+    /// out, not treated as a packet-level failure: the sample is sound
+    /// and discarding it would trade a real synchronisation for a cookie
+    /// the client is free to ignore. Conforming cookies in the same
+    /// packet still land, and the drop is reported in
+    /// `oversized_cookies_dropped` so the jar starving is observable
+    /// rather than silent (bd nts-r11f.4).
+    #[test]
+    fn parse_response_filters_oversized_cookies_and_keeps_sample() {
+        let (_, s2c) = fresh_keys();
+        let over = vec![0xDD; crate::nts::cookies::MAX_COOKIE_LEN + 1];
+        let at_cap = vec![0xEE; crate::nts::cookies::MAX_COOKIE_LEN];
+        let cookies: &[&[u8]] = &[&[0xAA; 64], &over, &at_cap];
+        let packet = craft_response(&UID, cookies, &s2c);
+        let parsed = parse_server_response(&packet, &UID, CLIENT_TX, &s2c)
+            .expect("oversized cookie must not fail the packet");
+        assert_eq!(parsed.oversized_cookies_dropped, 1);
+        assert_eq!(parsed.fresh_cookies.len(), 2);
+        assert_eq!(*parsed.fresh_cookies[0], cookies[0]);
+        assert_eq!(*parsed.fresh_cookies[1], at_cap);
+        assert_eq!(parsed.header.origin_timestamp, CLIENT_TX);
+    }
+
+    /// A response carrying only conforming cookies must report a zero
+    /// drop count, so the counter is a usable signal rather than noise.
+    #[test]
+    fn parse_response_reports_zero_drops_for_conforming_cookies() {
+        let (_, s2c) = fresh_keys();
+        let packet = craft_response(&UID, &[&[0xAB; 64]], &s2c);
+        let parsed = parse_server_response(&packet, &UID, CLIENT_TX, &s2c).unwrap();
+        assert_eq!(parsed.oversized_cookies_dropped, 0);
     }
 
     /// Compile-time pin that `ServerResponse::fresh_cookies` carries
