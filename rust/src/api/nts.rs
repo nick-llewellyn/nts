@@ -1852,11 +1852,11 @@ impl NtsClient {
     /// and for apps that want to release cached key material at a
     /// specific point rather than waiting for the table's own bounds.
     ///
-    /// The table is already bounded — at most [`SESSION_TABLE_CAP`]
-    /// entries, least-recently-used evicted, each dropped once idle
-    /// for [`SESSION_TABLE_IDLE_TTL`] — so `clear` is an eager
-    /// control, not the only thing standing between a long-lived
-    /// process and unbounded retention.
+    /// The table is already bounded — at most 64 sessions,
+    /// least-recently-used evicted, each dropped once idle for 24
+    /// hours — so `clear` is an eager control, not the only thing
+    /// standing between a long-lived process and unbounded retention
+    /// of cached keys and cookies.
     ///
     /// Marked `#[flutter_rust_bridge::frb(sync)]` for the same
     /// reason as `invalidate`: one mutex acquisition and one
