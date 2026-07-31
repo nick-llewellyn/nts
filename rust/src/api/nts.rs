@@ -1599,6 +1599,12 @@ const SESSION_TABLE_IDLE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// the bookkeeping a `VecDeque` shadow order would add to every cache
 /// hit — and it cannot desynchronise from the map.
 ///
+/// This full sweep is install-only for that reason. The TTL is also
+/// enforced per-key on the cache-hit path in `checkout_with`, which
+/// costs one comparison against the entry already looked up: without
+/// it a table that went quiet past the TTL would serve the stale
+/// session and refresh its `atime`, so the entry would never age out.
+///
 /// Uses `saturating_duration_since` so an `atime` somehow later than
 /// `now` yields [`Duration::ZERO`] (treated as fresh) rather than
 /// panicking. Callers sample `now` under the same `map` lock that
@@ -2319,6 +2325,23 @@ impl SessionTable {
             // unrelated cache hits behind itself.
             {
                 let mut g = lock_recover(&self.map);
+                // Enforce the idle TTL before serving. `prune_sessions`
+                // runs only on installs, so without this check a table
+                // that went quiet past the TTL would serve the stale
+                // session on the next draw and refresh its `atime` —
+                // the entry would never age out and the
+                // secret-retention bound would not hold for the
+                // query-after-long-idle shape the TTL exists for.
+                // Scoped to the looked-up key so the hot path stays
+                // O(1); the full sweep still happens on install.
+                // Removing under the `map` lock alone is the same
+                // discipline `invalidate` and `evict_session` use, and
+                // falling through re-handshakes.
+                if g.get(&key).is_some_and(|s| {
+                    BootInstant::now().saturating_duration_since(s.atime) >= SESSION_TABLE_IDLE_TTL
+                }) {
+                    g.remove(&key);
+                }
                 if let Some(s) = g.get_mut(&key) {
                     if s.cookies_remaining() > 0 {
                         // `cookies_remaining > 0` implies `take` returns

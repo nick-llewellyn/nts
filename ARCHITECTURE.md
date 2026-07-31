@@ -575,7 +575,7 @@ itself is `pub(crate)` and FRB-ignored — Dart only ever sees
 ### Bounded retention
 
 Every `SessionTable` — the process-wide default included — is
-bounded on two axes, enforced by `prune_sessions` on each install:
+bounded on two axes:
 
 - **Capacity.** At most `SESSION_TABLE_CAP` (64) entries. Installing
   into a full table evicts the least-recently-used entry, ranked by
@@ -585,6 +585,15 @@ bounded on two axes, enforced by `prune_sessions` on each install:
   `SESSION_TABLE_IDLE_TTL` (24 hours) is dropped. The stamp is a
   `BootInstant`, so idle time keeps accruing while the device is
   suspended rather than freezing for the duration of the sleep.
+
+`prune_sessions` applies both on each install — a full sweep, kept
+off the hot path because its LRU pass is a linear scan. The TTL is
+additionally checked per-key on the cache-hit path, at the cost of
+one comparison against the entry already looked up. Without that
+second check the TTL would not bind the case it exists for: a
+process that goes quiet past the TTL and then queries the same host
+performs no install, so it would draw from the stale session and
+refresh its `atime`, and the entry would never age out.
 
 Eviction drops the `Session`, which releases its AEAD keys
 (`ZeroizeOnDrop`) and its cookie jar — so this is a

@@ -1960,6 +1960,7 @@ fn nts_query_live_ipv6_ptb() {
 // a cloned `NtsError`. See `nts-o8u` for the full design.
 // ------------------------------------------------------------------
 
+use crate::nts::boottime::boottime_micros;
 use std::sync::atomic::AtomicUsize;
 use std::thread;
 
@@ -4338,7 +4339,10 @@ fn checkout_cache_hit_refreshes_the_lru_stamp() {
     };
     let key = session_key(&spec);
     let mut session = make_test_session_with_cookies("atime-refresh.invalid", 123, 1, 2);
-    let stale = BootInstant::from_micros(1);
+    // Old enough to be the LRU victim, but inside the idle TTL: the
+    // cache-hit path evicts anything past the TTL rather than serving
+    // it, so a stamp older than that would test the wrong branch.
+    let stale = BootInstant::from_micros(boottime_micros().saturating_sub(60_000_000));
     session.atime = stale;
     table.install(&spec, session);
 
@@ -4356,5 +4360,51 @@ fn checkout_cache_hit_refreshes_the_lru_stamp() {
     assert!(
         s.atime > stale,
         "a successful cookie draw must refresh the LRU stamp",
+    );
+}
+
+/// A session idle past `SESSION_TABLE_IDLE_TTL` is dropped on the
+/// cache-hit path rather than served. `prune_sessions` runs only on
+/// installs, so without this the query-after-long-idle shape would
+/// draw from the stale session and refresh its `atime`, and the entry
+/// would never age out — the TTL's secret-retention bound would not
+/// hold for exactly the case it exists to cover.
+#[test]
+fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
+    let table = SessionTable::new();
+    let spec = NtsServerSpec {
+        host: "ttl-expired.invalid".into(),
+        port: 4460,
+    };
+    let key = session_key(&spec);
+    let mut session = make_test_session_with_cookies("ttl-expired.invalid", 123, 1, 2);
+    let ttl_micros = i64::try_from(SESSION_TABLE_IDLE_TTL.as_micros()).expect("TTL fits in i64");
+    session.atime = BootInstant::from_micros(boottime_micros().saturating_sub(ttl_micros));
+    table.install(&spec, session);
+
+    let handshake_ran = Arc::new(AtomicUsize::new(0));
+    let do_handshake = {
+        let handshake_ran = handshake_ran.clone();
+        move |_: &NtsServerSpec, _: Duration, _: usize, _: Option<&PhaseReporter>| {
+            handshake_ran.fetch_add(1, Ordering::SeqCst);
+            Err(NtsError::Internal("stub".into()))
+        }
+    };
+    let _ = table.checkout_with(
+        &spec,
+        Duration::from_millis(1),
+        DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
+        &do_handshake,
+    );
+
+    assert_eq!(
+        handshake_ran.load(Ordering::SeqCst),
+        1,
+        "an expired session must fall through to a fresh handshake",
+    );
+    let g = table.map.lock().expect("test session table poisoned");
+    assert!(
+        !g.contains_key(&key),
+        "the expired entry must be dropped, releasing its keys and jar",
     );
 }

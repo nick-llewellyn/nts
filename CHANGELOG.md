@@ -49,16 +49,22 @@
   accumulated key material without limit and had only manual `clear()`
   as a remedy.
 
-  Two bounds now apply, both enforced whenever a session is installed.
-  A hard ceiling of 64 entries evicts the least-recently-used session
-  to make room, ranked by a per-session stamp that each successful
-  cookie draw refreshes so an actively-used session is never the
-  victim. Independently, any session idle for 24 hours is dropped.
-  That stamp is a `BootInstant` rather than an `Instant`, so idle time
-  keeps accruing across device suspend — under `Instant` a table
-  populated before a long sleep would hold its keys for the sleep
-  duration on top of the TTL, which is exactly the backgrounded-app
-  case the TTL exists to cover.
+  Two bounds now apply. A hard ceiling of 64 entries evicts the
+  least-recently-used session to make room, ranked by a per-session
+  stamp that each successful cookie draw refreshes so an actively-used
+  session is never the victim. Independently, any session idle for 24
+  hours is dropped. That stamp is a `BootInstant` rather than an
+  `Instant`, so idle time keeps accruing across device suspend — under
+  `Instant` a table populated before a long sleep would hold its keys
+  for the sleep duration on top of the TTL, which is exactly the
+  backgrounded-app case the TTL exists to cover.
+
+  Both bounds are swept whenever a session is installed, and the TTL
+  is additionally checked when a cached session is drawn from. The
+  second check is what makes the TTL bind for a process that goes
+  quiet and then queries the same host again: that path installs
+  nothing, so without it the stale session would be served and its
+  stamp refreshed, and the entry would never age out.
 
   Eviction drops the `Session`, releasing its `ZeroizeOnDrop` AEAD
   keys and its cookie jar, so the bound is on secret retention and not
