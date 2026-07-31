@@ -54,11 +54,12 @@
   per-session stamp that each successful cookie draw refreshes so an
   actively-used session is never the victim; re-handshaking a host
   already cached replaces it in place and evicts nothing.
-  Independently, any session idle for 24 hours is dropped. That stamp is a `BootInstant` rather than an
-  `Instant`, so idle time keeps accruing across device suspend — under
-  `Instant` a table populated before a long sleep would hold its keys
-  for the sleep duration on top of the TTL, which is exactly the
-  backgrounded-app case the TTL exists to cover.
+  Independently, any session idle for 24 hours is dropped. That stamp
+  is a `BootInstant` rather than an `Instant`, so idle time keeps
+  accruing across device suspend — under `Instant` a table populated
+  before a long sleep would hold its keys for the sleep duration on
+  top of the TTL, which is exactly the backgrounded-app case the TTL
+  exists to cover.
 
   Both bounds are swept whenever a session is installed, and the TTL
   is additionally checked when a cached session is drawn from. The

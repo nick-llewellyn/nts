@@ -2339,8 +2339,9 @@ impl SessionTable {
                 // Scoped to the looked-up key so the hot path stays
                 // O(1); the full sweep still happens on install.
                 // Removing under the `map` lock alone is the same
-                // discipline `invalidate` and `evict_session` use, and
-                // falling through re-handshakes.
+                // discipline `invalidate` and `evict_session` use.
+                // With the entry gone, the cache lookup below misses
+                // and the caller falls through to a re-handshake.
                 if g.get(&key).is_some_and(|s| {
                     BootInstant::now().saturating_duration_since(s.atime) >= SESSION_TABLE_IDLE_TTL
                 }) {
