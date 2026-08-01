@@ -93,11 +93,10 @@
   offset onto any epoch, so a reader interpreting it as a timestamp
   lands in the 1900s. That is deliberate: it is a uniqueness and echo
   token rather than a time, and an implausible year keeps it from being
-  read as a genuine clock value in a packet capture. The
-  offset and peer-delay figures computed from such an exchange remain
-  meaningless, exactly as they were when the value was zero — the
-  emitted sample time comes from the server's T3, and round-trip time
-  is measured locally.
+  read as a genuine clock value in a packet capture. The offset and
+  peer-delay figures computed from such an exchange remain meaningless,
+  exactly as they were when the value was zero — the emitted sample time
+  comes from the server's T3, and round-trip time is measured locally.
 
 - DNS worker-thread spawn failure is no longer misreported as a network
   error. When the bounded resolver pool granted a slot but the OS then
