@@ -316,10 +316,14 @@ class NtsClient {
   /// than an [NtsError] — the failure is in the handle, not in the
   /// protocol, so it is a usage bug and not a condition to branch on.
   ///
-  /// Safe to call with a [query] / [warmCookies] / [getTime] still in
-  /// flight. Each in-flight call took its own reference to the native
-  /// object before dispatching, so it runs to completion against the
-  /// state it started with; only calls made *after* [dispose] are
-  /// refused.
+  /// Safe to call with a [query] / [warmCookies] / [getTime] already
+  /// executing on the native side: such a call took its own reference
+  /// to the native object when its arguments were encoded, so it runs
+  /// to completion against the state it started with. A call still
+  /// *queued* at the bridge admission gate has not encoded its
+  /// arguments yet, so it is refused once admitted, exactly as a call
+  /// made after [dispose] is. [getTime] runs a warm plus a burst of
+  /// queries, so a [dispose] mid-sequence can refuse a later leg after
+  /// earlier ones completed.
   void dispose() => _inner.dispose();
 }

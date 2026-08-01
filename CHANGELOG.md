@@ -190,11 +190,14 @@
 
   Distinct from `clear()`, which empties the session table and leaves
   the client usable; `dispose()` ends the client. Idempotent, and safe
-  to call with a `query` / `warmCookies` / `getTime` still in flight:
-  each in-flight call already holds its own reference to the native
-  object and runs to completion. A method called *after* `dispose()`
-  throws an FRB `FrbException` rather than an `NtsError`, since the
-  failure is in the handle rather than in the protocol. (NTS-114)
+  to call with a `query` / `warmCookies` / `getTime` already executing
+  on the native side: such a call took its own reference to the native
+  object when its arguments were encoded, and runs to completion. A
+  call still queued at the bridge admission gate has not encoded its
+  arguments yet, so it is refused once admitted, as is any method
+  called *after* `dispose()`; the refusal is an FRB `FrbException`
+  rather than an `NtsError`, since the failure is in the handle rather
+  than in the protocol. (NTS-114)
 
 - `TimeoutPhase.dnsSpawnFailed` distinguishes "the OS refused to create
   a DNS worker thread" from the pool-cap refusal already reported as
