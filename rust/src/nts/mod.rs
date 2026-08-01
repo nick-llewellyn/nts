@@ -7,7 +7,7 @@
 // - `ke`      — synchronous NTS-KE handshake driver (rustls + std::net).
 // - `aead`    — AES-SIV-CMAC-256 wrapper (RFC 5297, RFC 8915 §5.6).
 // - `ntp`     — NTPv4 packet codec with NTS extension fields (RFC 8915 §5).
-// - `cookies` — per-host LRU cookie store fed by KE responses and NTP replies.
+// - `cookies` — per-session FIFO cookie store fed by KE responses and NTP replies.
 //
 // Phase 1 landed `records` + `ke`.
 // Phase 2 added `aead` + `ntp` + `cookies` alongside.

@@ -1139,6 +1139,13 @@ struct Session {
     /// NTPv4 host the KE response pointed at (often the same as the KE host).
     ntpv4_host: String,
     ntpv4_port: u16,
+    /// Cookie pool for this session's server. A single unkeyed queue
+    /// rather than a host-keyed map: a `Session` is 1:1 with a
+    /// negotiated `host:port`, so the key was redundant with
+    /// `ntpv4_host` and its only effect was to admit a mismatch —
+    /// depositing under the KE host and drawing under the NTPv4 host
+    /// (which diverge on a Server-record redirect) would strand the
+    /// cookies silently (bd nts-r11f.9).
     jar: CookieJar,
     /// Trust-anchor backend the original KE handshake authenticated
     /// against. Cached on the `Session` so steady-state cached-session
@@ -1173,7 +1180,7 @@ struct Session {
 
 impl Session {
     fn cookies_remaining(&self) -> usize {
-        self.jar.count(&self.ntpv4_host)
+        self.jar.count()
     }
 }
 
@@ -2113,7 +2120,7 @@ fn establish_session(
             trust_backend: Some(trust_backend),
         });
     }
-    jar.put_many(&outcome.ntpv4_host, outcome.cookies);
+    jar.put_many(outcome.cookies);
     // Flatten the typed `WarningCode`s to their raw `u16` wire values
     // once, here, rather than at each per-query read: the KE layer
     // keeps the typed representation so a future IANA assignment can
@@ -2350,15 +2357,15 @@ impl SessionTable {
                 if let Some(s) = g.get_mut(&key) {
                     if s.cookies_remaining() > 0 {
                         // `cookies_remaining > 0` implies `take` returns
-                        // `Some` (both read the same per-host queue
-                        // under the same `map` lock), so this should
-                        // not surface in practice. Defend against the
-                        // invariant being silently violated by a
-                        // future `CookieJar` refactor: return
-                        // `NoCookies` rather than panicking with
-                        // `expect`. The pre-singleflight code surfaced
-                        // the same shape on this path.
-                        match s.jar.take(&s.ntpv4_host) {
+                        // `Some` (both read the same queue under the
+                        // same `map` lock), so this should not surface
+                        // in practice. Defend against the invariant
+                        // being silently violated by a future
+                        // `CookieJar` refactor: return `NoCookies`
+                        // rather than panicking with `expect`. The
+                        // pre-singleflight code surfaced the same
+                        // shape on this path.
+                        match s.jar.take() {
                             Some(cookie) => {
                                 // Successful draw: refresh the LRU
                                 // stamp so an actively-used session is
@@ -2508,7 +2515,7 @@ impl SessionTable {
                                 g.insert(key.clone(), session);
                                 let s = g.get_mut(&key).expect("just inserted under this key");
                                 s.jar
-                                    .take(&s.ntpv4_host)
+                                    .take()
                                     .map(|cookie| (build_query_context(s, cookie), ()))
                             };
                             match cookie_opt {
@@ -2872,8 +2879,7 @@ impl SessionTable {
                 // are bound to keys we no longer hold. Discard.
                 return;
             }
-            let host = session.ntpv4_host.clone();
-            session.jar.put_many(&host, cookies);
+            session.jar.put_many(cookies);
         }
     }
 

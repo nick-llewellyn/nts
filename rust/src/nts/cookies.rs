@@ -1,17 +1,22 @@
-//! Per-host NTS cookie store (RFC 8915 §6).
+//! Single-server NTS cookie store (RFC 8915 §6).
 //!
-//! Holds a bounded FIFO queue per NTS-KE host. Each `nts_query` spends one
-//! cookie via [`CookieJar::take`] and ingests fresh cookies from the response
-//! via [`CookieJar::put_many`]. RFC 8915 §6 mandates that cookies be used at
+//! Holds one bounded FIFO queue. Each `nts_query` spends one cookie via
+//! [`CookieJar::take`] and ingests fresh cookies from the response via
+//! [`CookieJar::put_many`]. RFC 8915 §6 mandates that cookies be used at
 //! most once and that clients keep "no more than 8 unused cookies" per server
 //! to bound exposure if the host's KE state is later compromised.
+//!
+//! The jar holds cookies for exactly one server because its sole owner —
+//! `crate::api::nts::Session` — is itself 1:1 with a negotiated
+//! `host:port`. See [`CookieJar`] for why that is expressed structurally
+//! rather than by keying on a host.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 
 use zeroize::Zeroizing;
 
-/// Default per-host capacity. RFC 8915 §6 advises clients keep at most 8
+/// Default jar capacity. RFC 8915 §6 advises clients keep at most 8
 /// unused cookies per server to bound exposure if KE state is later
 /// compromised; this matches the cap several public deployments (e.g.
 /// Cloudflare) deliver in the initial KE response. The count returned by any
@@ -41,12 +46,22 @@ pub const DEFAULT_CAPACITY: usize = 8;
 /// [`super::ntp::MAX_CLIENT_PACKET_BYTES`].
 pub const MAX_COOKIE_LEN: usize = 512;
 
-/// FIFO cookie store keyed by NTS-KE host.
+/// FIFO cookie store for a single NTS server.
 ///
 /// Eviction is FIFO: when the queue is at capacity, the oldest cookie is
 /// dropped to make room for the newest. `take` also pops from the front so
 /// the oldest cookie in the pool is spent first; combined this means a cookie
 /// is either spent or evicted (never reused), satisfying RFC 8915 §6.
+///
+/// The jar holds one queue rather than a host-keyed map because its only
+/// owner, `crate::api::nts::Session`, is 1:1 with a negotiated
+/// `host:port` and knows that host itself. A host-keyed jar made the
+/// binding a runtime agreement between caller and store: a caller that
+/// deposited under the KE host and drew under the NTPv4 host — which
+/// diverge whenever the KE response carries a Server record (RFC 8915
+/// §4.1.7) — would strand the deposited cookies behind a second key and
+/// see a phantom empty jar, with no type error and no panic. Dropping
+/// the key makes that mismatch unrepresentable (bd nts-r11f.9).
 ///
 /// Cookies are NTS authentication material (RFC 8915 §6): a recovered
 /// cookie lets an attacker impersonate the original client to the NTS
@@ -54,10 +69,10 @@ pub const MAX_COOKIE_LEN: usize = 512;
 /// jar therefore treats cookie bytes the way [`crate::nts::aead`]
 /// treats AEAD key material: each stored cookie is held in
 /// [`Zeroizing<Vec<u8>>`], so the natural drop chain
-/// ([`Self::put`] overflow eviction, [`Self::clear_host`] drain,
+/// ([`Self::put`] overflow eviction, [`Self::clear`] drain,
 /// [`CookieJar`] going out of scope) wipes the bytes from RAM before
 /// the backing allocation is returned to the allocator. The
-/// [`fmt::Debug`] implementation renders only per-host counts so
+/// [`fmt::Debug`] implementation renders only the cookie count so
 /// accidental `{:?}` formatting in logs, panic messages, or
 /// diagnostic output cannot leak bytes. [`Self::take`] returns the
 /// popped cookie still wrapped in [`Zeroizing`] so the bytes are
@@ -74,11 +89,11 @@ pub const MAX_COOKIE_LEN: usize = 512;
 /// `Vec<u8>` allocations (bd nts-8ey).
 ///
 /// CONCURRENCY: this type auto-derives `Send + Sync` (its fields —
-/// `usize`, `HashMap`, `VecDeque`, `Zeroizing<Vec<u8>>` — are all
+/// `usize`, `VecDeque`, `Zeroizing<Vec<u8>>` — are all
 /// `Send + Sync`), so the marker traits alone do *not* warn callers
 /// off concurrent use. The real constraint is that it carries **no
 /// interior mutability**: every mutator ([`Self::put`],
-/// [`Self::put_many`], [`Self::take`], [`Self::clear_host`]) takes
+/// [`Self::put_many`], [`Self::take`], [`Self::clear`]) takes
 /// `&mut self`, so two threads cannot mutate the same jar without
 /// external synchronisation. A future caller that reaches for
 /// `CookieJar` directly outside [`crate::api::nts`] must wrap it in a
@@ -86,46 +101,20 @@ pub const MAX_COOKIE_LEN: usize = 512;
 /// [`crate::api::nts`]'s `SessionTable` already does this by owning
 /// every jar inside its `Mutex<HashMap<String, Session>>` and only
 /// touching it under that lock.
-#[derive(Clone)]
+///
+/// Deliberately **not** `Clone`. A clone would deep-copy every cookie
+/// into a second set of heap allocations with an independent drop
+/// point, so the wipe-on-drop guarantee above would hold for each copy
+/// separately rather than for the material as a whole — widening the
+/// window in which the bytes are resident. Nothing needs it: the jar
+/// is owned by exactly one `Session` and reached only through `&mut`.
 pub struct CookieJar {
     capacity: usize,
-    inner: HashMap<String, VecDeque<Zeroizing<Vec<u8>>>>,
-}
-
-/// Inner-map renderer for [`CookieJar`]'s redacted `Debug`.
-/// Walks `self.0` once via `f.debug_map()` so the per-`{:?}` cost
-/// is a single `Formatter` interaction rather than the
-/// intermediate `HashMap<&str, usize>::collect()` the earlier
-/// implementation paid. Hosts are sorted before emission so the
-/// rendered output is deterministic across `HashMap` reseeds
-/// (the `std::collections::HashMap` iteration order is otherwise
-/// implementation-defined and varies run-to-run), which keeps
-/// snapshot-style regression tests against the rendered form
-/// stable. The wrapper is private to this module — it exists
-/// only as a `&dyn fmt::Debug` target for `debug_struct().field`.
-struct DebugCookieCounts<'a>(&'a HashMap<String, VecDeque<Zeroizing<Vec<u8>>>>);
-
-impl fmt::Debug for DebugCookieCounts<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut hosts: Vec<&str> = self.0.keys().map(String::as_str).collect();
-        hosts.sort_unstable();
-        let mut m = f.debug_map();
-        for host in hosts {
-            // `expect` is sound: `host` came from `self.0.keys()`
-            // immediately above and `self.0` is borrowed
-            // immutably for the duration of this `fmt` call.
-            let queue = self
-                .0
-                .get(host)
-                .expect("host was just enumerated from self.0.keys()");
-            m.entry(&host, &queue.len());
-        }
-        m.finish()
-    }
+    inner: VecDeque<Zeroizing<Vec<u8>>>,
 }
 
 impl fmt::Debug for CookieJar {
-    /// Render counts only; cookies are NTS authentication material
+    /// Render the count only; cookies are NTS authentication material
     /// (RFC 8915 §6) and must not leak via accidental `{:?}` in logs,
     /// panic messages, or diagnostic output. Mirrors the redacted
     /// `Debug` on [`crate::nts::ke::KeOutcome`] so the same hygiene
@@ -133,7 +122,7 @@ impl fmt::Debug for CookieJar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CookieJar")
             .field("capacity", &self.capacity)
-            .field("counts", &DebugCookieCounts(&self.inner))
+            .field("count", &self.inner.len())
             .finish()
     }
 }
@@ -145,19 +134,19 @@ impl Default for CookieJar {
 }
 
 impl CookieJar {
-    /// Construct an empty jar with the default per-host cap.
+    /// Construct an empty jar with the default cap.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Construct an empty jar with `capacity` cookies per host. Panics if zero.
+    /// Construct an empty jar holding at most `capacity` cookies. Panics if zero.
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity > 0, "CookieJar capacity must be > 0");
         Self {
             capacity,
-            inner: HashMap::new(),
+            inner: VecDeque::new(),
         }
     }
 
@@ -174,35 +163,34 @@ impl CookieJar {
     /// [`crate::nts::ke::KeOutcome::cookies`] (bd nts-8ey). Either
     /// way the stored value is `Zeroizing<Vec<u8>>`, so the natural
     /// drop chain wipes the bytes on every eviction path — overflow
-    /// pop here, [`Self::clear_host`] drain, [`CookieJar`] going out
+    /// pop here, [`Self::clear`] drain, [`CookieJar`] going out
     /// of scope — without any further manual `zeroize()` calls.
-    pub fn put<T>(&mut self, host: &str, cookie: T)
+    pub fn put<T>(&mut self, cookie: T)
     where
         T: Into<Zeroizing<Vec<u8>>>,
     {
-        let queue = self.inner.entry(host.to_owned()).or_default();
-        queue.push_back(cookie.into());
-        while queue.len() > self.capacity {
+        self.inner.push_back(cookie.into());
+        while self.inner.len() > self.capacity {
             // The popped `Zeroizing<Vec<u8>>` wipes its bytes when
             // it drops at the end of this iteration; no explicit
             // `zeroize()` call is needed.
-            let _ = queue.pop_front();
+            let _ = self.inner.pop_front();
         }
     }
 
     /// Insert several cookies in order. Honors `capacity` — when overflow
     /// occurs only the most-recent `capacity` survive.
-    pub fn put_many<I, T>(&mut self, host: &str, cookies: I)
+    pub fn put_many<I, T>(&mut self, cookies: I)
     where
         I: IntoIterator<Item = T>,
         T: Into<Zeroizing<Vec<u8>>>,
     {
         for c in cookies {
-            self.put(host, c);
+            self.put(c);
         }
     }
 
-    /// Pop and return the oldest unused cookie for `host`, if any.
+    /// Pop and return the oldest unused cookie, if any.
     ///
     /// The cookie stays inside its [`Zeroizing`] wrapper across the
     /// hand-off so the bytes are wiped from RAM when the consumer
@@ -211,44 +199,30 @@ impl CookieJar {
     /// outcome → jar → caller — closes every freed-allocation surface
     /// where a spent cookie could otherwise linger between the wire
     /// and the [`Drop`] of the consumer's local.
-    pub fn take(&mut self, host: &str) -> Option<Zeroizing<Vec<u8>>> {
-        self.inner.get_mut(host).and_then(VecDeque::pop_front)
+    pub fn take(&mut self) -> Option<Zeroizing<Vec<u8>>> {
+        self.inner.pop_front()
     }
 
-    /// Number of cookies currently stored for `host`.
-    pub fn count(&self, host: &str) -> usize {
-        self.inner.get(host).map_or(0, VecDeque::len)
+    /// Number of cookies currently stored.
+    pub fn count(&self) -> usize {
+        self.inner.len()
     }
 
-    /// Total cookie count across every host.
-    pub fn total(&self) -> usize {
-        self.inner.values().map(VecDeque::len).sum()
-    }
-
-    /// Drop every cookie for `host`. Useful when a query returns an
+    /// Drop every cookie. Useful when a query returns an
     /// authentication failure and the entire pool must be invalidated.
     ///
     /// The drained `Zeroizing<Vec<u8>>` values wipe their bytes on
     /// drop, so an authentication-failure-driven pool invalidation
     /// does not leave the rejected cookies recoverable in freed
     /// allocations.
-    pub fn clear_host(&mut self, host: &str) {
-        if let Some(queue) = self.inner.get_mut(host) {
-            queue.clear();
-        }
-    }
-
-    pub fn hosts(&self) -> impl Iterator<Item = &str> {
-        self.inner.keys().map(String::as_str)
+    pub fn clear(&mut self) {
+        self.inner.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const HOST_A: &str = "time.cloudflare.com";
-    const HOST_B: &str = "nts.netnod.se";
 
     /// Pins the headroom relationship between the two caps added for bd
     /// nts-r11f.4. [`crate::nts::ntp::build_client_request`] emits the
@@ -272,72 +246,57 @@ mod tests {
     fn defaults_to_capacity_eight() {
         let jar = CookieJar::new();
         assert_eq!(jar.capacity(), DEFAULT_CAPACITY);
-        assert_eq!(jar.total(), 0);
+        assert_eq!(jar.count(), 0);
     }
 
     #[test]
     fn put_and_take_is_fifo() {
         let mut jar = CookieJar::with_capacity(4);
         for i in 0..3u8 {
-            jar.put(HOST_A, vec![i]);
+            jar.put(vec![i]);
         }
-        assert_eq!(jar.count(HOST_A), 3);
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![0])));
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![1])));
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![2])));
-        assert_eq!(jar.take(HOST_A), None);
+        assert_eq!(jar.count(), 3);
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![0])));
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![1])));
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![2])));
+        assert_eq!(jar.take(), None);
     }
 
     #[test]
     fn capacity_evicts_oldest() {
         let mut jar = CookieJar::with_capacity(3);
         for i in 0..5u8 {
-            jar.put(HOST_A, vec![i]);
+            jar.put(vec![i]);
         }
-        assert_eq!(jar.count(HOST_A), 3);
+        assert_eq!(jar.count(), 3);
         // Cookies 0 and 1 evicted; 2, 3, 4 survive.
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![2])));
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![3])));
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![4])));
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![2])));
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![3])));
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![4])));
     }
 
     #[test]
     fn put_many_respects_capacity() {
         let mut jar = CookieJar::with_capacity(2);
-        jar.put_many(HOST_A, [vec![0u8], vec![1], vec![2], vec![3]]);
-        assert_eq!(jar.count(HOST_A), 2);
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![2])));
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![3])));
+        jar.put_many([vec![0u8], vec![1], vec![2], vec![3]]);
+        assert_eq!(jar.count(), 2);
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![2])));
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![3])));
     }
 
     #[test]
-    fn hosts_are_independent() {
-        let mut jar = CookieJar::with_capacity(2);
-        jar.put(HOST_A, vec![1]);
-        jar.put(HOST_B, vec![2]);
-        jar.put(HOST_B, vec![3]);
-        assert_eq!(jar.count(HOST_A), 1);
-        assert_eq!(jar.count(HOST_B), 2);
-        assert_eq!(jar.total(), 3);
-        let mut listed: Vec<&str> = jar.hosts().collect();
-        listed.sort();
-        assert_eq!(listed, vec![HOST_B, HOST_A]);
-    }
-
-    #[test]
-    fn clear_host_drops_all_cookies_for_one_server() {
+    fn clear_drops_every_cookie() {
         let mut jar = CookieJar::new();
-        jar.put_many(HOST_A, [vec![1u8], vec![2], vec![3]]);
-        jar.put(HOST_B, vec![9]);
-        jar.clear_host(HOST_A);
-        assert_eq!(jar.count(HOST_A), 0);
-        assert_eq!(jar.count(HOST_B), 1);
+        jar.put_many([vec![1u8], vec![2], vec![3]]);
+        jar.clear();
+        assert_eq!(jar.count(), 0);
+        assert_eq!(jar.take(), None);
     }
 
     #[test]
-    fn take_on_empty_host_returns_none() {
+    fn take_on_empty_jar_returns_none() {
         let mut jar = CookieJar::new();
-        assert_eq!(jar.take("never.used.example"), None);
+        assert_eq!(jar.take(), None);
     }
 
     #[test]
@@ -348,36 +307,35 @@ mod tests {
 
     /// Pins the redacted `Debug` impl: cookies are NTS authentication
     /// material (RFC 8915 §6) and must not leak via any `{:?}`
-    /// formatting site. The hand-rolled `Debug` renders per-host
-    /// counts only.
+    /// formatting site. The hand-rolled `Debug` renders the capacity
+    /// and the cookie count only.
     ///
     /// The negative assertion checks that the rendered output does
     /// not contain the exact substring `Vec<u8>::Debug` would
     /// produce for the sentinel cookie (e.g. `[222, 173, 190,
     /// 239, ...]`). That is the load-bearing shape: a regression
     /// that reverted to `#[derive(Debug)]` would emit cookies
-    /// through the natural `Vec<Vec<u8>>` rendering, which is
+    /// through the natural `VecDeque<Vec<u8>>` rendering, which is
     /// exactly `Vec<u8>::Debug` for each inner vector. Asserting
     /// the *concatenated* decimal sequence (rather than scanning
     /// for each individual byte in isolation) keeps the check
-    /// robust against unrelated changes to `HOST_A` / `HOST_B` /
-    /// `capacity` that happen to contain one of the sentinel
-    /// byte values as a substring — the multi-byte sequence is
-    /// vanishingly unlikely to collide with any structural field
-    /// rendering.
+    /// robust against unrelated changes to `capacity` that happen
+    /// to contain one of the sentinel byte values as a substring —
+    /// the multi-byte sequence is vanishingly unlikely to collide
+    /// with any structural field rendering.
     #[test]
     fn debug_impl_renders_counts_only_and_does_not_leak_cookie_bytes() {
         let mut jar = CookieJar::with_capacity(4);
         let sentinel = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
-        jar.put(HOST_A, sentinel.clone());
-        jar.put(HOST_A, sentinel.clone());
-        jar.put(HOST_B, sentinel.clone());
+        jar.put(sentinel.clone());
+        jar.put(sentinel.clone());
+        jar.put(sentinel.clone());
 
         let rendered = format!("{jar:?}");
 
         // The redaction goal: a `Vec<u8>::Debug` rendering of the
         // sentinel (the exact shape `#[derive(Debug)]` over
-        // `Vec<Vec<u8>>` would emit) must not appear in the
+        // `VecDeque<Vec<u8>>` would emit) must not appear in the
         // rendered output.
         let leaked_form = format!("{sentinel:?}");
         assert!(
@@ -388,7 +346,7 @@ mod tests {
 
         // The render must still carry the structural information
         // callers actually want from a debug print: capacity and
-        // per-host counts.
+        // cookie count.
         assert!(
             rendered.contains("CookieJar"),
             "Debug output must identify the type (full output: {rendered})",
@@ -398,13 +356,8 @@ mod tests {
             "Debug output must carry the capacity (full output: {rendered})",
         );
         assert!(
-            rendered.contains(HOST_A) && rendered.contains(HOST_B),
-            "Debug output must list each host (full output: {rendered})",
-        );
-        // Counts: 2 for HOST_A, 1 for HOST_B.
-        assert!(
-            rendered.contains(": 2") && rendered.contains(": 1"),
-            "Debug output must surface per-host counts (full output: {rendered})",
+            rendered.contains("count: 3"),
+            "Debug output must surface the cookie count (full output: {rendered})",
         );
     }
 
@@ -422,8 +375,8 @@ mod tests {
     fn take_returns_zeroizing_wrapped_cookie() {
         fn assert_zeroizing_vec(_: &Zeroizing<Vec<u8>>) {}
         let mut jar = CookieJar::new();
-        jar.put(HOST_A, vec![0xAB; 64]);
-        let cookie = jar.take(HOST_A).expect("just-put cookie must pop");
+        jar.put(vec![0xAB; 64]);
+        let cookie = jar.take().expect("just-put cookie must pop");
         assert_zeroizing_vec(&cookie);
         // Sanity-check the inner bytes survive the wrapper (the
         // wipe happens only on drop, not on construction).
@@ -443,19 +396,16 @@ mod tests {
     fn put_accepts_zeroizing_wrapped_cookies() {
         let mut jar = CookieJar::with_capacity(4);
         // Single-cookie path: pre-wrapped Zeroizing payload.
-        jar.put(HOST_A, Zeroizing::new(vec![1u8, 2, 3]));
+        jar.put(Zeroizing::new(vec![1u8, 2, 3]));
         // Bulk path: an iterator of `Zeroizing<Vec<u8>>` — the exact
         // shape `outcome.cookies.into_iter()` produces in `nts.rs`.
-        jar.put_many(
-            HOST_A,
-            [
-                Zeroizing::new(vec![4u8, 5, 6]),
-                Zeroizing::new(vec![7u8, 8, 9]),
-            ],
-        );
-        assert_eq!(jar.count(HOST_A), 3);
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![1, 2, 3])));
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![4, 5, 6])));
-        assert_eq!(jar.take(HOST_A), Some(Zeroizing::new(vec![7, 8, 9])));
+        jar.put_many([
+            Zeroizing::new(vec![4u8, 5, 6]),
+            Zeroizing::new(vec![7u8, 8, 9]),
+        ]);
+        assert_eq!(jar.count(), 3);
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![1, 2, 3])));
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![4, 5, 6])));
+        assert_eq!(jar.take(), Some(Zeroizing::new(vec![7, 8, 9])));
     }
 }
