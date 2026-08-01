@@ -3646,15 +3646,53 @@ fn nts_warm_cookies_inner(
 
 /// Convert `std::time::SystemTime::now()` to an NTPv4 64-bit timestamp.
 ///
-/// This is used purely as the request's transmit timestamp. The server echoes
-/// it back as `origin_timestamp`; the round-trip is measured locally with
-/// `Instant`, so a clock that is wildly wrong here does not affect accuracy.
+/// This is used as the request's transmit timestamp (T1) and, on the
+/// return leg, as the destination timestamp (T4). The server echoes T1
+/// back as `origin_timestamp`; the round-trip is measured locally with
+/// `Instant`, so a clock that is wildly wrong here does not affect
+/// accuracy.
+///
+/// A clock reading before the Unix epoch (a device whose RTC reset to
+/// 1970-or-earlier) falls back to [`pre_epoch_fallback_ntp64`] rather
+/// than returning zero. Both call sites take the same branch on such a
+/// device, so T4 − T1 remains a real elapsed duration.
 fn system_time_to_ntp64() -> u64 {
     let now = std::time::SystemTime::now();
     match now.duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => unix_duration_to_ntp64(d),
-        Err(_) => 0,
+        Err(_) => pre_epoch_fallback_ntp64(),
     }
+}
+
+/// Non-zero stand-in timestamp for a system clock reading before the
+/// Unix epoch.
+///
+/// Packs the sleep-aware boot clock ([`crate::nts::boottime`]) into the
+/// NTP64 wire *format* — 32 bits of whole seconds, 32 bits of binary
+/// fraction — with elapsed-since-boot substituted for the usual
+/// seconds-since-1900. The result is therefore a well-formed NTP64
+/// field but not a timestamp relative to any epoch: it advances
+/// monotonically at microsecond resolution and is effectively unique
+/// per query, which is all this call site needs. A returned zero is
+/// impossible: the raw encoding is clamped up to 1, which matters on
+/// the `Instant`-anchored fallback path where the first reading of a
+/// process can be zero.
+///
+/// Leaving the seconds field small — so a reader interpreting it as
+/// an NTP timestamp lands in the 1900s — rather than shifting it into
+/// the Unix-epoch range is deliberate. It is not a time; it exists
+/// only as an origin-echo and uniqueness token, and an obviously
+/// implausible year keeps it from being mistaken for a real reading in
+/// a packet capture or a log. The offset computed in
+/// [`on_wire_statistics`] from such a T1/T4 pair is meaningless either
+/// way, exactly as it was when this returned zero; the emitted sample
+/// time comes from the server's T3.
+fn pre_epoch_fallback_ntp64() -> u64 {
+    let micros = crate::nts::boottime::boottime_micros().max(0) as u64;
+    let secs = micros / 1_000_000;
+    let frac = ((micros % 1_000_000) << 32) / 1_000_000;
+    let raw = ((secs & 0xFFFF_FFFF) << 32) | (frac & 0xFFFF_FFFF);
+    raw.max(1)
 }
 
 fn unix_duration_to_ntp64(d: Duration) -> u64 {

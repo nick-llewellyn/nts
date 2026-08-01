@@ -153,6 +153,39 @@ fn unix_duration_round_trips_to_ntp64() {
 }
 
 #[test]
+fn pre_epoch_fallback_is_non_zero_and_monotonic() {
+    let first = pre_epoch_fallback_ntp64();
+    assert_ne!(
+        first, 0,
+        "an all-zero transmit timestamp is the weak origin-echo token \
+         this fallback exists to avoid",
+    );
+    // Busy-wait past the microsecond quantum so the second reading is
+    // strictly later; the encoding preserves that ordering.
+    let start = std::time::Instant::now();
+    while start.elapsed() < Duration::from_millis(2) {
+        std::hint::spin_loop();
+    }
+    assert!(
+        pre_epoch_fallback_ntp64() > first,
+        "fallback must advance so successive queries do not collide",
+    );
+}
+
+#[test]
+fn pre_epoch_fallback_stays_below_the_unix_epoch() {
+    // The value is a uniqueness token, not a time. Leaving the seconds
+    // field small (well under 2_208_988_800, so it reads as the 1900s)
+    // means a packet capture cannot mistake it for a plausible reading.
+    let secs_ntp = pre_epoch_fallback_ntp64() >> 32;
+    assert!(
+        secs_ntp < NTP_TO_UNIX_EPOCH_SECS,
+        "fallback encoded {secs_ntp} NTP seconds, which reads as a \
+         post-1970 wall-clock time",
+    );
+}
+
+#[test]
 fn on_wire_statistics_computes_rfc5905_offset_and_peer_delay() {
     // T1 = 100 ms, T2 = 160 ms, T3 = 161 ms, T4 = 110 ms (all offsets
     // into the same Unix second): server clock 55 ms ahead, 10 ms

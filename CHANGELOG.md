@@ -77,6 +77,30 @@
 
 ### Fixed
 
+- A system clock reading before the Unix epoch no longer produces an
+  all-zero NTP transmit timestamp. On a device whose RTC has reset to
+  1970-or-earlier, `SystemTime::now().duration_since(UNIX_EPOCH)` fails
+  and the conversion returned `0`, so every query on that device sent
+  an identical T1. The server echoes T1 back as `origin_timestamp`, and
+  the client checks the echo — a constant makes that check pass for any
+  captured response, not just the one it was sent for, weakening it as
+  an anti-spoof signal precisely on the devices whose clocks are least
+  trustworthy.
+
+  The pre-epoch branch now derives a non-zero, microsecond-resolution
+  value from the sleep-aware boot clock, so successive queries differ.
+  The boot clock is packed into the NTP64 wire format rather than being
+  offset onto any epoch, so a reader interpreting it as a timestamp
+  lands in the 1900s. That is deliberate: it is a uniqueness and echo
+  token rather than a time, and an implausible year keeps it from being
+  read as a genuine clock value in a packet capture. The offset computed
+  from such an exchange remains meaningless, exactly as it was when the
+  value was zero: T1 and T4 sit in the 1900s while T2 and T3 carry real
+  server time. Peer-delay, by contrast, becomes sound — T1 and T4 come
+  from the same fallback source, so T4−T1 is a true elapsed duration
+  where previously it was zero. The emitted sample time still comes from
+  the server's T3, and round-trip time is still measured locally.
+
 - DNS worker-thread spawn failure is no longer misreported as a network
   error. When the bounded resolver pool granted a slot but the OS then
   refused to create the `nts-dns` worker thread, the `io::Error` from
