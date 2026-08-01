@@ -2145,11 +2145,7 @@ fn establish_session(
         // an operator can correlate the warning with the endpoint the
         // subsequent samples will name without the common non-redirect
         // case printing the same host twice.
-        let redirect_note = if outcome.ntpv4_host == spec.host {
-            String::new()
-        } else {
-            format!(" ntp_host={}", outcome.ntpv4_host)
-        };
+        let redirect_note = ke_warning_redirect_note(&spec.host, &outcome.ntpv4_host);
         log::warn!(
             target: "nts::ke",
             "NTS-KE server sent {} warning record(s): host={}{} codes={:?}",
@@ -2172,6 +2168,23 @@ fn establish_session(
         atime: BootInstant::now(),
     };
     Ok((session, outcome.phase_timings))
+}
+
+/// Suffix appended to the `nts::ke` warning log identifying the NTP
+/// endpoint when a Server record (RFC 8915 §4.1.7) redirected the
+/// query phase away from the KE host, and the empty string otherwise.
+///
+/// Extracted from the inline conditional in [`establish_session`]
+/// purely so the attribution is unit-testable without a log-capture
+/// harness: the regression this guards against is naming
+/// `ntpv4_host` under the `host=` key, which labels the warning with
+/// the redirect target — a machine that emitted nothing (52d9cb7).
+fn ke_warning_redirect_note(ke_host: &str, ntpv4_host: &str) -> String {
+    if ntpv4_host == ke_host {
+        String::new()
+    } else {
+        format!(" ntp_host={ntpv4_host}")
+    }
 }
 
 /// Snapshot of the data a single NTPv4 exchange needs once the lock is released.

@@ -339,6 +339,19 @@
   the only panic on the path. Internal only; no public API or
   observable behaviour changes. (NTS-132)
 
+- The host attribution in the NTS-KE warning log moved out of
+  `establish_session` into a small named helper. The warnings come
+  from the KE peer, but a KE response carrying a Server record
+  (RFC 8915 §4.1.7) redirects the NTP phase to a different machine
+  that emitted nothing — so labelling the warning with the redirect
+  target names the wrong host. That misattribution was previously
+  caught only by review; the helper makes it directly testable
+  without a log-capture harness. Record-level coverage was also added
+  for `validate_response`, pinning that Warning records reach the
+  caller in wire order and that the redirect host stays distinct from
+  the KE host. Internal only; the emitted log line, the public API,
+  and all observable behaviour are unchanged. (NTS-133)
+
 - **Breaking (error type):** the `trustMode` / `customRoots` pair
   validation now throws `NtsError.invalidSpec` instead of
   `ArgumentError`. Both violations — a non-null `customRoots` without
