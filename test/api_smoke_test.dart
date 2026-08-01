@@ -461,16 +461,22 @@ class _FakeFfiNtsClient implements ffi.NtsClient {
     verificationTimeMs: verificationTimeMs,
   );
 
-  // Mirrors FRB's `Droppable.dispose`, which guards on `isDisposed`
-  // and releases at most once. `disposeCalls` counts every call
-  // including the no-ops, so a test can tell "the wrapper forwarded
-  // twice and the guard absorbed the second" from "the wrapper
-  // swallowed the second call itself".
+  // Mirrors FRB's `Droppable.dispose`, which guards on `isDisposed` so
+  // the underlying resource is released at most once. The two counters
+  // are what let the idempotency test tell the two failure modes
+  // apart: `disposeCalls` counts every forward from the wrapper
+  // (including the no-ops), `releaseCount` counts only the calls that
+  // got past the guard. A real double-release shows up as
+  // `releaseCount == 2`; a wrapper that silently swallowed the second
+  // call shows up as `disposeCalls == 1`.
   int disposeCalls = 0;
+  int releaseCount = 0;
 
   @override
   void dispose() {
     disposeCalls++;
+    if (_disposed) return;
+    releaseCount++;
     _disposed = true;
   }
 
@@ -2118,6 +2124,7 @@ void main() {
       expect(inner.isDisposed, isFalse);
       client.dispose();
       expect(inner.isDisposed, isTrue);
+      expect(inner.releaseCount, 1);
     });
 
     test('dispose is idempotent', () {
@@ -2125,10 +2132,11 @@ void main() {
       client.dispose();
       // The second call must not double-release. The wrapper forwards
       // it unconditionally and relies on FRB's `Droppable.dispose`
-      // guard to absorb it, so assert both halves: two forwards, one
-      // handle that stays disposed.
+      // guard to absorb it, so assert both halves: the wrapper did
+      // forward twice, and only one of the two got past the guard.
       client.dispose();
       expect(api.lastClientNew!.disposeCalls, 2);
+      expect(api.lastClientNew!.releaseCount, 1);
       expect(api.lastClientNew!.isDisposed, isTrue);
     });
 
