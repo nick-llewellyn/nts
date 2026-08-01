@@ -204,6 +204,29 @@
 
 ### Fixed
 
+- A call queued behind the bridge admission gate now surfaces its
+  timeout after a device suspend instead of parking past it. Queue wait
+  was already charged on the sleep-aware monotonic clock, so the budget
+  crossing the FFI boundary stayed honest, but cancellation of a
+  still-queued waiter was a `Timer` armed for the full timeout. `Timer`
+  runs on the event loop's suspend-frozen clock, so a device that slept
+  through the budget resumed with the timer still owing its whole
+  remaining slice — the waiter kept parking for an outcome already
+  decided, and only unparked once a slot happened to free or the frozen
+  timer eventually caught up.
+
+  Deadlines are now absolute readings on the same sleep-aware clock,
+  swept by one queue-wide timer rather than one full-length timer per
+  waiter. Each arming is capped at 250 ms, so a resume re-evaluates
+  every deadline against the boot clock within one slice; the cap never
+  delays a nearer deadline, which is every deadline while awake, and
+  the sweeper is only armed while the queue is non-empty. Expiry now
+  happens in the same single-pass compaction that performs admission,
+  so the existing O(n) cost under a mass-timeout burst is unchanged and
+  a freed slot goes to a waiter that can still use it rather than to
+  one the dispatch-side residual check would reject again. No public
+  API changes. (NTS-111)
+
 - KE responses that redirect the NTP phase are now validated before
   any post-handshake I/O. `validate_response` in `nts::ke` took the
   NTPv4 Server and Port records raw: an empty Server body reached the

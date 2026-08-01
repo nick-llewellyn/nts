@@ -3201,6 +3201,76 @@ void main() {
       expect(api.queryDispatches, 2);
     });
 
+    test('a suspend that consumes a queued budget unparks the waiter '
+        'with bridgeSaturation', () async {
+      final gate = Completer<void>();
+      api.asyncGate = () => gate.future;
+      final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      // 10s is far beyond this test's real-time duration, so an
+      // event-loop `Timer` armed for the whole budget cannot fire
+      // here — its clock is suspend-frozen and the simulated sleep
+      // costs it nothing. Only a sweep that re-reads the boot clock
+      // expires this waiter, which is the behaviour under test.
+      final queued = ntsQuery(
+        spec: spec,
+        bridgeConcurrencyCap: 1,
+        timeout: const Duration(seconds: 10),
+      );
+      api.suspendOffsetMicros += const Duration(seconds: 11).inMicroseconds;
+      await expectLater(
+        queued,
+        throwsA(
+          isA<NtsErrorTimeout>()
+              .having((e) => e.phase, 'phase', TimeoutPhase.bridgeSaturation)
+              .having((e) => e.trustBackend, 'trustBackend', isNull),
+        ),
+      );
+      expect(api.queryDispatches, 1);
+      api.asyncGate = null;
+      gate.complete();
+      await holder;
+    });
+
+    test('a sweep expires only the waiters the suspend outlived, and '
+        'charges the slept time to the survivor', () async {
+      final gate = Completer<void>();
+      api.asyncGate = () => gate.future;
+      final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+      final expiring = ntsQuery(
+        spec: spec,
+        bridgeConcurrencyCap: 1,
+        timeout: const Duration(seconds: 10),
+      );
+      final surviving = ntsQuery(
+        spec: spec,
+        bridgeConcurrencyCap: 1,
+        timeout: const Duration(seconds: 30),
+      );
+      api.suspendOffsetMicros += const Duration(seconds: 11).inMicroseconds;
+      await expectLater(
+        expiring,
+        throwsA(
+          isA<NtsErrorTimeout>().having(
+            (e) => e.phase,
+            'phase',
+            TimeoutPhase.bridgeSaturation,
+          ),
+        ),
+      );
+      // The slice cap only bounds how often deadlines are re-read; a
+      // waiter whose budget the suspend did not reach stays queued
+      // across sweeps rather than being expired with its neighbour.
+      expect(api.queryDispatches, 1);
+      api.asyncGate = null;
+      gate.complete();
+      await Future.wait([holder, surviving]);
+      expect(api.queryDispatches, 2);
+      // The freed slot went to the survivor, and the slept 11s was
+      // charged against its 30s budget rather than being ignored.
+      expect(api.lastQueryTimeoutMs, lessThan(20000));
+      expect(api.lastQueryTimeoutMs, greaterThan(15000));
+    });
+
     test('queue wait is charged against the forwarded timeout', () async {
       final gate = Completer<void>();
       api.asyncGate = () => gate.future;

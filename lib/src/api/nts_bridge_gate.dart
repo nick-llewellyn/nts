@@ -17,7 +17,7 @@ part of 'nts.dart';
 // (holding no pool thread) in arrival order; admission compares the
 // live in-flight count against each waiter's own
 // `bridgeConcurrencyCap`, giving mixed-cap bursts the same asymmetric
-// semantics as the Rust-side DNS resolver pool. `_admitBridgeWaiters`
+// semantics as the Rust-side DNS resolver pool. `_sweepBridgeQueue`
 // walks the queue in FIFO order and admits every waiter whose cap
 // clears the count, so at rest every queued waiter's cap is <= the
 // in-flight count; a new arrival that is admissible therefore never
@@ -32,15 +32,50 @@ part of 'nts.dart';
 // calling isolate (the same isolate FRB dispatches from), and every
 // mutation happens synchronously between suspension points, so no
 // further synchronisation is needed.
+//
+// Deadlines are held as absolute `MonotonicClock` readings and swept
+// by a single queue-wide timer rather than one full-length `Timer`
+// per waiter. `Timer` runs on the event loop's suspend-frozen clock,
+// so a device that sleeps while a waiter is queued resumes with the
+// timer still owing its whole remaining slice even though the
+// sleep-aware budget is long gone — the waiter would keep parking for
+// an outcome already decided. The sweeper caps each arming at
+// `_kBridgeSweepSliceCap`, so a resume re-evaluates against the
+// boottime clock within one slice; the cap never delays a deadline
+// that is nearer than the cap, which is every deadline while awake.
 
 class _BridgeWaiter {
   final int cap;
+
+  /// Absolute [MonotonicClock] reading at which this waiter's budget
+  /// runs out. Sleep-aware, unlike the event loop's timer clock.
+  final int deadlineMicros;
+
+  /// Captured at enqueue time so the timeout error's stack trace
+  /// points at the wrapper call path that queued the waiter, not at
+  /// the sweep callback that fired the deadline.
+  final StackTrace enqueueTrace;
+
   final Completer<void> admitted = Completer<void>();
-  _BridgeWaiter(this.cap);
+  _BridgeWaiter(this.cap, this.deadlineMicros, this.enqueueTrace);
 }
+
+/// Upper bound on how long the queue sweeper parks between deadline
+/// re-evaluations, and therefore on how late a still-queued waiter
+/// can be unparked after the device resumes from deep sleep. Only
+/// armed while the queue is non-empty, so an idle process schedules
+/// nothing.
+const Duration _kBridgeSweepSliceCap = Duration(milliseconds: 250);
 
 int _bridgeInFlight = 0;
 final List<_BridgeWaiter> _bridgeQueue = <_BridgeWaiter>[];
+Timer? _bridgeSweep;
+
+/// Absolute boot-clock reading [_bridgeSweep] is due to fire at. Only
+/// meaningful while [_bridgeSweep] is non-null, which holds exactly
+/// while [_bridgeQueue] is non-empty. Lets an arrival decide whether
+/// the pending sweep already covers it without scanning the queue.
+int _bridgeSweepAtMicros = 0;
 
 Future<T> _withBridgeSlot<T>({
   required int bridgeConcurrencyCap,
@@ -56,35 +91,28 @@ Future<T> _withBridgeSlot<T>({
   } else {
     final queueClock = MonotonicClock.instance;
     final queueStartMicros = queueClock.nowMicros();
-    final waiter = _BridgeWaiter(bridgeConcurrencyCap);
+    final waiter = _BridgeWaiter(
+      bridgeConcurrencyCap,
+      queueStartMicros + timeout.inMicroseconds,
+      StackTrace.current,
+    );
+    final wasEmpty = _bridgeQueue.isEmpty;
     _bridgeQueue.add(waiter);
-    // Captured at enqueue time so the timeout error's stack trace points
-    // at the wrapper call path that queued the waiter, not at the timer
-    // callback that fired the deadline.
-    final enqueueTrace = StackTrace.current;
-    final deadline = Timer(timeout, () {
-      if (!waiter.admitted.isCompleted) {
-        // Completing with the error is also the cancellation mark: the
-        // entry stays queued and `_admitBridgeWaiters` drops it during
-        // its next compaction pass, keeping a mass-timeout burst O(n)
-        // overall instead of the O(n²) a per-timeout `List.remove`
-        // (linear search + element shifting) would cost. A queued
-        // waiter implies at least one in-flight call, whose release
-        // runs that pass, so cancelled entries cannot linger.
-        waiter.admitted.completeError(
-          const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation),
-          enqueueTrace,
-        );
-      }
-    });
-    try {
-      // `_admitBridgeWaiters` increments `_bridgeInFlight` on this
-      // call's behalf before completing the future, so both branches
-      // converge holding exactly one slot.
-      await waiter.admitted.future;
-    } finally {
-      deadline.cancel();
+    if (wasEmpty || waiter.deadlineMicros < _bridgeSweepAtMicros) {
+      // Re-arm only when this arrival is not already covered. The
+      // guard is against the pending sweep's fire time, not against
+      // the queue minimum: under the slice cap a sweep is usually due
+      // long before the nearest deadline, so a new nearest that still
+      // falls after it needs nothing. A non-empty queue always has a
+      // pending sweep, so the else branch is safe to leave silent.
+      _armBridgeSweep(queueStartMicros, waiter.deadlineMicros);
     }
+    // `_sweepBridgeQueue` increments `_bridgeInFlight` on this call's
+    // behalf before completing the future, so both branches converge
+    // holding exactly one slot. No per-waiter cancellation is needed
+    // on either exit: an admitted or expired entry is dropped by the
+    // next compaction pass.
+    await waiter.admitted.future;
     remainingTimeout = timeout - queueClock.elapsedSince(queueStartMicros);
   }
   try {
@@ -97,33 +125,90 @@ Future<T> _withBridgeSlot<T>({
     return await body(remainingTimeout);
   } finally {
     _bridgeInFlight--;
-    _admitBridgeWaiters();
+    _sweepBridgeQueue();
   }
 }
 
-void _admitBridgeWaiters() {
-  // Single-pass in-place compaction keeps admission O(n): admitted
-  // and timed-out waiters are dropped, retained waiters shift down,
-  // and the tail is truncated once — versus the O(n²) element
-  // shifting a per-waiter `removeAt` would cost under a large queued
-  // burst. Mutating in place is safe: `complete()` only schedules
-  // microtasks and the loop has no suspension points, so no timer or
-  // waiter continuation can observe the queue mid-compaction.
+/// Park until [nearestMicros], capped at [_kBridgeSweepSliceCap].
+///
+/// The cap is what makes cancellation sleep-aware without polling: a
+/// resume from deep sleep is followed by a sweep within one slice,
+/// which re-reads [MonotonicClock] and expires everything the sleep
+/// consumed. While awake the nearest deadline is almost always inside
+/// the cap, so the extra wake-ups only occur under a queue whose
+/// waiters all have long budgets.
+///
+/// [nearestMicros] is supplied by the caller rather than derived here:
+/// both call sites already know it — the sweep from its compaction
+/// pass, an arrival from its own deadline having beaten the pending
+/// fire time — so deriving it would re-walk a queue that was just
+/// walked, or walk one for a single new entry.
+void _armBridgeSweep(int nowMicros, int nearestMicros) {
+  _bridgeSweep?.cancel();
+  if (_bridgeQueue.isEmpty) {
+    _bridgeSweep = null;
+    return;
+  }
+  // Clamped rather than used raw: a deadline already behind `nowMicros`
+  // must fire on the next turn, not be handed to `Timer` as a negative
+  // duration, and one further out than the cap must still wake within a
+  // slice so a resume from suspend is not waited out.
+  final sliceMicros = (nearestMicros - nowMicros).clamp(
+    0,
+    _kBridgeSweepSliceCap.inMicroseconds,
+  );
+  _bridgeSweepAtMicros = nowMicros + sliceMicros;
+  _bridgeSweep = Timer(Duration(microseconds: sliceMicros), _sweepBridgeQueue);
+}
+
+void _sweepBridgeQueue() {
+  // Single-pass in-place compaction keeps the sweep O(n): expired and
+  // admitted waiters are dropped, retained waiters shift down, and the
+  // tail is truncated once — versus the O(n²) element shifting a
+  // per-waiter `removeAt` would cost under a large queued burst.
+  // Mutating in place is safe: `complete()` / `completeError()` only
+  // schedule microtasks and the loop has no suspension points, so no
+  // timer or waiter continuation can observe the queue mid-sweep.
+  //
+  // One clock reading serves both the whole pass and the re-arm, so a
+  // burst of waiters sharing a deadline expires together rather than
+  // splitting across readings taken microseconds apart. The empty
+  // queue exits before the read: every uncontended call runs this on
+  // release, and that path should not pay for an FFI clock hop.
+  if (_bridgeQueue.isEmpty) return;
+  final nowMicros = MonotonicClock.instance.nowMicros();
   var kept = 0;
+  // Tracked alongside the compaction rather than rescanned afterwards:
+  // the retained branch below visits exactly the surviving set, so the
+  // re-arm's input costs nothing extra.
+  var nearestMicros = 0;
   for (var i = 0; i < _bridgeQueue.length; i++) {
     final waiter = _bridgeQueue[i];
     if (waiter.admitted.isCompleted) {
-      // Timed out while queued: the deadline timer already completed
-      // the future with `bridgeSaturation` and left the entry here
-      // for this pass to sweep. Drop without admitting.
+      // Already resolved by an earlier pass in this same turn. Drop.
+      continue;
+    }
+    if (waiter.deadlineMicros <= nowMicros) {
+      // Budget spent while queued. Expiring here rather than admitting
+      // keeps the freed slot for a waiter that can still use it; the
+      // dispatch-side residual check would only have rejected this one
+      // again.
+      waiter.admitted.completeError(
+        const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation),
+        waiter.enqueueTrace,
+      );
       continue;
     }
     if (_bridgeInFlight < waiter.cap) {
       _bridgeInFlight++;
       waiter.admitted.complete();
     } else {
+      if (kept == 0 || waiter.deadlineMicros < nearestMicros) {
+        nearestMicros = waiter.deadlineMicros;
+      }
       _bridgeQueue[kept++] = waiter;
     }
   }
   _bridgeQueue.length = kept;
+  _armBridgeSweep(nowMicros, nearestMicros);
 }

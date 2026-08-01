@@ -324,7 +324,21 @@ budget verbatim, bit-for-bit identical to the pre-gate behaviour). A
 budget that expires while queued surfaces as `NtsError.timeout` with
 the Dart-authored `TimeoutPhase.bridgeSaturation` — the one
 `TimeoutPhase` value that fires before any FFI dispatch and therefore
-always carries a `null` `trustBackend`. Gate state is confined to the
+always carries a `null` `trustBackend`.
+
+Both the metering and the cancellation read the sleep-aware
+`MonotonicClock`. Deadlines are absolute boot-clock readings, swept by
+one queue-wide timer capped at 250 ms per arming rather than a
+full-length `Timer` per waiter: `Timer` runs on the event loop's
+suspend-frozen clock, so a device that slept through a queued budget
+would resume with the timer still owing its whole remaining slice. The
+cap bounds post-resume unpark latency to one slice and never delays a
+nearer deadline; the sweeper is only armed while the queue is
+non-empty. Expiry runs inside the same single-pass compaction as
+admission, so a mass-timeout burst stays O(n) and a freed slot goes to
+a waiter that can still use it.
+
+Gate state is confined to the
 calling isolate and every mutation is synchronous between suspension
 points, so no locking is involved. Each isolate therefore gates only
 its own calls; the FRB worker pool being bounded is shared
@@ -380,7 +394,8 @@ permanently selects a `Stopwatch` fallback. Locking
 the source per instance guarantees readings from one instance never
 mix epochs. The shared `MonotonicClock.instance` singleton is the
 timeline used by `NtsSyncedTime` (anchor + projection), the `getTime`
-total budget, and the bridge admission gate's queue-wait metering, so
+total budget, and the bridge admission gate's queue-wait metering and
+deadline sweep, so
 consumer code reading the same instance shares the package's exact
 timeline.
 
