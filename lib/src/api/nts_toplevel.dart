@@ -258,7 +258,8 @@ Future<NtsTimeSample> ntsQuery({
 /// `webpki-roots` downgrade, `bundledOnly` bypassing the platform
 /// store, `custom` trusting only the caller-supplied roots) and the
 /// accepted `customRoots` encodings (PEM bundle or single DER
-/// certificate) are documented on the [NtsClient] constructor. Pair
+/// certificate), along with the `customRoots` ownership contract, are
+/// documented on the [NtsClient] constructor. Pair
 /// validation matches that constructor too: a non-null `customRoots`
 /// requires [TrustMode.custom], and [TrustMode.custom] requires a
 /// non-empty `customRoots`; violations complete the returned

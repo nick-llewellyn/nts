@@ -146,6 +146,10 @@ TrustMode _publicTrustMode(ffi.TrustMode m) => switch (m) {
   ffi.TrustMode_Custom() => TrustMode.custom,
 };
 
+// The `custom` arm copies the caller's `List<int>` into the `Uint8List`
+// the FFI encoder requires. That copy is this package's to own, so it is
+// wiped by `_wipeCustomRoots` once the encode has consumed it; the
+// caller's own list is never touched.
 ffi.TrustMode _ffiTrustMode(
   TrustMode m, [
   List<int>? customRoots,
@@ -155,6 +159,29 @@ ffi.TrustMode _ffiTrustMode(
   TrustMode.bundledOnly => const ffi.TrustMode.bundledOnly(),
   TrustMode.custom => ffi.TrustMode.custom(Uint8List.fromList(customRoots!)),
 };
+
+// Overwrite the intermediate copy `_ffiTrustMode` made, once the FFI
+// call that consumes it has returned. Trust material is caller-supplied
+// and less hot than AEAD keying, but the Rust side holds its equivalent
+// in a `Zeroizing<Vec<u8>>` (`CustomRootsBytes`), and leaving the Dart
+// copy live until an unpredictable GC is the weaker end of that story.
+//
+// Sound because the copy has exactly one consumer: `withTrustMode`
+// dispatches synchronously and the generated `sse_encode_*` path has
+// already copied the bytes into the serializer buffer by the time it
+// returns. Nothing retains the `Uint8List` afterwards.
+//
+// Bounded, not total. Two copies remain outside this package's reach:
+// the caller's own `List<int>`, which is theirs to manage (see the
+// [NtsClient] constructor dartdoc), and the FRB serializer buffer the
+// encoder writes into, which is upstream-owned and not exposed for
+// wiping — the same class of residue the Rust-side `CustomRootsBytes`
+// docs record for the PEM parse path.
+void _wipeCustomRoots(ffi.TrustMode m) {
+  if (m is ffi.TrustMode_Custom) {
+    m.field0.fillRange(0, m.field0.length, 0);
+  }
+}
 
 NtsTrustStatus _publicTrustStatus(ffi.NtsTrustStatus s) => NtsTrustStatus(
   defaultClientBackend: s.defaultClientBackend == null
