@@ -134,11 +134,15 @@ void _armBridgeSweep(int nowMicros) {
       nearestMicros = waiter.deadlineMicros;
     }
   }
-  final untilNearest = Duration(microseconds: nearestMicros - nowMicros);
-  final slice = untilNearest < _kBridgeSweepSliceCap
-      ? (untilNearest.isNegative ? Duration.zero : untilNearest)
-      : _kBridgeSweepSliceCap;
-  _bridgeSweep = Timer(slice, _sweepBridgeQueue);
+  // Clamped rather than used raw: a deadline already behind `nowMicros`
+  // must fire on the next turn, not be handed to `Timer` as a negative
+  // duration, and one further out than the cap must still wake within a
+  // slice so a resume from suspend is not waited out.
+  final sliceMicros = (nearestMicros - nowMicros).clamp(
+    0,
+    _kBridgeSweepSliceCap.inMicroseconds,
+  );
+  _bridgeSweep = Timer(Duration(microseconds: sliceMicros), _sweepBridgeQueue);
 }
 
 void _sweepBridgeQueue() {
