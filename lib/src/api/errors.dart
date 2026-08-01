@@ -518,9 +518,16 @@ final class NtsErrorInternal extends NtsError {
 /// returned bytes — an unrecognised enum discriminant, or a buffer
 /// shorter than the layout the bindings were generated for. Those
 /// failures arrive as bare Dart `Error`s (`RangeError`,
-/// `UnimplementedError`, `ArgumentError`) from the codec rather
-/// than as a structured error from the Rust side, so the wrapper
-/// converts them here to keep its single-error-surface contract.
+/// `UnimplementedError`) from the codec rather than as a structured
+/// error from the Rust side, so the wrapper converts them here to
+/// keep its single-error-surface contract.
+///
+/// The conversion is deliberately confined to those two shapes.
+/// Anything else thrown from inside the call — including a bare
+/// `ArgumentError`, a `FormatException`, or the `StateError` FRB
+/// raises for a missed `NtsRustLib.init()` — reaches the caller
+/// unchanged, because attributing it to a layout disagreement would
+/// point the reader at a rebuild the fault does not lie in.
 ///
 /// The overwhelmingly common cause is a stale native library: the
 /// Rust sources changed and the library was not rebuilt. The

@@ -77,6 +77,31 @@
 
 ### Fixed
 
+- The ABI-mismatch conversion no longer rewrites a bare
+  `ArgumentError` as `NtsError.abiMismatch`. The wrapper widens its
+  catch around the FFI call to convert codec decode failures — bytes
+  the generated codec cannot read against the layout it was built for
+  — into an error naming the rebuild. The predicate matched
+  `ArgumentError` alongside `RangeError` and `UnimplementedError`,
+  which is the widest of the three: it swept in throws that have
+  nothing to do with the wire layout, answering an unrelated
+  diagnostic with "rebuild the native library from the Rust sources"
+  and sending the reader somewhere the fault is not.
+
+  Driving the real generated `sse_decode_*` functions over malformed
+  buffers shows every drift shape they produce is a `RangeError` (a
+  short buffer, or a fieldless-enum index past the end of `values`) or
+  an `UnimplementedError` (an unrecognised variant tag). No shape
+  yields a bare `ArgumentError`, so matching it bought no coverage.
+  The predicate is now those two shapes; `RangeError` remains matched
+  in its own right rather than via its `ArgumentError` supertype.
+  Anything else thrown from inside the call — a bare `ArgumentError`,
+  a `FormatException`, the `StateError` FRB raises for a missed
+  `NtsRustLib.init()` — reaches the caller unchanged. The
+  codec-driven tests now assert membership in exactly those two
+  shapes, so a decoder that started throwing something else fails the
+  suite rather than quietly relying on a broader catch.
+
 - A system clock reading before the Unix epoch no longer produces an
   all-zero NTP transmit timestamp. On a device whose RTC has reset to
   1970-or-earlier, `SystemTime::now().duration_since(UNIX_EPOCH)` fails

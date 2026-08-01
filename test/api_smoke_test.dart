@@ -1118,14 +1118,12 @@ void main() {
     // practical — so the buffers stand in for the drift a rebuilt
     // Rust side would introduce.
 
-    // The three decode-failure shapes the wrapper attributes to a
-    // layout disagreement. `ArgumentError` last because `RangeError`
-    // is a subtype of it — ordering here documents that the predicate
-    // covers both independently.
+    // The two decode-failure shapes the wrapper attributes to a
+    // layout disagreement. A bare `ArgumentError` is deliberately not
+    // among them — see the negative test below.
     final decodeFailures = <Object>[
       RangeError.range(9, 0, 4, 'byteOffset'),
       UnimplementedError('unreachable tag 11'),
-      ArgumentError('malformed discriminant'),
     ];
 
     for (final failure in decodeFailures) {
@@ -1150,6 +1148,33 @@ void main() {
         expect(ntsDnsPoolStats, throwsA(isA<NtsErrorAbiMismatch>()));
       });
     }
+
+    test('a bare ArgumentError passes through unconverted', () async {
+      // Every failure the generated codec actually produces is a
+      // `RangeError` or an `UnimplementedError` — pinned by the
+      // `failures produced by the real generated codec` subgroup
+      // below. So an `ArgumentError` that is not a `RangeError` did
+      // not come from the decoder: it is a mock mistake, a future FRB
+      // argument bug, or an unrelated throw from inside the call.
+      // Converting it would answer a real diagnostic with "rebuild
+      // the native library" and send the reader somewhere the fault
+      // is not.
+      final unrelated = ArgumentError('caller passed something odd');
+      expect(unrelated, isNot(isA<RangeError>()));
+      api.nextThrow = unrelated;
+      await expectLater(
+        ntsQuery(spec: spec),
+        throwsA(allOf(isA<ArgumentError>(), isNot(isA<NtsErrorAbiMismatch>()))),
+      );
+    });
+
+    test('sync endpoint lets a bare ArgumentError through unconverted', () {
+      api.nextSyncThrow = ArgumentError('caller passed something odd');
+      expect(
+        ntsDnsPoolStats,
+        throwsA(allOf(isA<ArgumentError>(), isNot(isA<NtsErrorAbiMismatch>()))),
+      );
+    });
 
     test('StateError from a missed init passes through unconverted', () async {
       // FRB's dispatcher throws `StateError` when `NtsRustLib.init()`
@@ -1266,17 +1291,13 @@ void main() {
                 'the buffer stopped being malformed for this decoder; '
                 'the test no longer proves anything',
           );
-          // The wrapper's predicate is `RangeError || UnimplementedError
-          // || ArgumentError`. Asserting membership here is what ties
-          // the real codec's output to the conversion arm.
-          expect(
-            failure,
-            anyOf(
-              isA<RangeError>(),
-              isA<UnimplementedError>(),
-              isA<ArgumentError>(),
-            ),
-          );
+          // The wrapper's predicate is `RangeError ||
+          // UnimplementedError`. Asserting membership here is what
+          // ties the real codec's output to the conversion arm, and
+          // what justifies the predicate being no wider than this: a
+          // drift shape that started throwing something else would
+          // fail here rather than quietly rely on a broader catch.
+          expect(failure, anyOf(isA<RangeError>(), isA<UnimplementedError>()));
 
           // Round-trip the captured object through both guarded paths.
           api.nextSyncThrow = failure;
@@ -1300,7 +1321,7 @@ void main() {
         // Not every codec failure is a layout disagreement. A `String`
         // whose length prefix is honest but whose bytes are not valid
         // UTF-8 throws `FormatException`, which is neither an `Error`
-        // nor one of the three shapes — the wrapper rethrows it
+        // nor one of the two shapes — the wrapper rethrows it
         // unchanged. Documented here so a future widening of
         // `_isAbiDecodeFailure` has to confront the case deliberately
         // rather than absorb it by accident.
