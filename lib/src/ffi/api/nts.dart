@@ -15,7 +15,7 @@ part 'nts.freezed.dart';
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
 /// with `Relaxed` ordering; the snapshot is intended for
 /// human / dashboard consumption, not for synchronisation. See
-/// [`NtsDnsPoolStats`] for the diagnostic signatures and
+/// [NtsDnsPoolStats] for the diagnostic signatures and
 /// `ARCHITECTURE.md`'s "Timeout budget and bounded DNS" section for
 /// the operational shape.
 ///
@@ -29,11 +29,11 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 /// Snapshot the process-global trust-anchor diagnostic state.
 ///
 /// Returns seven observables that callers cannot recover from a
-/// per-query [`NtsTimeSample`] alone:
+/// per-query [NtsTimeSample] alone:
 ///
 /// 1. `default_client_backend` — backend the *default singleton*
-///    [`NtsClient`] (the one used by [`nts_query`] and
-///    [`nts_warm_cookies`]) most recently resolved to. `None` when
+///    [NtsClient] (the one used by [ntsQuery] and
+///    [ntsWarmCookies]) most recently resolved to. `None` when
 ///    no handshake has run yet against the singleton (process just
 ///    started, or all queries so far went through caller-minted
 ///    clients). This is an overwrite-on-store event marker, not a
@@ -42,24 +42,24 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 ///    transient `WebpkiRoots`-resolving handshake will latch this
 ///    field permanently until the next `Platform`-resolving one.
 ///    Custom-client callers should read the per-handshake
-///    `trust_backend` field on [`NtsTimeSample`] /
-///    [`NtsWarmCookiesOutcome`] for accurate per-client attribution
+///    `trust_backend` field on [NtsTimeSample] /
+///    [NtsWarmCookiesOutcome] for accurate per-client attribution
 ///    instead.
 /// 2. `default_backend_platform_count` — cumulative count of
-///    singleton handshakes that resolved to [`TrustBackend::Platform`].
+///    singleton handshakes that resolved to [TrustBackend.platform].
 /// 3. `default_backend_hybrid_count` — cumulative count of
 ///    singleton handshakes that resolved to
-///    [`TrustBackend::PlatformWithHybridFallback`]. Always zero on
+///    [TrustBackend.platformWithHybridFallback]. Always zero on
 ///    non-Android platforms (the fallback path only exists on Android).
 /// 4. `default_backend_webpki_count` — cumulative count of
-///    singleton handshakes that resolved to [`TrustBackend::WebpkiRoots`].
+///    singleton handshakes that resolved to [TrustBackend.webpkiRoots].
 /// 5. `default_backend_custom_count` — cumulative count of
-///    singleton handshakes that resolved to [`TrustBackend::Custom`].
+///    singleton handshakes that resolved to [TrustBackend.custom].
 /// 6. `android_platform_init_succeeded` — `true` iff
 ///    `com.nllewellyn.nts.PlatformInit.nativeInit` reported success
 ///    at least once. `false` on every other platform. A `false` value
 ///    on Android implies subsequent handshakes will run against the
-///    `webpki-roots` static bundle regardless of [`TrustMode`].
+///    `webpki-roots` static bundle regardless of [TrustMode].
 /// 7. `android_hybrid_fallback_count` — cumulative count of TLS
 ///    chains the Android `HybridVerifier` has accepted via the
 ///    `webpki-roots` fallback path. Always zero on non-Android
@@ -75,7 +75,7 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 /// concurrent snapshots.
 ///
 /// Marked `#[frb(sync)]` for the same reason as
-/// [`nts_dns_pool_stats`]: the underlying state read is cheap enough
+/// [ntsDnsPoolStats]: the underlying state read is cheap enough
 /// that paying isolate-hop overhead would dominate the call.
 NtsTrustStatus ntsTrustStatus() =>
     NtsRustLib.instance.api.crateApiNtsNtsTrustStatus();
@@ -98,7 +98,7 @@ NtsTrustStatus ntsTrustStatus() =>
 /// best-effort).
 ///
 /// Marked `#[frb(sync)]` for the same reason as
-/// [`nts_dns_pool_stats`]: a single clock read is cheap enough that
+/// [ntsDnsPoolStats]: a single clock read is cheap enough that
 /// paying isolate-hop overhead would dominate the call, and the Dart
 /// wrapper reads it inside hot getters (`NtsSyncedTime.utcNow`).
 ///
@@ -143,7 +143,7 @@ PlatformInt64 ntsBoottimeMicros() =>
 /// clock-skew deadlock where a wrong system clock would otherwise reject
 /// an in-window certificate as expired or not-yet-valid.
 ///
-/// The returned [`NtsTimeSample`] exposes the raw protocol primitives, not a
+/// The returned [NtsTimeSample] exposes the raw protocol primitives, not a
 /// finished synchronized clock. `utc_unix_micros` is the server transmit
 /// timestamp exactly as it appeared on the wire; it does not include any
 /// compensation for the one-way network delay between the server and this
@@ -178,13 +178,13 @@ Future<NtsTimeSample> ntsQuery({
 /// inherit the built-in default.
 ///
 /// The returned `phase_timings` (Dart: `phaseTimings`) on
-/// [`NtsWarmCookiesOutcome`] only covers the KE handshake (DNS,
+/// [NtsWarmCookiesOutcome] only covers the KE handshake (DNS,
 /// connect, TLS, KE record I/O) — there is no UDP NTP exchange on
 /// this path, so the `Ntp` phase is implicitly zero and not
 /// represented.
 ///
 /// `verification_time_ms` carries the identical semantics as on
-/// [`nts_query`]: when `Some` it substitutes the supplied
+/// [ntsQuery]: when `Some` it substitutes the supplied
 /// epoch-milliseconds instant for the system clock as the `now` the
 /// certificate verifier reads (must be non-negative; a negative returns
 /// `NtsError::InvalidSpec`), pinning every time-based check the verifier
@@ -236,18 +236,18 @@ abstract class NtsClient implements RustOpaqueInterface {
   bool invalidate({required NtsServerSpec spec});
 
   /// Construct a fresh client with an empty session table and the
-  /// default trust-anchor policy ([`TrustMode::PlatformWithFallback`]).
+  /// default trust-anchor policy ([TrustMode.platformWithFallback]).
   ///
   /// Marked `#[flutter_rust_bridge::frb(sync)]` so the generated
   /// Dart side exposes this as the `NtsClient()` default
   /// constructor (synchronous; no isolate hop) rather than as an
   /// `await NtsClient.newInstance()` static factory.
   ///
-  /// Use [`NtsClient::with_trust_mode`] to opt into
-  /// [`TrustMode::PlatformOnly`] strict mode for clients that
+  /// Use [NtsClient.withTrustMode] to opt into
+  /// [TrustMode.platformOnly] strict mode for clients that
   /// pin a corporate CA or otherwise refuse to downgrade to the
   /// `webpki-roots` static bundle. The top-level convenience
-  /// functions ([`nts_query`], [`nts_warm_cookies`]) always go
+  /// functions ([ntsQuery], [ntsWarmCookies]) always go
   /// through a default-mode singleton and are unaffected.
   factory NtsClient() => NtsRustLib.instance.api.crateApiNtsNtsClientNew();
 
@@ -283,7 +283,7 @@ abstract class NtsClient implements RustOpaqueInterface {
   });
 
   /// Construct a fresh client with the caller-selected
-  /// [`TrustMode`] policy. Equivalent to [`NtsClient::new`] when
+  /// [TrustMode] policy. Equivalent to [NtsClient.new] when
   /// `trust_mode == TrustMode::PlatformWithFallback`; produces a
   /// strict-mode client when `trust_mode ==
   /// TrustMode::PlatformOnly`.
@@ -364,15 +364,15 @@ class NtsDnsPoolStats {
 
   /// Cumulative count of admitted lookups the OS then refused to
   /// spawn a worker thread for (`EAGAIN` / `ENOMEM`) since process
-  /// start. Disjoint from [`Self::refused`], and the actionable
+  /// start. Disjoint from [NtsDnsPoolStats.refused], and the actionable
   /// distinction between them: `refused` climbing means the cap is
   /// the binding constraint and raising `dns_concurrency_cap` would
   /// help, whereas this counter climbing means the process is at a
   /// thread or memory ceiling and raising the cap would make it
-  /// worse. Not counted in [`Self::recovered`] either, since no
-  /// worker ran. Pairs with [`TimeoutPhase::DnsSpawnFailed`] (Dart:
+  /// worse. Not counted in [NtsDnsPoolStats.recovered] either, since no
+  /// worker ran. Pairs with [TimeoutPhase.dnsSpawnFailed] (Dart:
   /// `TimeoutPhase.dnsSpawnFailed`) on the error channel. `u64` for
-  /// the same wraparound reason as [`Self::recovered`].
+  /// the same wraparound reason as [NtsDnsPoolStats.recovered].
   final BigInt spawnFailed;
 
   const NtsDnsPoolStats({
@@ -467,11 +467,11 @@ sealed class NtsError with _$NtsError implements FrbException {
   }) = NtsError_Authentication;
 
   /// Wall-clock budget elapsed inside one of the call's pre-NTP or
-  /// NTP phases. The [`TimeoutPhase`] payload identifies which
+  /// NTP phases. The [TimeoutPhase] payload identifies which
   /// phase tripped the deadline so callers can choose the right
   /// remediation (raise the resolver cap on `DnsSaturation`,
   /// lengthen `timeout_ms` on `DnsTimeout` / `Connect` / `Tls` /
-  /// `KeRecordIo` / `Ntp`, etc.). See [`TimeoutPhase`] for the full
+  /// `KeRecordIo` / `Ntp`, etc.). See [TimeoutPhase] for the full
   /// taxonomy.
   const factory NtsError.timeout({
     required TimeoutPhase phase,
@@ -482,7 +482,7 @@ sealed class NtsError with _$NtsError implements FrbException {
   const factory NtsError.noCookies({TrustBackend? trustBackend}) =
       NtsError_NoCookies;
 
-  /// Caller selected [`TrustMode::PlatformOnly`] and
+  /// Caller selected [TrustMode.platformOnly] and
   /// `build_with_native_verifier` could not construct a
   /// platform-backed `ClientConfig`. Surfaced instead of silently
   /// downgrading to the `webpki-roots` static bundle. The payload
@@ -537,7 +537,7 @@ class NtsTimeSample {
   /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
   /// `send` and the matching `recv`. This *is* the UDP-phase
   /// wall-clock cost — there is no separate `udp_send_recv_micros`
-  /// in [`PhaseTimings`] because that would publish the same fact
+  /// in [PhaseTimings] because that would publish the same fact
   /// in two fields.
   final PlatformInt64 roundTripMicros;
 
@@ -571,7 +571,7 @@ class NtsTimeSample {
   /// instant of this sample, before any FFI-return, worker-thread
   /// handoff, or Dart event-loop latency is incurred.
   ///
-  /// Same clock source and epoch as [`nts_boottime_micros`]
+  /// Same clock source and epoch as [ntsBoottimeMicros]
   /// (Dart: `ntsBoottimeMicros` / `MonotonicClock`), including on
   /// the degraded non-boottime path (both route through the same
   /// process-wide anchor), so subtracting this from a later
@@ -608,7 +608,7 @@ class NtsTimeSample {
   /// delay from the server to the reference clock (RFC 5905 §7.3,
   /// converted from the wire's *signed* 16.16 fixed-point seconds;
   /// a negative on-wire value clamps to `0` — see
-  /// [`ntp_short_signed_to_micros`]). New in 7.1.
+  /// `ntp_short_signed_to_micros`). New in 7.1.
   final PlatformInt64 rootDelayMicros;
 
   /// Server-reported root dispersion in microseconds: total
@@ -698,7 +698,7 @@ class NtsTimeSample {
 }
 
 /// Process-global trust-anchor diagnostic snapshot returned by
-/// [`nts_trust_status`] (Dart: `ntsTrustStatus`).
+/// [ntsTrustStatus] (Dart: `ntsTrustStatus`).
 ///
 /// The fields combine one overwrite-on-store event marker (which
 /// backend the default singleton client *most recently* resolved
@@ -716,18 +716,18 @@ class NtsTrustStatus {
   /// Backend the default singleton client most recently resolved to
   /// at handshake time. `None` when no handshake has run yet
   /// against the singleton (e.g. process just started, or all
-  /// queries so far went through caller-minted [`NtsClient`]
+  /// queries so far went through caller-minted [NtsClient]
   /// instances). This is an overwrite-on-store event marker, not
   /// a steady-state signal: prefer the four `default_backend_*_count`
   /// fields below for dashboard panels that need trend visibility
   /// across the singleton's resolution history. Custom-client
   /// callers should read the per-handshake `trust_backend` field
-  /// on [`NtsTimeSample`] / [`NtsWarmCookiesOutcome`] for accurate
+  /// on [NtsTimeSample] / [NtsWarmCookiesOutcome] for accurate
   /// per-client attribution.
   final TrustBackend? defaultClientBackend;
 
   /// Cumulative count of default-singleton handshakes that resolved
-  /// to [`TrustBackend::Platform`] since process start. Bumped
+  /// to [TrustBackend.platform] since process start. Bumped
   /// in lock-step with each `Platform` store on
   /// `default_client_backend`. Never reset; weakly monotonic
   /// across consecutive snapshots, with the same per-counter
@@ -735,7 +735,7 @@ class NtsTrustStatus {
   final BigInt defaultBackendPlatformCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
-  /// to [`TrustBackend::PlatformWithHybridFallback`] since process
+  /// to [TrustBackend.platformWithHybridFallback] since process
   /// start. Always zero on non-Android platforms (the
   /// platform-verifier-with-`webpki-roots`-fallback path only
   /// exists on Android). Same monotonicity contract as
@@ -743,15 +743,15 @@ class NtsTrustStatus {
   final BigInt defaultBackendHybridCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
-  /// to [`TrustBackend::WebpkiRoots`] since process start. Bumped
+  /// to [TrustBackend.webpkiRoots] since process start. Bumped
   /// every time `build_with_native_verifier` failed at TLS-config
-  /// construction time on a [`TrustMode::PlatformWithFallback`]
+  /// construction time on a [TrustMode.platformWithFallback]
   /// singleton. Same monotonicity contract as
   /// `default_backend_platform_count`.
   final BigInt defaultBackendWebpkiCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
-  /// to [`TrustBackend::Custom`] since process start. Same monotonicity
+  /// to [TrustBackend.custom] since process start. Same monotonicity
   /// contract as `default_backend_platform_count`.
   final BigInt defaultBackendCustomCount;
 
@@ -761,7 +761,7 @@ class NtsTrustStatus {
   /// other platform (no JNI bootstrap step exists). A `false`
   /// value on Android implies the process is currently running
   /// against the `webpki-roots` static bundle for any subsequent
-  /// handshake, regardless of the caller's [`TrustMode`].
+  /// handshake, regardless of the caller's [TrustMode].
   final bool androidPlatformInitSucceeded;
 
   /// Cumulative count of TLS chains the Android `HybridVerifier`
@@ -810,7 +810,7 @@ class NtsTrustStatus {
 /// Successful outcome of `nts_warm_cookies` (Dart: `ntsWarmCookies`).
 ///
 /// Replaces the prior bare `u32` return so the same phase-attribution
-/// view available on [`NtsTimeSample`] is also available for the
+/// view available on [NtsTimeSample] is also available for the
 /// handshake-only path callers use to refill an empty cookie pool.
 class NtsWarmCookiesOutcome {
   /// Number of fresh cookies the server delivered with the KE response.
@@ -835,7 +835,7 @@ class NtsWarmCookiesOutcome {
   /// 8915 — so a non-empty list means the peer sent a code this
   /// client cannot interpret.
   ///
-  /// Unlike [`NtsTimeSample::ke_warnings`] there is no cached-path
+  /// Unlike [NtsTimeSample.keWarnings] there is no cached-path
   /// nuance to state: this call always performs a fresh handshake,
   /// so the codes are always that handshake's own. A singleflight
   /// *waiter* that collapsed onto a concurrent leader reports the
@@ -871,13 +871,13 @@ class NtsWarmCookiesOutcome {
 /// Microsecond-resolution wall-clock breakdown of a successful
 /// `nts_query` (Dart: `ntsQuery`) or `nts_warm_cookies`
 /// (Dart: `ntsWarmCookies`) call, surfaced on the `phase_timings`
-/// field of [`NtsTimeSample`] / [`NtsWarmCookiesOutcome`] (Dart:
+/// field of [NtsTimeSample] / [NtsWarmCookiesOutcome] (Dart:
 /// `phaseTimings`).
 ///
 /// Field semantics match the internal `KePhaseTimings` for the
 /// four KE-pipeline phases. The UDP send/recv phase has no field
 /// of its own; `round_trip_micros` (Dart: `roundTripMicros`) on
-/// [`NtsTimeSample`] already covers it (kept for
+/// [NtsTimeSample] already covers it (kept for
 /// backward-compatibility on the Dart side and to avoid
 /// publishing the same fact in two fields). Callers who want a
 /// "preNtp" wall-clock view can sum
@@ -949,7 +949,7 @@ class PhaseTimings {
 /// Phase of an `nts_query` (Dart: `ntsQuery`) or `nts_warm_cookies`
 /// (Dart: `ntsWarmCookies`) call whose wall-clock budget elapsed.
 ///
-/// Carried as the payload of [`NtsError`]'s `Timeout` variant so
+/// Carried as the payload of [NtsError]'s `Timeout` variant so
 /// callers can attribute a failure to a specific pre-NTP step
 /// instead of inspecting free-form diagnostic strings. The
 /// Rust-side KE-pipeline taxonomy (`KeTimeoutPhase`, internal to
@@ -976,7 +976,7 @@ enum TimeoutPhase {
   /// process is at a thread or memory ceiling — reducing concurrent
   /// load elsewhere, or raising the process thread limit, are the
   /// appropriate remediations. Counted by
-  /// [`NtsDnsPoolStats::spawn_failed`] (Dart:
+  /// [NtsDnsPoolStats.spawnFailed] (Dart:
   /// `NtsDnsPoolStats.spawnFailed`).
   dnsSpawnFailed,
 
@@ -1011,8 +1011,8 @@ enum TimeoutPhase {
 /// Trust-anchor backend that authenticated a TLS chain, or that a
 /// process-global resolution attempt landed on.
 ///
-/// Carried per-handshake on [`NtsTimeSample`] / [`NtsWarmCookiesOutcome`]
-/// and process-globally on [`NtsTrustStatus`]. See `ARCHITECTURE.md`'s
+/// Carried per-handshake on [NtsTimeSample] / [NtsWarmCookiesOutcome]
+/// and process-globally on [NtsTrustStatus]. See `ARCHITECTURE.md`'s
 /// "Trust-anchor diagnostics" section for the operational shape.
 enum TrustBackend {
   /// `rustls-platform-verifier` ran against the OS trust store
@@ -1035,8 +1035,8 @@ enum TrustBackend {
   /// chain end-to-end. Loses visibility into MDM / user-installed
   /// roots; works against the major public NTS providers but not
   /// against corporate TLS-inspection appliances. See
-  /// [`TrustMode::PlatformOnly`] for the opt-in that surfaces this
-  /// path as [`NtsError::TrustBackendUnavailable`] instead.
+  /// [TrustMode.platformOnly] for the opt-in that surfaces this
+  /// path as [NtsError.trustBackendUnavailable] instead.
   webpkiRoots,
 
   /// Caller-supplied custom root certificates authenticated this chain.
@@ -1051,7 +1051,7 @@ sealed class TrustMode with _$TrustMode {
   /// `build_with_native_verifier` failure the client silently
   /// downgrades to the `webpki-roots` static bundle. Default mode
   /// for the top-level convenience functions and for
-  /// [`NtsClient::new`].
+  /// [NtsClient.new].
   const factory TrustMode.platformWithFallback() =
       TrustMode_PlatformWithFallback;
 
@@ -1064,7 +1064,7 @@ sealed class TrustMode with _$TrustMode {
   /// Two distinct surfaces are gated:
   ///
   /// 1. **Build-time** (3.0.0): `build_with_native_verifier`
-  ///    failure surfaces as [`NtsError::TrustBackendUnavailable`]
+  ///    failure surfaces as [NtsError.trustBackendUnavailable]
   ///    rather than constructing a `webpki-roots` config.
   /// 2. **Per-chain** on Android (4.0.0, BREAKING): the
   ///    `HybridVerifier` no longer retries against `webpki-roots`
@@ -1074,8 +1074,8 @@ sealed class TrustMode with _$TrustMode {
   ///    Both arms now propagate the platform verifier's error
   ///    verbatim. As a result, a `PlatformOnly` Android caller
   ///    will *never* observe
-  ///    [`TrustBackend::PlatformWithHybridFallback`]; that backend
-  ///    is reachable only via [`TrustMode::PlatformWithFallback`]
+  ///    [TrustBackend.platformWithHybridFallback]; that backend
+  ///    is reachable only via [TrustMode.platformWithFallback]
   ///    (the historic default), where both fallback arms continue
   ///    to fire as in 3.0.x.
   const factory TrustMode.platformOnly() = TrustMode_PlatformOnly;
