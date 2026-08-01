@@ -71,6 +71,12 @@ int _bridgeInFlight = 0;
 final List<_BridgeWaiter> _bridgeQueue = <_BridgeWaiter>[];
 Timer? _bridgeSweep;
 
+/// Absolute boot-clock reading [_bridgeSweep] is due to fire at. Only
+/// meaningful while [_bridgeSweep] is non-null, which holds exactly
+/// while [_bridgeQueue] is non-empty. Lets an arrival decide whether
+/// the pending sweep already covers it without scanning the queue.
+int _bridgeSweepAtMicros = 0;
+
 Future<T> _withBridgeSlot<T>({
   required int bridgeConcurrencyCap,
   required Duration timeout,
@@ -90,8 +96,17 @@ Future<T> _withBridgeSlot<T>({
       queueStartMicros + timeout.inMicroseconds,
       StackTrace.current,
     );
+    final wasEmpty = _bridgeQueue.isEmpty;
     _bridgeQueue.add(waiter);
-    _armBridgeSweep(queueStartMicros);
+    if (wasEmpty || waiter.deadlineMicros < _bridgeSweepAtMicros) {
+      // Re-arm only when this arrival is not already covered. The
+      // guard is against the pending sweep's fire time, not against
+      // the queue minimum: under the slice cap a sweep is usually due
+      // long before the nearest deadline, so a new nearest that still
+      // falls after it needs nothing. A non-empty queue always has a
+      // pending sweep, so the else branch is safe to leave silent.
+      _armBridgeSweep(queueStartMicros, waiter.deadlineMicros);
+    }
     // `_sweepBridgeQueue` increments `_bridgeInFlight` on this call's
     // behalf before completing the future, so both branches converge
     // holding exactly one slot. No per-waiter cancellation is needed
@@ -114,7 +129,7 @@ Future<T> _withBridgeSlot<T>({
   }
 }
 
-/// Park until the nearest deadline, capped at [_kBridgeSweepSliceCap].
+/// Park until [nearestMicros], capped at [_kBridgeSweepSliceCap].
 ///
 /// The cap is what makes cancellation sleep-aware without polling: a
 /// resume from deep sleep is followed by a sweep within one slice,
@@ -122,17 +137,17 @@ Future<T> _withBridgeSlot<T>({
 /// consumed. While awake the nearest deadline is almost always inside
 /// the cap, so the extra wake-ups only occur under a queue whose
 /// waiters all have long budgets.
-void _armBridgeSweep(int nowMicros) {
+///
+/// [nearestMicros] is supplied by the caller rather than derived here:
+/// both call sites already know it — the sweep from its compaction
+/// pass, an arrival from its own deadline having beaten the pending
+/// fire time — so deriving it would re-walk a queue that was just
+/// walked, or walk one for a single new entry.
+void _armBridgeSweep(int nowMicros, int nearestMicros) {
   _bridgeSweep?.cancel();
   if (_bridgeQueue.isEmpty) {
     _bridgeSweep = null;
     return;
-  }
-  var nearestMicros = _bridgeQueue.first.deadlineMicros;
-  for (final waiter in _bridgeQueue) {
-    if (waiter.deadlineMicros < nearestMicros) {
-      nearestMicros = waiter.deadlineMicros;
-    }
   }
   // Clamped rather than used raw: a deadline already behind `nowMicros`
   // must fire on the next turn, not be handed to `Timer` as a negative
@@ -142,6 +157,7 @@ void _armBridgeSweep(int nowMicros) {
     0,
     _kBridgeSweepSliceCap.inMicroseconds,
   );
+  _bridgeSweepAtMicros = nowMicros + sliceMicros;
   _bridgeSweep = Timer(Duration(microseconds: sliceMicros), _sweepBridgeQueue);
 }
 
@@ -162,6 +178,10 @@ void _sweepBridgeQueue() {
   if (_bridgeQueue.isEmpty) return;
   final nowMicros = MonotonicClock.instance.nowMicros();
   var kept = 0;
+  // Tracked alongside the compaction rather than rescanned afterwards:
+  // the retained branch below visits exactly the surviving set, so the
+  // re-arm's input costs nothing extra.
+  var nearestMicros = 0;
   for (var i = 0; i < _bridgeQueue.length; i++) {
     final waiter = _bridgeQueue[i];
     if (waiter.admitted.isCompleted) {
@@ -183,9 +203,12 @@ void _sweepBridgeQueue() {
       _bridgeInFlight++;
       waiter.admitted.complete();
     } else {
+      if (kept == 0 || waiter.deadlineMicros < nearestMicros) {
+        nearestMicros = waiter.deadlineMicros;
+      }
       _bridgeQueue[kept++] = waiter;
     }
   }
   _bridgeQueue.length = kept;
-  _armBridgeSweep(nowMicros);
+  _armBridgeSweep(nowMicros, nearestMicros);
 }
