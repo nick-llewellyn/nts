@@ -13,6 +13,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::num::NonZeroUsize;
 
 use zeroize::Zeroizing;
 
@@ -21,7 +22,7 @@ use zeroize::Zeroizing;
 /// compromised; this matches the cap several public deployments (e.g.
 /// Cloudflare) deliver in the initial KE response. The count returned by any
 /// given server is per RFC 8915 §4 a matter of server policy.
-pub const DEFAULT_CAPACITY: usize = 8;
+pub const DEFAULT_CAPACITY: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 /// Hard cap on a single cookie's length, in octets.
 ///
@@ -109,7 +110,7 @@ pub const MAX_COOKIE_LEN: usize = 512;
 /// window in which the bytes are resident. Nothing needs it: the jar
 /// is owned by exactly one `Session` and reached only through `&mut`.
 pub struct CookieJar {
-    capacity: usize,
+    capacity: NonZeroUsize,
     inner: VecDeque<Zeroizing<Vec<u8>>>,
 }
 
@@ -121,7 +122,7 @@ impl fmt::Debug for CookieJar {
     /// applies at both ends of the KE → cache pipeline.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CookieJar")
-            .field("capacity", &self.capacity)
+            .field("capacity", &self.capacity.get())
             .field("count", &self.inner.len())
             .finish()
     }
@@ -140,10 +141,16 @@ impl CookieJar {
         Self::default()
     }
 
-    /// Construct an empty jar holding at most `capacity` cookies. Panics if zero.
+    /// Construct an empty jar holding at most `capacity` cookies.
+    ///
+    /// `capacity` is a [`NonZeroUsize`] rather than a plain `usize`
+    /// because a zero-capacity jar would evict every cookie on
+    /// insertion, leaving [`Self::take`] permanently empty and every
+    /// query reporting `NoCookies`. Encoding the bound in the type
+    /// rejects that at the call site instead of panicking here
+    /// (bd nts-r11f.11 / NTS-132).
     #[must_use]
-    pub fn with_capacity(capacity: usize) -> Self {
-        assert!(capacity > 0, "CookieJar capacity must be > 0");
+    pub fn with_capacity(capacity: NonZeroUsize) -> Self {
         Self {
             capacity,
             inner: VecDeque::new(),
@@ -151,7 +158,7 @@ impl CookieJar {
     }
 
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.capacity.get()
     }
 
     /// Insert a single cookie, evicting the oldest when at capacity.
@@ -170,7 +177,7 @@ impl CookieJar {
         T: Into<Zeroizing<Vec<u8>>>,
     {
         self.inner.push_back(cookie.into());
-        while self.inner.len() > self.capacity {
+        while self.inner.len() > self.capacity.get() {
             // The popped `Zeroizing<Vec<u8>>` wipes its bytes when
             // it drops at the end of this iteration; no explicit
             // `zeroize()` call is needed.
@@ -224,6 +231,14 @@ impl CookieJar {
 mod tests {
     use super::*;
 
+    /// Shorthand for the [`NonZeroUsize`] capacities the tests below
+    /// build. Panics on zero, which is exactly what the production
+    /// signature now makes unreachable — the panic lives in the test
+    /// helper rather than in [`CookieJar::with_capacity`].
+    fn cap(n: usize) -> NonZeroUsize {
+        NonZeroUsize::new(n).expect("test capacity must be non-zero")
+    }
+
     /// Pins the headroom relationship between the two caps added for bd
     /// nts-r11f.4. [`crate::nts::ntp::build_client_request`] emits the
     /// cookie once plus once per placeholder, so the worst-case
@@ -245,13 +260,13 @@ mod tests {
     #[test]
     fn defaults_to_capacity_eight() {
         let jar = CookieJar::new();
-        assert_eq!(jar.capacity(), DEFAULT_CAPACITY);
+        assert_eq!(jar.capacity(), DEFAULT_CAPACITY.get());
         assert_eq!(jar.count(), 0);
     }
 
     #[test]
     fn put_and_take_is_fifo() {
-        let mut jar = CookieJar::with_capacity(4);
+        let mut jar = CookieJar::with_capacity(cap(4));
         for i in 0..3u8 {
             jar.put(vec![i]);
         }
@@ -264,7 +279,7 @@ mod tests {
 
     #[test]
     fn capacity_evicts_oldest() {
-        let mut jar = CookieJar::with_capacity(3);
+        let mut jar = CookieJar::with_capacity(cap(3));
         for i in 0..5u8 {
             jar.put(vec![i]);
         }
@@ -277,7 +292,7 @@ mod tests {
 
     #[test]
     fn put_many_respects_capacity() {
-        let mut jar = CookieJar::with_capacity(2);
+        let mut jar = CookieJar::with_capacity(cap(2));
         jar.put_many([vec![0u8], vec![1], vec![2], vec![3]]);
         assert_eq!(jar.count(), 2);
         assert_eq!(jar.take(), Some(Zeroizing::new(vec![2])));
@@ -299,10 +314,22 @@ mod tests {
         assert_eq!(jar.take(), None);
     }
 
+    /// Pins the non-panicking capacity contract (bd nts-r11f.11 /
+    /// NTS-132). [`CookieJar::with_capacity`] takes a
+    /// [`NonZeroUsize`], so a zero capacity cannot be expressed: the
+    /// rejection happens where the value is built, as a `None` from
+    /// [`NonZeroUsize::new`], rather than as a panic inside the
+    /// constructor. `with_capacity(0)` no longer compiles, which is
+    /// the property this test stands in for — a regression to a plain
+    /// `usize` parameter would make the assertion below meaningless
+    /// but would also re-admit the panicking call site.
     #[test]
-    #[should_panic(expected = "capacity must be > 0")]
-    fn zero_capacity_panics() {
-        let _ = CookieJar::with_capacity(0);
+    fn zero_capacity_is_unrepresentable() {
+        assert!(
+            NonZeroUsize::new(0).is_none(),
+            "a zero capacity must not survive NonZeroUsize construction",
+        );
+        assert_eq!(DEFAULT_CAPACITY.get(), 8);
     }
 
     /// Pins the redacted `Debug` impl: cookies are NTS authentication
@@ -325,7 +352,7 @@ mod tests {
     /// with any structural field rendering.
     #[test]
     fn debug_impl_renders_counts_only_and_does_not_leak_cookie_bytes() {
-        let mut jar = CookieJar::with_capacity(4);
+        let mut jar = CookieJar::with_capacity(cap(4));
         let sentinel = vec![0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF];
         jar.put(sentinel.clone());
         jar.put(sentinel.clone());
@@ -394,7 +421,7 @@ mod tests {
     /// Compiles iff the bound stays `T: Into<Zeroizing<Vec<u8>>>`.
     #[test]
     fn put_accepts_zeroizing_wrapped_cookies() {
-        let mut jar = CookieJar::with_capacity(4);
+        let mut jar = CookieJar::with_capacity(cap(4));
         // Single-cookie path: pre-wrapped Zeroizing payload.
         jar.put(Zeroizing::new(vec![1u8, 2, 3]));
         // Bulk path: an iterator of `Zeroizing<Vec<u8>>` — the exact
