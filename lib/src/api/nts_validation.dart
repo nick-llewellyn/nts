@@ -68,27 +68,36 @@ DateTime? _verificationInstant(int? resolvedMs) => resolvedMs == null
 // `on ffi.NtsError catch` arms and reach consumers as a raw
 // `RangeError (byteOffset)` naming neither the cause nor the fix.
 //
-// Three shapes are attributable to a layout disagreement:
+// Two shapes are attributable to a layout disagreement, and the
+// `failures produced by the real generated codec` tests pin that both
+// are reachable and that nothing outside them is:
 //
 // - `RangeError` — a fixed-width decoder read past the end of a
-//   buffer shorter than the layout expects.
+//   buffer shorter than the layout expects, or a fieldless-enum index
+//   past the end of the generated `values` list.
 // - `UnimplementedError` — an enum discriminant the generated
 //   `switch` has no arm for (see `sse_decode_nts_error`'s `default`).
-// - `ArgumentError` — a decoded value rejected as malformed before
-//   it reaches a DTO constructor.
 //
-// Deliberately *not* caught: `StateError`, which FRB's dispatcher
-// throws for a missed `NtsRustLib.init()`. That is a bootstrap
-// ordering mistake with its own documented remediation, and the four
-// entry points' dartdoc already promises it passes through
-// unconverted.
+// Deliberately *not* caught:
+//
+// - `ArgumentError` other than its `RangeError` subtype. Every decode
+//   failure the generated codec actually produces is one of the two
+//   shapes above, so a bare `ArgumentError` arriving here did not come
+//   from the decoder — it is a mock mistake, a future FRB argument
+//   bug, or an unrelated throw from inside the call. Converting it
+//   would answer a real diagnostic with "rebuild the native library",
+//   which sends the reader somewhere the fault is not.
+// - `StateError`, which FRB's dispatcher throws for a missed
+//   `NtsRustLib.init()`. That is a bootstrap ordering mistake with its
+//   own documented remediation, and the four entry points' dartdoc
+//   already promises it passes through unconverted.
 //
 // The wrapper validates its own integer arguments up front
 // (`_validateRanges`), so an encode-side `RangeError` cannot reach
 // here; anything of these shapes crossing this boundary originates
 // in the decode path.
 bool _isAbiDecodeFailure(Object e) =>
-    e is RangeError || e is UnimplementedError || e is ArgumentError;
+    e is RangeError || e is UnimplementedError;
 
 // Rebuild guidance carried on every converted decode failure. The
 // example CLI warns about the common case ahead of the call by
