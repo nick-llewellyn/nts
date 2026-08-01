@@ -123,6 +123,12 @@ class _RecordingApi implements NtsRustLibApi {
   // started" shape.
   int clientWithTrustModeCalls = 0;
   ffi.TrustMode? lastClientWithTrustModeMode;
+  // Snapshot of the `custom` payload taken *during* the call, before the
+  // wrapper wipes the intermediate copy it owns. `lastClientWithTrustModeMode`
+  // holds the live object, so reading its bytes after the constructor
+  // returns observes the zeros rather than what was encoded.
+  Uint8List? lastClientWithTrustModeRootsAtCall;
+  Object? nextWithTrustModeThrow;
   final Map<ffi.NtsClient, ffi.TrustMode> clientTrustModes =
       <ffi.NtsClient, ffi.TrustMode>{};
   int trustStatusCalls = 0;
@@ -164,6 +170,8 @@ class _RecordingApi implements NtsRustLibApi {
     nextInvalidateResult = false;
     clientWithTrustModeCalls = 0;
     lastClientWithTrustModeMode = null;
+    lastClientWithTrustModeRootsAtCall = null;
+    nextWithTrustModeThrow = null;
     clientTrustModes.clear();
     trustStatusCalls = 0;
     nextTrustStatus = _zeroFfiTrustStatus();
@@ -304,6 +312,15 @@ class _RecordingApi implements NtsRustLibApi {
   }) {
     clientWithTrustModeCalls++;
     lastClientWithTrustModeMode = trustMode;
+    if (trustMode is ffi.TrustMode_Custom) {
+      lastClientWithTrustModeRootsAtCall = Uint8List.fromList(trustMode.field0);
+    }
+    // Recorded before the throw so a test can inspect what was handed
+    // over on the failing path. Kept separate from `nextSyncThrow` so
+    // arming it cannot perturb the many tests that construct a client
+    // incidentally while exercising another sync endpoint.
+    final t = nextWithTrustModeThrow;
+    if (t != null) throw t;
     final fake = _FakeFfiNtsClient();
     clientTrustModes[fake] = trustMode;
     return fake;
@@ -2153,10 +2170,40 @@ void main() {
       NtsClient(trustMode: TrustMode.custom, customRoots: roots);
       expect(api.clientNewCalls, 0);
       expect(api.clientWithTrustModeCalls, 1);
+      // Asserted against the snapshot the mock took during the call:
+      // the wrapper wipes the copy it owns once the encode has consumed
+      // it, so the live payload is zeros by the time we get here.
+      expect(api.lastClientWithTrustModeRootsAtCall, Uint8List.fromList(roots));
+      expect(api.lastClientWithTrustModeMode, isA<ffi.TrustMode_Custom>());
+    });
+
+    test('the intermediate customRoots copy is wiped after the FFI '
+        'handoff', () {
+      final roots = [1, 2, 3];
+      NtsClient(trustMode: TrustMode.custom, customRoots: roots);
+      // The Rust side holds its equivalent in a `Zeroizing<Vec<u8>>`;
+      // leaving the Dart copy readable until an unpredictable GC would
+      // be the weaker end of that. The copy is this package's, so it is
+      // ours to wipe.
+      final handed = api.lastClientWithTrustModeMode as ffi.TrustMode_Custom;
+      expect(handed.field0, Uint8List.fromList([0, 0, 0]));
+      // The caller's own list is untouched — the contract the
+      // constructor dartdoc promises.
+      expect(roots, [1, 2, 3]);
+    });
+
+    test('the copy is wiped even when the FFI construction throws', () {
+      final roots = [1, 2, 3];
+      api.nextWithTrustModeThrow = StateError('withTrustMode blew up');
       expect(
-        api.lastClientWithTrustModeMode,
-        ffi.TrustMode.custom(Uint8List.fromList(roots)),
+        () => NtsClient(trustMode: TrustMode.custom, customRoots: roots),
+        throwsA(isA<StateError>()),
       );
+      // The throwing path is where a wipe is most easily lost: without
+      // the `finally` the bytes become unreachable *and* unwipeable.
+      final handed = api.lastClientWithTrustModeMode as ffi.TrustMode_Custom;
+      expect(handed.field0, Uint8List.fromList([0, 0, 0]));
+      expect(roots, [1, 2, 3]);
     });
 
     test('trustMode validation throws NtsError.invalidSpec on mismatched '
@@ -2895,10 +2942,12 @@ void main() {
         customRoots: roots,
       );
       expect(api.clientWithTrustModeCalls, 1);
-      expect(
-        api.lastClientWithTrustModeMode,
-        ffi.TrustMode.custom(Uint8List.fromList(roots)),
-      );
+      // Snapshot taken during the call: the wrapper wipes the copy it
+      // owns once the encode has consumed it, so the live payload reads
+      // as zeros afterwards. The caller's list is untouched.
+      expect(api.lastClientWithTrustModeRootsAtCall, Uint8List.fromList(roots));
+      expect(api.lastClientWithTrustModeMode, isA<ffi.TrustMode_Custom>());
+      expect(roots, [1, 2, 3]);
     });
 
     test('ntsGetTime rejects a mismatched trustMode/customRoots pair '

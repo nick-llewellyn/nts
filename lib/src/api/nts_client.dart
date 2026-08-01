@@ -80,6 +80,16 @@ class NtsClient {
   /// caller-supplied custom root certificates. The choice is
   /// immutable for the life of the client.
   ///
+  /// **`customRoots` ownership.** The list is read, not retained: its
+  /// contents are copied on the way to the FFI boundary and the copy
+  /// is overwritten with zeros once the native side has consumed it.
+  /// Your list is never mutated, and no reference to it outlives this
+  /// call — so wiping it afterwards is yours to do if the bytes are
+  /// sensitive in your threat model. Do not assume this package wipes
+  /// it for you. Trust anchors are public certificates in the common
+  /// case; the caution matters for deployments where the anchor set
+  /// itself is confidential.
+  ///
   /// Synchronous: dispatches through the FRB bridge to mint the
   /// underlying Rust handle in-line. `await NtsRustLib.init()` must
   /// have completed first; calling this before init throws a
@@ -92,12 +102,20 @@ class NtsClient {
     List<int>? customRoots,
   }) {
     _validateTrustPolicy(trustMode: trustMode, customRoots: customRoots);
-    final inner = trustMode == TrustMode.platformWithFallback
-        ? ffi.NtsClient()
-        : ffi.NtsClient.withTrustMode(
-            trustMode: _ffiTrustMode(trustMode, customRoots),
-          );
-    return NtsClient._(inner);
+    if (trustMode == TrustMode.platformWithFallback) {
+      return NtsClient._(ffi.NtsClient());
+    }
+    // `_ffiTrustMode` copies `customRoots` into the `Uint8List` the FFI
+    // encoder needs. The encode is synchronous and complete when
+    // `withTrustMode` returns, so the copy is wiped in a `finally` —
+    // including on a throw, when the bytes would otherwise be
+    // unreachable and unwipeable.
+    final ffiMode = _ffiTrustMode(trustMode, customRoots);
+    try {
+      return NtsClient._(ffi.NtsClient.withTrustMode(trustMode: ffiMode));
+    } finally {
+      _wipeCustomRoots(ffiMode);
+    }
   }
 
   /// Trust-anchor policy this client was constructed with.

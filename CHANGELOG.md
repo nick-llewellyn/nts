@@ -77,6 +77,24 @@
 
 ### Fixed
 
+- The Dart-side copy of `customRoots` is now wiped after the FFI
+  handoff instead of being left readable until the GC runs. The
+  `NtsClient` constructor copies the caller's `List<int>` into the
+  `Uint8List` the FFI encoder requires; the Rust side holds its
+  equivalent in a `Zeroizing<Vec<u8>>` (`CustomRootsBytes`), so the
+  intermediate Dart copy was the weaker end of that story for
+  deployments where the anchor set itself is confidential. The copy is
+  overwritten with zeros in a `finally`, so it is cleared on the
+  throwing path too — the case where the bytes would otherwise be both
+  unreachable and unwipeable.
+
+  Bounded, not total, and the constructor dartdoc now says so. Two
+  copies stay outside the package's reach: the caller's own list, which
+  is theirs to manage and is never mutated, and the FRB serializer
+  buffer the encoder writes into, which is upstream-owned — the same
+  class of residue the Rust-side `CustomRootsBytes` docs already record
+  for the PEM parse path.
+
 - The ABI-mismatch conversion no longer rewrites a bare
   `ArgumentError` as `NtsError.abiMismatch`. The wrapper widens its
   catch around the FFI call to convert codec decode failures — bytes
