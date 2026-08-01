@@ -90,7 +90,7 @@ pub const MAX_COOKIE_LEN: usize = 512;
 /// `Vec<u8>` allocations (bd nts-8ey).
 ///
 /// CONCURRENCY: this type auto-derives `Send + Sync` (its fields —
-/// `usize`, `VecDeque`, `Zeroizing<Vec<u8>>` — are all
+/// `NonZeroUsize`, `VecDeque`, `Zeroizing<Vec<u8>>` — are all
 /// `Send + Sync`), so the marker traits alone do *not* warn callers
 /// off concurrent use. The real constraint is that it carries **no
 /// interior mutability**: every mutator ([`Self::put`],
