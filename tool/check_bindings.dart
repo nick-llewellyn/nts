@@ -124,6 +124,7 @@ Future<void> main(List<String> args) async {
   _lintIgnorePatches.forEach(_addLintsToIgnoreForFile);
   _patchFrbGeneratedUnimplementedMessages();
   _patchDartFrbGeneratedUnimplementedMessages();
+  _patchDartIntraDocLinks();
   final dcoPatched = _patchDartFrbGeneratedDcoUnreachableMessages();
   if (dcoPatched == 0) {
     stderr.writeln(
@@ -584,4 +585,351 @@ int _patchDartFrbGeneratedDcoUnreachableMessages() {
 Future<void> _validateGeneratedDart() async {
   stdout.writeln('Validating patched Dart bindings...');
   await _run('dart', const ['analyze', _frbGeneratedDispatcher]);
+}
+
+// ---------------------------------------------------------------------------
+// Rust intra-doc link rewriting
+// ---------------------------------------------------------------------------
+
+/// A Dart symbol reachable from a rustdoc intra-doc link.
+///
+/// [dartPath] is the dartdoc reference text the link is rewritten to, e.g.
+/// `NtsDnsPoolStats.spawnFailed`.
+class DartSymbol {
+  /// Creates a symbol resolving to [dartPath].
+  const DartSymbol(this.dartPath);
+
+  /// Dartdoc reference text, without the enclosing square brackets.
+  final String dartPath;
+
+  @override
+  String toString() => dartPath;
+}
+
+/// Lookup table mapping Rust paths (`Type::member`, bare item names) onto
+/// the Dart symbols FRB emitted for them.
+///
+/// The table is *derived from the generated Dart*, never from a casing
+/// rule: a Rust path only resolves if a matching Dart declaration was
+/// actually parsed out of the bindings. That is what keeps the rewrite
+/// honest across the shapes FRB treats differently — plain enums, freezed
+/// sealed classes, struct fields, renamed constructors.
+class DartSymbolTable {
+  DartSymbolTable._(this._symbols, this._frbIgnored);
+
+  final Map<String, DartSymbol> _symbols;
+  final Set<String> _frbIgnored;
+
+  /// Rust paths this table can resolve, sorted. Exposed for diagnostics
+  /// and tests.
+  List<String> get keys => _symbols.keys.toList()..sort();
+
+  /// Rust item names FRB reported as excluded from the bindings.
+  Set<String> get frbIgnored => Set<String>.unmodifiable(_frbIgnored);
+
+  /// Resolves [rustPath] to a Dart symbol, or `null` when unknown.
+  ///
+  /// `Self::` is resolved against [enclosingClass], which callers supply
+  /// from the declaration the doc comment is attached to. Dart has no
+  /// `Self`, so a `Self::` link outside a class body is unresolvable.
+  DartSymbol? resolve(String rustPath, {String? enclosingClass}) {
+    var path = rustPath;
+    if (path.startsWith('Self::')) {
+      if (enclosingClass == null) return null;
+      path = '$enclosingClass::${path.substring('Self::'.length)}';
+    }
+    return _symbols[path];
+  }
+
+  /// Whether [rustPath] names an item FRB deliberately left out of the
+  /// bindings (crate-private functions, unreferenced types). Such links
+  /// have no Dart target by construction and are downgraded to inline
+  /// code rather than reported as errors.
+  bool isFrbIgnored(String rustPath) =>
+      !rustPath.contains('::') && _frbIgnored.contains(rustPath);
+}
+
+/// Builds a [DartSymbolTable] from generated Dart binding [sources].
+///
+/// Recognises top-level functions, classes / enums / sealed classes, their
+/// fields, enum values, named and unnamed constructors, and static and
+/// instance methods. Each member is registered under both the snake_case
+/// and the PascalCase Rust spelling of its Dart name, because Rust struct
+/// fields and free functions are snake_case while enum variants are
+/// PascalCase and FRB lowerCamelCases all of them.
+DartSymbolTable buildDartSymbolTable(Iterable<String> sources) {
+  final symbols = <String, DartSymbol>{};
+  final ignored = <String>{};
+
+  void addMember(String container, String dartName, String rustName) {
+    symbols.putIfAbsent(
+      '$container::$rustName',
+      () => DartSymbol('$container.$dartName'),
+    );
+  }
+
+  for (final source in sources) {
+    String? container;
+    for (final line in source.split('\n')) {
+      final ignoreMatch = _frbIgnoredHeader.firstMatch(line);
+      if (ignoreMatch != null) {
+        for (final m in _backtickedName.allMatches(line)) {
+          ignored.add(m.group(1)!);
+        }
+        continue;
+      }
+
+      final containerMatch = _dartContainerDecl.firstMatch(line);
+      if (containerMatch != null) {
+        container = containerMatch.group(1) ?? containerMatch.group(2);
+        symbols.putIfAbsent(container!, () => DartSymbol(container!));
+        continue;
+      }
+      if (line == '}') {
+        container = null;
+        continue;
+      }
+
+      if (container == null) {
+        final fn = _dartTopLevelFn.firstMatch(line);
+        if (fn != null) {
+          final name = fn.group(1)!;
+          symbols.putIfAbsent(_toSnakeCase(name), () => DartSymbol(name));
+        }
+        continue;
+      }
+
+      final field = _dartField.firstMatch(line);
+      if (field != null) {
+        _registerSpellings(addMember, container, field.group(1)!);
+        continue;
+      }
+      final namedCtor = _dartNamedFactory.firstMatch(line);
+      if (namedCtor != null && namedCtor.group(1) == container) {
+        _registerSpellings(addMember, container, namedCtor.group(2)!);
+        continue;
+      }
+      final unnamedCtor = _dartUnnamedFactory.firstMatch(line);
+      if (unnamedCtor != null && unnamedCtor.group(1) == container) {
+        // FRB renders a `#[frb(sync)]` Rust `new` as Dart's unnamed
+        // constructor; `[Type.new]` is dartdoc's reference form for it.
+        addMember(container, 'new', 'new');
+        continue;
+      }
+      final enumValue = _dartEnumValue.firstMatch(line);
+      if (enumValue != null) {
+        _registerSpellings(addMember, container, enumValue.group(1)!);
+        continue;
+      }
+      final method = _dartMethod.firstMatch(line);
+      if (method != null) {
+        _registerSpellings(addMember, container, method.group(1)!);
+      }
+    }
+  }
+  return DartSymbolTable._(symbols, ignored);
+}
+
+void _registerSpellings(
+  void Function(String container, String dartName, String rustName) add,
+  String container,
+  String dartName,
+) {
+  add(container, dartName, _toSnakeCase(dartName));
+  add(container, dartName, dartName[0].toUpperCase() + dartName.substring(1));
+}
+
+String _toSnakeCase(String camel) => camel
+    .replaceAllMapped(RegExp('[A-Z]'), (m) => '_${m.group(0)!.toLowerCase()}')
+    .replaceFirst(RegExp('^_'), '');
+
+// `abstract class X`, `sealed class X`, `class X`, `enum X`. Anchored at
+// column 0 so nested/annotated declarations inside a body are not mistaken
+// for a new container.
+final _dartContainerDecl = RegExp(
+  r'^(?:(?:abstract|sealed|final|base|interface)\s+)*class\s+(\w+)'
+  r'|^enum\s+(\w+)',
+);
+final _dartTopLevelFn = RegExp(r'^[A-Za-z_][\w<>?,\s]*\s([a-z]\w*)\(');
+final _dartField = RegExp(r'^  final\s+[\w<>?,\s]+\s(\w+);');
+final _dartNamedFactory = RegExp(r'^  (?:const\s+)?factory\s+(\w+)\.(\w+)\(');
+final _dartUnnamedFactory = RegExp(r'^  (?:const\s+)?factory\s+(\w+)\(\)');
+final _dartEnumValue = RegExp(r'^  ([a-z]\w*),$');
+final _dartMethod = RegExp(
+  r'^  (?:static\s+)?[A-Za-z_][\w<>?,\s]*\s([a-z]\w*)\(',
+);
+final _frbIgnoredHeader = RegExp(r'^// These (?:function|type)s? .* ignored ');
+final _backtickedName = RegExp(r'`(\w+)`');
+
+// A rustdoc intra-doc link: `` [`path`] ``. Bare `[Foo]` links are already
+// Dart-shaped (or authored text) and are left alone.
+final _rustIntraDocLink = RegExp(r'\[`([\w:]+)`\]');
+
+/// Outcome of rewriting one generated Dart source.
+class IntraDocRewrite {
+  /// Creates a rewrite result.
+  const IntraDocRewrite(
+    this.source,
+    this.rewritten,
+    this.downgraded,
+    this.unresolved,
+  );
+
+  /// Patched source text.
+  final String source;
+
+  /// Number of links rewritten to a Dart target.
+  final int rewritten;
+
+  /// Number of links downgraded to inline code because FRB excluded the
+  /// referent from the bindings.
+  final int downgraded;
+
+  /// Rust paths that resolved to nothing, in first-seen order.
+  final List<String> unresolved;
+}
+
+/// Rewrites Rust intra-doc links in [source] into their Dart equivalents
+/// using [table].
+///
+/// Links whose referent FRB excluded from the bindings are downgraded to
+/// inline code, matching the convention `rust/src/api/nts.rs` already
+/// applies by hand for crate-internal names. Anything else that fails to
+/// resolve is reported in [IntraDocRewrite.unresolved] rather than being
+/// silently left Rust-shaped.
+///
+/// Idempotent: the output contains no `` [`...`] `` forms, so a second
+/// pass is a no-op.
+IntraDocRewrite rewriteIntraDocLinks(String source, DartSymbolTable table) {
+  final unresolved = <String>[];
+  var rewritten = 0;
+  var downgraded = 0;
+  String? container;
+  final out = <String>[];
+
+  for (final line in source.split('\n')) {
+    final containerMatch = _dartContainerDecl.firstMatch(line);
+    if (containerMatch != null) {
+      container = containerMatch.group(1) ?? containerMatch.group(2);
+    } else if (line == '}') {
+      container = null;
+    }
+
+    if (!line.contains('[`')) {
+      out.add(line);
+      continue;
+    }
+    // Doc comments precede their declaration, so the container in scope
+    // for a member's rustdoc is the one whose body it sits in -- already
+    // tracked above. A class-level doc comment sits *outside* the class,
+    // where `Self` cannot appear anyway.
+    final captured = container;
+    out.add(
+      line.replaceAllMapped(_rustIntraDocLink, (m) {
+        final path = m.group(1)!;
+        final symbol = table.resolve(path, enclosingClass: captured);
+        if (symbol != null) {
+          rewritten++;
+          return '[${symbol.dartPath}]';
+        }
+        if (table.isFrbIgnored(path)) {
+          downgraded++;
+          return '`$path`';
+        }
+        if (!unresolved.contains(path)) unresolved.add(path);
+        return m.group(0)!;
+      }),
+    );
+  }
+  return IntraDocRewrite(out.join('\n'), rewritten, downgraded, unresolved);
+}
+
+// Rewrites Rust intra-doc links in every generated Dart API module into
+// their Dart equivalents. The symbol table is built across all modules so
+// a cross-module reference resolves; the freezed part files contribute
+// their sealed-class subtypes and carry no doc comments of their own.
+//
+// Exits non-zero on an unresolvable link rather than leaving it
+// Rust-shaped, naming the originating `rust/src/api/*.rs` line so the
+// docstring can be fixed at source.
+void _patchDartIntraDocLinks() {
+  final dir = Directory(_generatedDartApiDir);
+  if (!dir.existsSync()) {
+    stderr.writeln(
+      '$_errorPrefix expected generated directory not found: '
+      '$_generatedDartApiDir (intra-doc link patch cannot be applied)',
+    );
+    exit(1);
+  }
+  final files =
+      dir
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.dart'))
+          .toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
+  final sources = <String, String>{
+    for (final f in files) f.path: f.readAsStringSync(),
+  };
+  final table = buildDartSymbolTable(sources.values);
+
+  var rewritten = 0;
+  var downgraded = 0;
+  final unresolved = <String, List<String>>{};
+  for (final entry in sources.entries) {
+    final result = rewriteIntraDocLinks(entry.value, table);
+    rewritten += result.rewritten;
+    downgraded += result.downgraded;
+    if (result.unresolved.isNotEmpty) {
+      unresolved[entry.key] = result.unresolved;
+    }
+    if (result.source != entry.value) {
+      File(entry.key).writeAsStringSync(result.source);
+    }
+  }
+
+  if (unresolved.isNotEmpty) {
+    stderr.writeln(
+      '${_errorPrefix}unresolvable Rust intra-doc link(s) in the '
+      'generated Dart bindings. Each one documents a Dart API using a '
+      'Rust path that has no Dart counterpart, so it renders as a dead '
+      'reference. Fix the rustdoc at source -- either point it at an '
+      'item FRB exports, or render it as inline code like the '
+      'crate-internal names already are.',
+    );
+    unresolved.forEach((path, paths) {
+      for (final rustPath in paths) {
+        stderr.writeln('       [`$rustPath`] (in $path)');
+        for (final origin in _findRustOrigins(rustPath)) {
+          stderr.writeln('         from $origin');
+        }
+      }
+    });
+    exit(1);
+  }
+
+  if (rewritten > 0 || downgraded > 0) {
+    stdout.writeln(
+      'Patched $_generatedDartApiDir: rewrote $rewritten Rust intra-doc '
+      'link(s) into Dart form, downgraded $downgraded FRB-excluded '
+      'reference(s) to inline code',
+    );
+  }
+}
+
+// Best-effort locator for the rustdoc that produced an unresolvable link.
+// Scans the FRB-visible Rust API sources for the literal link text.
+List<String> _findRustOrigins(String rustPath) {
+  final dir = Directory('rust/src/api');
+  if (!dir.existsSync()) return const <String>[];
+  final needle = '[`$rustPath`]';
+  final origins = <String>[];
+  for (final file in dir.listSync().whereType<File>()) {
+    if (!file.path.endsWith('.rs')) continue;
+    final lines = file.readAsLinesSync();
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].contains(needle)) origins.add('${file.path}:${i + 1}');
+    }
+  }
+  return origins;
 }

@@ -396,6 +396,26 @@
   rejected future rather than a synchronous throw, are unchanged.
   (NTS-77)
 
+- Rust intra-doc links in the generated Dart bindings are now rewritten
+  into Dart form. FRB copies `rust/src/api/nts.rs` doc comments verbatim
+  into `lib/src/ffi/api/nts.dart`, so the Dart mirror documented Dart
+  APIs using Rust paths: 59 links across the file used `::`, Rust
+  casing, or `Self`, none of which name anything on the Dart side, so
+  every one rendered as a dead reference. A new post-codegen pass in
+  `tool/check_bindings.dart` resolves each path against a symbol table
+  *derived from the generated Dart* rather than from a casing rule,
+  because FRB treats the shapes differently — a plain enum variant
+  becomes a lowerCamelCase value, a freezed sealed-class variant a named
+  factory, a `#[frb(sync)]` `new` the unnamed constructor, a free
+  function a camelCase top-level. A uniform lowercasing rule would emit
+  confidently wrong targets for three of those. References to items FRB
+  excludes from the bindings are downgraded to inline code, matching
+  what the Rust source already does by hand for crate-internal names,
+  and anything that resolves to nothing fails the check with the
+  originating `rust/src/api/*.rs` line rather than passing through
+  Rust-shaped. The Rust source is untouched, so Rust readers keep
+  working intra-doc links. Documentation only. (NTS-135)
+
 
 ## 8.0.0
 
