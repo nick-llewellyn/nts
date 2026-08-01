@@ -138,6 +138,16 @@ budget that expires while queued fails with
 `TimeoutPhase.bridgeSaturation` without ever crossing the FFI
 boundary.
 
+Cancellation of a still-queued waiter reads the same clock. Deadlines
+are held as absolute boot-clock readings and swept by a single
+queue-wide timer, capped at 250 ms per arming. A plain `Timer` armed
+for the whole budget would not do: it runs on the event loop's
+suspend-frozen clock, so a device that slept through a waiter's budget
+would resume with the timer still owing its full remaining slice. The
+cap bounds how late a resume unparks a waiter to one slice, and never
+delays a deadline nearer than the cap — which is every deadline while
+awake.
+
 ## Reliability inside the Rust core
 
 The Rust pipeline was already monotonic before PR #231 — and stays
