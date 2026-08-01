@@ -23,7 +23,12 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show BaseHandler, ExternalLibrary, PlatformInt64Util, SseDeserializer;
+    show
+        BaseApiImpl,
+        BaseHandler,
+        ExternalLibrary,
+        PlatformInt64Util,
+        SseDeserializer;
 // Not re-exported by the public FRB entrypoints; the real-bridge
 // coverage test constructs the generated `NtsRustLibApiImpl` directly
 // and needs these (file-level implementation_imports ignore above).
@@ -3167,6 +3172,32 @@ void main() {
         NtsRustLib.instance.resetState();
         NtsRustLib.initMock(api: api);
       }
+    });
+
+    test('the generated FFI implementation satisfies the BaseApiImpl '
+        'gate that hand-supplied APIs do not', () {
+      // `MonotonicClock._resolveSource` discriminates real bridge from
+      // mock on `api is BaseApiImpl` — FRB runtime code, rather than
+      // the codegen-named `NtsRustLibApiImpl` whose identifier follows
+      // `dart_entrypoint_class_name`. That indirection only holds
+      // while the generated implementation still derives from
+      // `BaseApiImpl`, so pin both arms here: an FRB upgrade that
+      // reshaped the hierarchy would otherwise flip the clock to its
+      // suspend-frozen fallback with no test failure.
+      final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+      final binding = GeneralizedFrbRustBinding(lib);
+      final handler = BaseHandler();
+      final realApi = NtsRustLibApiImpl(
+        handler: handler,
+        wire: NtsRustLibWire.fromExternalLibrary(lib),
+        generalizedFrbRustBinding: binding,
+        portManager: PortManager(binding, handler),
+      );
+      expect(realApi, isA<BaseApiImpl>());
+      // The suite's own fake implements the API interface directly and
+      // extends nothing, which is the shape every hand-supplied mock
+      // takes; it must land on the probe-and-fall-back arm.
+      expect(api, isNot(isA<BaseApiImpl>()));
     });
 
     test('NtsSyncedTime toString carries the diagnostic fields', () {

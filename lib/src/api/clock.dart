@@ -10,8 +10,11 @@
 // monotonic timeline the package uses internally via
 // `MonotonicClock.instance`.
 
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show BaseApiImpl;
+
 import '../ffi/api/nts.dart' as ffi;
-import '../ffi/frb_generated.dart' show NtsRustLib, NtsRustLibApiImpl;
+import '../ffi/frb_generated.dart' show NtsRustLib;
 
 /// A sleep-aware monotonic time source.
 ///
@@ -43,11 +46,13 @@ import '../ffi/frb_generated.dart' show NtsRustLib, NtsRustLibApiImpl;
 /// during device sleep.
 ///
 /// **Mock-mode fallback (tests only):** the gate is structural, on
-/// the installed API's type. Whenever the bridge holds any API other
-/// than the generated FFI implementation — `NtsRustLib.initMock()`,
-/// or a hand-supplied API passed to `NtsRustLib.init(api: ...)` —
-/// the source is probed once; if the probe throws (the API does not
-/// stub `crateApiNtsNtsBoottimeMicros`), the instance degrades to a
+/// the installed API's type — specifically on whether it extends
+/// flutter_rust_bridge's `BaseApiImpl`, the runtime base class every
+/// generated FFI dispatch implementation derives from. Whenever the
+/// bridge holds any other API — `NtsRustLib.initMock()`, or a
+/// hand-supplied API passed to `NtsRustLib.init(api: ...)` — the
+/// source is probed once; if the probe throws (the API does not stub
+/// `crateApiNtsNtsBoottimeMicros`), the instance degrades to a
 /// standard, suspend-frozen [Stopwatch] source. A real bridge (the
 /// generated FFI implementation that `NtsRustLib.init()` installs by
 /// default) never takes this path: its clock read is dispatched
@@ -100,8 +105,19 @@ class MonotonicClock {
     // `api` is FRB-internal, but this package owns the generated
     // bindings; the same access pattern is used throughout
     // `lib/src/ffi/api/nts.dart`.
+    //
+    // The test is against `BaseApiImpl` rather than the generated
+    // `NtsRustLibApiImpl`, whose name is derived from
+    // `dart_entrypoint_class_name` in `flutter_rust_bridge.yaml` and
+    // so moves with configuration. `BaseApiImpl` is hand-written FRB
+    // runtime code that every generated implementation extends (via
+    // its `*ApiImplPlatform` layer), so the predicate survives both a
+    // rename and a regeneration. `test/api_smoke_test.dart` pins the
+    // relationship, so an FRB upgrade that reshaped the hierarchy
+    // would fail there rather than silently selecting this arm's
+    // opposite.
     // ignore: invalid_use_of_internal_member
-    if (NtsRustLib.instance.api is NtsRustLibApiImpl) {
+    if (NtsRustLib.instance.api is BaseApiImpl) {
       // Real bridge (`NtsRustLib.init()` installed the generated FFI
       // dispatch implementation): no probe, no catch. Any failure of
       // the synchronous clock read propagates instead of being masked
