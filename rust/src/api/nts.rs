@@ -3667,16 +3667,21 @@ fn system_time_to_ntp64() -> u64 {
 /// Non-zero stand-in timestamp for a system clock reading before the
 /// Unix epoch.
 ///
-/// Encodes the sleep-aware boot clock ([`crate::nts::boottime`]) as
-/// seconds-plus-fraction since the *NTP* epoch, so the value advances
+/// Packs the sleep-aware boot clock ([`crate::nts::boottime`]) into the
+/// NTP64 wire *format* — 32 bits of whole seconds, 32 bits of binary
+/// fraction — with elapsed-since-boot substituted for the usual
+/// seconds-since-1900. The result is therefore a well-formed NTP64
+/// field but not a timestamp relative to any epoch: it advances
 /// monotonically at microsecond resolution and is effectively unique
-/// per query. A returned zero is impossible: the raw encoding is
-/// clamped up to 1, which matters on the `Instant`-anchored fallback
-/// path where the first reading of a process can be zero.
+/// per query, which is all this call site needs. A returned zero is
+/// impossible: the raw encoding is clamped up to 1, which matters on
+/// the `Instant`-anchored fallback path where the first reading of a
+/// process can be zero.
 ///
-/// Landing the value in the 1900s rather than shifting it into the
-/// Unix-epoch range is deliberate. It is not a time — it exists only
-/// as an origin-echo and uniqueness token — and an obviously
+/// Leaving the seconds field small — so a reader interpreting it as
+/// an NTP timestamp lands in the 1900s — rather than shifting it into
+/// the Unix-epoch range is deliberate. It is not a time; it exists
+/// only as an origin-echo and uniqueness token, and an obviously
 /// implausible year keeps it from being mistaken for a real reading in
 /// a packet capture or a log. The offset computed in
 /// [`on_wire_statistics`] from such a T1/T4 pair is meaningless either

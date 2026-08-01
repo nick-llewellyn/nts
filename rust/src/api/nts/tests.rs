@@ -174,9 +174,9 @@ fn pre_epoch_fallback_is_non_zero_and_monotonic() {
 
 #[test]
 fn pre_epoch_fallback_stays_below_the_unix_epoch() {
-    // The value is a uniqueness token, not a time. Keeping it in the
-    // 1900s (NTP seconds well under 2_208_988_800) means a packet
-    // capture cannot mistake it for a plausible reading.
+    // The value is a uniqueness token, not a time. Leaving the seconds
+    // field small (well under 2_208_988_800, so it reads as the 1900s)
+    // means a packet capture cannot mistake it for a plausible reading.
     let secs_ntp = pre_epoch_fallback_ntp64() >> 32;
     assert!(
         secs_ntp < NTP_TO_UNIX_EPOCH_SECS,

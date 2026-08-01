@@ -89,9 +89,11 @@
 
   The pre-epoch branch now derives a non-zero, microsecond-resolution
   value from the sleep-aware boot clock, so successive queries differ.
-  It is deliberately encoded to land in the 1900s: it is a uniqueness
-  and echo token rather than a time, and an implausible year keeps it
-  from being read as a genuine clock value in a packet capture. The
+  The boot clock is packed into the NTP64 wire format rather than being
+  offset onto any epoch, so a reader interpreting it as a timestamp
+  lands in the 1900s. That is deliberate: it is a uniqueness and echo
+  token rather than a time, and an implausible year keeps it from being
+  read as a genuine clock value in a packet capture. The
   offset and peer-delay figures computed from such an exchange remain
   meaningless, exactly as they were when the value was zero — the
   emitted sample time comes from the server's T3, and round-trip time
