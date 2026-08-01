@@ -365,6 +365,48 @@ pub(crate) fn resolve_with<F>(
 where
     F: FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + 'static,
 {
+    resolve_with_spawner(stats, cap, host, port, timeout, lookup, spawn_dns_worker)
+}
+
+/// Production spawner: a detached, named OS thread. The `JoinHandle` is
+/// dropped deliberately — see the module docs on detached workers.
+fn spawn_dns_worker(work: Box<dyn FnOnce() + Send + 'static>) -> io::Result<()> {
+    thread::Builder::new()
+        .name("nts-dns".to_owned())
+        .spawn(work)
+        .map(|_handle| ())
+}
+
+/// [`resolve_with`] with the worker-spawn step injectable.
+///
+/// The seam exists for the spawn-failure branch below, which is
+/// otherwise unreachable from a test: `thread::Builder::spawn` only
+/// fails when the process is at a thread or memory limit, which cannot
+/// be induced portably. A test passes a `spawn` that returns
+/// `Err(…)` and asserts the whole contract that branch owes its two
+/// consumers — the [`SPAWN_FAILED_PREFIX`] tag, the `WouldBlock`
+/// normalisation, and the counter accounting.
+///
+/// `spawn` receives the worker as a boxed closure so the seam is a
+/// plain `FnOnce` rather than a generic-method trait. The single
+/// allocation is immaterial next to the thread stack the production
+/// spawner is about to allocate. An implementation must take ownership
+/// of the closure on failure exactly as `thread::Builder::spawn` does —
+/// the failure branch releases the slot on the assumption that the
+/// captured [`PendingSlot`] has been discarded.
+pub(crate) fn resolve_with_spawner<F, S>(
+    stats: &'static PoolStats,
+    cap: usize,
+    host: &str,
+    port: u16,
+    timeout: Duration,
+    lookup: F,
+    spawn: S,
+) -> io::Result<Vec<SocketAddr>>
+where
+    F: FnOnce(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + 'static,
+    S: FnOnce(Box<dyn FnOnce() + Send + 'static>) -> io::Result<()>,
+{
     let Some(slot) = try_acquire_slot(stats, cap) else {
         return Err(io::Error::new(
             io::ErrorKind::WouldBlock,
@@ -383,17 +425,14 @@ where
     // guard dropped there would credit `recovered` for a worker that
     // never ran. See [`SlotGuard::into_pending`].
     let pending = slot.into_pending();
-    if let Err(e) = thread::Builder::new()
-        .name("nts-dns".to_owned())
-        .spawn(move || {
-            let _slot = pending.arm();
-            let result = lookup(host_owned.as_str(), port);
-            // Receiver may have gone away after the timeout fired; the
-            // send fails silently in that case and the thread exits,
-            // which drops `_slot` and releases the pool slot.
-            let _ = tx.send(result);
-        })
-    {
+    if let Err(e) = spawn(Box::new(move || {
+        let _slot = pending.arm();
+        let result = lookup(host_owned.as_str(), port);
+        // Receiver may have gone away after the timeout fired; the
+        // send fails silently in that case and the thread exits,
+        // which drops `_slot` and releases the pool slot.
+        let _ = tx.send(result);
+    })) {
         // The closure — and the `PendingSlot` it captured — is gone, so
         // release the slot directly and record the refusal against
         // `spawn_failed` rather than `refused` (the cap was not
@@ -693,11 +732,10 @@ mod tests {
     /// "the process cannot create threads". A cap rejection that also
     /// bumped `spawn_failed` would make the pair useless for that
     /// decision. The converse direction — a spawn failure leaving
-    /// `refused` alone — cannot be exercised here because
-    /// `thread::Builder::spawn` is not injectable; it is pinned
-    /// structurally instead by `spawn_failure_does_not_credit_recovered`
-    /// and by the single `refused` increment living in
-    /// `try_acquire_slot`.
+    /// `refused` alone — is pinned through the `resolve_with_spawner`
+    /// seam by `resolve_with_spawn_failure_reaches_dns_spawn_failed_phase`
+    /// in `nts::ke`, which drives the real branch with an injected
+    /// refusal.
     #[test]
     fn cap_rejection_does_not_credit_spawn_failed() {
         static STATS: PoolStats = PoolStats::new();
@@ -751,12 +789,15 @@ mod tests {
     /// that never existed. `PendingSlot` has no `Drop` impl precisely
     /// so that discard is inert.
     ///
-    /// Spawn failure cannot be induced portably, so this asserts the
-    /// property that makes the failure path correct: `into_pending`
+    /// This pins the handoff primitive in isolation: `into_pending`
     /// followed by dropping the `PendingSlot` (standing in for the
     /// closure `spawn` discards) leaves `recovered` alone, while
     /// `in_flight` stays held — which is what obliges the spawn-failure
-    /// branch in `resolve_with` to release it explicitly.
+    /// branch in `resolve_with` to release it explicitly. That the
+    /// branch actually does so is asserted end-to-end through the
+    /// `resolve_with_spawner` seam by
+    /// `resolve_with_spawn_failure_reaches_dns_spawn_failed_phase` in
+    /// `nts::ke`.
     #[test]
     fn spawn_failure_does_not_credit_recovered() {
         static STATS: PoolStats = PoolStats::new();

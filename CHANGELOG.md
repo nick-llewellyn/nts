@@ -352,6 +352,21 @@
   the KE host. Internal only; the emitted log line, the public API,
   and all observable behaviour are unchanged. (NTS-133)
 
+- The bounded DNS resolver's worker-spawn step is now injectable via an
+  internal `resolve_with_spawner`, so the spawn-failure branch has
+  direct test coverage. That branch normalises both libc shapes
+  (`EAGAIN`, `ENOMEM`) to `WouldBlock` and tags the message with a
+  stable prefix, which is the only thing distinguishing a refused spawn
+  from a saturated pool at the two mapping sites that classify the
+  error. The prefix contract was previously pinned only against a
+  hand-built error, so a refactor that dropped or reformatted it would
+  have silently regressed the reported phase back to DNS saturation
+  with no test failure. The new test drives the real branch and follows
+  the resulting error through to its phase tag, exercising producer and
+  consumer together. The production path still resolves to a single
+  monomorphised call to the real thread builder. Internal only; no
+  public API or observable behaviour changes. (NTS-134)
+
 - **Breaking (error type):** the `trustMode` / `customRoots` pair
   validation now throws `NtsError.invalidSpec` instead of
   `ArgumentError`. Both violations — a non-null `customRoots` without
