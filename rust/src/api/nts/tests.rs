@@ -2638,6 +2638,29 @@ fn ke_warnings_empty_when_server_sends_none() {
     assert!(ctx.ke_warnings.is_empty());
 }
 
+/// Host attribution for the `nts::ke` warning log. The warnings come
+/// from the KE peer, so `host=` always names `spec.host`; the
+/// redirect target is a separate machine that emitted nothing and is
+/// only mentioned when it actually diverges, so the common
+/// non-redirect case does not print the same host twice.
+///
+/// This pins the helper rather than the emitted string — the crate
+/// has no log-capture harness, and the substantive property is which
+/// host each key names, not the format.
+#[test]
+fn ke_warning_redirect_note_names_only_a_diverging_ntp_host() {
+    assert_eq!(
+        ke_warning_redirect_note("ke.example.test", "ke.example.test"),
+        "",
+        "no Server record: the NTP host is the KE host, so no second label"
+    );
+    assert_eq!(
+        ke_warning_redirect_note("ke.example.test", "ntp.alt.example.test"),
+        " ntp_host=ntp.alt.example.test",
+        "redirected: the target is labelled ntp_host, never host"
+    );
+}
+
 // ------------------------------------------------------------------
 // Trust-anchor diagnostics + strict-mode tests (nts-21j, 3.0.0).
 //

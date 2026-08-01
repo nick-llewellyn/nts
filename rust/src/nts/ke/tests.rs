@@ -571,6 +571,46 @@ mod validate_response {
         assert_eq!(p.ntpv4_port, 4123);
     }
 
+    /// RFC 8915 §4.1.3 — Warning records are advisory: the handshake
+    /// still succeeds, and the codes must reach the caller rather than
+    /// being dropped by the record walk. The response also carries a
+    /// Server record, so the two host values this function produces
+    /// diverge: `ntpv4_host` is the redirect target, which emitted
+    /// nothing, while the warnings came from the KE endpoint named by
+    /// `request_host`. That divergence is what the `nts::ke` warning
+    /// log in `api/nts.rs::establish_session` has to distinguish, and
+    /// misattributing it was caught only by review (52d9cb7).
+    ///
+    /// Two codes are inserted so collection order is pinned alongside
+    /// presence — a set-backed refactor would reorder them.
+    #[test]
+    fn validate_response_collects_warnings_and_keeps_redirect_host_distinct() {
+        let mut records = well_formed_response();
+        records.insert(
+            2,
+            rec(false, RecordKind::Warning(WarningCode::Unknown(0x1234))),
+        );
+        records.insert(
+            3,
+            rec(false, RecordKind::Server("ntp.alt.example".to_owned())),
+        );
+        records.insert(
+            4,
+            rec(false, RecordKind::Warning(WarningCode::Unknown(0x5678))),
+        );
+        let p = validate_response("ke.example.com", &[aead::AES_SIV_CMAC_256], &records).unwrap();
+        assert_eq!(
+            p.warnings,
+            vec![WarningCode::Unknown(0x1234), WarningCode::Unknown(0x5678)],
+            "both Warning records must survive the walk, in wire order",
+        );
+        assert_eq!(
+            p.ntpv4_host, "ntp.alt.example",
+            "the Server record still redirects the NTP phase",
+        );
+        assert_eq!(p.cookies.len(), 2, "warnings must not disturb the harvest");
+    }
+
     #[test]
     fn validate_response_propagates_server_error() {
         let records = vec![
