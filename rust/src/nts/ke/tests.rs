@@ -1311,6 +1311,87 @@ mod error_translation {
         }
     }
 
+    /// Closes the loop between the producer of the spawn-failure
+    /// error shape (`nts::dns::resolve_with`) and its consumer
+    /// (`dns_error_to_ke`, above).
+    ///
+    /// `dns_error_to_ke_translates_each_io_kind` feeds a hand-built
+    /// `io::Error`, so it pins the mapping but not the claim that the
+    /// resolver ever emits that shape. This drives the real
+    /// spawn-failure branch through the `resolve_with_spawner` seam and
+    /// asserts the whole contract that branch owes: the `WouldBlock`
+    /// normalisation (both libc shapes — `EAGAIN`/`WouldBlock` and
+    /// `ENOMEM`/`OutOfMemory` — arrive at the mapping layers as
+    /// `WouldBlock`), the `SPAWN_FAILED_PREFIX` tag, the counter
+    /// accounting, and the resulting `KeTimeoutPhase`.
+    ///
+    /// Without this, a refactor that dropped or reformatted the prefix
+    /// would silently regress the phase to `DnsSaturation` — the exact
+    /// defect NTS-126 fixed — with no test failure.
+    #[test]
+    fn resolve_with_spawn_failure_reaches_dns_spawn_failed_phase() {
+        use crate::nts::dns::{resolve_with_spawner, snapshot_of, PoolStats, SPAWN_FAILED_PREFIX};
+
+        static STATS: PoolStats = PoolStats::new();
+
+        for kind in [
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::OutOfMemory,
+        ] {
+            let before = snapshot_of(&STATS);
+            let err = resolve_with_spawner(
+                &STATS,
+                4,
+                "host.invalid",
+                4460,
+                Duration::from_secs(60),
+                |_host, _port| panic!("lookup must not run when the spawn fails"),
+                // Takes the boxed worker by value and drops it, exactly
+                // as `thread::Builder::spawn` does on failure.
+                |_work| Err(std::io::Error::new(kind, "injected spawn refusal")),
+            )
+            .expect_err("a refused spawn must surface as an error");
+
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::WouldBlock,
+                "{kind:?} must be normalised to WouldBlock; got {:?}",
+                err.kind(),
+            );
+            assert!(
+                err.to_string().starts_with(SPAWN_FAILED_PREFIX),
+                "spawn-failure error lost its prefix tag: {err}",
+            );
+
+            let after = snapshot_of(&STATS);
+            assert_eq!(
+                after.spawn_failed,
+                before.spawn_failed + 1,
+                "spawn failure must bump spawn_failed exactly once",
+            );
+            assert_eq!(
+                after.refused, before.refused,
+                "the cap was not reached, so refused must stay flat",
+            );
+            assert_eq!(
+                after.recovered, before.recovered,
+                "no worker ran, so recovered must stay flat",
+            );
+            assert_eq!(
+                after.in_flight, before.in_flight,
+                "the granted slot must be released on the failure path",
+            );
+
+            match dns_error_to_ke(err) {
+                KeError::PhaseTimeout(KeTimeoutPhase::DnsSpawnFailed) => {}
+                other => panic!(
+                    "{kind:?} spawn refusal -> {other:?}; expected \
+                     PhaseTimeout(DnsSpawnFailed)",
+                ),
+            }
+        }
+    }
+
     /// Companion to `dns_error_to_ke_translates_each_io_kind` for the
     /// per-address connect leg. `TimedOut` is the only deadline
     /// signal `TcpStream::connect_timeout` raises; non-timeout
