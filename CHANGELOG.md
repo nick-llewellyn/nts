@@ -328,6 +328,17 @@
   that mismatch unrepresentable. Internal only; no public API or
   observable behaviour changes. (NTS-130)
 
+- The internal cookie store's capacity is now a `NonZeroUsize` rather
+  than a `usize` validated by a runtime assertion. A zero capacity is
+  degenerate rather than merely invalid — every insertion would evict
+  what it had just stored, so the jar would read as permanently empty
+  and each query would report having no cookies. The old constructor
+  caught that with an `assert!`, which turns a caller's mistake into a
+  process abort at the moment the jar is built. Encoding the bound in
+  the parameter type rejects it at the call site instead, and removes
+  the only panic on the path. Internal only; no public API or
+  observable behaviour changes. (NTS-132)
+
 - **Breaking (error type):** the `trustMode` / `customRoots` pair
   validation now throws `NtsError.invalidSpec` instead of
   `ArgumentError`. Both violations — a non-null `customRoots` without
