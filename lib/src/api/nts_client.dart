@@ -21,7 +21,9 @@ part of 'nts.dart';
 ///   force a fresh NTS-KE handshake.
 /// - **Scope-bounded session ownership**, so the cache lives only as
 ///   long as the owning client and is bounded to the hosts that
-///   client is interested in.
+///   client is interested in. [dispose] makes that scope explicit:
+///   it releases the native handle at a moment you choose rather
+///   than whenever the GC finalizer next runs.
 ///
 /// The client is safe to share across same-isolate async callers;
 /// the underlying Rust table is mutex-guarded, so concurrent
@@ -292,13 +294,36 @@ class NtsClient {
   /// the full bootstrap contract.
   void clear() => _syncGuard(() => _inner.clear());
 
-  // Release the underlying native handle (the Rust `Arc` behind the
-  // FRB `RustOpaque`) eagerly instead of waiting for the GC
-  // finalizer. Library-internal: the public surface deliberately
-  // exposes no dispose method — long-lived clients are reclaimed by
-  // the finalizer, and only the call-scoped client minted inside
-  // [ntsGetTime] needs deterministic release. Owning this here keeps
-  // any future cleanup for `NtsClient` internals in one place rather
-  // than coupling callers to the `_inner` representation.
-  void _dispose() => _inner.dispose();
+  /// Release this client's native handle — and with it the session
+  /// table, its cached AEAD keys, and its cookie jars — instead of
+  /// waiting for the GC finalizer to notice the handle is
+  /// unreachable.
+  ///
+  /// Optional. The finalizer remains the backstop, so a client that
+  /// is simply dropped is still reclaimed; [dispose] only makes
+  /// *when* deterministic. Reach for it when the timing matters:
+  /// a client scoped to a work batch, a screen, or a test, or a
+  /// process that mints many short-lived clients faster than GC
+  /// pressure builds. A single long-lived client held for the life
+  /// of the app needs nothing.
+  ///
+  /// Distinct from [clear], which empties the session table but
+  /// leaves the client usable. [dispose] ends the client.
+  ///
+  /// Idempotent: the second and later calls are no-ops. Calling any
+  /// other method afterwards throws an FRB `FrbException` (concretely
+  /// `DroppableDisposedException`, which FRB does not export) rather
+  /// than an [NtsError] — the failure is in the handle, not in the
+  /// protocol, so it is a usage bug and not a condition to branch on.
+  ///
+  /// Safe to call with a [query] / [warmCookies] / [getTime] already
+  /// executing on the native side: such a call took its own reference
+  /// to the native object when its arguments were encoded, so it runs
+  /// to completion against the state it started with. A call still
+  /// *queued* at the bridge admission gate has not encoded its
+  /// arguments yet, so it is refused once admitted, exactly as a call
+  /// made after [dispose] is. [getTime] runs a warm plus a burst of
+  /// queries, so a [dispose] mid-sequence can refuse a later leg after
+  /// earlier ones completed.
+  void dispose() => _inner.dispose();
 }

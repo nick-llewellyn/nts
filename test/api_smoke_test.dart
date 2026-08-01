@@ -103,6 +103,10 @@ class _RecordingApi implements NtsRustLibApi {
   ffi.NtsServerSpec? lastClientInvalidateSpec;
   ffi.NtsClient? lastClientClearThat;
   int clientNewCalls = 0;
+  // The fake handed back by the most recent `crateApiNtsNtsClientNew`,
+  // so a test can inspect its `isDisposed` flag — the wrapper keeps
+  // `_inner` private, and disposal is only observable from this side.
+  _FakeFfiNtsClient? lastClientNew;
   int clientClearCalls = 0;
   int clientInvalidateCalls = 0;
   // Return value the mock hands back from the next
@@ -165,6 +169,7 @@ class _RecordingApi implements NtsRustLibApi {
     lastClientInvalidateSpec = null;
     lastClientClearThat = null;
     clientNewCalls = 0;
+    lastClientNew = null;
     clientClearCalls = 0;
     clientInvalidateCalls = 0;
     nextInvalidateResult = false;
@@ -298,6 +303,7 @@ class _RecordingApi implements NtsRustLibApi {
   ffi.NtsClient crateApiNtsNtsClientNew() {
     clientNewCalls++;
     final fake = _FakeFfiNtsClient();
+    lastClientNew = fake;
     // Default-constructed clients always carry the fallback policy on
     // the Rust side; pin the same view here so a subsequent
     // `client.trustMode` getter forwards through and reads back the
@@ -455,8 +461,24 @@ class _FakeFfiNtsClient implements ffi.NtsClient {
     verificationTimeMs: verificationTimeMs,
   );
 
+  // Mirrors FRB's `Droppable.dispose`, which guards on `isDisposed` so
+  // the underlying resource is released at most once. The two counters
+  // are what let the idempotency test tell the two failure modes
+  // apart: `disposeCalls` counts every forward from the wrapper
+  // (including the no-ops), `releaseCount` counts only the calls that
+  // got past the guard. A real double-release shows up as
+  // `releaseCount == 2`; a wrapper that silently swallowed the second
+  // call shows up as `disposeCalls == 1`.
+  int disposeCalls = 0;
+  int releaseCount = 0;
+
   @override
-  void dispose() => _disposed = true;
+  void dispose() {
+    disposeCalls++;
+    if (_disposed) return;
+    releaseCount++;
+    _disposed = true;
+  }
 
   @override
   bool get isDisposed => _disposed;
@@ -2094,6 +2116,38 @@ void main() {
       client.clear();
       expect(api.clientClearCalls, 1);
       expect(api.lastClientClearThat, isNotNull);
+    });
+
+    test('dispose releases the native handle eagerly', () {
+      final client = NtsClient();
+      final inner = api.lastClientNew!;
+      expect(inner.isDisposed, isFalse);
+      client.dispose();
+      expect(inner.isDisposed, isTrue);
+      expect(inner.releaseCount, 1);
+    });
+
+    test('dispose is idempotent', () {
+      final client = NtsClient();
+      client.dispose();
+      // The second call must not double-release. The wrapper forwards
+      // it unconditionally and relies on FRB's `Droppable.dispose`
+      // guard to absorb it, so assert both halves: the wrapper did
+      // forward twice, and only one of the two got past the guard.
+      client.dispose();
+      expect(api.lastClientNew!.disposeCalls, 2);
+      expect(api.lastClientNew!.releaseCount, 1);
+      expect(api.lastClientNew!.isDisposed, isTrue);
+    });
+
+    test('dispose does not empty the session table on the way out', () {
+      // `clear` and `dispose` are different operations: one empties a
+      // client that stays usable, the other ends the client. Dropping
+      // the handle releases the table wholesale on the Rust side, so
+      // routing a `clear` through first would be redundant FFI traffic.
+      final client = NtsClient();
+      client.dispose();
+      expect(api.clientClearCalls, 0);
     });
 
     test(
