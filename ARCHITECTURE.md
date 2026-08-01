@@ -566,7 +566,11 @@ Two ways to own a `SessionTable`:
    client or with any other `NtsClient`. The handle exposes the same
    `query` / `warm_cookies` operations plus `invalidate(spec)`
    (drops one cached session, returns `bool`) and `clear()` (drops
-   every cached session).
+   every cached session). On the Dart side the handle also exposes
+   `dispose()`, which releases the underlying `RustOpaque` — and with
+   it the whole `SessionTable` — at a caller-chosen moment instead of
+   whenever the GC finalizer notices. It has no Rust-side counterpart:
+   Rust drops the `NtsClient` at end of scope already.
 
 Use cases for the per-instance shape:
 
@@ -621,7 +625,10 @@ every server it had ever queried until process exit.
 
 `invalidate(spec)` and `clear()` remain the eager controls for
 callers that need a session gone at a specific moment rather than
-whenever the bounds next require it.
+whenever the bounds next require it. Dart's `dispose()` is the
+coarsest of the three: it releases the table by dropping the handle
+that owns it, so the same `ZeroizeOnDrop` teardown runs, but the
+client does not survive the call.
 
 ## Singleflight: collapsing concurrent cold queries
 

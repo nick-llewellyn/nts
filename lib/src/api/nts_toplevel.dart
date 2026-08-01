@@ -311,7 +311,7 @@ Future<NtsSyncedTime> ntsGetTime({
         client: client,
       );
     } finally {
-      client._dispose();
+      client.dispose();
     }
   }
   return _getTimeFor(spec: spec, verificationTime: verificationTime);

@@ -175,6 +175,27 @@
 
 ### Added
 
+- `NtsClient.dispose()` releases the client's native handle — and with
+  it the session table, its cached AEAD keys, and its cookie jars — at
+  a moment the caller chooses, instead of leaving it to the GC
+  finalizer. The method existed internally (only `ntsGetTime`'s
+  call-scoped client used it) and is now public.
+
+  Optional, not required: the finalizer remains the backstop, so a
+  client that is simply dropped is still reclaimed. What was missing
+  was any way to make the timing deterministic — a client scoped to a
+  work batch, a screen, or a test could pin native state well past the
+  point the app considered it dead, and an app minting many
+  short-lived clients had no lever at all short of GC pressure.
+
+  Distinct from `clear()`, which empties the session table and leaves
+  the client usable; `dispose()` ends the client. Idempotent, and safe
+  to call with a `query` / `warmCookies` / `getTime` still in flight:
+  each in-flight call already holds its own reference to the native
+  object and runs to completion. A method called *after* `dispose()`
+  throws an FRB `FrbException` rather than an `NtsError`, since the
+  failure is in the handle rather than in the protocol. (NTS-114)
+
 - `TimeoutPhase.dnsSpawnFailed` distinguishes "the OS refused to create
   a DNS worker thread" from the pool-cap refusal already reported as
   `TimeoutPhase.dnsSaturation`. Additive enum growth: `switch`
