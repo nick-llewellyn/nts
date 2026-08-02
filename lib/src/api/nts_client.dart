@@ -244,9 +244,19 @@ class NtsClient {
       _getTimeFor(spec: spec, verificationTime: verificationTime, client: this);
 
   /// Drop this client's cached session for `spec`'s `host:port`, if
-  /// any. Returns `true` when an entry was removed, `false` when no
-  /// session was cached for that key. The next [query] or
-  /// [warmCookies] for that spec triggers a fresh NTS-KE handshake.
+  /// any. The next [query] or [warmCookies] for that spec triggers a
+  /// fresh NTS-KE handshake.
+  ///
+  /// The return value reports **whether an entry existed**, not
+  /// whether `spec` names a reachable or otherwise valid NTS server:
+  /// `false` means nothing was cached under that key — a host this
+  /// client never queried, one already invalidated, or one whose
+  /// session the table evicted — and is an ordinary outcome, not an
+  /// error. Nothing is validated against the network, so a `true` is
+  /// no evidence the server is good and a `false` is no evidence it
+  /// is bad. The post-condition is identical either way: no session
+  /// is cached for that key. Callers wanting idempotent teardown can
+  /// discard the result.
   ///
   /// Synchronous: backed by one mutex acquisition and one
   /// `HashMap::remove` on the Rust side; no isolate hop. The
