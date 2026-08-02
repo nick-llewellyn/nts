@@ -343,8 +343,14 @@ class NtsController {
       }
     } on NtsError catch (err) {
       _logError('nts_query', err, entry.hostname);
-    } on FrbException catch (_) {
-      _logSupersededClient('nts_query', clientAtStart, entry.hostname);
+    } on FrbException catch (err, stack) {
+      _logSupersededClient(
+        'nts_query',
+        clientAtStart,
+        entry.hostname,
+        err,
+        stack,
+      );
     } catch (err, stack) {
       // Anything that escapes `NtsError` is unexpected — surface it
       // loudly in the log so the developer can pair it with a
@@ -396,8 +402,14 @@ class NtsController {
       }
     } on NtsError catch (err) {
       _logError('nts_warm_cookies', err, entry.hostname);
-    } on FrbException catch (_) {
-      _logSupersededClient('nts_warm_cookies', clientAtStart, entry.hostname);
+    } on FrbException catch (err, stack) {
+      _logSupersededClient(
+        'nts_warm_cookies',
+        clientAtStart,
+        entry.hostname,
+        err,
+        stack,
+      );
     } catch (err, stack) {
       state.log.error(
         'nts_warm_cookies',
@@ -452,8 +464,14 @@ class NtsController {
       }
     } on NtsError catch (err) {
       _logError('nts_get_time', err, entry.hostname);
-    } on FrbException catch (_) {
-      _logSupersededClient('nts_get_time', clientAtStart, entry.hostname);
+    } on FrbException catch (err, stack) {
+      _logSupersededClient(
+        'nts_get_time',
+        clientAtStart,
+        entry.hostname,
+        err,
+        stack,
+      );
     } catch (err, stack) {
       state.log.error(
         'nts_get_time',
@@ -505,12 +523,21 @@ class NtsController {
   ///
   /// Anything else reaching here — a genuine FRB fault against a
   /// client that is still current — is unexpected, and is logged at
-  /// error severity.
-  void _logSupersededClient(String source, NtsClient client, String host) {
+  /// error severity with [err] and [stack], matching what the
+  /// catch-all arms emit. The expected refusal names its exception
+  /// too, but without the stack: the interesting fact there is *which*
+  /// bridge-level refusal fired, not the Dart frames that led to it.
+  void _logSupersededClient(
+    String source,
+    NtsClient client,
+    String host,
+    Object err,
+    StackTrace stack,
+  ) {
     if (identical(client, _client) && !_disposed) {
       state.log.error(
         source,
-        'Bridge call failed against the active NtsClient.',
+        'Bridge call failed against the active NtsClient: $err\n$stack',
         host: host,
       );
       return;
@@ -519,7 +546,7 @@ class NtsController {
       source,
       'Call refused — its NtsClient was disposed (superseded by a '
       'trust-mode / custom-roots change, or the controller was torn '
-      'down) before the call reached the native side.',
+      'down) before the call reached the native side: $err',
       host: host,
     );
   }
