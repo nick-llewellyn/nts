@@ -21,6 +21,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:nts/src/ffi/api/nts.dart'
     show
         NtsClient,
+        NtsDnsPoolStats,
         NtsError,
         NtsServerSpec,
         NtsTimeSample,
@@ -217,6 +218,20 @@ class MockNtsApi implements NtsRustLibApi {
 
   @override
   void crateApiNtsNtsClientClear({required NtsClient that}) {}
+
+  @override
+  NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() => NtsDnsPoolStats(
+    // The mock never touches the system resolver, so there is no pool
+    // to report on: every counter stays at its process-start value.
+    // A CLI run under `--mock` therefore prints an all-zero delta,
+    // which is the honest answer — no lookups were admitted, refused,
+    // or spawned.
+    inFlight: 0,
+    highWaterMark: 0,
+    recovered: PlatformInt64Util.from(0),
+    refused: PlatformInt64Util.from(0),
+    spawnFailed: PlatformInt64Util.from(0),
+  );
 
   @override
   NtsTrustStatus crateApiNtsNtsTrustStatus() => NtsTrustStatus(

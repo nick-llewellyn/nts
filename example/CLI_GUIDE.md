@@ -94,6 +94,8 @@ carries the host in square brackets so they stay attributable.
     └─ aead=AES-SIV-CMAC-256(15)  cookies=2
 2026-04-26T11:05:02.091473Z INFO  nts_query [nts.netnod.se]  OK  rtt= 68.57ms  stratum=1  utc=2026-04-26T11:05:02.094865Z
     └─ aead=AES-SIV-CMAC-256(15)  cookies=2
+2026-04-26T11:05:02.091902Z INFO  nts_dns_pool [-]  DNS pool  refused=0  spawn-failed=0
+    └─ recovered=2  in-flight=0  high-water=2 (process lifetime)
 ```
 
 ### Round-trip time (`rtt=`)
@@ -123,6 +125,36 @@ The indented continuation reports two things:
   baseline; the parenthesised number is the algorithm's IANA id.
 - `cookies=` — how many fresh single-use authentication cookies the
   server returned for use on subsequent queries.
+
+### DNS pool line (`nts_dns_pool`)
+
+Every run finishes with one extra pair of lines summarising the pool of
+DNS lookups the run used. It is not attributed to a host — the pool is
+shared across the whole run — so the bracketed field reads `-`.
+
+```text
+2026-04-26T11:05:02.091902Z INFO  nts_dns_pool [-]  DNS pool  refused=0  spawn-failed=0
+    └─ recovered=2  in-flight=0  high-water=2 (process lifetime)
+```
+
+The two numbers on the headline answer a question the timeout messages
+cannot. A lookup that never got to run reports the same timeout either
+way, but the cause differs:
+
+- **`refused` above zero** — the run hit its own `--dns-cap` ceiling.
+  Raise it.
+- **`spawn-failed` above zero** — the operating system would not give
+  the process another thread. Raising `--dns-cap` here makes things
+  worse, not better; the fix is fewer hosts per run, or a process with
+  more headroom.
+
+Both at zero is the healthy case, and what you should normally see.
+
+`refused`, `spawn-failed` and `recovered` count only what this run did.
+`in-flight` and `high-water` are readings rather than counts, so they
+cover the whole process: `in-flight` is how many lookups were still
+outstanding at the end (normally zero), and `high-water` is the busiest
+the pool ever got.
 
 ### Warning and error lines
 
@@ -169,9 +201,9 @@ envelope:
 | -------- | ------ | ---------------------------------------------------- |
 | `ts`     | string | UTC ISO-8601 timestamp the event was emitted        |
 | `level`  | string | `INFO`, `WARN`, or `ERROR`                          |
-| `source` | string | `nts_query` or `nts_warm_cookies`                   |
-| `host`   | string | The hostname this event relates to                  |
-| `event`  | string | `start`, `success`, or `error`                      |
+| `source` | string | `nts_query`, `nts_warm_cookies`, or `nts_dns_pool`  |
+| `host`   | string | The hostname this event relates to (`-` when none)  |
+| `event`  | string | `start`, `success`, `error`, or `dns_pool_stats`    |
 
 `success` events for `nts_query` carry the parsed sample (`utc`,
 `utc_unix_micros`, `rtt_micros`, `stratum`, `aead_id`, `aead_label`,
@@ -181,9 +213,17 @@ envelope:
 human-readable description text mode prints), and `severity` (`warn`
 or `error`).
 
+The trailing DNS pool lines cannot appear as a block here without
+breaking the one-object-per-line rule, so they arrive as a final
+`dns_pool_stats` event carrying the same figures described under
+[DNS pool line](#dns-pool-line-nts_dns_pool): `refused`, `spawn_failed`
+and `recovered` for the run, `in_flight` and `high_water_mark` for the
+process.
+
 ```text
 {"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"start"}
 {"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"success","utc_unix_micros":…,"utc":"…","rtt_micros":68570,"stratum":1,"aead_id":15,"aead_label":"AES-SIV-CMAC-256(15)","cookies":2}
+{"ts":"…","level":"INFO","source":"nts_dns_pool","host":"-","event":"dns_pool_stats","refused":0,"spawn_failed":0,"recovered":2,"in_flight":0,"high_water_mark":2}
 ```
 
 Successes still go to stdout, failures still go to stderr — the same
