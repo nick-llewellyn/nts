@@ -3607,23 +3607,23 @@ fn nts_trust_status_reads_singleton_and_converts_shape() {
              and DTO: {other:?}"
         ),
     }
-    // The DTO widens each `u64` counter to `i64` so FRB binds it as a
-    // plain Dart `int`; compare in the DTO's own type.
+    // The DTO republishes each `u64` counter as `i64` so FRB binds it
+    // as a plain Dart `int`; compare through the same projection.
     assert_eq!(
         status.default_backend_platform_count,
-        snap.default_backend_platform_count as i64,
+        counter_to_i64(snap.default_backend_platform_count),
     );
     assert_eq!(
         status.default_backend_hybrid_count,
-        snap.default_backend_hybrid_count as i64,
+        counter_to_i64(snap.default_backend_hybrid_count),
     );
     assert_eq!(
         status.default_backend_webpki_count,
-        snap.default_backend_webpki_count as i64,
+        counter_to_i64(snap.default_backend_webpki_count),
     );
     assert_eq!(
         status.default_backend_custom_count,
-        snap.default_backend_custom_count as i64,
+        counter_to_i64(snap.default_backend_custom_count),
     );
     assert_eq!(
         status.android_platform_init_succeeded,
@@ -3631,8 +3631,26 @@ fn nts_trust_status_reads_singleton_and_converts_shape() {
     );
     assert_eq!(
         status.android_hybrid_fallback_count,
-        snap.android_hybrid_fallback_count as i64,
+        counter_to_i64(snap.android_hybrid_fallback_count),
     );
+}
+
+/// `counter_to_i64` projects the `AtomicU64`-backed cumulative counters
+/// onto the `i64` the bridge-facing structs publish. The projection is
+/// range-narrowing, so the contract is that it saturates at `i64::MAX`
+/// rather than wrapping to a negative value — a wrap would break the
+/// per-counter monotonicity the snapshots promise, which is the one
+/// property dashboards consume.
+#[test]
+fn counter_to_i64_saturates_instead_of_wrapping() {
+    assert_eq!(counter_to_i64(0), 0);
+    assert_eq!(counter_to_i64(42), 42);
+    // Largest value representable without clamping.
+    assert_eq!(counter_to_i64(i64::MAX as u64), i64::MAX);
+    // One past it, and the extreme: both clamp rather than going
+    // negative, which is what a plain `as` cast would have produced.
+    assert_eq!(counter_to_i64(i64::MAX as u64 + 1), i64::MAX);
+    assert_eq!(counter_to_i64(u64::MAX), i64::MAX);
 }
 
 /// `nts_query_inner` (the backend for `nts_query` / `NtsClient::query`)

@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
 
@@ -356,12 +356,13 @@ class NtsDnsPoolStats {
   /// 32-bit wraparound would be visible on long-running CLI / server
   /// builds with a saturated resolver.
   ///
-  /// Widened from the backing `AtomicU64` as `i64` (not `u64`) so
-  /// FRB maps it to `PlatformInt64` — a plain Dart `int` on all
-  /// supported non-web targets — instead of `BigInt`; same
-  /// rationale as [ntsBoottimeMicros]. The narrowing is
-  /// unreachable in practice: saturating the sign bit needs 2^63
-  /// completed lookups.
+  /// Declared `i64` (not `u64`) so FRB maps it to `PlatformInt64` —
+  /// a plain Dart `int` on all supported non-web targets — instead
+  /// of `BigInt`; same rationale as [ntsBoottimeMicros]. The
+  /// backing store is an `AtomicU64`, so the projection is
+  /// range-narrowing and saturates at `i64::MAX`; see
+  /// `counter_to_i64`. The clamp is unreachable in practice,
+  /// since reaching it needs 2^63 completed lookups.
   final PlatformInt64 recovered;
 
   /// Cumulative count of admission attempts that were refused
@@ -741,12 +742,13 @@ class NtsTrustStatus {
   /// across consecutive snapshots, with the same per-counter
   /// monotonicity contract as `android_hybrid_fallback_count`.
   ///
-  /// Widened from the backing `AtomicU64` as `i64` (not `u64`) so
-  /// FRB maps it to `PlatformInt64` — a plain Dart `int` on all
-  /// supported non-web targets — instead of `BigInt`; same
-  /// rationale as [ntsBoottimeMicros]. The narrowing is
-  /// unreachable in practice: saturating the sign bit needs 2^63
-  /// handshakes.
+  /// Declared `i64` (not `u64`) so FRB maps it to `PlatformInt64` —
+  /// a plain Dart `int` on all supported non-web targets — instead
+  /// of `BigInt`; same rationale as [ntsBoottimeMicros]. The
+  /// backing store is an `AtomicU64`, so the projection is
+  /// range-narrowing and saturates at `i64::MAX`; see
+  /// `counter_to_i64`. The clamp is unreachable in practice,
+  /// since reaching it needs 2^63 handshakes.
   final PlatformInt64 defaultBackendPlatformCount;
 
   /// Cumulative count of default-singleton handshakes that resolved

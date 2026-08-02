@@ -17,17 +17,20 @@
   rationale on the fields — that a 32-bit wraparound would be visible
   on long-running builds — justifies the 64-bit *backing* store, not
   the `BigInt` *binding*. The backing counters remain `AtomicU64`;
-  only the bridge-facing struct fields widen to `i64`, which FRB
-  binds as `PlatformInt64` and the conversion layer narrows to a
+  only the bridge-facing struct fields are redeclared as `i64`, which
+  FRB binds as `PlatformInt64` and the conversion layer narrows to a
   plain `int`. This matches what `PhaseTimings` and
   `ntsBoottimeMicros` already did, and removes the split inside
   `NtsDnsPoolStats`, whose `inFlight` / `highWaterMark` were already
   plain `int`.
 
-  Saturating the sign bit needs 2^63 events, so no range or
-  saturation policy is specified. Web remains unsupported (NTS-KE
-  needs a raw TCP socket), so the 53-bit JavaScript integer limit is
-  not a consideration.
+  `u64` → `i64` is range-narrowing, so the overflow policy is
+  explicit: the projection saturates at `i64::MAX` rather than
+  wrapping, keeping the published sequence non-decreasing. The clamp
+  is unreachable in practice — a counter bumped once per DNS lookup
+  or per handshake would need 2^63 events to reach it. Web remains
+  unsupported (NTS-KE needs a raw TCP socket), so the 53-bit
+  JavaScript integer limit is not a consideration.
 
   Migration: drop `BigInt.from(...)` at construction sites and
   compare against plain integer literals. `stats.refused >

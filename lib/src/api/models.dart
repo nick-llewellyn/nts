@@ -932,12 +932,13 @@ class NtsDnsPoolStats {
   final int highWaterMark;
 
   /// Cumulative count of detached workers that have completed and
-  /// released their slot since process start. Backed by a 64-bit
-  /// counter because it grows monotonically over a process lifetime
-  /// and a 32-bit wraparound would be visible on long-running CLI /
-  /// server builds with a saturated resolver. Saturating the `int`
-  /// range needs 2^63 completed lookups, so no overflow policy is
-  /// specified.
+  /// released their slot since process start. Backed by an unsigned
+  /// 64-bit counter because it grows monotonically over a process
+  /// lifetime and a 32-bit wraparound would be visible on
+  /// long-running CLI / server builds with a saturated resolver.
+  /// Published as a signed `int`, saturating at 2^63 - 1 so the
+  /// sequence stays non-decreasing; reaching that clamp needs 2^63
+  /// completed lookups.
   final int recovered;
 
   /// Cumulative count of admission attempts that were refused because

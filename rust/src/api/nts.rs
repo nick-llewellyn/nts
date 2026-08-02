@@ -436,12 +436,13 @@ pub struct NtsDnsPoolStats {
     /// 32-bit wraparound would be visible on long-running CLI / server
     /// builds with a saturated resolver.
     ///
-    /// Widened from the backing `AtomicU64` as `i64` (not `u64`) so
-    /// FRB maps it to `PlatformInt64` — a plain Dart `int` on all
-    /// supported non-web targets — instead of `BigInt`; same
-    /// rationale as [`nts_boottime_micros`]. The narrowing is
-    /// unreachable in practice: saturating the sign bit needs 2^63
-    /// completed lookups.
+    /// Declared `i64` (not `u64`) so FRB maps it to `PlatformInt64` —
+    /// a plain Dart `int` on all supported non-web targets — instead
+    /// of `BigInt`; same rationale as [`nts_boottime_micros`]. The
+    /// backing store is an `AtomicU64`, so the projection is
+    /// range-narrowing and saturates at `i64::MAX`; see
+    /// [`counter_to_i64`]. The clamp is unreachable in practice,
+    /// since reaching it needs 2^63 completed lookups.
     pub recovered: i64,
     /// Cumulative count of admission attempts that were refused
     /// because the cap was reached since process start. The expected
@@ -479,10 +480,30 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
     NtsDnsPoolStats {
         in_flight: snap.in_flight as u32,
         high_water_mark: snap.high_water_mark as u32,
-        recovered: snap.recovered as i64,
-        refused: snap.refused as i64,
-        spawn_failed: snap.spawn_failed as i64,
+        recovered: counter_to_i64(snap.recovered),
+        refused: counter_to_i64(snap.refused),
+        spawn_failed: counter_to_i64(snap.spawn_failed),
     }
+}
+
+/// Project a `u64` cumulative counter onto the `i64` the bridge-facing
+/// diagnostic structs publish.
+///
+/// The counters are backed by `AtomicU64`, but the FFI structs declare
+/// `i64` so FRB binds them as `PlatformInt64` — a plain Dart `int` —
+/// rather than `BigInt`. That makes the projection range-narrowing, so
+/// the overflow policy is explicit: **saturate at [`i64::MAX`]**.
+/// A plain `as` cast would wrap to a negative value and break the
+/// per-counter monotonicity these snapshots promise; clamping keeps
+/// the sequence non-decreasing, which is the property dashboards
+/// actually consume.
+///
+/// The clamp is unreachable in practice — every counter is bumped once
+/// per DNS lookup or per TLS handshake, so reaching 2^63 would take
+/// longer than any process lifetime — but a saturating floor is
+/// cheaper than reasoning about that bound at each call site.
+fn counter_to_i64(v: u64) -> i64 {
+    i64::try_from(v).unwrap_or(i64::MAX)
 }
 
 /// Snapshot the process-global trust-anchor diagnostic state.
@@ -541,12 +562,12 @@ pub fn nts_trust_status() -> NtsTrustStatus {
     let snap = crate::nts::trust_state::TRUST_STATE.snapshot();
     NtsTrustStatus {
         default_client_backend: snap.default_backend.map(TrustBackend::from),
-        default_backend_platform_count: snap.default_backend_platform_count as i64,
-        default_backend_hybrid_count: snap.default_backend_hybrid_count as i64,
-        default_backend_webpki_count: snap.default_backend_webpki_count as i64,
-        default_backend_custom_count: snap.default_backend_custom_count as i64,
+        default_backend_platform_count: counter_to_i64(snap.default_backend_platform_count),
+        default_backend_hybrid_count: counter_to_i64(snap.default_backend_hybrid_count),
+        default_backend_webpki_count: counter_to_i64(snap.default_backend_webpki_count),
+        default_backend_custom_count: counter_to_i64(snap.default_backend_custom_count),
         android_platform_init_succeeded: snap.android_platform_init_succeeded,
-        android_hybrid_fallback_count: snap.android_hybrid_fallback_count as i64,
+        android_hybrid_fallback_count: counter_to_i64(snap.android_hybrid_fallback_count),
     }
 }
 
@@ -774,12 +795,13 @@ pub struct NtsTrustStatus {
     /// across consecutive snapshots, with the same per-counter
     /// monotonicity contract as `android_hybrid_fallback_count`.
     ///
-    /// Widened from the backing `AtomicU64` as `i64` (not `u64`) so
-    /// FRB maps it to `PlatformInt64` — a plain Dart `int` on all
-    /// supported non-web targets — instead of `BigInt`; same
-    /// rationale as [`nts_boottime_micros`]. The narrowing is
-    /// unreachable in practice: saturating the sign bit needs 2^63
-    /// handshakes.
+    /// Declared `i64` (not `u64`) so FRB maps it to `PlatformInt64` —
+    /// a plain Dart `int` on all supported non-web targets — instead
+    /// of `BigInt`; same rationale as [`nts_boottime_micros`]. The
+    /// backing store is an `AtomicU64`, so the projection is
+    /// range-narrowing and saturates at `i64::MAX`; see
+    /// [`counter_to_i64`]. The clamp is unreachable in practice,
+    /// since reaching it needs 2^63 handshakes.
     pub default_backend_platform_count: i64,
     /// Cumulative count of default-singleton handshakes that resolved
     /// to [`TrustBackend::PlatformWithHybridFallback`] since process
