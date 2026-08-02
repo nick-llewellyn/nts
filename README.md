@@ -201,9 +201,12 @@ to plug into `NtsServerSpec`, see the community-maintained
 ### Upgrading
 
 Migration notes for breaking releases live in
-[CHANGELOG.md](CHANGELOG.md) under the relevant version header — in
-particular the `1.4.0` Android bootstrap rework (JNI symbol rename
-plus auto-init plugin) for anyone arriving from `1.3.x`.
+[CHANGELOG.md](CHANGELOG.md) under the relevant version header.
+Releases up to and including `1.4.0` — among them the `1.4.0` Android
+bootstrap rework (JNI symbol rename plus auto-init plugin) that anyone
+arriving from `1.3.x` needs — are in
+[CHANGELOG_ARCHIVE.md](https://github.com/nick-llewellyn/nts/blob/main/CHANGELOG_ARCHIVE.md),
+which is kept in the repository but not shipped in the package.
 
 ## Manual control (advanced primitives)
 
