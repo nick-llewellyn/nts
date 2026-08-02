@@ -50,11 +50,20 @@ class NtsServerSpec {
 /// `ntsQuery` or `ntsWarmCookies` call, surfaced on the `phaseTimings`
 /// field of [NtsTimeSample] / [NtsWarmCookiesOutcome].
 ///
+/// Every field is a **monotonic elapsed duration measured inside the
+/// native call** (Rust `Instant`), not a calendar timestamp and not a
+/// sleep-inclusive boottime span: the phases are short blocking
+/// operations, and a suspend that lands inside one is not accounted
+/// for. "Wall-clock" below means elapsed-time-as-observed rather than
+/// CPU time; it does not mean calendar time. For sleep-inclusive
+/// budgeting use [MonotonicClock] or the `getTime` budget exhaustion
+/// signal — do not sum these fields to reconstruct one.
+///
 /// The four fields cover the KE-pipeline phases. The UDP send/recv
 /// phase has no field of its own; `roundTripMicros` on [NtsTimeSample]
-/// already covers it. Callers who want a "preNtp" wall-clock view can
-/// sum the four fields here; the per-call total wall-clock is that sum
-/// plus `roundTripMicros`.
+/// already covers it. Callers who want a "preNtp" elapsed view can
+/// sum the four fields here; the per-call total elapsed time is that
+/// sum plus `roundTripMicros`.
 ///
 /// Phases that did not run are reported as `0` rather than absent --
 /// e.g. on a cache-hit query (no KE handshake), [connectMicros],
@@ -786,9 +795,19 @@ class NtsSyncedTime {
   /// server-reported root dispersion, plus [jitterMicros]. The true
   /// UTC instant at the sync moment lies within
   /// `± errorBoundMicros` of [utcUnixMicros] under the NTP
-  /// symmetric-delay assumption. Grows stale with oscillator drift as the
-  /// sync ages (see class doc); it describes the bound at anchor
-  /// time, not at [utcNow] time. Falls back to
+  /// symmetric-delay assumption.
+  ///
+  /// **This is a snapshot taken at the anchor, not a current bound.**
+  /// The value is fixed for the lifetime of the instance, while
+  /// [utcNow] keeps projecting forward, so it is *not* the maximum
+  /// error of the time [utcNow] returns hours later. The true bound at
+  /// projection time is this value plus the oscillator drift accrued
+  /// over [elapsedSinceSync] — on the order of tens of parts per
+  /// million (see class doc). A caller who wants a current figure must
+  /// age it themselves, e.g.
+  /// `errorBoundMicros + (elapsedSinceSync.inMicroseconds * ppm / 1e6)`
+  /// for a hardware-appropriate `ppm`; the package does not pick a
+  /// drift rate on the caller's behalf. Falls back to
   /// `roundTripMicros / 2` when constructed from a pre-7.1 fixture.
   /// New in 7.1.
   final int errorBoundMicros;
@@ -836,6 +855,10 @@ class NtsSyncedTime {
   /// the sleep-aware monotonic clock. Unaffected by system clock
   /// changes after the sync; subject to local oscillator drift as
   /// described on the class doc.
+  ///
+  /// [errorBoundMicros] bounds the anchor instant, not this one: the
+  /// uncertainty of the value returned here is that bound *plus* the
+  /// drift accrued over [elapsedSinceSync]. See [errorBoundMicros].
   DateTime get utcNow => DateTime.fromMicrosecondsSinceEpoch(
     utcUnixMicros + (MonotonicClock.instance.nowMicros() - _anchorMicros),
     isUtc: true,
