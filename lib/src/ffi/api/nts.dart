@@ -648,7 +648,7 @@ class NtsTimeSample {
   /// having started after the cookie pool went warm. Codes are
   /// surfaced rather than acted on: nothing here fails a query,
   /// since by definition a warning did not stop the handshake.
-  /// New in 8.1.
+  /// New in 9.0.
   final Uint16List keWarnings;
 
   const NtsTimeSample({
@@ -861,7 +861,7 @@ class NtsWarmCookiesOutcome {
   /// so the codes are always that handshake's own. A singleflight
   /// *waiter* that collapsed onto a concurrent leader reports the
   /// leader's codes, matching how `fresh_cookies` and
-  /// `trust_backend` already cross that boundary. New in 8.1.
+  /// `trust_backend` already cross that boundary. New in 9.0.
   final Uint16List keWarnings;
 
   const NtsWarmCookiesOutcome({

@@ -241,7 +241,7 @@ class NtsTimeSample {
   /// original handshake across cached-session queries instead of
   /// resetting to empty once the cookie pool is warm. A caller
   /// polling in steady state therefore cannot miss codes by having
-  /// started after the first query. New in 8.1.
+  /// started after the first query. New in 9.0.
   final List<int> keWarnings;
 
   /// Construct a sample. Intended for the wrapper-layer conversion
@@ -378,7 +378,7 @@ class NtsWarmCookiesOutcome {
   ///
   /// Unlike [NtsTimeSample.keWarnings] there is no cached-path nuance:
   /// this call always performs a fresh handshake, so the codes are
-  /// always that handshake's own. New in 8.1.
+  /// always that handshake's own. New in 9.0.
   final List<int> keWarnings;
 
   /// Construct an outcome. Intended for the wrapper-layer conversion
