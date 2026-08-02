@@ -506,6 +506,21 @@
   Rust-shaped. The Rust source is untouched, so Rust readers keep
   working intra-doc links. Documentation only. (NTS-135)
 
+- `MonotonicClock` no longer names a generated class when deciding
+  whether the installed bridge API is the real FFI dispatch
+  implementation. The gate tested `api is NtsRustLibApiImpl`, an
+  identifier derived from `dart_entrypoint_class_name` in
+  `flutter_rust_bridge.yaml`; renaming the entrypoint broke the file
+  loudly, but a codegen template change that reshaped the class
+  hierarchy could have left it compiling while selecting the opposite
+  arm — silently demoting a real bridge to the suspend-frozen
+  `Stopwatch` fallback that v7.0.0 removed for production builds. The
+  test is now against `BaseApiImpl`, hand-written flutter_rust_bridge
+  runtime code that every generated implementation extends, and
+  `test/api_smoke_test.dart` pins both arms of the relationship so an
+  FRB upgrade that broke it fails a test instead. Internal only; no
+  public API or observable behaviour changes. (NTS-115)
+
 
 ## 8.0.0
 

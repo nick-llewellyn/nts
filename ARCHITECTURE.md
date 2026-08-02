@@ -385,8 +385,10 @@ before `NtsRustLib.init()` / `NtsRustLib.initMock()` throws a `StateError`
 (fail-fast: a production process can never silently degrade to a
 suspend-frozen clock). After init, each instance resolves its source
 exactly once at construction, discriminating structurally on the
-installed API: a real bridge (`api is NtsRustLibApiImpl`, the
-generated implementation `NtsRustLib.init()` installs) dispatches
+installed API: a real bridge (`api is BaseApiImpl`, the FRB runtime
+base class every generated implementation extends — tested in
+preference to the codegen-named `NtsRustLibApiImpl`, whose
+identifier follows `dart_entrypoint_class_name`) dispatches
 directly with no probe and no catch, so any clock-read failure
 propagates; only a mock-mode API (from `NtsRustLib.initMock()`, or
 hand-supplied to `init()`) is probed, and a throw (no boottime stub)
