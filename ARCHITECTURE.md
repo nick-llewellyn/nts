@@ -860,12 +860,21 @@ The wrapper has three jobs:
    and removed in 8.0.0.
 2. **DTOs** — `lib/src/api/models.dart` hand-writes the public DTOs
    (`NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`,
-   `NtsDnsPoolStats`, `PhaseTimings`) with plain Dart `int` fields
-   instead of FRB's `PlatformInt64` wrapper. The wrapper converts
-   from the FFI shapes at the call boundary. A Rust-side struct
-   field rename or reorder no longer becomes a Dart source break for
-   downstream callers; it surfaces as a compile error in the
-   conversion layer instead.
+   `NtsDnsPoolStats`, `NtsTrustStatus`, `PhaseTimings`) with plain
+   Dart `int` fields instead of FRB's `PlatformInt64` wrapper. The
+   wrapper converts from the FFI shapes at the call boundary. A
+   Rust-side struct field rename or reorder no longer becomes a Dart
+   source break for downstream callers; it surfaces as a compile
+   error in the conversion layer instead.
+
+   The cumulative counters on `NtsDnsPoolStats` and `NtsTrustStatus`
+   are declared `i64` on the Rust side of the bridge, rather than
+   matching their backing `AtomicU64`, purely so FRB binds them as
+   `PlatformInt64` rather than `BigInt` — same rationale as
+   `ntsBoottimeMicros`. That projection is range-narrowing, so
+   `counter_to_i64` saturates at `i64::MAX` instead of wrapping,
+   preserving the non-decreasing sequence the snapshots promise. The
+   clamp needs 2^63 events to reach and is unreachable in practice.
 3. **Errors** — `lib/src/api/errors.dart` hand-writes `NtsError` as a
    Dart 3 `sealed class implements Exception` with ten final
    variant subclasses (`NtsErrorInvalidSpec`, `NtsErrorNetwork`, …)

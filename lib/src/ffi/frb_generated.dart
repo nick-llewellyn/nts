@@ -705,9 +705,9 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     return NtsDnsPoolStats(
       inFlight: dco_decode_u_32(arr[0]),
       highWaterMark: dco_decode_u_32(arr[1]),
-      recovered: dco_decode_u_64(arr[2]),
-      refused: dco_decode_u_64(arr[3]),
-      spawnFailed: dco_decode_u_64(arr[4]),
+      recovered: dco_decode_i_64(arr[2]),
+      refused: dco_decode_i_64(arr[3]),
+      spawnFailed: dco_decode_i_64(arr[4]),
     );
   }
 
@@ -801,12 +801,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return NtsTrustStatus(
       defaultClientBackend: dco_decode_opt_box_autoadd_trust_backend(arr[0]),
-      defaultBackendPlatformCount: dco_decode_u_64(arr[1]),
-      defaultBackendHybridCount: dco_decode_u_64(arr[2]),
-      defaultBackendWebpkiCount: dco_decode_u_64(arr[3]),
-      defaultBackendCustomCount: dco_decode_u_64(arr[4]),
+      defaultBackendPlatformCount: dco_decode_i_64(arr[1]),
+      defaultBackendHybridCount: dco_decode_i_64(arr[2]),
+      defaultBackendWebpkiCount: dco_decode_i_64(arr[3]),
+      defaultBackendCustomCount: dco_decode_i_64(arr[4]),
       androidPlatformInitSucceeded: dco_decode_bool(arr[5]),
-      androidHybridFallbackCount: dco_decode_u_64(arr[6]),
+      androidHybridFallbackCount: dco_decode_i_64(arr[6]),
     );
   }
 
@@ -891,12 +891,6 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   int dco_decode_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
-  }
-
-  @protected
-  BigInt dco_decode_u_64(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dcoDecodeU64(raw);
   }
 
   @protected
@@ -1031,9 +1025,9 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     final var_inFlight = sse_decode_u_32(deserializer);
     final var_highWaterMark = sse_decode_u_32(deserializer);
-    final var_recovered = sse_decode_u_64(deserializer);
-    final var_refused = sse_decode_u_64(deserializer);
-    final var_spawnFailed = sse_decode_u_64(deserializer);
+    final var_recovered = sse_decode_i_64(deserializer);
+    final var_refused = sse_decode_i_64(deserializer);
+    final var_spawnFailed = sse_decode_i_64(deserializer);
     return NtsDnsPoolStats(
       inFlight: var_inFlight,
       highWaterMark: var_highWaterMark,
@@ -1164,12 +1158,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_defaultClientBackend = sse_decode_opt_box_autoadd_trust_backend(
       deserializer,
     );
-    final var_defaultBackendPlatformCount = sse_decode_u_64(deserializer);
-    final var_defaultBackendHybridCount = sse_decode_u_64(deserializer);
-    final var_defaultBackendWebpkiCount = sse_decode_u_64(deserializer);
-    final var_defaultBackendCustomCount = sse_decode_u_64(deserializer);
+    final var_defaultBackendPlatformCount = sse_decode_i_64(deserializer);
+    final var_defaultBackendHybridCount = sse_decode_i_64(deserializer);
+    final var_defaultBackendWebpkiCount = sse_decode_i_64(deserializer);
+    final var_defaultBackendCustomCount = sse_decode_i_64(deserializer);
     final var_androidPlatformInitSucceeded = sse_decode_bool(deserializer);
-    final var_androidHybridFallbackCount = sse_decode_u_64(deserializer);
+    final var_androidHybridFallbackCount = sse_decode_i_64(deserializer);
     return NtsTrustStatus(
       defaultClientBackend: var_defaultClientBackend,
       defaultBackendPlatformCount: var_defaultBackendPlatformCount,
@@ -1283,12 +1277,6 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   int sse_decode_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint32();
-  }
-
-  @protected
-  BigInt sse_decode_u_64(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getBigUint64();
   }
 
   @protected
@@ -1441,9 +1429,9 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self.inFlight, serializer);
     sse_encode_u_32(self.highWaterMark, serializer);
-    sse_encode_u_64(self.recovered, serializer);
-    sse_encode_u_64(self.refused, serializer);
-    sse_encode_u_64(self.spawnFailed, serializer);
+    sse_encode_i_64(self.recovered, serializer);
+    sse_encode_i_64(self.refused, serializer);
+    sse_encode_i_64(self.spawnFailed, serializer);
   }
 
   @protected
@@ -1542,12 +1530,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       self.defaultClientBackend,
       serializer,
     );
-    sse_encode_u_64(self.defaultBackendPlatformCount, serializer);
-    sse_encode_u_64(self.defaultBackendHybridCount, serializer);
-    sse_encode_u_64(self.defaultBackendWebpkiCount, serializer);
-    sse_encode_u_64(self.defaultBackendCustomCount, serializer);
+    sse_encode_i_64(self.defaultBackendPlatformCount, serializer);
+    sse_encode_i_64(self.defaultBackendHybridCount, serializer);
+    sse_encode_i_64(self.defaultBackendWebpkiCount, serializer);
+    sse_encode_i_64(self.defaultBackendCustomCount, serializer);
     sse_encode_bool(self.androidPlatformInitSucceeded, serializer);
-    sse_encode_u_64(self.androidHybridFallbackCount, serializer);
+    sse_encode_i_64(self.androidHybridFallbackCount, serializer);
   }
 
   @protected
@@ -1635,12 +1623,6 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   void sse_encode_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint32(self);
-  }
-
-  @protected
-  void sse_encode_u_64(BigInt self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putBigUint64(self);
   }
 
   @protected

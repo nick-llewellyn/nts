@@ -700,9 +700,9 @@ impl SseDecode for crate::api::nts::NtsDnsPoolStats {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_inFlight = <u32>::sse_decode(deserializer);
         let mut var_highWaterMark = <u32>::sse_decode(deserializer);
-        let mut var_recovered = <u64>::sse_decode(deserializer);
-        let mut var_refused = <u64>::sse_decode(deserializer);
-        let mut var_spawnFailed = <u64>::sse_decode(deserializer);
+        let mut var_recovered = <i64>::sse_decode(deserializer);
+        let mut var_refused = <i64>::sse_decode(deserializer);
+        let mut var_spawnFailed = <i64>::sse_decode(deserializer);
         return crate::api::nts::NtsDnsPoolStats {
             in_flight: var_inFlight,
             high_water_mark: var_highWaterMark,
@@ -842,12 +842,12 @@ impl SseDecode for crate::api::nts::NtsTrustStatus {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_defaultClientBackend =
             <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
-        let mut var_defaultBackendPlatformCount = <u64>::sse_decode(deserializer);
-        let mut var_defaultBackendHybridCount = <u64>::sse_decode(deserializer);
-        let mut var_defaultBackendWebpkiCount = <u64>::sse_decode(deserializer);
-        let mut var_defaultBackendCustomCount = <u64>::sse_decode(deserializer);
+        let mut var_defaultBackendPlatformCount = <i64>::sse_decode(deserializer);
+        let mut var_defaultBackendHybridCount = <i64>::sse_decode(deserializer);
+        let mut var_defaultBackendWebpkiCount = <i64>::sse_decode(deserializer);
+        let mut var_defaultBackendCustomCount = <i64>::sse_decode(deserializer);
         let mut var_androidPlatformInitSucceeded = <bool>::sse_decode(deserializer);
-        let mut var_androidHybridFallbackCount = <u64>::sse_decode(deserializer);
+        let mut var_androidHybridFallbackCount = <i64>::sse_decode(deserializer);
         return crate::api::nts::NtsTrustStatus {
             default_client_backend: var_defaultClientBackend,
             default_backend_platform_count: var_defaultBackendPlatformCount,
@@ -981,13 +981,6 @@ impl SseDecode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_u32::<NativeEndian>().unwrap()
-    }
-}
-
-impl SseDecode for u64 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        deserializer.cursor.read_u64::<NativeEndian>().unwrap()
     }
 }
 
@@ -1442,9 +1435,9 @@ impl SseEncode for crate::api::nts::NtsDnsPoolStats {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <u32>::sse_encode(self.in_flight, serializer);
         <u32>::sse_encode(self.high_water_mark, serializer);
-        <u64>::sse_encode(self.recovered, serializer);
-        <u64>::sse_encode(self.refused, serializer);
-        <u64>::sse_encode(self.spawn_failed, serializer);
+        <i64>::sse_encode(self.recovered, serializer);
+        <i64>::sse_encode(self.refused, serializer);
+        <i64>::sse_encode(self.spawn_failed, serializer);
     }
 }
 
@@ -1550,12 +1543,12 @@ impl SseEncode for crate::api::nts::NtsTrustStatus {
             self.default_client_backend,
             serializer,
         );
-        <u64>::sse_encode(self.default_backend_platform_count, serializer);
-        <u64>::sse_encode(self.default_backend_hybrid_count, serializer);
-        <u64>::sse_encode(self.default_backend_webpki_count, serializer);
-        <u64>::sse_encode(self.default_backend_custom_count, serializer);
+        <i64>::sse_encode(self.default_backend_platform_count, serializer);
+        <i64>::sse_encode(self.default_backend_hybrid_count, serializer);
+        <i64>::sse_encode(self.default_backend_webpki_count, serializer);
+        <i64>::sse_encode(self.default_backend_custom_count, serializer);
         <bool>::sse_encode(self.android_platform_init_succeeded, serializer);
-        <u64>::sse_encode(self.android_hybrid_fallback_count, serializer);
+        <i64>::sse_encode(self.android_hybrid_fallback_count, serializer);
     }
 }
 
@@ -1673,13 +1666,6 @@ impl SseEncode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
-    }
-}
-
-impl SseEncode for u64 {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        serializer.cursor.write_u64::<NativeEndian>(self).unwrap();
     }
 }
 

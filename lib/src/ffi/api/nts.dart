@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
 
@@ -351,16 +351,25 @@ class NtsDnsPoolStats {
   final int highWaterMark;
 
   /// Cumulative count of detached workers that have completed and
-  /// released their slot since process start. `u64` because the
+  /// released their slot since process start. 64-bit because the
   /// counter grows monotonically over a process lifetime and a
   /// 32-bit wraparound would be visible on long-running CLI / server
   /// builds with a saturated resolver.
-  final BigInt recovered;
+  ///
+  /// Declared `i64` (not `u64`) so FRB maps it to `PlatformInt64` —
+  /// a plain Dart `int` on all supported non-web targets — instead
+  /// of `BigInt`; same rationale as [ntsBoottimeMicros]. The
+  /// backing store is an `AtomicU64`, so the projection is
+  /// range-narrowing and saturates at `i64::MAX`; see
+  /// `counter_to_i64`. The clamp is unreachable in practice,
+  /// since reaching it needs 2^63 completed lookups.
+  final PlatformInt64 recovered;
 
   /// Cumulative count of admission attempts that were refused
   /// because the cap was reached since process start. The expected
-  /// delta when the resolver is healthy is zero.
-  final BigInt refused;
+  /// delta when the resolver is healthy is zero. `i64` for the same
+  /// binding reason as [NtsDnsPoolStats.recovered].
+  final PlatformInt64 refused;
 
   /// Cumulative count of admitted lookups the OS then refused to
   /// spawn a worker thread for (`EAGAIN` / `ENOMEM`) since process
@@ -371,9 +380,9 @@ class NtsDnsPoolStats {
   /// thread or memory ceiling and raising the cap would make it
   /// worse. Not counted in [NtsDnsPoolStats.recovered] either, since no
   /// worker ran. Pairs with [TimeoutPhase.dnsSpawnFailed] (Dart:
-  /// `TimeoutPhase.dnsSpawnFailed`) on the error channel. `u64` for
-  /// the same wraparound reason as [NtsDnsPoolStats.recovered].
-  final BigInt spawnFailed;
+  /// `TimeoutPhase.dnsSpawnFailed`) on the error channel. `i64` for
+  /// the same binding reason as [NtsDnsPoolStats.recovered].
+  final PlatformInt64 spawnFailed;
 
   const NtsDnsPoolStats({
     required this.inFlight,
@@ -732,28 +741,39 @@ class NtsTrustStatus {
   /// `default_client_backend`. Never reset; weakly monotonic
   /// across consecutive snapshots, with the same per-counter
   /// monotonicity contract as `android_hybrid_fallback_count`.
-  final BigInt defaultBackendPlatformCount;
+  ///
+  /// Declared `i64` (not `u64`) so FRB maps it to `PlatformInt64` —
+  /// a plain Dart `int` on all supported non-web targets — instead
+  /// of `BigInt`; same rationale as [ntsBoottimeMicros]. The
+  /// backing store is an `AtomicU64`, so the projection is
+  /// range-narrowing and saturates at `i64::MAX`; see
+  /// `counter_to_i64`. The clamp is unreachable in practice,
+  /// since reaching it needs 2^63 handshakes.
+  final PlatformInt64 defaultBackendPlatformCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
   /// to [TrustBackend.platformWithHybridFallback] since process
   /// start. Always zero on non-Android platforms (the
   /// platform-verifier-with-`webpki-roots`-fallback path only
   /// exists on Android). Same monotonicity contract as
-  /// `default_backend_platform_count`.
-  final BigInt defaultBackendHybridCount;
+  /// `default_backend_platform_count`. `i64` for the same binding
+  /// reason as `default_backend_platform_count`.
+  final PlatformInt64 defaultBackendHybridCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
   /// to [TrustBackend.webpkiRoots] since process start. Bumped
   /// every time `build_with_native_verifier` failed at TLS-config
   /// construction time on a [TrustMode.platformWithFallback]
   /// singleton. Same monotonicity contract as
-  /// `default_backend_platform_count`.
-  final BigInt defaultBackendWebpkiCount;
+  /// `default_backend_platform_count`. `i64` for the same binding
+  /// reason as `default_backend_platform_count`.
+  final PlatformInt64 defaultBackendWebpkiCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
   /// to [TrustBackend.custom] since process start. Same monotonicity
-  /// contract as `default_backend_platform_count`.
-  final BigInt defaultBackendCustomCount;
+  /// contract as `default_backend_platform_count`, and `i64` for the
+  /// same binding reason.
+  final PlatformInt64 defaultBackendCustomCount;
 
   /// On Android: `true` iff
   /// `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
@@ -770,8 +790,9 @@ class NtsTrustStatus {
   /// `HybridVerifier` exists). Non-zero on Android indicates at
   /// least one chain arrived whose only platform-side failure was
   /// a curated fallback-eligible shape (missing OCSP-AIA,
-  /// R8-stripped AAR classes, etc.).
-  final BigInt androidHybridFallbackCount;
+  /// R8-stripped AAR classes, etc.). `i64` for the same binding
+  /// reason as `default_backend_platform_count`.
+  final PlatformInt64 androidHybridFallbackCount;
 
   const NtsTrustStatus({
     this.defaultClientBackend,

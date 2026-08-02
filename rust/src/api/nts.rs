@@ -431,15 +431,24 @@ pub struct NtsDnsPoolStats {
     /// admission increment and the subsequent `fetch_max`.
     pub high_water_mark: u32,
     /// Cumulative count of detached workers that have completed and
-    /// released their slot since process start. `u64` because the
+    /// released their slot since process start. 64-bit because the
     /// counter grows monotonically over a process lifetime and a
     /// 32-bit wraparound would be visible on long-running CLI / server
     /// builds with a saturated resolver.
-    pub recovered: u64,
+    ///
+    /// Declared `i64` (not `u64`) so FRB maps it to `PlatformInt64` —
+    /// a plain Dart `int` on all supported non-web targets — instead
+    /// of `BigInt`; same rationale as [`nts_boottime_micros`]. The
+    /// backing store is an `AtomicU64`, so the projection is
+    /// range-narrowing and saturates at `i64::MAX`; see
+    /// [`counter_to_i64`]. The clamp is unreachable in practice,
+    /// since reaching it needs 2^63 completed lookups.
+    pub recovered: i64,
     /// Cumulative count of admission attempts that were refused
     /// because the cap was reached since process start. The expected
-    /// delta when the resolver is healthy is zero.
-    pub refused: u64,
+    /// delta when the resolver is healthy is zero. `i64` for the same
+    /// binding reason as [`Self::recovered`].
+    pub refused: i64,
     /// Cumulative count of admitted lookups the OS then refused to
     /// spawn a worker thread for (`EAGAIN` / `ENOMEM`) since process
     /// start. Disjoint from [`Self::refused`], and the actionable
@@ -449,9 +458,9 @@ pub struct NtsDnsPoolStats {
     /// thread or memory ceiling and raising the cap would make it
     /// worse. Not counted in [`Self::recovered`] either, since no
     /// worker ran. Pairs with [`TimeoutPhase::DnsSpawnFailed`] (Dart:
-    /// `TimeoutPhase.dnsSpawnFailed`) on the error channel. `u64` for
-    /// the same wraparound reason as [`Self::recovered`].
-    pub spawn_failed: u64,
+    /// `TimeoutPhase.dnsSpawnFailed`) on the error channel. `i64` for
+    /// the same binding reason as [`Self::recovered`].
+    pub spawn_failed: i64,
 }
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
@@ -471,10 +480,30 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
     NtsDnsPoolStats {
         in_flight: snap.in_flight as u32,
         high_water_mark: snap.high_water_mark as u32,
-        recovered: snap.recovered,
-        refused: snap.refused,
-        spawn_failed: snap.spawn_failed,
+        recovered: counter_to_i64(snap.recovered),
+        refused: counter_to_i64(snap.refused),
+        spawn_failed: counter_to_i64(snap.spawn_failed),
     }
+}
+
+/// Project a `u64` cumulative counter onto the `i64` the bridge-facing
+/// diagnostic structs publish.
+///
+/// The counters are backed by `AtomicU64`, but the FFI structs declare
+/// `i64` so FRB binds them as `PlatformInt64` — a plain Dart `int` —
+/// rather than `BigInt`. That makes the projection range-narrowing, so
+/// the overflow policy is explicit: **saturate at [`i64::MAX`]**.
+/// A plain `as` cast would wrap to a negative value and break the
+/// per-counter monotonicity these snapshots promise; clamping keeps
+/// the sequence non-decreasing, which is the property dashboards
+/// actually consume.
+///
+/// The clamp is unreachable in practice — every counter is bumped once
+/// per DNS lookup or per TLS handshake, so reaching 2^63 would take
+/// longer than any process lifetime — but a saturating floor is
+/// cheaper than reasoning about that bound at each call site.
+fn counter_to_i64(v: u64) -> i64 {
+    i64::try_from(v).unwrap_or(i64::MAX)
 }
 
 /// Snapshot the process-global trust-anchor diagnostic state.
@@ -533,12 +562,12 @@ pub fn nts_trust_status() -> NtsTrustStatus {
     let snap = crate::nts::trust_state::TRUST_STATE.snapshot();
     NtsTrustStatus {
         default_client_backend: snap.default_backend.map(TrustBackend::from),
-        default_backend_platform_count: snap.default_backend_platform_count,
-        default_backend_hybrid_count: snap.default_backend_hybrid_count,
-        default_backend_webpki_count: snap.default_backend_webpki_count,
-        default_backend_custom_count: snap.default_backend_custom_count,
+        default_backend_platform_count: counter_to_i64(snap.default_backend_platform_count),
+        default_backend_hybrid_count: counter_to_i64(snap.default_backend_hybrid_count),
+        default_backend_webpki_count: counter_to_i64(snap.default_backend_webpki_count),
+        default_backend_custom_count: counter_to_i64(snap.default_backend_custom_count),
         android_platform_init_succeeded: snap.android_platform_init_succeeded,
-        android_hybrid_fallback_count: snap.android_hybrid_fallback_count,
+        android_hybrid_fallback_count: counter_to_i64(snap.android_hybrid_fallback_count),
     }
 }
 
@@ -765,25 +794,36 @@ pub struct NtsTrustStatus {
     /// `default_client_backend`. Never reset; weakly monotonic
     /// across consecutive snapshots, with the same per-counter
     /// monotonicity contract as `android_hybrid_fallback_count`.
-    pub default_backend_platform_count: u64,
+    ///
+    /// Declared `i64` (not `u64`) so FRB maps it to `PlatformInt64` —
+    /// a plain Dart `int` on all supported non-web targets — instead
+    /// of `BigInt`; same rationale as [`nts_boottime_micros`]. The
+    /// backing store is an `AtomicU64`, so the projection is
+    /// range-narrowing and saturates at `i64::MAX`; see
+    /// [`counter_to_i64`]. The clamp is unreachable in practice,
+    /// since reaching it needs 2^63 handshakes.
+    pub default_backend_platform_count: i64,
     /// Cumulative count of default-singleton handshakes that resolved
     /// to [`TrustBackend::PlatformWithHybridFallback`] since process
     /// start. Always zero on non-Android platforms (the
     /// platform-verifier-with-`webpki-roots`-fallback path only
     /// exists on Android). Same monotonicity contract as
-    /// `default_backend_platform_count`.
-    pub default_backend_hybrid_count: u64,
+    /// `default_backend_platform_count`. `i64` for the same binding
+    /// reason as `default_backend_platform_count`.
+    pub default_backend_hybrid_count: i64,
     /// Cumulative count of default-singleton handshakes that resolved
     /// to [`TrustBackend::WebpkiRoots`] since process start. Bumped
     /// every time `build_with_native_verifier` failed at TLS-config
     /// construction time on a [`TrustMode::PlatformWithFallback`]
     /// singleton. Same monotonicity contract as
-    /// `default_backend_platform_count`.
-    pub default_backend_webpki_count: u64,
+    /// `default_backend_platform_count`. `i64` for the same binding
+    /// reason as `default_backend_platform_count`.
+    pub default_backend_webpki_count: i64,
     /// Cumulative count of default-singleton handshakes that resolved
     /// to [`TrustBackend::Custom`] since process start. Same monotonicity
-    /// contract as `default_backend_platform_count`.
-    pub default_backend_custom_count: u64,
+    /// contract as `default_backend_platform_count`, and `i64` for the
+    /// same binding reason.
+    pub default_backend_custom_count: i64,
     /// On Android: `true` iff
     /// `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
     /// invoked at least once and reported success. `false` on every
@@ -798,8 +838,9 @@ pub struct NtsTrustStatus {
     /// `HybridVerifier` exists). Non-zero on Android indicates at
     /// least one chain arrived whose only platform-side failure was
     /// a curated fallback-eligible shape (missing OCSP-AIA,
-    /// R8-stripped AAR classes, etc.).
-    pub android_hybrid_fallback_count: u64,
+    /// R8-stripped AAR classes, etc.). `i64` for the same binding
+    /// reason as `default_backend_platform_count`.
+    pub android_hybrid_fallback_count: i64,
 }
 
 /// Failure modes for `nts_query` (Dart: `ntsQuery`) and

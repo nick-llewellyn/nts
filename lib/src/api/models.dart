@@ -632,7 +632,7 @@ class NtsTrustStatus {
   /// Never reset; weakly monotonic across consecutive snapshots,
   /// with the same per-counter monotonicity contract as
   /// [androidHybridFallbackCount].
-  final BigInt defaultBackendPlatformCount;
+  final int defaultBackendPlatformCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
   /// to [TrustBackend.platformWithHybridFallback] since process
@@ -640,19 +640,19 @@ class NtsTrustStatus {
   /// platform-verifier-with-`webpki-roots`-fallback path only
   /// exists on Android). Same monotonicity contract as
   /// [defaultBackendPlatformCount].
-  final BigInt defaultBackendHybridCount;
+  final int defaultBackendHybridCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
   /// to [TrustBackend.webpkiRoots] since process start. Bumped every
   /// time platform-verifier configuration failed at build time on a
   /// [TrustMode.platformWithFallback] singleton. Same monotonicity
   /// contract as [defaultBackendPlatformCount].
-  final BigInt defaultBackendWebpkiCount;
+  final int defaultBackendWebpkiCount;
 
   /// Cumulative count of default-singleton handshakes that resolved
   /// to [TrustBackend.custom] since process start. Same monotonicity
   /// contract as [defaultBackendPlatformCount].
-  final BigInt defaultBackendCustomCount;
+  final int defaultBackendCustomCount;
 
   /// On Android: `true` iff the JNI bootstrap has reported success
   /// at least once. `false` on every other platform (no JNI
@@ -668,7 +668,7 @@ class NtsTrustStatus {
   /// exists). Non-zero on Android indicates at least one chain
   /// arrived whose only platform-side failure was a curated
   /// fallback-eligible shape.
-  final BigInt androidHybridFallbackCount;
+  final int androidHybridFallbackCount;
 
   /// Construct a snapshot. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures.
@@ -932,16 +932,19 @@ class NtsDnsPoolStats {
   final int highWaterMark;
 
   /// Cumulative count of detached workers that have completed and
-  /// released their slot since process start. `BigInt` because the
-  /// counter grows monotonically over a process lifetime and a 32-bit
-  /// wraparound would be visible on long-running CLI / server builds
-  /// with a saturated resolver.
-  final BigInt recovered;
+  /// released their slot since process start. Backed by an unsigned
+  /// 64-bit counter because it grows monotonically over a process
+  /// lifetime and a 32-bit wraparound would be visible on
+  /// long-running CLI / server builds with a saturated resolver.
+  /// Published as a signed `int`, saturating at 2^63 - 1 so the
+  /// sequence stays non-decreasing; reaching that clamp needs 2^63
+  /// completed lookups.
+  final int recovered;
 
   /// Cumulative count of admission attempts that were refused because
   /// the cap was reached since process start. The expected delta when
   /// the resolver is healthy is zero.
-  final BigInt refused;
+  final int refused;
 
   /// Cumulative count of admitted lookups the operating system then
   /// refused to spawn a worker thread for (`EAGAIN` / `ENOMEM`) since
@@ -953,9 +956,9 @@ class NtsDnsPoolStats {
   /// this counter climbing means the process is at a thread or memory
   /// ceiling and raising the cap would make matters worse. Not counted
   /// in [recovered] either, since no worker ran. Pairs with
-  /// [TimeoutPhase.dnsSpawnFailed] on the error channel. `BigInt` for
-  /// the same wraparound reason as [recovered].
-  final BigInt spawnFailed;
+  /// [TimeoutPhase.dnsSpawnFailed] on the error channel. Same 64-bit
+  /// backing as [recovered].
+  final int spawnFailed;
 
   /// Construct a snapshot. Intended for the wrapper-layer conversion
   /// boundary and for test fixtures.

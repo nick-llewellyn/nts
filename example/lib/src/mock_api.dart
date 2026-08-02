@@ -86,10 +86,10 @@ class MockNtsApi implements NtsRustLibApi {
   /// trust-status panel's trend numbers grow as the mock runs,
   /// matching the real-bridge contract on the three
   /// `defaultBackend*Count` fields of [NtsTrustStatus].
-  BigInt _singletonPlatformCount = BigInt.zero;
-  BigInt _singletonHybridCount = BigInt.zero;
-  BigInt _singletonWebpkiCount = BigInt.zero;
-  BigInt _singletonCustomCount = BigInt.zero;
+  int _singletonPlatformCount = 0;
+  int _singletonHybridCount = 0;
+  int _singletonWebpkiCount = 0;
+  int _singletonCustomCount = 0;
 
   /// Single recording point for the singleton-path trust-state
   /// updates. Centralises the "overwrite the pointer + bump the
@@ -99,13 +99,13 @@ class MockNtsApi implements NtsRustLibApi {
     _lastResolvedBackend = b;
     switch (b) {
       case TrustBackend.platform:
-        _singletonPlatformCount += BigInt.one;
+        _singletonPlatformCount += 1;
       case TrustBackend.platformWithHybridFallback:
-        _singletonHybridCount += BigInt.one;
+        _singletonHybridCount += 1;
       case TrustBackend.webpkiRoots:
-        _singletonWebpkiCount += BigInt.one;
+        _singletonWebpkiCount += 1;
       case TrustBackend.custom:
-        _singletonCustomCount += BigInt.one;
+        _singletonCustomCount += 1;
     }
   }
 
@@ -221,12 +221,14 @@ class MockNtsApi implements NtsRustLibApi {
   @override
   NtsTrustStatus crateApiNtsNtsTrustStatus() => NtsTrustStatus(
     defaultClientBackend: _lastResolvedBackend,
-    defaultBackendPlatformCount: _singletonPlatformCount,
-    defaultBackendHybridCount: _singletonHybridCount,
-    defaultBackendWebpkiCount: _singletonWebpkiCount,
-    defaultBackendCustomCount: _singletonCustomCount,
+    defaultBackendPlatformCount: PlatformInt64Util.from(
+      _singletonPlatformCount,
+    ),
+    defaultBackendHybridCount: PlatformInt64Util.from(_singletonHybridCount),
+    defaultBackendWebpkiCount: PlatformInt64Util.from(_singletonWebpkiCount),
+    defaultBackendCustomCount: PlatformInt64Util.from(_singletonCustomCount),
     androidPlatformInitSucceeded: false,
-    androidHybridFallbackCount: BigInt.zero,
+    androidHybridFallbackCount: PlatformInt64Util.from(0),
   );
 
   /// Resolve the simulated backend for a per-client handshake. A
