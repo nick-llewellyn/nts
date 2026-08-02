@@ -199,11 +199,12 @@ String describeError(NtsError err) => switch (err) {
 /// shape other than [NtsErrorTimeout].
 ///
 /// Mirrors the `phase` key emitted by [jsonError] (`bridgeSaturation`,
-/// `dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`,
-/// `ntp`). The health classifier uses it to tell a *local* DNS-pool
-/// exhaustion (`dnsSaturation`, a probe-side resolver-cap artifact)
-/// apart from a genuine server-side no-reply, instead of collapsing
-/// every timeout onto the bare `Timeout` tag from [errorTypeName].
+/// `dnsSaturation`, `dnsSpawnFailed`, `dnsTimeout`, `connect`, `tls`,
+/// `keRecordIo`, `ntp`). The health classifier uses it to tell a
+/// *local* resolver refusal (`dnsSaturation` or `dnsSpawnFailed`, both
+/// probe-side artifacts) apart from a genuine server-side no-reply,
+/// instead of collapsing every timeout onto the bare `Timeout` tag
+/// from [errorTypeName].
 String? timeoutPhaseName(NtsError err) =>
     err is NtsErrorTimeout ? err.phase.name : null;
 
@@ -259,10 +260,11 @@ Map<String, Object?> jsonWarmSuccess(NtsWarmCookiesOutcome outcome) => {
 ///
 /// `Timeout` failures additionally carry a structured `phase` field
 /// holding the [TimeoutPhase] variant name (`bridgeSaturation`,
-/// `dnsSaturation`, `dnsTimeout`, `connect`, `tls`, `keRecordIo`,
-/// `ntp`) so machine-readable consumers can switch on the attribution
-/// without re-parsing the human message — the whole point of carrying
-/// the phase tag through the API surface in the first place.
+/// `dnsSaturation`, `dnsSpawnFailed`, `dnsTimeout`, `connect`, `tls`,
+/// `keRecordIo`, `ntp`) so machine-readable consumers can switch on
+/// the attribution without re-parsing the human message — the whole
+/// point of carrying the phase tag through the API surface in the
+/// first place.
 Map<String, Object?> jsonError(NtsError err) => {
   'error_type': errorTypeName(err),
   'message': describeError(err),
