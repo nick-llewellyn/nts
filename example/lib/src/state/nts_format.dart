@@ -78,8 +78,12 @@ String formatTrustMode(TrustMode mode) => switch (mode) {
   TrustMode.custom => 'custom',
 };
 
-/// Trailing ` ke-warnings=[…]` segment for a non-empty list of
-/// NTS-KE warning codes, or the empty string when there are none.
+/// Trailing `ke-warnings=[…]` segment for a non-empty list of NTS-KE
+/// warning codes, or the empty string when there are none.
+///
+/// Carries its own two-space separator prefix, matching the column
+/// spacing the surrounding renderings use, so callers concatenate it
+/// directly rather than joining.
 ///
 /// The IANA NTS-KE warning registry has no assignments as of RFC 8915,
 /// so every server observed in practice sends zero codes. Rendering
