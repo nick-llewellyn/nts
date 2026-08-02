@@ -112,7 +112,7 @@ NtsError _abiMismatchError(Object cause) => NtsError.abiMismatch(
       '($cause) — rebuild the native library from the Rust sources '
       'matching this package version (`cargo build --release` in '
       '`rust/`, then regenerate bindings with '
-      '`flutter_rust_bridge_codegen generate` if the Rust API '
+      '`dart run tool/check_bindings.dart` if the Rust API '
       'changed)',
 );
 

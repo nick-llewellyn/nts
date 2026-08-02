@@ -2,7 +2,11 @@
 #
 # Regenerate bindings after editing anything under rust/src/api/:
 #
-#     flutter_rust_bridge_codegen generate
+#     dart run tool/check_bindings.dart
+#
+# That script drives the generator and then applies the post-codegen
+# patches; invoking `flutter_rust_bridge_codegen generate` directly
+# emits the unpatched form and fails the drift gate.
 
 # Path to the Rust source modules that should be exposed to Dart.
 # Every public function/type in these files becomes a Dart binding.

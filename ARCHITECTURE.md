@@ -931,7 +931,7 @@ release type.
 | `rust/src/api/` | Rust entry points exposed through FRB (`nts.rs`, `simple.rs`). |
 | `rust/src/nts/` | Protocol implementation (records, KE driver, AEAD, NTP, cookies, bounded DNS). |
 | `hook/build.dart` | Native Assets build hook; invokes `cargo build` for the active target. |
-| `tool/check_bindings.dart` | CI drift check for generated bindings. |
+| `tool/check_bindings.dart` | Canonical entry point for regenerating the bindings (codegen + post-codegen patches), and the CI drift check over the result. |
 | `example/` | Showcase apps (Flutter GUI + Dart CLI) and `example/main.dart`. |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the toolchain, codegen, and

@@ -574,6 +574,25 @@
   either direction.
   (NTS-116, NTS-118, NTS-120)
 
+### Documentation
+
+- `dart run tool/check_bindings.dart` is now documented as the
+  canonical way to regenerate the FRB bindings. The docs previously
+  gave `flutter_rust_bridge_codegen generate` as the regeneration
+  step, which emits the unpatched form and so reverts the five
+  post-codegen patch passes the script applies — lint suppression,
+  the three diagnostic-message rewrites on the SSE and DCO codec
+  catch-all arms, and the Rust-to-Dart intra-doc link rewriting. The
+  result fails the drift gate, and the gate's own error message
+  pointed back at the command that caused it, so a contributor
+  following it verbatim stayed red. That message now names the script
+  and says why bare codegen is not a substitute, `DEVELOPMENT.md`
+  tabulates all five passes rather than only the lint-suppression
+  one, and the remaining references across the PR template, the FRB
+  config, `.gitignore`, `pubspec.yaml`, `rust/src/lib.rs`, and the
+  ABI-mismatch error text were updated to match. Tooling and docs
+  only — no behavioural change. (NTS-136)
+
 
 ## 8.0.0
 

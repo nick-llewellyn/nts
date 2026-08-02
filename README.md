@@ -627,9 +627,9 @@ For internals, contribution workflow, and operational tuning:
   module-by-module breakdown of the Rust crate, and the repository
   layout.
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** — Rust toolchain, regenerating
-  FRB bindings, the `check_bindings.dart` drift gate, running Rust /
-  Dart tests, and the `verbose_logs` Native Assets user-define for
-  enabling `rustls` trace output.
+  FRB bindings via `check_bindings.dart` (which also serves as the
+  drift gate), running Rust / Dart tests, and the `verbose_logs`
+  Native Assets user-define for enabling `rustls` trace output.
 - **[RFC 8915](https://datatracker.ietf.org/doc/html/rfc8915)** —
   Official IETF specification for Network Time Security.
 

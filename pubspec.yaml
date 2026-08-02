@@ -51,8 +51,8 @@ dependencies:
   # the runtime crate produces silent memory corruption rather than a clear
   # error, so both sides must move in lockstep. Bumping this requires a
   # coordinated update of `rust/Cargo.toml` and a regeneration of the
-  # bindings via `flutter_rust_bridge_codegen generate`, gated by
-  # `tool/check_bindings.dart` in CI.
+  # bindings via `dart run tool/check_bindings.dart`, which is also the
+  # gate CI runs.
   #
   # `dart pub publish` will warn that this constraint should allow more
   # than one version. That warning is accepted: silent memory corruption

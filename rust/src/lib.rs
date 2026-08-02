@@ -23,8 +23,8 @@
 
 pub mod api;
 // `frb_generated` is `flutter_rust_bridge_codegen` output and is
-// regenerated wholesale by `dart run flutter_rust_bridge_codegen
-// generate`; lint findings against it are not actionable from this
+// regenerated wholesale by `dart run tool/check_bindings.dart`; lint
+// findings against it are not actionable from this
 // repository. The allow-list mirrors the lint shapes the generator
 // currently emits (wildcard imports of the `api::*` surface, terminal
 // `wrap_normal::<...>(...)` calls without a trailing semicolon, the
