@@ -46,59 +46,98 @@ Five tools, distinct roles.
 | Tool | Purpose | When to run |
 |------|---------|-------------|
 | `cargo` (in `rust/`) | Manage Rust deps, run unit tests | During Rust development |
-| `flutter_rust_bridge_codegen` | Regenerate Dart bindings | After any change to `rust/src/api/*.rs` |
-| `tool/check_bindings.dart` | Verify committed bindings match the generator | Before pushing changes that touch `rust/src/api/*.rs` |
+| `tool/check_bindings.dart` | Regenerate, patch, and verify the Dart bindings | After any change to `rust/src/api/*.rs`, and before pushing it |
+| `flutter_rust_bridge_codegen` | Underlying generator, invoked by the script above — not run directly | Never on its own; see [Regenerate bindings](#regenerate-bindings) |
 | `hook/build.dart` (Native Assets) | Compile + bundle the dylib for Flutter | Automatically on `flutter build` |
 | `tool/check_doc_snippets.dart` | Validate Dart code snippets in documentation | Before pushing changes that touch docs or public API |
 
 
 ### Regenerate bindings
 
-Required after any change to `rust/src/api/*.rs`. The generator
-version must match the exact `flutter_rust_bridge` pin in
-`pubspec.yaml` (currently `2.12.0`) — codegen and runtime are
-version-locked:
-
-```bash
-flutter_rust_bridge_codegen generate
-```
-
-Commit the regenerated `lib/src/ffi/**` and `rust/src/frb_generated.rs`,
-then run the drift gate below before pushing.
-
-### Verify bindings are in sync
+Required after any change to `rust/src/api/*.rs`. This is the same
+command as the drift gate — the script regenerates, patches, and
+verifies in one pass:
 
 ```bash
 dart run tool/check_bindings.dart
 ```
 
-Mirrors CI's drift check: regenerates bindings, applies the lint-suppression
-patches that FRB cannot emit on its own (see `_lintIgnorePatches` in the
-script), runs `dart format` on the output, then checks the watched paths
-two ways -- `git status --porcelain` for generated files that exist on
-disk but are not yet tracked by git (a bare `git diff` cannot see
-those), and `git diff --exit-code` for changes to tracked files. Exits
-non-zero with the same error message CI emits when `lib/src/ffi/` or
-`rust/src/frb_generated.rs` differ from the committed state. The pinned
-codegen version is read from `pubspec.yaml` so the script and CI stay
-in lockstep.
+Commit the regenerated `lib/src/ffi/**` and `rust/src/frb_generated.rs`.
+A second run should report `FRB bindings are in sync`; every patch pass
+is idempotent, so re-running is safe.
 
-#### Post-codegen lint-suppression patches
+> **Do not run `flutter_rust_bridge_codegen generate` directly.** Bare
+> codegen emits unpatched output and therefore *reverts* the five
+> post-codegen patch passes described below. The result fails the drift
+> gate, and committing it would regress the generated bindings. The
+> script invokes the generator itself, after checking that the
+> generator version matches the exact `flutter_rust_bridge` pin in
+> `pubspec.yaml` (currently `2.12.0`) and that `pubspec.yaml` and
+> `rust/Cargo.toml` agree on it — codegen and runtime are
+> version-locked.
 
-`flutter_rust_bridge_codegen` does not propagate Rust struct/enum
-docstrings to its synthesized freezed sealed class wrappers and
-auto-generated default constructors. With `public_member_api_docs`
-enabled in `analysis_options.yaml` and `lib/src/ffi/**` left in the
-analyzed file set (so the published surface stays in lockstep with what
-downstream consumers' analyzers see), every undocumented public member
-in those positions fires the lint -- ~120 hits in
-`lib/src/ffi/api/nts.dart` alone. Since the underlying lints cannot be
-fixed at the Rust source, the script appends the offending rule names
-to the file-level `// ignore_for_file:` directive after each codegen
-run. The patch table lives in `_lintIgnorePatches` and is idempotent:
-re-running adds nothing if the rule is already present. If FRB ever
-emits the missing docs natively, remove the corresponding entry from
-the table.
+### Verify bindings are in sync
+
+The drift gate is the same command; there is no separate verify-only
+mode:
+
+```bash
+dart run tool/check_bindings.dart
+```
+
+Mirrors CI's `Verify FRB bindings are in sync` job: regenerates
+bindings, applies the post-codegen patches FRB cannot emit on its own
+(see below), analyzes the patched output, runs `dart format` on it,
+flags orphaned generated modules (see `_checkForOrphanedApiModules`),
+then checks the watched paths two ways -- `git status --porcelain` for
+generated files that exist on disk but are not yet tracked by git (a
+bare `git diff` cannot see those), and `git diff --exit-code` for
+changes to tracked files. Exits non-zero with the same error message CI
+emits when `lib/src/ffi/` or `rust/src/frb_generated.rs` differ from
+the committed state.
+
+#### Post-codegen patches
+
+FRB's output needs five mutations that the generator cannot emit
+itself. All five run on every invocation of the script, and all five
+are idempotent — re-running applies nothing new. This is why bare
+codegen is not a substitute: it produces the unpatched form, which the
+drift gate then rejects.
+
+| Pass | Target | Purpose |
+|------|--------|---------|
+| `_lintIgnorePatches` (via `_addLintsToIgnoreForFile`) | `lib/src/ffi/**` | Appends lint names to each file's `// ignore_for_file:` directive. |
+| `_patchFrbGeneratedUnimplementedMessages` | `rust/src/frb_generated.rs` | Gives the `unimplemented!("")` catch-all arms a diagnostic message. |
+| `_patchDartFrbGeneratedUnimplementedMessages` | `lib/src/ffi/frb_generated.dart` | Same for the SSE codec's `UnimplementedError('')` arms, including the offending `$tag_`. |
+| `_patchDartIntraDocLinks` | `lib/src/ffi/api/*.dart` | Rewrites Rust intra-doc links into their Dart equivalents; fails the run on an unresolvable link. |
+| `_patchDartFrbGeneratedDcoUnreachableMessages` | `lib/src/ffi/frb_generated.dart` | Same for the DCO codec's `Exception('unreachable')` arms, including `${raw[0]}`. |
+
+**Lint suppression.** `flutter_rust_bridge_codegen` does not propagate
+Rust struct/enum docstrings to its synthesized freezed sealed class
+wrappers and auto-generated default constructors. With
+`public_member_api_docs` enabled in `analysis_options.yaml` and
+`lib/src/ffi/**` left in the analyzed file set (so the published
+surface stays in lockstep with what downstream consumers' analyzers
+see), every undocumented public member in those positions fires the
+lint -- ~120 hits in `lib/src/ffi/api/nts.dart` alone. Since the
+underlying lints cannot be fixed at the Rust source, the script appends
+the offending rule names to the file-level directive. If FRB ever emits
+the missing docs natively, remove the corresponding entry from
+`_lintIgnorePatches`.
+
+**Diagnostic messages.** FRB emits empty-message panic and throw sites
+for the defensive catch-all arms in its generated codecs. They are
+unreachable for the exhaustive enums in `crate::api::*`, but an empty
+message means a future wire-format mismatch fails with no context. The
+three message patchers substitute a greppable form naming the codec and
+the unexpected tag, without changing the runtime semantics.
+
+**Intra-doc links.** Rustdoc paths like `[`CookieJar`]` carried through
+from `rust/src/api/*.rs` have no meaning in Dart. The patcher resolves
+each against a symbol table built across all generated modules and
+rewrites it; an unresolvable link exits non-zero naming the originating
+Rust line, so the docstring is fixed at source rather than shipping a
+dead reference.
 
 ### Rust unit tests (no Flutter required)
 
@@ -554,7 +593,7 @@ Two cheaper filters run before the workflow even queues:
 | Screenshot asset swap (`screenshots/**`) | Workflow doesn't run (`paths-ignore`). |
 | Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust` and `rust-bridge-sync` skip. |
 | Rust source change (`rust/src/**`) | All three runtime jobs run. |
-| Hand-edit of generated bindings | `build` and `rust-bridge-sync` run; `rust-bridge-sync` will fail with a drift error (regenerate via `flutter_rust_bridge_codegen generate` instead). |
+| Hand-edit of generated bindings | `build` and `rust-bridge-sync` run; `rust-bridge-sync` will fail with a drift error (regenerate via `dart run tool/check_bindings.dart` instead). |
 | `pubspec.yaml` edit | All three runtime jobs run (FRB pin sits there). |
 | Workflow file edit | All three runtime jobs plus `hooks-syntax` and `hooks-behaviour` run (validates the change end-to-end and re-asserts the hook-enforcement layer still parses *and* still enforces, since all five gates trip on `ci`). |
 | Hook script change (`tool/hooks/**`) | `hooks-syntax` and `hooks-behaviour` run; the runtime jobs skip. |
@@ -828,8 +867,8 @@ sites under `rust/src/` follow this shape (see e.g.
 `rust/src/lib.rs` carries a single `#[allow(...)]` on the
 `mod frb_generated;` declaration. `frb_generated.rs` is
 `flutter_rust_bridge_codegen` output and gets regenerated
-wholesale by `flutter_rust_bridge_codegen generate` (the
-cargo-installed binary on `PATH`; see "Regenerate bindings"
+wholesale by `dart run tool/check_bindings.dart` (which drives the
+cargo-installed generator on `PATH`; see "Regenerate bindings"
 above); lint findings against it are not actionable from this
 repository.
 The suppression is durable, not temporary, so `#[expect]`'s "fail

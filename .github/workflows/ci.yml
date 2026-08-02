@@ -446,7 +446,7 @@ jobs:
       # decision tree governing additions to this list. Four files
       # are filtered:
       #   - `src/frb_generated.rs`: regenerated verbatim by
-      #     `flutter_rust_bridge_codegen generate`; the rust-bridge-sync
+      #     `dart run tool/check_bindings.dart`; the rust-bridge-sync
       #     job is the source of truth for its correctness, not coverage.
       #   - `src/android_init.rs` / `src/ios_init.rs`: JNI / Obj-C++
       #     init shims only loaded on-device; unreachable from the

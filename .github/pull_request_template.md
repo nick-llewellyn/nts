@@ -67,8 +67,8 @@ leg fails only on the floor, that's a real signal, not a flake.
 - [ ] `CHANGELOG.md` updated under the next-release section
 - [ ] `pubspec.yaml` `version:` bumped following semver
       (patch for fixes, minor for features, major for breaking changes)
-- [ ] If `rust/src/api/**` changed, `flutter_rust_bridge_codegen
-      generate` was rerun and the regenerated `lib/src/ffi/**` and
+- [ ] If `rust/src/api/**` changed, `dart run tool/check_bindings.dart`
+      was rerun and the regenerated `lib/src/ffi/**` and
       `rust/src/frb_generated.rs` are committed (no drift in CI)
 - [ ] If the `flutter_rust_bridge` pin moved, both
       `pubspec.yaml` (Dart) and `rust/Cargo.toml` (Rust `=2.x.y`)

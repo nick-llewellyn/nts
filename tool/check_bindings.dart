@@ -1,12 +1,20 @@
-// Local equivalent of the CI `Verify FRB bindings are in sync` job. Runs
-// `flutter_rust_bridge_codegen generate`, applies the lint-suppression
-// patches FRB cannot emit on its own (see `_lintIgnorePatches`), formats
-// the regenerated Dart bindings, checks for orphaned generated modules
+// Canonical entry point for regenerating the FRB bindings, and the local
+// equivalent of the CI `Verify FRB bindings are in sync` job. Runs
+// `flutter_rust_bridge_codegen generate`, applies the post-codegen patches
+// FRB cannot emit on its own (see `_lintIgnorePatches`,
+// `_patchFrbGeneratedUnimplementedMessages`,
+// `_patchDartFrbGeneratedUnimplementedMessages`, `_patchDartIntraDocLinks`,
+// and `_patchDartFrbGeneratedDcoUnreachableMessages`), formats the
+// regenerated Dart bindings, checks for orphaned generated modules
 // (see `_checkForOrphanedApiModules`), and fails non-zero if
 // `lib/src/ffi/` or `rust/src/frb_generated.rs` differ from the committed
 // state -- including when codegen *creates* a file the repo does not yet
 // track (see `_findUntrackedGeneratedFiles`; `git diff` alone reports
 // only tracked-file changes).
+//
+// Run this script rather than `flutter_rust_bridge_codegen generate`:
+// bare codegen emits the unpatched form and so reverts every patch pass
+// above, which this script's own drift check then rejects.
 //
 // Usage:
 //
@@ -173,8 +181,15 @@ Future<void> main(List<String> args) async {
 
   if (await _hasDrift()) {
     stderr.writeln(
-      '${_errorPrefix}FRB bindings drifted from rust/src/api/. Run '
-      "'flutter_rust_bridge_codegen generate' locally and commit the result.",
+      '${_errorPrefix}FRB bindings drifted from rust/src/api/. This run '
+      'already regenerated and patched them, so commit the resulting\n'
+      '       changes to lib/src/ffi/ and rust/src/frb_generated.rs.\n'
+      '       To reproduce locally, run this same script -- '
+      '`dart run tool/check_bindings.dart`.\n'
+      '       Do not run `flutter_rust_bridge_codegen generate` directly: '
+      'its unpatched\n'
+      '       output reverts the post-codegen patches and re-trips this '
+      'check.',
     );
     exit(1);
   }
