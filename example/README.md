@@ -379,9 +379,17 @@ fields. `success` events for `nts_query` carry the parsed sample;
 `severity`. The same stdout / stderr split as text mode applies, so
 `jq` over stdout still sees only the working hosts.
 
+`success` events also carry `ke_warnings`, the raw NTS-KE warning
+codes (RFC 8915 §4.1.4) the handshake produced. The key is always
+present — an empty list for every server observed in practice, since
+the IANA registry has no assignments — so a consumer can index it
+without a presence check. The text renderings instead omit the
+`ke-warnings=[…]` segment entirely when there are no codes, keeping
+the common-case log line quiet.
+
 ```text
 {"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"start"}
-{"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"success","utc_unix_micros":…,"utc":"…","rtt_micros":68570,"stratum":1,"aead_id":15,"aead_label":"AES-SIV-CMAC-256(15)","cookies":2}
+{"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"success","utc_unix_micros":…,"utc":"…","rtt_micros":68570,"stratum":1,"aead_id":15,"aead_label":"AES-SIV-CMAC-256(15)","cookies":2,"trust_backend":"platform","ke_warnings":[]}
 ```
 
 ---
@@ -579,8 +587,9 @@ module:
 lib/src/state/nts_format.dart
   ├─ aeadLabel(int)            → IANA AEAD id → human label
   ├─ formatRtt(int micros)     → auto-selects µs / ms / s units
+  ├─ keWarningsSegment(codes)  → ke-warnings=[…] segment, '' when empty
   ├─ formatQuerySuccess(...)   → two-line OK headline + continuation
-  ├─ formatWarmSuccess(int)    → single-line OK + cookie count
+  ├─ formatWarmSuccess(...)    → single-line OK + cookie count
   ├─ isErrorSeverity(NtsError) → severity classification (warn vs err)
   └─ describeError(NtsError)   → human-readable error rendering
 ```

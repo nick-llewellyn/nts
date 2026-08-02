@@ -78,6 +78,22 @@ String formatTrustMode(TrustMode mode) => switch (mode) {
   TrustMode.custom => 'custom',
 };
 
+/// Trailing `ke-warnings=[…]` segment for a non-empty list of NTS-KE
+/// warning codes, or the empty string when there are none.
+///
+/// Carries its own two-space separator prefix, matching the column
+/// spacing the surrounding renderings use, so callers concatenate it
+/// directly rather than joining.
+///
+/// The IANA NTS-KE warning registry has no assignments as of RFC 8915,
+/// so every server observed in practice sends zero codes. Rendering
+/// `ke-warnings=[]` on every success line would be pure noise, hence
+/// the segment is omitted entirely rather than shown empty — the
+/// inverse of the JSON payloads, which carry the key unconditionally
+/// so machine consumers get a stable schema.
+String keWarningsSegment(List<int> codes) =>
+    codes.isEmpty ? '' : '  ke-warnings=[${codes.join(',')}]';
+
 /// Two-line success rendering of an `ntsQuery` result.
 ///
 /// Headline carries the metrics a user actually scans for (RTT,
@@ -86,6 +102,10 @@ String formatTrustMode(TrustMode mode) => switch (mode) {
 /// but is noise during normal operation. The leading `OK ` marker is
 /// preserved on the headline so the share-export and any external
 /// `grep` tooling can still spot success lines on a single-line scan.
+///
+/// Any NTS-KE warning codes the handshake carried are appended to the
+/// continuation via [keWarningsSegment], which stays silent in the
+/// (universal, today) empty case.
 String formatQuerySuccess(NtsTimeSample sample) {
   final utc = DateTime.fromMicrosecondsSinceEpoch(
     sample.utcUnixMicros,
@@ -96,15 +116,19 @@ String formatQuerySuccess(NtsTimeSample sample) {
       'utc=${utc.toIso8601String()}\n'
       '    \u2514\u2500 aead=${aeadLabel(sample.aeadId)}  '
       'cookies=${sample.freshCookies}  '
-      'trust=${formatTrustBackend(sample.trustBackend)}';
+      'trust=${formatTrustBackend(sample.trustBackend)}'
+      '${keWarningsSegment(sample.keWarnings)}';
 }
 
 /// Single-line success rendering of an `ntsWarmCookies` result.
 /// Carries the trust backend so a warm-only diagnostic flow surfaces
-/// the same backend attribution as a full query.
+/// the same backend attribution as a full query, and any NTS-KE
+/// warning codes the handshake produced (omitted when empty, as in
+/// [formatQuerySuccess]).
 String formatWarmSuccess(NtsWarmCookiesOutcome outcome) =>
     'OK  recovered ${outcome.freshCookies} fresh cookie(s)  '
-    'trust=${formatTrustBackend(outcome.trustBackend)}';
+    'trust=${formatTrustBackend(outcome.trustBackend)}'
+    '${keWarningsSegment(outcome.keWarnings)}';
 
 /// Two-line success rendering of a `getTime` result.
 ///
@@ -231,6 +255,12 @@ String errorTypeName(NtsError err) => switch (err) {
 /// pipelines can distinguish a platform-store handshake from a
 /// hybrid-fallback or webpki-roots one without re-parsing the human
 /// message.
+///
+/// `ke_warnings` is present unconditionally, as an empty list in the
+/// common case, so a consumer can index the key without a
+/// null-presence branch. The text renderings drop the segment when
+/// empty instead; a human log line and a schema have opposite
+/// tolerances for a field that is almost always vacuous.
 Map<String, Object?> jsonQuerySuccess(NtsTimeSample sample) => {
   'utc_unix_micros': sample.utcUnixMicros,
   'utc': DateTime.fromMicrosecondsSinceEpoch(
@@ -243,15 +273,18 @@ Map<String, Object?> jsonQuerySuccess(NtsTimeSample sample) => {
   'aead_label': aeadLabel(sample.aeadId),
   'cookies': sample.freshCookies,
   'trust_backend': sample.trustBackend.name,
+  'ke_warnings': sample.keWarnings,
 };
 
 /// JSON-shaped success payload for an `ntsWarmCookies` result.
-/// Mirrors the per-handshake trust-backend attribution carried by
-/// [jsonQuerySuccess] so a warm-only diagnostic flow stays
-/// machine-readable without a separate code path.
+/// Mirrors the per-handshake trust-backend attribution and the
+/// unconditional `ke_warnings` key carried by [jsonQuerySuccess] so a
+/// warm-only diagnostic flow stays machine-readable without a
+/// separate code path.
 Map<String, Object?> jsonWarmSuccess(NtsWarmCookiesOutcome outcome) => {
   'cookies': outcome.freshCookies,
   'trust_backend': outcome.trustBackend.name,
+  'ke_warnings': outcome.keWarnings,
 };
 
 /// JSON-shaped failure payload for an [NtsError]. Pairs the variant

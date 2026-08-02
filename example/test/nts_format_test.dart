@@ -112,6 +112,28 @@ void main() {
       // Trust backend goes on the continuation row alongside aead /
       // cookies so the headline stays scannable.
       expect(lines[1], contains('trust=webpki-fallback'));
+      // No codes on the wire: the segment is omitted rather than
+      // rendered empty, since every real server sends zero today.
+      expect(lines[1], isNot(contains('ke-warnings')));
+    });
+
+    test('appends ke-warnings to the continuation when codes present', () {
+      final sample = NtsTimeSample(
+        utcUnixMicros: 1_777_334_400 * 1000000,
+        roundTripMicros: 226_000,
+        serverStratum: 1,
+        aeadId: 15,
+        freshCookies: 2,
+        phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platform,
+        keWarnings: const [1, 4097],
+      );
+      final lines = formatQuerySuccess(sample).split('\n');
+      expect(lines, hasLength(2));
+      // Trailing position keeps the established columns stable for
+      // anything grepping the continuation row.
+      expect(lines[1], endsWith('ke-warnings=[1,4097]'));
+      expect(lines[0], isNot(contains('ke-warnings')));
     });
   });
 
@@ -126,6 +148,33 @@ void main() {
         formatWarmSuccess(outcome),
         'OK  recovered 8 fresh cookie(s)  trust=platform',
       );
+    });
+
+    test('appends ke-warnings when the handshake carried codes', () {
+      final outcome = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platform,
+        keWarnings: const [7],
+      );
+      expect(
+        formatWarmSuccess(outcome),
+        'OK  recovered 8 fresh cookie(s)  trust=platform  ke-warnings=[7]',
+      );
+    });
+  });
+
+  group('keWarningsSegment', () {
+    test('empty list renders nothing at all', () {
+      expect(keWarningsSegment(const []), '');
+    });
+    test('single code renders a bracketed one-element list', () {
+      expect(keWarningsSegment(const [1]), '  ke-warnings=[1]');
+    });
+    test('multiple codes are comma-joined without spaces', () {
+      // No spaces inside the brackets so the segment stays a single
+      // whitespace-delimited token for awk/cut on the log line.
+      expect(keWarningsSegment(const [1, 2, 3]), '  ke-warnings=[1,2,3]');
     });
   });
 
@@ -314,7 +363,24 @@ void main() {
         'aead_label': 'AES-SIV-CMAC-256(15)',
         'cookies': 2,
         'trust_backend': 'platform',
+        // Present unconditionally, empty in the common case, so
+        // consumers can index the key without a presence branch.
+        'ke_warnings': <int>[],
       });
+    });
+
+    test('carries the raw ke_warnings codes when the server sent any', () {
+      final sample = NtsTimeSample(
+        utcUnixMicros: 1_777_334_400 * 1000000,
+        roundTripMicros: 750,
+        serverStratum: 1,
+        aeadId: 15,
+        freshCookies: 2,
+        phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platform,
+        keWarnings: const [1, 4097],
+      );
+      expect(jsonQuerySuccess(sample)['ke_warnings'], [1, 4097]);
     });
 
     test('survives jsonEncode round-trip without losing fields', () {
@@ -349,7 +415,18 @@ void main() {
       expect(jsonWarmSuccess(outcome), {
         'cookies': 8,
         'trust_backend': 'platformWithHybridFallback',
+        'ke_warnings': <int>[],
       });
+    });
+
+    test('carries the raw ke_warnings codes when the server sent any', () {
+      final outcome = NtsWarmCookiesOutcome(
+        freshCookies: 8,
+        phaseTimings: _zeroPhaseTimings(),
+        trustBackend: TrustBackend.platform,
+        keWarnings: const [7],
+      );
+      expect(jsonWarmSuccess(outcome)['ke_warnings'], [7]);
     });
   });
 
