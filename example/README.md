@@ -389,7 +389,7 @@ the common-case log line quiet.
 
 ```text
 {"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"start"}
-{"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"success","utc_unix_micros":…,"utc":"…","rtt_micros":68570,"stratum":1,"aead_id":15,"aead_label":"AES-SIV-CMAC-256(15)","cookies":2,"ke_warnings":[]}
+{"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"success","utc_unix_micros":…,"utc":"…","rtt_micros":68570,"stratum":1,"aead_id":15,"aead_label":"AES-SIV-CMAC-256(15)","cookies":2,"trust_backend":"platform","ke_warnings":[]}
 ```
 
 ---
@@ -589,7 +589,7 @@ lib/src/state/nts_format.dart
   ├─ formatRtt(int micros)     → auto-selects µs / ms / s units
   ├─ keWarningsSegment(codes)  → ke-warnings=[…] segment, '' when empty
   ├─ formatQuerySuccess(...)   → two-line OK headline + continuation
-  ├─ formatWarmSuccess(int)    → single-line OK + cookie count
+  ├─ formatWarmSuccess(...)    → single-line OK + cookie count
   ├─ isErrorSeverity(NtsError) → severity classification (warn vs err)
   └─ describeError(NtsError)   → human-readable error rendering
 ```
