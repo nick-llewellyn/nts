@@ -55,9 +55,11 @@ class NtsServerSpec {
 /// sleep-inclusive boottime span: the phases are short blocking
 /// operations, and a suspend that lands inside one is not accounted
 /// for. "Wall-clock" below means elapsed-time-as-observed rather than
-/// CPU time; it does not mean calendar time. For sleep-inclusive
-/// budgeting use [MonotonicClock] or the `getTime` budget exhaustion
-/// signal — do not sum these fields to reconstruct one.
+/// CPU time; it does not mean calendar time. Summing the fields is
+/// sound for the in-call accounting described below; what it cannot
+/// produce is a *sleep-inclusive* span, since none of the addends
+/// counts suspend — use [MonotonicClock] or the `getTime` budget
+/// exhaustion signal for that.
 ///
 /// The four fields cover the KE-pipeline phases. The UDP send/recv
 /// phase has no field of its own; `roundTripMicros` on [NtsTimeSample]

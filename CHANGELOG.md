@@ -530,7 +530,9 @@
   are monotonic elapsed durations measured inside the native call
   rather than calendar timestamps or sleep-inclusive spans, and points
   suspend-inclusive budgeting at `MonotonicClock` / the `getTime`
-  budget instead of a sum of phases. `NtsClient.invalidate` now
+  budget — summing phases stays sound for in-call accounting, but no
+  addend counts suspend, so the sum cannot yield one.
+  `NtsClient.invalidate` now
   distinguishes "no entry was cached" from "the spec is invalid": the
   `false` return reports only the former, an invalid spec throws, and
   nothing is checked against the network in either direction.
