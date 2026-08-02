@@ -14,7 +14,7 @@
 #
 # Files excluded:
 #   - `src/frb_generated.rs`: regenerated verbatim by
-#     `flutter_rust_bridge_codegen generate`; correctness is gated
+#     `dart run tool/check_bindings.dart`; correctness is gated
 #     by the `rust-bridge-sync` CI job, not by coverage.
 #   - `src/android_init.rs` / `src/ios_init.rs`: JNI / Obj-C++ init
 #     shims only loaded on-device via `System.loadLibrary` /

@@ -4,7 +4,7 @@
 // - `api`            — surface exposed across the FFI boundary to Dart.
 // - `nts`            — internal RFC 8915 protocol layer (KE, NTPv4, AEAD).
 //                      Not yet on the FFI surface; wired up in phase 3.
-// - `frb_generated`  — produced by `flutter_rust_bridge_codegen generate`.
+// - `frb_generated`  — produced by `dart run tool/check_bindings.dart`.
 //                      Do not edit by hand; regenerate after changing `api/`.
 
 // Hand-written code in this crate avoids `unsafe` by default. Two
