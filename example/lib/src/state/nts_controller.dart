@@ -18,6 +18,7 @@
 
 import 'dart:developer' as developer;
 
+import 'package:flutter_rust_bridge/flutter_rust_bridge.dart' show FrbException;
 import 'package:nts/nts.dart'
     show
         NtsClient,
@@ -70,24 +71,36 @@ class NtsController {
     // Re-mint the per-instance NtsClient whenever the user toggles
     // the trust-mode signal. TrustMode is a construction-time
     // parameter on the Rust side; replacing the handle is the only
-    // way to switch policies without restarting the app. The
-    // previous client's cached cookie pool is dropped on the floor
-    // intentionally — the demo's whole point is to make the cold-
-    // start cost of each policy visible.
-    state.trustMode.subscribe((_) => _onTrustModeChanged());
+    // way to switch policies without restarting the app. Losing the
+    // previous client's cached cookie pool is intentional — the
+    // demo's whole point is to make the cold-start cost of each
+    // policy visible.
+    _unsubscribeTrustMode = state.trustMode.subscribe(
+      (_) => _onTrustModeChanged(),
+    );
     // Re-mint whenever custom roots change so the new roots take
     // effect on the next handshake without requiring a trust-mode
     // toggle. `subscribe` fires immediately with the current value
     // on first listen; `_initialized` guards against that no-op
     // initial call polluting the log before the user has done
     // anything.
-    state.customRoots.subscribe((_) {
+    _unsubscribeCustomRoots = state.customRoots.subscribe((_) {
       if (_initialized) _onCustomRootsChanged();
     });
     _initialized = true;
   }
 
   final AppState state;
+
+  /// Signal-subscription cancellations, invoked by [dispose] so the
+  /// callbacks cannot fire against a torn-down controller and re-mint
+  /// a client nobody will ever release.
+  late final void Function() _unsubscribeTrustMode;
+  late final void Function() _unsubscribeCustomRoots;
+
+  /// Set once [dispose] has run. Guards the re-mint paths so a
+  /// signal write that races teardown cannot resurrect [_client].
+  bool _disposed = false;
 
   /// Set to `true` at the end of the constructor after subscriptions
   /// are attached. Guards the `customRoots` subscription callback
@@ -124,11 +137,25 @@ class NtsController {
     return NtsClient(trustMode: mode);
   }
 
+  /// Swap [_client] for a freshly-minted one, releasing the native
+  /// handle behind the superseded client rather than leaving the
+  /// session table, cached AEAD keys and cookie jars pinned until the
+  /// GC finalizer notices. In-flight calls that already reached the
+  /// native side complete against the state they started with; the
+  /// `identical` stale checks in the action methods keep their results
+  /// out of `AppState`.
+  void _replaceClient() {
+    final previous = _client;
+    _client = _mintClient();
+    previous?.dispose();
+  }
+
   void _onTrustModeChanged() {
+    if (_disposed) return;
     final next = state.trustMode.value;
     if (next == _activeMode) return;
     _activeMode = next;
-    _client = _mintClient();
+    _replaceClient();
     // The previous client's last-handshake backend belongs to a
     // policy that no longer applies; clearing the signal puts the
     // panel back to its "no per-client handshake yet" sentinel
@@ -166,8 +193,9 @@ class NtsController {
     // for no effect and post a misleading "Custom roots applied" log.
     // The change is picked up when the user switches to custom mode,
     // which re-mints via _onTrustModeChanged.
+    if (_disposed) return;
     if (state.trustMode.value != TrustMode.custom) return;
-    _client = _mintClient();
+    _replaceClient();
     _setLastHandshakeBackend(
       host: null,
       backend: null,
@@ -315,6 +343,8 @@ class NtsController {
       }
     } on NtsError catch (err) {
       _logError('nts_query', err, entry.hostname);
+    } on FrbException catch (_) {
+      _logSupersededClient('nts_query', clientAtStart, entry.hostname);
     } catch (err, stack) {
       // Anything that escapes `NtsError` is unexpected — surface it
       // loudly in the log so the developer can pair it with a
@@ -366,6 +396,8 @@ class NtsController {
       }
     } on NtsError catch (err) {
       _logError('nts_warm_cookies', err, entry.hostname);
+    } on FrbException catch (_) {
+      _logSupersededClient('nts_warm_cookies', clientAtStart, entry.hostname);
     } catch (err, stack) {
       state.log.error(
         'nts_warm_cookies',
@@ -420,6 +452,8 @@ class NtsController {
       }
     } on NtsError catch (err) {
       _logError('nts_get_time', err, entry.hostname);
+    } on FrbException catch (_) {
+      _logSupersededClient('nts_get_time', clientAtStart, entry.hostname);
     } catch (err, stack) {
       state.log.error(
         'nts_get_time',
@@ -454,5 +488,61 @@ class NtsController {
     } else {
       state.log.warn(source, message, host: host, trustBackend: backend);
     }
+  }
+
+  /// Report an `FrbException` raised because the client the action
+  /// started against was disposed before the call reached the native
+  /// side.
+  ///
+  /// `NtsError` implements `FrbException`, so this arm only sees the
+  /// handle-level failures the preceding `on NtsError` arm did not
+  /// claim. A call already executing natively is unaffected by
+  /// [NtsClient.dispose]; the exposed window is a call still queued at
+  /// the bridge admission gate, plus the later legs of `getTime`'s
+  /// warm-then-burst sequence. That is an expected consequence of a
+  /// trust-mode flip or a controller teardown racing an in-flight
+  /// action, so it is logged as a warning rather than an error.
+  ///
+  /// Anything else reaching here — a genuine FRB fault against a
+  /// client that is still current — is unexpected, and is logged at
+  /// error severity.
+  void _logSupersededClient(String source, NtsClient client, String host) {
+    if (identical(client, _client) && !_disposed) {
+      state.log.error(
+        source,
+        'Bridge call failed against the active NtsClient.',
+        host: host,
+      );
+      return;
+    }
+    state.log.warn(
+      source,
+      'Call refused — its NtsClient was disposed (superseded by a '
+      'trust-mode / custom-roots change, or the controller was torn '
+      'down) before the call reached the native side.',
+      host: host,
+    );
+  }
+
+  /// Release the controller's signal subscriptions and its active
+  /// [NtsClient].
+  ///
+  /// The finalizer would eventually reclaim the client, but the
+  /// example is the reference for how the API is meant to be used and
+  /// [NtsClient.dispose] exists precisely so the native session table,
+  /// cached AEAD keys and cookie jars go away when the app decides
+  /// they should, not when GC gets around to it.
+  ///
+  /// Idempotent. Actions in flight when this runs behave exactly as
+  /// they do across a re-mint: whatever already reached the native
+  /// side completes and is discarded by the `identical` stale check,
+  /// and anything still queued surfaces through
+  /// [_logSupersededClient].
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _unsubscribeTrustMode();
+    _unsubscribeCustomRoots();
+    _client?.dispose();
   }
 }

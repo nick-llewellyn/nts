@@ -177,10 +177,29 @@ Future<void> _lockOrientationOnPhones() async {
   }
 }
 
-class NtsExampleApp extends StatelessWidget {
+/// Owns the app-lifetime [NtsController].
+///
+/// Stateful purely for that ownership: the controller holds an
+/// [NtsClient] whose native session table, cached AEAD keys and cookie
+/// jars are released eagerly by `NtsController.dispose` rather than
+/// left to the GC finalizer.
+class NtsExampleApp extends StatefulWidget {
   const NtsExampleApp({super.key, required this.state});
 
   final AppState state;
+
+  @override
+  State<NtsExampleApp> createState() => _NtsExampleAppState();
+}
+
+class _NtsExampleAppState extends State<NtsExampleApp> {
+  late final NtsController _controller = NtsController(widget.state);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -196,8 +215,8 @@ class NtsExampleApp extends StatelessWidget {
       theme: _buildTheme(Brightness.light),
       darkTheme: _buildTheme(Brightness.dark),
       home: _Shell(
-        loadError: state.bridgeLoadError,
-        child: HomePage(state: state, controller: NtsController(state)),
+        loadError: widget.state.bridgeLoadError,
+        child: HomePage(state: widget.state, controller: _controller),
       ),
     );
   }

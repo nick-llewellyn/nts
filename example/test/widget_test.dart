@@ -49,7 +49,12 @@ Future<({AppState state, NtsController controller})> _bootHarness() async {
     favorites: favorites,
     log: NtsLogBuffer(),
   );
-  return (state: state, controller: NtsController(state));
+  final controller = NtsController(state);
+  // Mirrors what `_NtsExampleAppState.dispose` does in the app: drop
+  // the signal subscriptions and release the client so a controller
+  // from one test cannot react to a later one's signal writes.
+  addTearDown(controller.dispose);
+  return (state: state, controller: controller);
 }
 
 void main() {
@@ -250,6 +255,21 @@ void main() {
       sys.any((e) => e.message.contains('TrustMode → platform-only')),
       isTrue,
     );
+  });
+
+  test('a disposed controller stops reacting to trust-mode writes', () async {
+    final h = await _bootHarness();
+    h.controller.dispose();
+    // Idempotent: the second call must not throw.
+    h.controller.dispose();
+
+    final before = h.state.log.entries.value.length;
+    h.state.trustMode.value = TrustMode.platformOnly;
+
+    // The subscription is cancelled, so no client is re-minted and no
+    // system line is posted. Without the cancellation the callback
+    // would mint a client that nothing would ever dispose.
+    expect(h.state.log.entries.value.length, before);
   });
 
   testWidgets('TrustStatusPanel renders the last-handshake sentinel before '

@@ -467,6 +467,24 @@ tarball.
 
 ### Changed
 
+- The example app's `NtsController` now calls `NtsClient.dispose()` on
+  the client it supersedes when a trust-mode flip or a custom-roots
+  change re-mints one, and gains its own `dispose()` that cancels the
+  two signal subscriptions and releases the final client. `main.dart`
+  owns the controller from a `StatefulWidget` so that teardown has a
+  place to run. The controller previously dropped every superseded
+  client for the GC finalizer to reclaim — the exact pattern
+  `dispose()` was added in 9.0 to replace — leaving the native session
+  table, cached AEAD keys and cookie jars pinned well past the point
+  the app considered the client dead. The three action methods gain an
+  `on FrbException` arm ahead of their catch-all: a call already
+  executing natively is unaffected by a `dispose()`, but one still
+  queued at the bridge admission gate is refused, as are the later legs
+  of `getTime`'s warm-then-burst sequence. Those are logged as warnings
+  against the superseded client; a bridge failure against the *active*
+  client stays an error. Example app only; no package API change.
+  (NTS-143)
+
 - The internal cookie store is now a single FIFO queue rather than a
   map keyed by host. Its only owner, a cached session, is 1:1 with a
   negotiated `host:port`, so the key duplicated a value the session

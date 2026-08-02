@@ -130,6 +130,17 @@ rebuild reactively without any manual `setState` plumbing. The
 into the log as they complete, in completion order rather than
 dispatch order.
 
+The controller holds one `NtsClient` and re-mints it whenever the trust
+mode or the custom roots change, since both are construction-time
+parameters on the Rust side. Each superseded client is passed to
+`NtsClient.dispose()` rather than left to the GC finalizer, and
+`NtsController.dispose()` — called from the `State` that owns the
+controller in `main.dart` — cancels the signal subscriptions and
+releases the final one. An action whose client is disposed before its
+bridge call is admitted surfaces as a `WARN` log line naming the
+supersession; calls already executing natively complete normally and
+are discarded by the controller's staleness check.
+
 ### Visual identity
 
 The Material 3 theme is seeded from the indigo brand colour (`0xFF3F51B5`)
