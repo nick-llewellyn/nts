@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show
+        NtsDnsPoolStats,
         NtsError,
         NtsRustLib,
         NtsSyncedTime,
@@ -509,7 +510,88 @@ void main() {
       );
     });
   });
+
+  group('formatDnsPoolStats', () {
+    test('renders cumulative counters as a before/after delta', () {
+      final text = formatDnsPoolStats(
+        _poolStats(recovered: 10, refused: 2, spawnFailed: 1),
+        _poolStats(recovered: 14, refused: 5, spawnFailed: 3),
+      );
+      final lines = text.split('\n');
+      expect(lines, hasLength(2));
+      expect(lines[0], 'DNS pool  refused=3  spawn-failed=2');
+      expect(lines[1], contains('recovered=4'));
+    });
+
+    test('renders in-flight and high-water absolutely, not as deltas', () {
+      // Subtracting a live gauge or a process-lifetime maximum would
+      // produce a number with no meaning, so both stay absolute.
+      final text = formatDnsPoolStats(
+        _poolStats(inFlight: 1, highWaterMark: 3),
+        _poolStats(inFlight: 2, highWaterMark: 7),
+      );
+      expect(text, contains('in-flight=2'));
+      expect(text, contains('high-water=7 (process lifetime)'));
+    });
+  });
+
+  group('jsonDnsPoolStats', () {
+    test('deltas the counters and passes the gauges through', () {
+      expect(
+        jsonDnsPoolStats(
+          _poolStats(
+            inFlight: 1,
+            highWaterMark: 3,
+            recovered: 10,
+            refused: 2,
+            spawnFailed: 1,
+          ),
+          _poolStats(
+            inFlight: 2,
+            highWaterMark: 7,
+            recovered: 14,
+            refused: 5,
+            spawnFailed: 3,
+          ),
+        ),
+        {
+          'refused': 3,
+          'spawn_failed': 2,
+          'recovered': 4,
+          'in_flight': 2,
+          'high_water_mark': 7,
+        },
+      );
+    });
+
+    test('an untouched pool reports an all-zero delta', () {
+      final stats = _poolStats(recovered: 10, refused: 2, spawnFailed: 1);
+      final payload = jsonDnsPoolStats(stats, stats);
+      expect(payload['refused'], 0);
+      expect(payload['spawn_failed'], 0);
+      expect(payload['recovered'], 0);
+    });
+
+    test('payload survives a jsonEncode round trip', () {
+      final payload = jsonDnsPoolStats(_poolStats(), _poolStats(refused: 1));
+      expect(jsonDecode(jsonEncode(payload)), payload);
+    });
+  });
 }
+
+NtsDnsPoolStats _poolStats({
+  int inFlight = 0,
+  int highWaterMark = 0,
+  int recovered = 0,
+  int refused = 0,
+  int spawnFailed = 0,
+}) => NtsDnsPoolStats(
+  inFlight: inFlight,
+  highWaterMark: highWaterMark,
+  recovered: recovered,
+  refused: refused,
+  spawnFailed: spawnFailed,
+);
 
 PhaseTimings _zeroPhaseTimings() => const PhaseTimings(
   dnsMicros: 0,

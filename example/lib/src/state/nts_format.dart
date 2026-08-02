@@ -11,6 +11,7 @@
 
 import 'package:nts/nts.dart'
     show
+        NtsDnsPoolStats,
         NtsError,
         NtsErrorAbiMismatch,
         NtsErrorAuthentication,
@@ -151,6 +152,32 @@ String formatGetTimeSuccess(NtsSyncedTime time) {
       '    \u2514\u2500 error\u2264\u00b1$bound (root distance)  '
       'trust=${formatTrustBackend(time.trustBackend)}';
 }
+
+/// Two-line rendering of the DNS resolver pool counters observed
+/// across one batch of probes.
+///
+/// [NtsDnsPoolStats] is process-global and cumulative, so `recovered`,
+/// `refused` and `spawnFailed` are rendered as a [before] → [after]
+/// delta: a single post-batch snapshot cannot attribute anything to
+/// the invocation that read it. `inFlight` and `highWaterMark` are not
+/// counters and are rendered as the [after] value directly — the
+/// former is a live gauge, the latter a process-lifetime maximum, and
+/// subtracting either would produce a number with no meaning.
+///
+/// The headline carries the two refusal counters because they are the
+/// actionable pair: `refused` climbing means `dnsConcurrencyCap` is
+/// the binding constraint and raising it would help, whereas
+/// `spawn-failed` climbing means the process is at an OS thread or
+/// memory ceiling and raising the cap would make matters worse. Both
+/// collapse onto `NtsError.timeout` on the error channel, so the
+/// counters are the only way to tell them apart without matching on
+/// message text.
+String formatDnsPoolStats(NtsDnsPoolStats before, NtsDnsPoolStats after) =>
+    'DNS pool  refused=${after.refused - before.refused}  '
+    'spawn-failed=${after.spawnFailed - before.spawnFailed}\n'
+    '    \u2514\u2500 recovered=${after.recovered - before.recovered}  '
+    'in-flight=${after.inFlight}  '
+    'high-water=${after.highWaterMark} (process lifetime)';
 
 /// Severity classification for an [NtsError]. Network / timeout / spec
 /// errors are routine when probing arbitrary hosts and warrant warn;
@@ -303,4 +330,21 @@ Map<String, Object?> jsonError(NtsError err) => {
   'message': describeError(err),
   'severity': isErrorSeverity(err) ? 'error' : 'warn',
   if (err is NtsErrorTimeout) 'phase': err.phase.name,
+};
+
+/// JSON-shaped payload for the DNS resolver pool counters observed
+/// across one batch of probes. Carries the same delta-vs-gauge split
+/// as [formatDnsPoolStats]: the three cumulative counters are
+/// [before] → [after] deltas attributable to this invocation, while
+/// `in_flight` and `high_water_mark` are absolute readings whose
+/// process-lifetime scope is spelled out in the key name.
+Map<String, Object?> jsonDnsPoolStats(
+  NtsDnsPoolStats before,
+  NtsDnsPoolStats after,
+) => {
+  'refused': after.refused - before.refused,
+  'spawn_failed': after.spawnFailed - before.spawnFailed,
+  'recovered': after.recovered - before.recovered,
+  'in_flight': after.inFlight,
+  'high_water_mark': after.highWaterMark,
 };

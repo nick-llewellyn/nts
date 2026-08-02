@@ -347,11 +347,37 @@ fvm dart run bin/nts_cli.dart --json --exit-on-error \
     └─ aead=AES-SIV-CMAC-256(15)  cookies=2
 2026-04-26T11:05:02.091473Z INFO  nts_query [nts.netnod.se]  OK  rtt= 68.57ms  stratum=1  utc=2026-04-26T11:05:02.094865Z
     └─ aead=AES-SIV-CMAC-256(15)  cookies=2
+2026-04-26T11:05:02.091902Z INFO  nts_dns_pool [-]  DNS pool  refused=0  spawn-failed=0
+    └─ recovered=2  in-flight=0  high-water=2 (process lifetime)
 ```
 
 `INFO` lines go to stdout; `WARN` (network / timeout / spec / no-cookies
 errors) and `ERROR` (authentication / KE protocol / NTP protocol /
 internal errors) go to stderr.
+
+### DNS pool report
+
+Every run ends with a `nts_dns_pool` record summarising the bounded DNS
+resolver pool over the batch. The `host` field is `-` because the
+counters are process-global and belong to the run, not to any one host.
+
+`refused` and `spawn-failed` are the pair worth reading. Both collapse
+onto `NtsError.timeout` on the error channel (as
+`TimeoutPhase.dnsSaturation` and `TimeoutPhase.dnsSpawnFailed`), so
+without the counters a run of timeouts gives no way to tell them apart:
+
+| Counter climbing | Meaning                                           | Action                        |
+| ---------------- | ------------------------------------------------- | ----------------------------- |
+| `refused`        | `--dns-cap` is the binding constraint             | Raise `--dns-cap`             |
+| `spawn-failed`   | The OS refused a worker thread (`EAGAIN`/`ENOMEM`) | Raising the cap makes it worse |
+
+`refused`, `spawn-failed` and `recovered` are reported as a delta
+against a snapshot taken before the fan-out — the underlying counters
+are cumulative since process start, so a single post-batch reading
+could not attribute anything to this invocation. `in-flight` (a live
+gauge) and `high-water` (a process-lifetime maximum) are reported
+absolutely instead; differencing either would produce a number with no
+meaning.
 
 ### Exit codes
 
@@ -387,9 +413,16 @@ without a presence check. The text renderings instead omit the
 `ke-warnings=[…]` segment entirely when there are no codes, keeping
 the common-case log line quiet.
 
+The trailing DNS pool report cannot be a human-readable block in this
+mode without corrupting the one-object-per-line stream, so it is
+emitted as one more record with `event` set to `dns_pool_stats`,
+carrying the same counters described under
+[DNS pool report](#dns-pool-report).
+
 ```text
 {"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"start"}
 {"ts":"…","level":"INFO","source":"nts_query","host":"nts.netnod.se","event":"success","utc_unix_micros":…,"utc":"…","rtt_micros":68570,"stratum":1,"aead_id":15,"aead_label":"AES-SIV-CMAC-256(15)","cookies":2,"trust_backend":"platform","ke_warnings":[]}
+{"ts":"…","level":"INFO","source":"nts_dns_pool","host":"-","event":"dns_pool_stats","refused":0,"spawn_failed":0,"recovered":2,"in_flight":0,"high_water_mark":2}
 ```
 
 ---
@@ -590,6 +623,7 @@ lib/src/state/nts_format.dart
   ├─ keWarningsSegment(codes)  → ke-warnings=[…] segment, '' when empty
   ├─ formatQuerySuccess(...)   → two-line OK headline + continuation
   ├─ formatWarmSuccess(...)    → single-line OK + cookie count
+  ├─ formatDnsPoolStats(...)   → two-line DNS pool before/after delta
   ├─ isErrorSeverity(NtsError) → severity classification (warn vs err)
   └─ describeError(NtsError)   → human-readable error rendering
 ```

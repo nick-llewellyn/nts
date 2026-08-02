@@ -38,6 +38,14 @@
 //     plus event-specific payload fields. Suitable for `jq` / piping
 //     into log aggregators.
 //
+// Every run ends with a DNS resolver pool report (`dns_pool_stats`
+// under `--json`) carrying the counters observed across the batch.
+// `refused` and `spawn-failed` both surface as `dnsSaturation` /
+// `dnsSpawnFailed` timeouts on the error channel, and the pair is what
+// tells an operator whether raising `--dns-cap` would help (cap is the
+// binding constraint) or make matters worse (the process is already at
+// an OS thread ceiling).
+//
 // Exit semantics:
 //   * Default: 0 once every host has completed, regardless of whether
 //     individual hosts succeeded or failed.
@@ -52,10 +60,12 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:nts/nts.dart'
     show
+        NtsDnsPoolStats,
         NtsError,
         NtsServerSpec,
         kDefaultBridgeConcurrencyCap,
         kDefaultDnsConcurrencyCap,
+        ntsDnsPoolStats,
         ntsQuery,
         ntsWarmCookies;
 
@@ -193,6 +203,13 @@ Future<void> main(List<String> argv) async {
       ? hostCount
       : kDefaultBridgeConcurrencyCap;
 
+  // Baseline the DNS pool counters before the fan-out. They are
+  // process-global and cumulative, so a single post-batch read cannot
+  // attribute anything to this invocation; the trailing section below
+  // reports the delta against this snapshot. Cheap enough to take
+  // unconditionally — five relaxed atomic loads, no isolate hop.
+  final poolBefore = ntsDnsPoolStats();
+
   // Fan out one Future per host. We don't `Future.wait` directly —
   // instead each call's `.then` prints as soon as its individual
   // round-trip completes, so the user sees results in completion
@@ -221,6 +238,8 @@ Future<void> main(List<String> argv) async {
     );
   }
   await Future.wait(pending);
+
+  ctx.poolStats(poolBefore, ntsDnsPoolStats());
 
   if ((args['exit-on-error'] as bool) && ctx.anyFailed) {
     exit(_kExitHostFailure);
@@ -328,6 +347,34 @@ class _Ctx {
       });
     } else {
       _writeText(stderr, level, source, host, describeError(err));
+    }
+  }
+
+  /// Trailing run-scoped report of the DNS resolver pool counters.
+  ///
+  /// Emitted after `Future.wait`, so it lands below the
+  /// completion-ordered per-host lines rather than interleaved with
+  /// them. Under `--json` the stream is NDJSON, so this cannot be a
+  /// human-readable block — it goes out as one more object carrying
+  /// the same envelope as every other record, with `event` set to
+  /// `dns_pool_stats`. The envelope's `host` is `-`: the counters are
+  /// process-global and belong to the run, not to any one host, but
+  /// the key stays present and string-typed so a consumer can index
+  /// it without a per-event branch.
+  void poolStats(NtsDnsPoolStats before, NtsDnsPoolStats after) {
+    if (json) {
+      _writeJson(stdout, {
+        ..._envelope('INFO', 'nts_dns_pool', '-', 'dns_pool_stats'),
+        ...jsonDnsPoolStats(before, after),
+      });
+    } else {
+      _writeText(
+        stdout,
+        'INFO ',
+        'nts_dns_pool',
+        '-',
+        formatDnsPoolStats(before, after),
+      );
     }
   }
 
