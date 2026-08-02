@@ -74,6 +74,14 @@ CLAUDE.md
 ARCHITECTURE.md
 DEVELOPMENT.md
 
+# Archived release notes for 1.4.0 and earlier. pub.dev renders the
+# whole of CHANGELOG.md on the package page, and the combined history
+# had grown past 220 KB — the largest file in the tarball. The split
+# keeps 2.0.0 onwards on the package page and leaves the older entries
+# readable in the repository, which is where anyone still migrating off
+# a 1.x release is looking. CHANGELOG.md links to it.
+CHANGELOG_ARCHIVE.md
+
 # Third-party attribution notice. Enumerates the direct Dart and Rust
 # dependency licenses for the benefit of anyone doing license review
 # against the source repository. Tracked in git for that audience but
