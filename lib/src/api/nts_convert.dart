@@ -78,9 +78,9 @@ PhaseTimings _publicPhase(ffi.PhaseTimings p) => PhaseTimings(
 NtsDnsPoolStats _publicStats(ffi.NtsDnsPoolStats s) => NtsDnsPoolStats(
   inFlight: s.inFlight,
   highWaterMark: s.highWaterMark,
-  recovered: s.recovered,
-  refused: s.refused,
-  spawnFailed: s.spawnFailed,
+  recovered: s.recovered.toInt(),
+  refused: s.refused.toInt(),
+  spawnFailed: s.spawnFailed.toInt(),
 );
 
 TimeoutPhase _publicTimeoutPhase(ffi.TimeoutPhase phase) => switch (phase) {
@@ -187,10 +187,10 @@ NtsTrustStatus _publicTrustStatus(ffi.NtsTrustStatus s) => NtsTrustStatus(
   defaultClientBackend: s.defaultClientBackend == null
       ? null
       : _publicTrustBackend(s.defaultClientBackend!),
-  defaultBackendPlatformCount: s.defaultBackendPlatformCount,
-  defaultBackendHybridCount: s.defaultBackendHybridCount,
-  defaultBackendWebpkiCount: s.defaultBackendWebpkiCount,
-  defaultBackendCustomCount: s.defaultBackendCustomCount,
+  defaultBackendPlatformCount: s.defaultBackendPlatformCount.toInt(),
+  defaultBackendHybridCount: s.defaultBackendHybridCount.toInt(),
+  defaultBackendWebpkiCount: s.defaultBackendWebpkiCount.toInt(),
+  defaultBackendCustomCount: s.defaultBackendCustomCount.toInt(),
   androidPlatformInitSucceeded: s.androidPlatformInitSucceeded,
-  androidHybridFallbackCount: s.androidHybridFallbackCount,
+  androidHybridFallbackCount: s.androidHybridFallbackCount.toInt(),
 );

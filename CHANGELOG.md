@@ -1,7 +1,40 @@
 # Changelog
 
 
-## 8.1
+## 9.0
+
+### Breaking
+
+- The cumulative counters on `NtsDnsPoolStats` and `NtsTrustStatus`
+  changed from `BigInt` to `int`: `recovered`, `refused`,
+  `spawnFailed`, `defaultBackendPlatformCount`,
+  `defaultBackendHybridCount`, `defaultBackendWebpkiCount`,
+  `defaultBackendCustomCount`, and `androidHybridFallbackCount`.
+
+  These were the last `BigInt` fields on the public surface. They
+  were `BigInt` only because the Rust structs behind the bridge
+  declared them `u64`, which FRB binds to `BigInt`; the stated
+  rationale on the fields — that a 32-bit wraparound would be visible
+  on long-running builds — justifies the 64-bit *backing* store, not
+  the `BigInt` *binding*. The backing counters remain `AtomicU64`;
+  only the bridge-facing struct fields widen to `i64`, which FRB
+  binds as `PlatformInt64` and the conversion layer narrows to a
+  plain `int`. This matches what `PhaseTimings` and
+  `ntsBoottimeMicros` already did, and removes the split inside
+  `NtsDnsPoolStats`, whose `inFlight` / `highWaterMark` were already
+  plain `int`.
+
+  Saturating the sign bit needs 2^63 events, so no range or
+  saturation policy is specified. Web remains unsupported (NTS-KE
+  needs a raw TCP socket), so the 53-bit JavaScript integer limit is
+  not a consideration.
+
+  Migration: drop `BigInt.from(...)` at construction sites and
+  compare against plain integer literals. `stats.refused >
+  BigInt.zero` becomes `stats.refused > 0`. Both DTOs are now
+  `const`-constructible with literal counters. The wire layout is
+  unchanged — the counters still cross the boundary as 8 bytes each —
+  so no native rebuild is required beyond the regenerated bindings.
 
 ### Security
 

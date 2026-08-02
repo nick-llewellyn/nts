@@ -3607,21 +3607,23 @@ fn nts_trust_status_reads_singleton_and_converts_shape() {
              and DTO: {other:?}"
         ),
     }
+    // The DTO widens each `u64` counter to `i64` so FRB binds it as a
+    // plain Dart `int`; compare in the DTO's own type.
     assert_eq!(
         status.default_backend_platform_count,
-        snap.default_backend_platform_count,
+        snap.default_backend_platform_count as i64,
     );
     assert_eq!(
         status.default_backend_hybrid_count,
-        snap.default_backend_hybrid_count,
+        snap.default_backend_hybrid_count as i64,
     );
     assert_eq!(
         status.default_backend_webpki_count,
-        snap.default_backend_webpki_count,
+        snap.default_backend_webpki_count as i64,
     );
     assert_eq!(
         status.default_backend_custom_count,
-        snap.default_backend_custom_count,
+        snap.default_backend_custom_count as i64,
     );
     assert_eq!(
         status.android_platform_init_succeeded,
@@ -3629,7 +3631,7 @@ fn nts_trust_status_reads_singleton_and_converts_shape() {
     );
     assert_eq!(
         status.android_hybrid_fallback_count,
-        snap.android_hybrid_fallback_count,
+        snap.android_hybrid_fallback_count as i64,
     );
 }
 

@@ -431,15 +431,23 @@ pub struct NtsDnsPoolStats {
     /// admission increment and the subsequent `fetch_max`.
     pub high_water_mark: u32,
     /// Cumulative count of detached workers that have completed and
-    /// released their slot since process start. `u64` because the
+    /// released their slot since process start. 64-bit because the
     /// counter grows monotonically over a process lifetime and a
     /// 32-bit wraparound would be visible on long-running CLI / server
     /// builds with a saturated resolver.
-    pub recovered: u64,
+    ///
+    /// Widened from the backing `AtomicU64` as `i64` (not `u64`) so
+    /// FRB maps it to `PlatformInt64` — a plain Dart `int` on all
+    /// supported non-web targets — instead of `BigInt`; same
+    /// rationale as [`nts_boottime_micros`]. The narrowing is
+    /// unreachable in practice: saturating the sign bit needs 2^63
+    /// completed lookups.
+    pub recovered: i64,
     /// Cumulative count of admission attempts that were refused
     /// because the cap was reached since process start. The expected
-    /// delta when the resolver is healthy is zero.
-    pub refused: u64,
+    /// delta when the resolver is healthy is zero. `i64` for the same
+    /// binding reason as [`Self::recovered`].
+    pub refused: i64,
     /// Cumulative count of admitted lookups the OS then refused to
     /// spawn a worker thread for (`EAGAIN` / `ENOMEM`) since process
     /// start. Disjoint from [`Self::refused`], and the actionable
@@ -449,9 +457,9 @@ pub struct NtsDnsPoolStats {
     /// thread or memory ceiling and raising the cap would make it
     /// worse. Not counted in [`Self::recovered`] either, since no
     /// worker ran. Pairs with [`TimeoutPhase::DnsSpawnFailed`] (Dart:
-    /// `TimeoutPhase.dnsSpawnFailed`) on the error channel. `u64` for
-    /// the same wraparound reason as [`Self::recovered`].
-    pub spawn_failed: u64,
+    /// `TimeoutPhase.dnsSpawnFailed`) on the error channel. `i64` for
+    /// the same binding reason as [`Self::recovered`].
+    pub spawn_failed: i64,
 }
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
@@ -471,9 +479,9 @@ pub fn nts_dns_pool_stats() -> NtsDnsPoolStats {
     NtsDnsPoolStats {
         in_flight: snap.in_flight as u32,
         high_water_mark: snap.high_water_mark as u32,
-        recovered: snap.recovered,
-        refused: snap.refused,
-        spawn_failed: snap.spawn_failed,
+        recovered: snap.recovered as i64,
+        refused: snap.refused as i64,
+        spawn_failed: snap.spawn_failed as i64,
     }
 }
 
@@ -533,12 +541,12 @@ pub fn nts_trust_status() -> NtsTrustStatus {
     let snap = crate::nts::trust_state::TRUST_STATE.snapshot();
     NtsTrustStatus {
         default_client_backend: snap.default_backend.map(TrustBackend::from),
-        default_backend_platform_count: snap.default_backend_platform_count,
-        default_backend_hybrid_count: snap.default_backend_hybrid_count,
-        default_backend_webpki_count: snap.default_backend_webpki_count,
-        default_backend_custom_count: snap.default_backend_custom_count,
+        default_backend_platform_count: snap.default_backend_platform_count as i64,
+        default_backend_hybrid_count: snap.default_backend_hybrid_count as i64,
+        default_backend_webpki_count: snap.default_backend_webpki_count as i64,
+        default_backend_custom_count: snap.default_backend_custom_count as i64,
         android_platform_init_succeeded: snap.android_platform_init_succeeded,
-        android_hybrid_fallback_count: snap.android_hybrid_fallback_count,
+        android_hybrid_fallback_count: snap.android_hybrid_fallback_count as i64,
     }
 }
 
@@ -765,25 +773,35 @@ pub struct NtsTrustStatus {
     /// `default_client_backend`. Never reset; weakly monotonic
     /// across consecutive snapshots, with the same per-counter
     /// monotonicity contract as `android_hybrid_fallback_count`.
-    pub default_backend_platform_count: u64,
+    ///
+    /// Widened from the backing `AtomicU64` as `i64` (not `u64`) so
+    /// FRB maps it to `PlatformInt64` — a plain Dart `int` on all
+    /// supported non-web targets — instead of `BigInt`; same
+    /// rationale as [`nts_boottime_micros`]. The narrowing is
+    /// unreachable in practice: saturating the sign bit needs 2^63
+    /// handshakes.
+    pub default_backend_platform_count: i64,
     /// Cumulative count of default-singleton handshakes that resolved
     /// to [`TrustBackend::PlatformWithHybridFallback`] since process
     /// start. Always zero on non-Android platforms (the
     /// platform-verifier-with-`webpki-roots`-fallback path only
     /// exists on Android). Same monotonicity contract as
-    /// `default_backend_platform_count`.
-    pub default_backend_hybrid_count: u64,
+    /// `default_backend_platform_count`. `i64` for the same binding
+    /// reason as `default_backend_platform_count`.
+    pub default_backend_hybrid_count: i64,
     /// Cumulative count of default-singleton handshakes that resolved
     /// to [`TrustBackend::WebpkiRoots`] since process start. Bumped
     /// every time `build_with_native_verifier` failed at TLS-config
     /// construction time on a [`TrustMode::PlatformWithFallback`]
     /// singleton. Same monotonicity contract as
-    /// `default_backend_platform_count`.
-    pub default_backend_webpki_count: u64,
+    /// `default_backend_platform_count`. `i64` for the same binding
+    /// reason as `default_backend_platform_count`.
+    pub default_backend_webpki_count: i64,
     /// Cumulative count of default-singleton handshakes that resolved
     /// to [`TrustBackend::Custom`] since process start. Same monotonicity
-    /// contract as `default_backend_platform_count`.
-    pub default_backend_custom_count: u64,
+    /// contract as `default_backend_platform_count`, and `i64` for the
+    /// same binding reason.
+    pub default_backend_custom_count: i64,
     /// On Android: `true` iff
     /// `Java_com_nllewellyn_nts_PlatformInit_nativeInit` has been
     /// invoked at least once and reported success. `false` on every
@@ -798,8 +816,9 @@ pub struct NtsTrustStatus {
     /// `HybridVerifier` exists). Non-zero on Android indicates at
     /// least one chain arrived whose only platform-side failure was
     /// a curated fallback-eligible shape (missing OCSP-AIA,
-    /// R8-stripped AAR classes, etc.).
-    pub android_hybrid_fallback_count: u64,
+    /// R8-stripped AAR classes, etc.). `i64` for the same binding
+    /// reason as `default_backend_platform_count`.
+    pub android_hybrid_fallback_count: i64,
 }
 
 /// Failure modes for `nts_query` (Dart: `ntsQuery`) and
