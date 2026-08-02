@@ -715,12 +715,6 @@ pub enum KeError {
     NonCriticalNextProtocol,
     NoCommonProtocol,
     MissingAead,
-    /// RFC 8915 §4.1.5 — "The AEAD Algorithm Negotiation record [...]
-    /// MUST be sent with the Critical Bit set." Same threat shape as
-    /// `NonCriticalNextProtocol`: silently accepting a non-critical
-    /// AeadAlgorithm record would let an on-path adversary nudge the
-    /// client toward an algorithm it would otherwise reject.
-    NonCriticalAeadAlgorithm,
     /// RFC 8915 §4.1.5 — an `AeadAlgorithm` record was present but its
     /// body listed no algorithm IDs. The spec permits an empty body as
     /// a server-side refusal signal ("the server is unwilling to use
@@ -886,9 +880,6 @@ impl std::fmt::Display for KeError {
             }
             Self::NoCommonProtocol => f.write_str("server does not support NTPv4"),
             Self::MissingAead => f.write_str("response missing AEAD Algorithm record"),
-            Self::NonCriticalAeadAlgorithm => {
-                f.write_str("AEAD Algorithm record received without Critical bit (RFC 8915 §4.1.5)")
-            }
             Self::AeadNegotiationRefused => f.write_str(
                 "server returned empty AEAD Algorithm record (RFC 8915 §4.1.5 \
                  negotiation refusal)",
@@ -1101,6 +1092,58 @@ fn scan_for_fatal_or_log_deviations(records: &[Record]) -> Result<(), KeError> {
     Ok(())
 }
 
+/// Resolves the negotiated AEAD identifier from the response records.
+///
+/// RFC 8915 §4.1.5 — unlike NextProtocol (§4.1.2), the Critical bit on
+/// the AeadAlgorithm record MAY be set; the spec does not require it.
+/// Conforming servers exist on both sides of that choice, so the bit is
+/// observed and logged rather than enforced — rejecting a cleared bit
+/// is a hard interop failure against public pools such as `ntp.br`. No
+/// downgrade surface is opened: the record travels inside the TLS
+/// channel, and the selected ID is validated against `offered_aead`
+/// before it is returned.
+///
+/// The record's body slice is bound (rather than just
+/// `first().copied()`) so an `AeadAlgorithm` record with an empty body
+/// is distinguished from a fully missing record: the spec permits an
+/// empty body as a server-side refusal signal, and collapsing it onto
+/// [`KeError::MissingAead`] would hide that the server explicitly
+/// declined every offered algorithm.
+///
+/// Split out of [`validate_response`] to keep that function under the
+/// `clippy::too_many_lines` cap; behaviour is identical to running the
+/// checks inline.
+fn select_aead(
+    request_host: &str,
+    offered_aead: &[u16],
+    records: &[Record],
+) -> Result<u16, KeError> {
+    let (aead_critical, aead_body) = records
+        .iter()
+        .find_map(|r| match &r.kind {
+            RecordKind::AeadAlgorithm(v) => Some((r.critical, v.as_slice())),
+            _ => None,
+        })
+        .ok_or(KeError::MissingAead)?;
+    if !aead_critical {
+        log::debug!(
+            target: "nts::ke",
+            "AEAD Algorithm record received without Critical bit \
+             (RFC 8915 §4.1.5 permits either): host={request_host} \
+             body_len={}",
+            aead_body.len(),
+        );
+    }
+    let aead_id = *aead_body.first().ok_or(KeError::AeadNegotiationRefused)?;
+    if !offered_aead.contains(&aead_id) {
+        return Err(KeError::UnsupportedAead(aead_id));
+    }
+    if aead_key_len(aead_id).is_none() {
+        return Err(KeError::UnsupportedAead(aead_id));
+    }
+    Ok(aead_id)
+}
+
 pub(crate) fn validate_response(
     request_host: &str,
     offered_aead: &[u16],
@@ -1159,31 +1202,7 @@ pub(crate) fn validate_response(
     if !next_proto.contains(&NEXT_PROTO_NTPV4) {
         return Err(KeError::NoCommonProtocol);
     }
-    // RFC 8915 §4.1.5 — same Critical-bit requirement as NextProtocol,
-    // and same anti-downgrade rationale; see comment above. We bind
-    // the record's body slice (rather than just `first().copied()`)
-    // so an `AeadAlgorithm` record with an empty body is distinguished
-    // from a fully missing record: the spec permits an empty body as
-    // a server-side refusal signal, and collapsing it onto
-    // `MissingAead` would hide that the server explicitly declined
-    // every offered algorithm.
-    let (aead_critical, aead_body) = records
-        .iter()
-        .find_map(|r| match &r.kind {
-            RecordKind::AeadAlgorithm(v) => Some((r.critical, v.as_slice())),
-            _ => None,
-        })
-        .ok_or(KeError::MissingAead)?;
-    if !aead_critical {
-        return Err(KeError::NonCriticalAeadAlgorithm);
-    }
-    let aead_id = *aead_body.first().ok_or(KeError::AeadNegotiationRefused)?;
-    if !offered_aead.contains(&aead_id) {
-        return Err(KeError::UnsupportedAead(aead_id));
-    }
-    if aead_key_len(aead_id).is_none() {
-        return Err(KeError::UnsupportedAead(aead_id));
-    }
+    let aead_id = select_aead(request_host, offered_aead, records)?;
     // `b: &Zeroizing<Vec<u8>>`; `b.clone()` delegates to the inner
     // `Vec<u8>::clone()` and re-wraps in `Zeroizing`, so each cloned
     // cookie inherits the wipe-on-drop discipline. Carrying the

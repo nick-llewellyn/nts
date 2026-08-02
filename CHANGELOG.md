@@ -113,6 +113,27 @@
 
 ### Fixed
 
+- NTS-KE handshakes against servers that clear the Critical bit on the
+  AEAD Algorithm record now succeed instead of failing with
+  `NtsError.keProtocol`. RFC 8915 §4.1.5 states that the Critical bit
+  on this record *MAY* be set — it is the deliberate exception to the
+  *MUST* imposed on EndOfMessage (§4.1.1), Next Protocol (§4.1.2),
+  Error (§4.1.3), and Warning (§4.1.4). The parser enforced the bit by
+  false symmetry with the Next Protocol check, making every conforming
+  server that clears it permanently unreachable; members of the public
+  `ntp.br` pool do exactly this, and because `gps.ntp.br` resolves to
+  two addresses that disagree, the failure presented as intermittent.
+
+  A cleared bit is now recorded at `debug` level under the `nts::ke`
+  log target and the handshake continues, matching the treatment
+  already given to unknown non-critical records (§4.1.4). No downgrade
+  surface is introduced: the record is carried inside the TLS channel,
+  so an on-path attacker can alter neither the bit nor the algorithm
+  identifier, and the returned identifier is still validated against
+  the client's offered list. The Critical-bit requirement on the Next
+  Protocol record is unchanged — §4.1.2 genuinely says *MUST*.
+  (NTS-138)
+
 - The Dart-side copy of `customRoots` is now wiped after the FFI
   handoff instead of being left readable until the GC runs. The
   `NtsClient` constructor copies the caller's `List<int>` into the
