@@ -854,27 +854,57 @@ mod validate_response {
         }
     }
 
-    /// RFC 8915 §4.1.5 — symmetric to the NextProtocol case above; an
-    /// AeadAlgorithm record without the Critical bit must short-circuit
-    /// the handshake before key export.
+    /// RFC 8915 §4.1.5 — deliberately *not* symmetric to the
+    /// NextProtocol case above. §4.1.2 says the NextProtocol record MUST
+    /// carry the Critical bit; §4.1.5 says the AeadAlgorithm record's
+    /// Critical bit MAY be set. A cleared bit is therefore conforming
+    /// and must not fail the handshake — servers in the `ntp.br` pool
+    /// clear it, and rejecting them is a hard interop failure.
     #[test]
-    fn validate_response_rejects_non_critical_aead_algorithm() {
+    fn validate_response_accepts_non_critical_aead_algorithm() {
         let mut records = well_formed_response();
         records[1] = rec(
             false,
             RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
         );
-        match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
-            Err(KeError::NonCriticalAeadAlgorithm) => {}
-            other => panic!("expected NonCriticalAeadAlgorithm, got {other:?}"),
+        let partial = validate_response("h", &[aead::AES_SIV_CMAC_256], &records)
+            .expect("non-critical AeadAlgorithm is permitted by RFC 8915 §4.1.5");
+        assert_eq!(partial.aead_id, aead::AES_SIV_CMAC_256);
+    }
+
+    /// Regression pin for the shape observed on the wire from
+    /// `a.st1.ntp.br` (bd nts-wfj3 / NTS-138): critical NextProtocol
+    /// with NTPv4, **non-critical** AeadAlgorithm carrying
+    /// AES-SIV-CMAC-256, eight non-critical NewCookie records, critical
+    /// EndOfMessage. This response must validate cleanly.
+    #[test]
+    fn validate_response_accepts_ntp_br_record_shape() {
+        let mut records = vec![
+            rec(true, RecordKind::NextProtocol(vec![NEXT_PROTO_NTPV4])),
+            rec(
+                false,
+                RecordKind::AeadAlgorithm(vec![aead::AES_SIV_CMAC_256]),
+            ),
+        ];
+        for i in 0..8u8 {
+            records.push(rec(
+                false,
+                RecordKind::NewCookie(Zeroizing::new(vec![i; 104])),
+            ));
         }
+        records.push(rec(true, RecordKind::EndOfMessage));
+
+        let partial = validate_response("a.st1.ntp.br", &[aead::AES_SIV_CMAC_256], &records)
+            .expect("ntp.br record shape is RFC 8915 conforming");
+        assert_eq!(partial.aead_id, aead::AES_SIV_CMAC_256);
+        assert_eq!(partial.cookies.len(), 8);
     }
 
     /// When both the NextProtocol and AeadAlgorithm records lack the
-    /// Critical bit, the NextProtocol violation must surface first —
-    /// it appears earlier in `validate_response` and rejecting on it
-    /// keeps the diagnostic deterministic for callers that pattern-match
-    /// on the variant for retry/backoff classification.
+    /// Critical bit, the NextProtocol violation still surfaces — it is
+    /// the only one of the two that is a violation at all (§4.1.2 MUST
+    /// vs §4.1.5 MAY), so the cleared AEAD bit contributes nothing to
+    /// the outcome.
     #[test]
     fn validate_response_rejects_non_critical_next_protocol_first() {
         let mut records = well_formed_response();
@@ -942,19 +972,18 @@ mod validate_response {
         }
     }
 
-    /// RFC 8915 §4.1.5 still requires the Critical bit on the
-    /// `AeadAlgorithm` record even when its body is empty. The
-    /// non-critical violation must surface before the empty-body
-    /// refusal so the diagnostic remains deterministic: an attacker
-    /// who can strip the Critical bit must not be able to mask the
-    /// shape-level violation behind a content-level signal.
+    /// The Critical bit is orthogonal to the empty-body refusal signal.
+    /// Because §4.1.5 permits a cleared bit, an `AeadAlgorithm` record
+    /// that is both non-critical *and* empty must still surface the
+    /// content-level diagnostic — `AeadNegotiationRefused` — rather than
+    /// being masked by a shape-level rejection that no longer exists.
     #[test]
-    fn validate_response_non_critical_aead_precedes_empty_body() {
+    fn validate_response_non_critical_empty_aead_is_negotiation_refusal() {
         let mut records = well_formed_response();
         records[1] = rec(false, RecordKind::AeadAlgorithm(vec![]));
         match validate_response("h", &[aead::AES_SIV_CMAC_256], &records) {
-            Err(KeError::NonCriticalAeadAlgorithm) => {}
-            other => panic!("expected NonCriticalAeadAlgorithm, got {other:?}"),
+            Err(KeError::AeadNegotiationRefused) => {}
+            other => panic!("expected AeadNegotiationRefused, got {other:?}"),
         }
     }
 
