@@ -521,7 +521,7 @@
   FRB upgrade that broke it fails a test instead. Internal only; no
   public API or observable behaviour changes. (NTS-115)
 
-- Three dartdoc clarifications on the public models, no code change.
+- Three dartdoc clarifications on the public API, no code change.
   `NtsSyncedTime.errorBoundMicros` now states outright that it is a
   snapshot bounding the *anchor* instant and stays fixed while
   `utcNow` keeps projecting, so it is not the current maximum error;
@@ -532,10 +532,10 @@
   suspend-inclusive budgeting at `MonotonicClock` / the `getTime`
   budget — summing phases stays sound for in-call accounting, but no
   addend counts suspend, so the sum cannot yield one.
-  `NtsClient.invalidate` now
-  distinguishes "no entry was cached" from "the spec is invalid": the
-  `false` return reports only the former, an invalid spec throws, and
-  nothing is checked against the network in either direction.
+  `NtsClient.invalidate` now distinguishes "no entry was cached" from
+  "the spec is invalid": the `false` return reports only the former, an
+  invalid spec throws, and nothing is checked against the network in
+  either direction.
   (NTS-116, NTS-118, NTS-120)
 
 
