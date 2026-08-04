@@ -88,6 +88,135 @@ void main() {
     });
   });
 
+  group('parseTrustMode', () {
+    test('round-trips every formatTrustMode label', () {
+      for (final mode in TrustMode.values) {
+        expect(parseTrustMode(formatTrustMode(mode)), mode);
+      }
+    });
+
+    test('kTrustModeFlagValues covers exactly the four modes', () {
+      expect(
+        kTrustModeFlagValues.map(parseTrustMode).toList(),
+        TrustMode.values,
+      );
+    });
+
+    test('unrecognised values return null', () {
+      expect(parseTrustMode('platformOnly'), isNull);
+      expect(parseTrustMode(''), isNull);
+    });
+  });
+
+  group('parseTrustBackend', () {
+    test('kTrustBackendFlagValues covers exactly the four backends', () {
+      expect(
+        kTrustBackendFlagValues.map(parseTrustBackend).toList(),
+        TrustBackend.values,
+      );
+    });
+
+    test('accepts the enum name in kebab form, not the display label', () {
+      // formatTrustBackend renders this variant as `webpki-fallback`,
+      // which names the anchor set that won rather than the mode, so it
+      // is deliberately NOT accepted as a flag value.
+      expect(
+        parseTrustBackend('platform-with-hybrid-fallback'),
+        TrustBackend.platformWithHybridFallback,
+      );
+      expect(parseTrustBackend('webpki-fallback'), isNull);
+    });
+
+    test('unrecognised values return null', () {
+      expect(parseTrustBackend('webpkiRoots'), isNull);
+      expect(parseTrustBackend(''), isNull);
+    });
+  });
+
+  group('formatTrustMismatch', () {
+    test('renders both backends through the success-line vocabulary', () {
+      expect(
+        formatTrustMismatch(
+          TrustBackend.platform,
+          TrustBackend.platformWithHybridFallback,
+        ),
+        'FAIL  trust backend mismatch: '
+        'required=platform  actual=webpki-fallback',
+      );
+    });
+
+    test('covers every backend on both sides', () {
+      for (final requiredBackend in TrustBackend.values) {
+        for (final actualBackend in TrustBackend.values) {
+          expect(
+            formatTrustMismatch(requiredBackend, actualBackend),
+            'FAIL  trust backend mismatch: '
+            'required=${formatTrustBackend(requiredBackend)}  '
+            'actual=${formatTrustBackend(actualBackend)}',
+          );
+        }
+      }
+    });
+  });
+
+  group('jsonTrustMismatch', () {
+    test('carries raw enum names, not the display labels', () {
+      expect(
+        jsonTrustMismatch(
+          TrustBackend.webpkiRoots,
+          TrustBackend.platformWithHybridFallback,
+        ),
+        {
+          'error_type': 'TrustBackendMismatch',
+          'message':
+              'FAIL  trust backend mismatch: '
+              'required=webpki-roots  actual=webpki-fallback',
+          'severity': 'error',
+          'required_trust_backend': 'webpkiRoots',
+          'trust_backend': 'platformWithHybridFallback',
+        },
+      );
+    });
+
+    test('error_type does not collide with any NtsError tag', () {
+      final tags = <String>{
+        errorTypeName(const NtsError.invalidSpec(message: 'x')),
+        errorTypeName(const NtsError.network(message: 'x')),
+        errorTypeName(const NtsError.keProtocol(message: 'x')),
+        errorTypeName(const NtsError.ntpProtocol(message: 'x')),
+        errorTypeName(const NtsError.authentication(message: 'x')),
+        errorTypeName(const NtsError.timeout(phase: TimeoutPhase.ntp)),
+        errorTypeName(const NtsError.noCookies()),
+        errorTypeName(const NtsError.trustBackendUnavailable(message: 'x')),
+        errorTypeName(const NtsError.internal(message: 'x')),
+        'Unhandled',
+      };
+      final tag =
+          jsonTrustMismatch(
+                TrustBackend.custom,
+                TrustBackend.platform,
+              )['error_type']
+              as String;
+      expect(tags, isNot(contains(tag)));
+    });
+
+    test('is JSON-encodable for every backend pair', () {
+      for (final requiredBackend in TrustBackend.values) {
+        for (final actualBackend in TrustBackend.values) {
+          final decoded =
+              jsonDecode(
+                    jsonEncode(
+                      jsonTrustMismatch(requiredBackend, actualBackend),
+                    ),
+                  )
+                  as Map<String, Object?>;
+          expect(decoded['required_trust_backend'], requiredBackend.name);
+          expect(decoded['trust_backend'], actualBackend.name);
+        }
+      }
+    });
+  });
+
   group('formatQuerySuccess', () {
     test('renders a two-line headline / continuation pair with trust', () {
       final sample = NtsTimeSample(

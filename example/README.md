@@ -78,8 +78,10 @@ detail out and walk through the user-facing behaviour:
   interpreting the status banners.
 - [CLI User Manual](CLI_GUIDE.md) — invoking `bin/nts_cli.dart`, the
   positional host arguments, the `--port` / `--timeout` / `--dns-cap` /
-  `--warm` / `--mock` / `--json` / `--exit-on-error` flags, and how to
-  read the round-trip and AEAD fields in the terminal output.
+  `--warm` / `--mock` / `--json` / `--exit-on-error` flags, the
+  `--trust-mode` / `--custom-roots` / `--require-trust-backend`
+  trust-anchor flags, and how to read the round-trip and AEAD fields in
+  the terminal output.
 
 The remainder of this README is the developer-facing reference:
 architecture, bridge modes, dylib loading, and toolchain notes.
@@ -260,29 +262,48 @@ entirely.
 
 ```text
 Usage: nts_cli [options] <host> [<host>...]
--p, --port            TCP port for NTS-KE on every host (default: 4460).
--t, --timeout         Per-request timeout in milliseconds. Single global
-                      wall-clock budget that spans DNS, NTS-KE (TCP connect,
-                      TLS handshake, record I/O) and the AEAD-NTPv4 UDP
-                      exchange as one shrinking deadline.
-                      (default: 5000)
--l, --library         Path to a prebuilt nts_rust dylib. If
-                      omitted, falls back to rust/target/release/.
-    --dns-cap         Ceiling on the package's process-wide pool of
-                      in-flight DNS resolver workers (package default:
-                      4, sized for mobile). If omitted, sized up to the
-                      host fan-out so a multi-host run cannot
-                      self-saturate the pool; values below the fan-out
-                      can surface dnsSaturation fast-fails.
--w, --warm            Run ntsWarmCookies instead of ntsQuery.
-    --mock            Use the in-memory mock bridge (no native dylib required).
-    --json            Emit NDJSON (one JSON object per line) instead of
-                      human log lines. Success goes to stdout, failures
-                      to stderr.
-    --exit-on-error   Exit with status 1 if any host produced a warn or
-                      error result. Default exits 0 regardless of
-                      per-host outcomes.
--h, --help            Show this help.
+-p, --port                    TCP port for NTS-KE on every host (default: 4460).
+-t, --timeout                 Per-request timeout in milliseconds. Single global
+                              wall-clock budget that spans DNS, NTS-KE (TCP
+                              connect, TLS handshake, record I/O) and the
+                              AEAD-NTPv4 UDP exchange as one shrinking deadline.
+                              (default: 5000)
+-l, --library                 Path to a prebuilt nts_rust dylib. If
+                              omitted, falls back to rust/target/release/.
+    --dns-cap                 Ceiling on the package's process-wide pool of
+                              in-flight DNS resolver workers (package default:
+                              4, sized for mobile). If omitted, sized up to the
+                              host fan-out so a multi-host run cannot
+                              self-saturate the pool; values below the fan-out
+                              can surface dnsSaturation fast-fails.
+    --trust-mode              TLS trust-anchor policy for every handshake this
+                              run initiates. Omitted, the run goes through the
+                              package's process-wide default client
+                              (platform-with-fallback); any other value mints
+                              one call-scoped NtsClient for the batch.
+                              [platform-with-fallback, platform-only,
+                              bundled-only, custom]
+    --custom-roots            Path to a PEM certificate bundle or a single
+                              DER-encoded certificate. Required by
+                              --trust-mode=custom, and rejected with every
+                              other mode.
+    --require-trust-backend   Assert that each handshake negotiated this
+                              backend. A host that authenticated under a
+                              different one reports TrustBackendMismatch
+                              instead of success, which counts as a failure
+                              for --exit-on-error.
+                              [platform, platform-with-hybrid-fallback,
+                              webpki-roots, custom]
+-w, --warm                    Run ntsWarmCookies instead of ntsQuery.
+    --mock                    Use the in-memory mock bridge (no native dylib
+                              required).
+    --json                    Emit NDJSON (one JSON object per line) instead of
+                              human log lines. Success goes to stdout, failures
+                              to stderr.
+    --exit-on-error           Exit with status 1 if any host produced a warn or
+                              error result. Default exits 0 regardless of
+                              per-host outcomes.
+-h, --help                    Show this help.
 ```
 
 ### Examples
@@ -349,6 +370,25 @@ fvm dart run bin/nts_cli.dart --json --exit-on-error \
     nts.netnod.se time.cloudflare.com
 ```
 
+Probe under a non-default trust-anchor policy and assert the backend
+that actually authenticated. A non-default `--trust-mode` mints one
+call-scoped `NtsClient` for the batch instead of routing through the
+package's default client:
+
+```bash
+fvm dart run bin/nts_cli.dart --exit-on-error \
+    --trust-mode bundled-only --require-trust-backend webpki-roots \
+    time.cloudflare.com
+```
+
+Against a private CA, pass the roots explicitly:
+
+```bash
+fvm dart run bin/nts_cli.dart \
+    --trust-mode custom --custom-roots /etc/nts/internal-ca.pem \
+    nts.internal.example
+```
+
 ### Sample output
 
 ```text
@@ -395,8 +435,8 @@ meaning.
 | Code | Meaning                                                                  |
 | ---- | ------------------------------------------------------------------------ |
 | `0`  | Bridge initialised; every host completed (success or failure)            |
-| `1`  | `--exit-on-error` was passed and at least one host produced warn / error |
-| `64` | Argument error (bad `--port`, `--timeout`, missing hosts)                |
+| `1`  | `--exit-on-error` was passed and at least one host produced warn / error, including a `--require-trust-backend` mismatch |
+| `64` | Argument error (bad `--port`, `--timeout`, missing hosts, unreadable `--custom-roots`, or a `--trust-mode` / `--custom-roots` pairing the `NtsClient` constructor rejects) |
 | `70` | Bridge load failure (no dylib found, `NtsRustLib.init` threw)               |
 
 By default the exit code does **not** reflect per-host failures — a
@@ -423,6 +463,17 @@ the IANA registry has no assignments — so a consumer can index it
 without a presence check. The text renderings instead omit the
 `ke-warnings=[…]` segment entirely when there are no codes, keeping
 the common-case log line quiet.
+
+Two envelope keys are conditional, because they describe the
+invocation rather than a single handshake: `trust_mode` appears only
+when `--trust-mode` was passed, and `required_trust_backend` only when
+`--require-trust-backend` was, so a run using neither flag emits the
+records it always has. When present they ride every record in the
+stream, `dns_pool_stats` included. A `--require-trust-backend`
+mismatch arrives as an `error` event whose `error_type` is
+`TrustBackendMismatch` — distinct from every `NtsError` tag — carrying
+the negotiated `trust_backend` alongside the demanded
+`required_trust_backend`.
 
 The trailing DNS pool report cannot be a human-readable block in this
 mode without corrupting the one-object-per-line stream, so it is

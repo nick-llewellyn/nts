@@ -6,6 +6,32 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 9.1
+
+### Added
+
+- The example CLI (`example/bin/nts_cli.dart`) can now select a
+  trust-anchor policy and assert the backend that actually
+  authenticated. `--trust-mode` takes `platform-with-fallback`
+  (default), `platform-only`, `bundled-only`, or `custom`;
+  `--custom-roots <path>` supplies the PEM bundle or DER certificate
+  the `custom` mode requires; `--require-trust-backend` asserts that
+  each handshake negotiated a named `TrustBackend`, reporting
+  `TrustBackendMismatch` instead of success when it did not and
+  counting that as a failure for `--exit-on-error`.
+
+  Previously every run went through the top-level `ntsQuery` /
+  `ntsWarmCookies` and therefore the process-wide default client, whose
+  mode is fixed at `TrustMode.platformWithFallback` — the most
+  permissive policy the package offers — so the tool could neither
+  probe under a stricter policy nor detect a silent `webpki-roots`
+  fallback. A non-default mode now mints one call-scoped `NtsClient`
+  for the batch and disposes it after the fan-out; the default path is
+  unchanged and constructs no client. Under `--json`, `trust_mode` and
+  `required_trust_backend` are emitted only when their flag was passed,
+  so a flagless run's records are unchanged. Example app only; no
+  package API change. (NTS-146)
+
 ## 9.0.0
 
 ### Breaking

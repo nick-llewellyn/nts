@@ -79,6 +79,87 @@ String formatTrustMode(TrustMode mode) => switch (mode) {
   TrustMode.custom => 'custom',
 };
 
+/// Accepted `--trust-mode` values, in [TrustMode] declaration order.
+///
+/// Doubles as the `allowed:` set for the CLI option, so the parser
+/// rejects an unknown value with usage text before [parseTrustMode]
+/// ever runs.
+const List<String> kTrustModeFlagValues = [
+  'platform-with-fallback',
+  'platform-only',
+  'bundled-only',
+  'custom',
+];
+
+/// Accepted `--require-trust-backend` values, in [TrustBackend]
+/// declaration order.
+///
+/// These are the kebab-cased *enum* names, deliberately not
+/// [formatTrustBackend]'s output: that helper renders
+/// [TrustBackend.platformWithHybridFallback] as the display label
+/// `webpki-fallback`, which reads well in a log line but is a poor
+/// flag value because it does not name the mode that produced it.
+const List<String> kTrustBackendFlagValues = [
+  'platform',
+  'platform-with-hybrid-fallback',
+  'webpki-roots',
+  'custom',
+];
+
+/// Inverse of [formatTrustMode]; `null` for an unrecognised value.
+TrustMode? parseTrustMode(String value) => switch (value) {
+  'platform-with-fallback' => TrustMode.platformWithFallback,
+  'platform-only' => TrustMode.platformOnly,
+  'bundled-only' => TrustMode.bundledOnly,
+  'custom' => TrustMode.custom,
+  _ => null,
+};
+
+/// Maps a [kTrustBackendFlagValues] entry onto its [TrustBackend];
+/// `null` for an unrecognised value.
+TrustBackend? parseTrustBackend(String value) => switch (value) {
+  'platform' => TrustBackend.platform,
+  'platform-with-hybrid-fallback' => TrustBackend.platformWithHybridFallback,
+  'webpki-roots' => TrustBackend.webpkiRoots,
+  'custom' => TrustBackend.custom,
+  _ => null,
+};
+
+/// Human rendering of a `--require-trust-backend` assertion failure:
+/// the handshake succeeded, but negotiated a backend other than the
+/// one the run demanded.
+///
+/// Both backends render through [formatTrustBackend] so the line reads
+/// in the same vocabulary as the `trust=` segment on the success lines
+/// it replaces. The machine-readable counterpart
+/// ([jsonTrustMismatch]) carries the raw enum names instead.
+String formatTrustMismatch(
+  TrustBackend requiredBackend,
+  TrustBackend actualBackend,
+) =>
+    'FAIL  trust backend mismatch: '
+    'required=${formatTrustBackend(requiredBackend)}  '
+    'actual=${formatTrustBackend(actualBackend)}';
+
+/// JSON-shaped payload for a `--require-trust-backend` assertion
+/// failure.
+///
+/// `error_type` shares the namespace with [errorTypeName]'s ten
+/// [NtsError] tags so a consumer switching on the field can tell a
+/// policy-assertion failure from a protocol error without a second
+/// branch. `trust_backend` reuses the key [jsonQuerySuccess] /
+/// [jsonWarmSuccess] already use for the negotiated backend.
+Map<String, Object?> jsonTrustMismatch(
+  TrustBackend requiredBackend,
+  TrustBackend actualBackend,
+) => {
+  'error_type': 'TrustBackendMismatch',
+  'message': formatTrustMismatch(requiredBackend, actualBackend),
+  'severity': 'error',
+  'required_trust_backend': requiredBackend.name,
+  'trust_backend': actualBackend.name,
+};
+
 /// Trailing `ke-warnings=[…]` segment for a non-empty list of NTS-KE
 /// warning codes, or the empty string when there are none.
 ///
