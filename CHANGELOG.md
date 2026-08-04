@@ -6,7 +6,7 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 9.0
+## 9.0.0
 
 ### Breaking
 
@@ -115,6 +115,102 @@ tarball.
   remain the eager controls for callers that need a session gone at a
   specific moment. No public API changes; the bounds are internal
   policy. (NTS-124)
+
+### Added
+
+- `NtsClient.dispose()` releases the client's native handle — and with
+  it the session table, its cached AEAD keys, and its cookie jars — at
+  a moment the caller chooses, instead of leaving it to the GC
+  finalizer. The method existed internally (only `ntsGetTime`'s
+  call-scoped client used it) and is now public.
+
+  Optional, not required: the finalizer remains the backstop, so a
+  client that is simply dropped is still reclaimed. What was missing
+  was any way to make the timing deterministic — a client scoped to a
+  work batch, a screen, or a test could pin native state well past the
+  point the app considered it dead, and an app minting many
+  short-lived clients had no lever at all short of GC pressure.
+
+  Distinct from `clear()`, which empties the session table and leaves
+  the client usable; `dispose()` ends the client. Idempotent, and safe
+  to call with a `query` / `warmCookies` / `getTime` already executing
+  on the native side: such a call took its own reference to the native
+  object when its arguments were encoded, and runs to completion. A
+  call still queued at the bridge admission gate has not encoded its
+  arguments yet, so it is refused once admitted, as is any method
+  called *after* `dispose()`; the refusal is an FRB `FrbException`
+  rather than an `NtsError`, since the failure is in the handle rather
+  than in the protocol. (NTS-114)
+
+- `TimeoutPhase.dnsSpawnFailed` distinguishes "the OS refused to create
+  a DNS worker thread" from the pool-cap refusal already reported as
+  `TimeoutPhase.dnsSaturation`. Additive enum growth: `switch`
+  statements over `TimeoutPhase` that were previously exhaustive will
+  now need a case for it (or a `default`).
+
+- `NtsDnsPoolStats.spawnFailed` counts those refusals, disjoint from
+  both `refused` (admission blocked by the cap) and `recovered` (a
+  detached worker that actually ran). The pair `refused` vs
+  `spawnFailed` is what makes the cap-vs-ceiling distinction observable
+  without parsing error strings, since both refusals surface as
+  `WouldBlock` internally. Callers constructing `NtsDnsPoolStats`
+  directly — test fixtures, chiefly — must pass the new required
+  field.
+
+- `NtsTimeSample.keWarnings` and `NtsWarmCookiesOutcome.keWarnings`
+  expose the non-fatal NTS-KE warning codes a server sent with the
+  handshake (RFC 8915 §4.1.4 record type 3) as `List<int>` raw code
+  values, in the order received. Previously the KE layer parsed these
+  records but discarded them, so a server signalling a warning was
+  indistinguishable from one that sent none. Empty for every server
+  observed in practice — the IANA NTS-KE warning registry has no
+  assignments as of RFC 8915 — so a non-empty list means the peer sent
+  a code this client version cannot interpret. Codes are surfaced, not
+  acted on: nothing here fails a query, since by definition a warning
+  did not stop the handshake. A non-empty list is also logged once per
+  handshake at `warn` on target `nts::ke`.
+
+  A warning describes the *handshake*, so on `NtsTimeSample` the value
+  follows the session across cached-session queries rather than
+  resetting to empty like `phaseTimings` — matching how `trustBackend`
+  already behaves. A caller polling in steady state therefore cannot
+  miss codes by having started after the cookie pool went warm. On
+  `NtsWarmCookiesOutcome` there is no cached-path nuance, since that
+  call always runs a fresh handshake; a singleflight waiter that
+  collapsed onto a concurrent leader reports the leader's codes, as
+  `freshCookies` and `trustBackend` already do.
+
+  Additive and source-compatible: both fields default to `const []`,
+  so existing constructor calls and `NtsTimeSample` fixtures compile
+  unchanged. Callers that destructure exhaustively or compare DTOs
+  against hand-built expected values will observe the new field in
+  `==`, `hashCode`, and `toString`. (NTS-127)
+
+- New advisory CI workflow `.github/workflows/cross-platform.yml` runs
+  the Rust live probes and the `test/live/` Dart suite on both
+  `ubuntu-latest` and `windows-latest`, weekly (Mondays 07:00 UTC) and
+  on manual dispatch. It adds the first CI coverage of the
+  Windows-conditional `windows-sys` arm behind `nts::boottime`, and the
+  first CI run of the Dart live suite on any platform. The workflow is
+  not a required status check: its steps depend on public NTS server
+  reachability, so a red run is a signal to triage rather than a merge
+  blocker. Repository infrastructure only — no packaged code changed.
+  (NTS-12)
+
+- The `dependency-review` job now carries an `allow-dependencies-licenses`
+  carve-out for build-time GitHub Actions, separating them from the
+  NTS-72 SPDX `allow-licenses` list. That list is a distribution policy
+  governing what may be linked into the published package or the
+  `nts_rust` cdylib, which is why it is kept in lockstep with
+  `[licenses].allow` in `rust/deny.toml`; actions are a different
+  population, executed on an ephemeral runner and never conveyed to a
+  user. Exemptions are named per-action rather than per-licence so a
+  future copyleft action must be added deliberately. One entry today:
+  `Swatinem/rust-cache` (LGPL-3.0), already used by `ci.yml` and
+  `fuzz.yml` and surfaced only because the new workflow above
+  introduced it "newly" from the diff's perspective. Repository
+  infrastructure only — no packaged code changed, and the distribution
+  policy is unchanged. (NTS-12)
 
 ### Fixed
 
@@ -234,104 +330,6 @@ tarball.
   told to alert on. The slot now travels to the worker as a
   `Drop`-free `PendingSlot` and is re-armed there, leaving the
   spawn-failure branch to release the slot explicitly.
-
-### Added
-
-- `NtsClient.dispose()` releases the client's native handle — and with
-  it the session table, its cached AEAD keys, and its cookie jars — at
-  a moment the caller chooses, instead of leaving it to the GC
-  finalizer. The method existed internally (only `ntsGetTime`'s
-  call-scoped client used it) and is now public.
-
-  Optional, not required: the finalizer remains the backstop, so a
-  client that is simply dropped is still reclaimed. What was missing
-  was any way to make the timing deterministic — a client scoped to a
-  work batch, a screen, or a test could pin native state well past the
-  point the app considered it dead, and an app minting many
-  short-lived clients had no lever at all short of GC pressure.
-
-  Distinct from `clear()`, which empties the session table and leaves
-  the client usable; `dispose()` ends the client. Idempotent, and safe
-  to call with a `query` / `warmCookies` / `getTime` already executing
-  on the native side: such a call took its own reference to the native
-  object when its arguments were encoded, and runs to completion. A
-  call still queued at the bridge admission gate has not encoded its
-  arguments yet, so it is refused once admitted, as is any method
-  called *after* `dispose()`; the refusal is an FRB `FrbException`
-  rather than an `NtsError`, since the failure is in the handle rather
-  than in the protocol. (NTS-114)
-
-- `TimeoutPhase.dnsSpawnFailed` distinguishes "the OS refused to create
-  a DNS worker thread" from the pool-cap refusal already reported as
-  `TimeoutPhase.dnsSaturation`. Additive enum growth: `switch`
-  statements over `TimeoutPhase` that were previously exhaustive will
-  now need a case for it (or a `default`).
-
-- `NtsDnsPoolStats.spawnFailed` counts those refusals, disjoint from
-  both `refused` (admission blocked by the cap) and `recovered` (a
-  detached worker that actually ran). The pair `refused` vs
-  `spawnFailed` is what makes the cap-vs-ceiling distinction observable
-  without parsing error strings, since both refusals surface as
-  `WouldBlock` internally. Callers constructing `NtsDnsPoolStats`
-  directly — test fixtures, chiefly — must pass the new required
-  field.
-
-- `NtsTimeSample.keWarnings` and `NtsWarmCookiesOutcome.keWarnings`
-  expose the non-fatal NTS-KE warning codes a server sent with the
-  handshake (RFC 8915 §4.1.4 record type 3) as `List<int>` raw code
-  values, in the order received. Previously the KE layer parsed these
-  records but discarded them, so a server signalling a warning was
-  indistinguishable from one that sent none. Empty for every server
-  observed in practice — the IANA NTS-KE warning registry has no
-  assignments as of RFC 8915 — so a non-empty list means the peer sent
-  a code this client version cannot interpret. Codes are surfaced, not
-  acted on: nothing here fails a query, since by definition a warning
-  did not stop the handshake. A non-empty list is also logged once per
-  handshake at `warn` on target `nts::ke`.
-
-  A warning describes the *handshake*, so on `NtsTimeSample` the value
-  follows the session across cached-session queries rather than
-  resetting to empty like `phaseTimings` — matching how `trustBackend`
-  already behaves. A caller polling in steady state therefore cannot
-  miss codes by having started after the cookie pool went warm. On
-  `NtsWarmCookiesOutcome` there is no cached-path nuance, since that
-  call always runs a fresh handshake; a singleflight waiter that
-  collapsed onto a concurrent leader reports the leader's codes, as
-  `freshCookies` and `trustBackend` already do.
-
-  Additive and source-compatible: both fields default to `const []`,
-  so existing constructor calls and `NtsTimeSample` fixtures compile
-  unchanged. Callers that destructure exhaustively or compare DTOs
-  against hand-built expected values will observe the new field in
-  `==`, `hashCode`, and `toString`. (NTS-127)
-
-- New advisory CI workflow `.github/workflows/cross-platform.yml` runs
-  the Rust live probes and the `test/live/` Dart suite on both
-  `ubuntu-latest` and `windows-latest`, weekly (Mondays 07:00 UTC) and
-  on manual dispatch. It adds the first CI coverage of the
-  Windows-conditional `windows-sys` arm behind `nts::boottime`, and the
-  first CI run of the Dart live suite on any platform. The workflow is
-  not a required status check: its steps depend on public NTS server
-  reachability, so a red run is a signal to triage rather than a merge
-  blocker. Repository infrastructure only — no packaged code changed.
-  (NTS-12)
-
-- The `dependency-review` job now carries an `allow-dependencies-licenses`
-  carve-out for build-time GitHub Actions, separating them from the
-  NTS-72 SPDX `allow-licenses` list. That list is a distribution policy
-  governing what may be linked into the published package or the
-  `nts_rust` cdylib, which is why it is kept in lockstep with
-  `[licenses].allow` in `rust/deny.toml`; actions are a different
-  population, executed on an ephemeral runner and never conveyed to a
-  user. Exemptions are named per-action rather than per-licence so a
-  future copyleft action must be added deliberately. One entry today:
-  `Swatinem/rust-cache` (LGPL-3.0), already used by `ci.yml` and
-  `fuzz.yml` and surfaced only because the new workflow above
-  introduced it "newly" from the diff's perspective. Repository
-  infrastructure only — no packaged code changed, and the distribution
-  policy is unchanged. (NTS-12)
-
-### Fixed
 
 - A call queued behind the bridge admission gate now surfaces its
   timeout after a device suspend instead of parking past it. Queue wait
@@ -465,6 +463,18 @@ tarball.
   contract, gains a matching one-line pointer. Documentation only.
   (NTS-119)
 
+- The example app now builds for an iOS device again. Its Xcode project
+  pinned `IPHONEOS_DEPLOYMENT_TARGET = 13.0` across all three build
+  configurations — Flutter's default at the time the iOS scaffolding was
+  generated — while `file_picker`, added for the custom-roots panel,
+  declares an iOS floor of `14.0`. CocoaPods found no `file_picker` spec
+  satisfying `13.0` and aborted during dependency resolution, before any
+  compilation. macOS was unaffected and so hid the breakage: the same
+  podspec sets a `10.13` floor, comfortably under the project's
+  `MACOSX_DEPLOYMENT_TARGET = 10.15`. The three configurations now
+  target `14.0`. Example app only; no package API change, and the
+  published package ships no iOS project.
+
 ### Changed
 
 - The example app's `NtsController` now calls `NtsClient.dispose()` on
@@ -484,6 +494,27 @@ tarball.
   against the superseded client; a bridge failure against the *active*
   client stays an error. Example app only; no package API change.
   (NTS-143)
+
+- The example CLI (`example/bin/nts_cli.dart`) now reports the DNS pool
+  counters, snapshotting `ntsDnsPoolStats()` either side of the query
+  run so the cumulative fields read as a per-run delta. `refused`
+  (admission blocked by `dnsConcurrencyCap`) and `spawnFailed` (the OS
+  refused the worker thread) are the pair 9.0 added to make that
+  distinction observable, and the CLI was the reference consumer with
+  no way to show it. Human mode gets a two-line trailing block; `--json`
+  gets a `{"event":"dns_pool_stats"}` NDJSON record. Example app only;
+  no package API change. (NTS-144)
+
+- The example app's log renderings now surface `keWarnings`. The text
+  form appends a trailing `ke-warnings=[1,4097]` token to the
+  continuation row only when the list is non-empty — the IANA registry
+  has no assignments as of RFC 8915, so every server observed in
+  practice sends none and an always-present `ke-warnings=[]` would be
+  pure noise. The JSON payloads carry `ke_warnings` unconditionally,
+  empty list included, so a machine consumer can index the key without
+  a presence branch. Both surfaces route through `nts_format`, so the
+  GUI log view and the CLI pick it up without a per-caller change.
+  Example app only; no package API change. (NTS-142)
 
 - The internal cookie store is now a single FIFO queue rather than a
   map keyed by host. Its only owner, a cached session, is 1:1 with a
