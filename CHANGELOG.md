@@ -463,17 +463,9 @@ tarball.
   contract, gains a matching one-line pointer. Documentation only.
   (NTS-119)
 
-- The example app now builds for an iOS device again. Its Xcode project
-  pinned `IPHONEOS_DEPLOYMENT_TARGET = 13.0` across all three build
-  configurations — Flutter's default at the time the iOS scaffolding was
-  generated — while `file_picker`, added for the custom-roots panel,
-  declares an iOS floor of `14.0`. CocoaPods found no `file_picker` spec
-  satisfying `13.0` and aborted during dependency resolution, before any
-  compilation. macOS was unaffected and so hid the breakage: the same
-  podspec sets a `10.13` floor, comfortably under the project's
-  `MACOSX_DEPLOYMENT_TARGET = 10.15`. The three configurations now
-  target `14.0`. Example app only; no package API change, and the
-  published package ships no iOS project.
+- The example app's iOS deployment target is raised from `13.0` to
+  `14.0` across all three build configurations, meeting the floor
+  declared by `file_picker`. Example app only; no package API change.
 
 ### Changed
 
