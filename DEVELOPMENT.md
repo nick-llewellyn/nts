@@ -790,8 +790,8 @@ the full set.
 
 ### Copilot code review configuration
 
-Copilot code review is configured from tracked files plus one
-settings-side toggle. The tracked half:
+Copilot code review is configured from tracked files plus two
+settings-side requirements (enumerated below). The tracked half:
 
 | Path | Role |
 |---|---|
