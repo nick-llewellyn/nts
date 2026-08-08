@@ -64,9 +64,13 @@ them is this repository's most repeated documentation defect.
    `platformOnly` treats the same failure as fatal and raises
    `TrustBackendUnavailable`.
 
-2. **Per-chain** — `nts/hybrid_verifier.rs`. The platform verifier was
-   built successfully, but an individual chain verdict falls back to
-   webpki. Under `PlatformWithFallback` exactly two verdicts are
+2. **Per-chain** — `nts/hybrid_verifier.rs`, **Android-only** in
+   production: `ke.rs` instantiates `HybridVerifier` under
+   `cfg(target_os = "android")`, and other targets use the bare
+   platform verifier with no per-chain retry. On Android the platform
+   verifier was built successfully, but an individual chain verdict
+   falls back to webpki. Under `PlatformWithFallback` exactly two
+   verdicts are
    retried: `CertificateError::Revoked` (Let's Encrypt R12/R8 chains
    omit the OCSP responder URL, so the platform reports `Revoked` when
    it merely could not check) and `Error::General` carrying the

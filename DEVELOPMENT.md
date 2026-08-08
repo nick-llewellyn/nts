@@ -924,8 +924,15 @@ open the review session from the PR timeline and read the session logs.
 Requesting a review:
 
 ```bash
-gh pr edit <number> --add-reviewer @copilot
+gh api -X POST repos/<owner>/<repo>/pulls/<number>/requested_reviewers \
+  -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
 ```
+
+`gh pr edit --add-reviewer` does not work for this. It resolves the
+reviewer through GraphQL, which rejects the bot login with `Could not
+resolve user`; the REST endpoint above accepts it. A `@copilot review`
+issue comment is the other option, but it is unreliable — it silently
+produced no review at least once.
 
 ## Lint suppression policy
 

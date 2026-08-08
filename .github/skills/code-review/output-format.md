@@ -21,7 +21,7 @@ below:
 
 | Value | Use when |
 |---|---|
-| `Ready to Merge` | No Critical/Bug findings. Any remaining findings are follow-up material and are labelled as such. |
+| `Ready to Merge` | Every finding is labelled *Consider for follow-up*. No finding carries *Fix required before merge* or *Clarification requested*. |
 | `Changes Requested` | At least one Critical/Bug finding, or a Documentation or Test Coverage finding whose action is *Fix required before merge*. |
 | `Needs Clarification` | The diff cannot be assessed without an answer from the author — intent is ambiguous, or a claim could not be verified against the code. Do not use this as a hedge; use it only when a specific question genuinely blocks the assessment, and state the question. |
 
@@ -129,10 +129,10 @@ exist.
 ### Test Coverage
 
 - **`example/test/nts_format_test.dart:192`** — The tag-collision set
-  enumerates ten `NtsError` variants by hand and omits
-  `AbiMismatch`. The list has no mechanical link to the sealed type,
-  so it drifted silently when that variant was added and will drift
-  again on the next one.
+  enumerates the `NtsError` variants by hand. The list has no
+  mechanical link to the sealed type, so it drifted silently once
+  already when `AbiMismatch` was added and will drift again on the
+  next variant.
   *Action: Consider for follow-up.*
 
 ## Review Status

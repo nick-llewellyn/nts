@@ -78,14 +78,12 @@ report. The check that matters is the one the analyzer cannot make:
   variants, tags, or severities written out by hand can drift. It
   already did once — the tag-collision test in
   `example/test/nts_format_test.dart` omitted `AbiMismatch`.
-  The guard pattern for `_allNtsErrors` in that file is two-sided:
-  `_variantKind` is an exhaustive switch with no wildcard arm, so a new
-  variant fails analysis, and a runtime test asserts the samples map
-  onto `_NtsErrorKind.values` so an arm added without a sample fails
-  too. That pattern arrives with PR #293 and is not in the tree until
-  it merges, so treat it as the shape to follow rather than as
-  something already present. A new hand-maintained list without an
-  equivalent guard is a Test Coverage finding.
+  The guard to look for is two-sided: an exhaustive switch over the
+  sealed type with no wildcard arm, so a new variant fails analysis,
+  plus a runtime test asserting the samples cover every arm, so an arm
+  added without a sample fails too. Check the file for that shape
+  rather than assuming either state — a list without an equivalent
+  guard is a Test Coverage finding.
 - **Wildcard arms.** A `_ =>` or `default:` in a switch over `NtsError`
   defeats the compile-time gate. It is occasionally correct; flag it
   and ask, rather than assuming either way.
@@ -114,10 +112,13 @@ it has already shipped once.
    failure is fatal and raises `TrustBackendUnavailable`.
 
 2. **Per-chain fallback** — `rust/src/nts/hybrid_verifier.rs`, in
-   `HybridVerifier::verify_server_cert`. The platform verifier is
-   constructed and used, but an *individual chain* verdict falls back
-   to webpki. Under `PlatformWithFallback` exactly two platform
-   verdicts are retried, and no others:
+   `HybridVerifier::verify_server_cert`. This path is **Android-only**
+   in production: `ke.rs` instantiates `HybridVerifier` under
+   `cfg(target_os = "android")` and every other target uses the bare
+   platform verifier, so no per-chain retry happens there. On Android
+   the platform verifier is constructed and used, but an *individual
+   chain* verdict falls back to webpki. Under `PlatformWithFallback`
+   exactly two platform verdicts are retried, and no others:
    - `CertificateError::Revoked` — Let's Encrypt R12/R8 chains omit
      the OCSP responder URL, so the platform reports `Revoked` when it
      merely could not check. The certs are not revoked.
