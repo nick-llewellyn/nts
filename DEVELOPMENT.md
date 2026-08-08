@@ -818,13 +818,18 @@ configured per repository under **Settings → Copilot → MCP servers**,
 as a JSON object. The configuration is shared by Copilot code review
 and Copilot cloud agent — there is no review-only server list.
 
+That object holds only the servers added for this repository, and is
+empty on a fresh one. The built-in GitHub and Playwright servers are
+applied implicitly and do not appear in it, so there is nothing to
+preserve when pasting a first entry.
+
 Two requirements, stated as requirements rather than as observed
 defaults, since GitHub's defaults are outside this repository's control
 and may change:
 
-1. **The GitHub MCP server must be enabled.** It is the server the
-   review protocol depends on for CI check results and prior PR
-   history. Nothing here needs Playwright.
+1. **The built-in GitHub MCP server must stay enabled.** It is the
+   server the review protocol depends on for CI check results and prior
+   PR history. Nothing here needs Playwright.
 2. **"Allow Copilot to use MCP tools when reviewing pull requests"
    must stay enabled**, under **Settings → Copilot → Code review**.
    Disabling it restricts MCP to the cloud agent, which would make the
@@ -842,10 +847,10 @@ checks acceptance criteria only where the PR itself restates them and
 the `NTS-` ticket is out of reach. That is what
 `.github/skills/code-review/SKILL.md` currently instructs.
 
-Linear can be reached by adding its MCP server to the same JSON
-object. Copilot does not support remote MCP servers that authenticate
-via OAuth, which is Linear's default, so the connection has to go
-through the `mcp-remote` stdio bridge with a bearer token:
+Linear can be reached by adding its MCP server to that JSON object.
+Copilot does not support remote MCP servers that authenticate via
+OAuth, which is Linear's default, so the connection has to go through
+the `mcp-remote` stdio bridge with a bearer token:
 
 ```jsonc
 {
