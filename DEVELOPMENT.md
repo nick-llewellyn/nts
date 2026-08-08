@@ -871,7 +871,7 @@ the `mcp-remote` stdio bridge with a bearer token:
 }
 ```
 
-Three things this needs beyond the JSON:
+Two things this needs beyond the JSON:
 
 - **An Agents secret** named `COPILOT_MCP_LINEAR_API_KEY` (the
   `COPILOT_MCP_` prefix is mandatory; the remainder is what `env`
@@ -880,21 +880,28 @@ Three things this needs beyond the JSON:
   invokes configured tools autonomously without asking for approval,
   so a read-only key is what bounds the damage from a prompt-injected
   review.
-- **Firewall allowlisting** for `mcp.linear.app` and the npm registry,
-  or the bridge cannot start. Code review has its own firewall
-  configuration, separate from the cloud agent's.
 - **An enumerated `tools` list.** Unlike VS Code, the repository
   configuration requires the key. `["*"]` grants the reviewer Linear's
   write tools as well, which the autonomy note above makes the wrong
   default.
 
+No firewall allowlisting is needed, and this cuts against the intuition
+that the egress has to be opened. Copilot's firewall — configured under
+**Settings → Copilot → Internet access** — applies only to processes
+the agent starts through its Bash tool, explicitly *not* to MCP
+servers. So neither the `npx` fetch nor the connection to
+`mcp.linear.app` is subject to it. The corollary is that adding an MCP
+server widens the review's network reach past whatever the firewall
+allows, which is the reason to keep `tools` enumerated and the key
+read-only.
+
 Two costs to weigh before enabling it. `mcp-remote` is a third-party
 npm shim fetched at review time into a session holding a Linear token,
-which is a supply-chain surface on every review — pin the version, as
-above, rather than tracking `@latest`. And the sync between the two
-halves is manual: enabling the server does not update `SKILL.md`, so
-the reviewer keeps treating Linear as unreachable until that file is
-changed to match.
+which is a supply-chain surface on every review, outside the firewall
+per the paragraph above — pin the version, as above, rather than
+tracking `@latest`. And the sync between the two halves is manual:
+enabling the server does not update `SKILL.md`, so the reviewer keeps
+treating Linear as unreachable until that file is changed to match.
 
 This is unrelated to the "Integrate cloud agent with Linear" feature in
 GitHub's documentation, which delegates Linear issues *to* Copilot
