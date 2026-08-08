@@ -91,8 +91,11 @@ report. The check that matters is the one the analyzer cannot make:
 ## `TrustMode` and the two fallback paths
 
 `TrustMode` selects the TLS trust anchor source for the NTS-KE
-handshake: `webpki` (bundled roots), `platform` / `platformOnly`,
-`platformWithFallback`, and custom roots.
+handshake. The Dart variants are `platformWithFallback` (the default),
+`platformOnly`, `bundledOnly`, and `custom`
+(`lib/src/api/models.dart`); the Rust `KeTrustMode` variants carry the
+same names in PascalCase (`rust/src/nts/ke.rs`). Use these exact
+identifiers — there is no `webpki` or `platform` mode.
 
 **`platform-with-fallback` has two distinct fallback paths.** Conflating
 them is the single most repeated documentation defect in this repo, and
@@ -104,22 +107,33 @@ it has already shipped once.
    roots for the whole connection. Under `platformOnly` the same
    failure is fatal and raises `TrustBackendUnavailable`.
 
-2. **Per-chain fallback** — `rust/src/nts/hybrid_verifier.rs`, around
-   lines 252 and 282. The platform verifier is constructed and used,
-   but an *individual chain* verdict falls back to webpki. A `Revoked`
-   verdict is deliberately **not** retried — revocation is a positive
-   assertion, and retrying against webpki would launder it.
+2. **Per-chain fallback** — `rust/src/nts/hybrid_verifier.rs`, in
+   `HybridVerifier::verify_server_cert`. The platform verifier is
+   constructed and used, but an *individual chain* verdict falls back
+   to webpki. Under `PlatformWithFallback` exactly two platform
+   verdicts are retried, and no others:
+   - `CertificateError::Revoked` — Let's Encrypt R12/R8 chains omit
+     the OCSP responder URL, so the platform reports `Revoked` when it
+     merely could not check. The certs are not revoked.
+   - `Error::General` carrying the `rustls-platform-verifier`
+     JNI-failure marker — R8 stripped the AAR classes on Android.
+
+   Every other failure category (`Expired`, `UnknownIssuer`,
+   `BadEncoding`, other `General` errors) propagates verbatim.
+   Under `PlatformOnly` *neither* retry runs: `Revoked` propagates
+   unchanged.
 
 When a diff documents or describes fallback behaviour, verify which
 path it means, and verify the claim by reading these two files even
 when the PR does not touch them.
 
 - Does prose that says "falls back" say *when*? Both paths, or one?
-- Does it preserve the `Revoked` non-retry? Text implying every
-  failure retries is wrong.
-- Does it distinguish `platform-only` from `platform-with-fallback`
-  for the build-time case? That is where `TrustBackendUnavailable`
-  comes from.
+- Does it keep the per-chain retry set at exactly `Revoked` and the
+  JNI marker? Text implying every failure retries is wrong, and so is
+  text implying `Revoked` propagates under `PlatformWithFallback`.
+- Does it distinguish `platformOnly` from `platformWithFallback` for
+  both cases? That asymmetry is the whole point of the two modes, and
+  the build-time case is where `TrustBackendUnavailable` comes from.
 
 `TrustBackendUnavailable` is classified error-severity, not warning:
 it means a caller-side configuration choice the runtime cannot honour,

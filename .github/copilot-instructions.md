@@ -102,9 +102,9 @@ dart format --output=none --set-exit-if-changed .
 dart analyze
 dart run tool/check_doc_snippets.dart
 
-cd example && flutter test          # example app suite
-cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings
-cd rust && cargo test
+(cd example && flutter test)         # example app suite
+(cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings)
+(cd rust && cargo test)
 ```
 
 `DEVELOPMENT.md` is authoritative for the full gate list and the

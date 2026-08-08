@@ -822,9 +822,11 @@ defaults, since GitHub's defaults are outside this repository's control
 and may change:
 
 1. **The GitHub MCP server must be enabled.** It is the only server the
-   review protocol depends on — for CI check results, linked `NTS-`
-   issues, and prior PR history. No custom MCP server is required, and
-   nothing here needs Playwright.
+   review protocol depends on — for CI check results and prior PR
+   history. No custom MCP server is required, and nothing here needs
+   Playwright. Note that it cannot read Linear, so the reviewer checks
+   acceptance criteria only where the PR itself restates them; the
+   `NTS-` ticket is out of reach.
 2. **"Allow Copilot to use MCP tools when reviewing pull requests"
    must stay enabled**, in the same settings section. Disabling it
    restricts MCP to the cloud agent, which would make the

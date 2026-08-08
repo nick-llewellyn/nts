@@ -20,9 +20,13 @@ which drops the script's diagnostic-message patches. The "Verify FRB
 bindings are in sync" CI check is authoritative.
 
 An enum variant added or reordered in a type crossing the boundary is
-an ABI change. Stale bindings decode it as garbage, which surfaces to
-Dart as `NtsErrorAbiMismatch`. Flag ABI changes and confirm the
-CHANGELOG records them as breaking.
+an ABI change. An unknown or out-of-range tag surfaces to Dart as
+`NtsErrorAbiMismatch`, but a reordered or inserted variant can keep an
+in-range discriminant and decode silently as the wrong existing variant
+(fieldless enums go through `values[inner]` in
+`lib/src/ffi/frb_generated.dart`). So the structured error is a partial
+net, not a guarantee. Flag ABI changes and confirm the CHANGELOG records
+them as breaking.
 
 ## Secrets
 
@@ -62,12 +66,17 @@ them is this repository's most repeated documentation defect.
 
 2. **Per-chain** — `nts/hybrid_verifier.rs`. The platform verifier was
    built successfully, but an individual chain verdict falls back to
-   webpki. A `Revoked` verdict is deliberately **not** retried:
-   revocation is a positive assertion, and retrying against webpki
-   would launder it.
+   webpki. Under `PlatformWithFallback` exactly two verdicts are
+   retried: `CertificateError::Revoked` (Let's Encrypt R12/R8 chains
+   omit the OCSP responder URL, so the platform reports `Revoked` when
+   it merely could not check) and `Error::General` carrying the
+   `rustls-platform-verifier` JNI-failure marker. Every other category
+   (`Expired`, `UnknownIssuer`, `BadEncoding`, other `General` errors)
+   propagates verbatim. Under `PlatformOnly` neither retry runs and
+   `Revoked` propagates unchanged.
 
-Any change here needs the `Revoked` non-retry preserved, and any prose
-describing fallback needs to say which path it means.
+Any change here needs that two-verdict retry set preserved exactly, and
+any prose describing fallback needs to say which path it means.
 
 ## Error mapping
 

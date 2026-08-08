@@ -98,10 +98,14 @@ is, use it during review to settle a question the diff alone cannot:
 - **Prior art.** When a diff reverses or re-treads an earlier
   decision, look up the PR or issue that made it and reference it, so
   the developer sees the history rather than rediscovering it.
-- **Linked issues.** PR branches are named `<type>/NTS-<n>-<slug>` and
-  the Linear identifier appears in the branch name. When the PR
-  description references an `NTS-` identifier, check the stated
-  acceptance criteria against the diff and flag unmet ones.
+- **Stated acceptance criteria.** PR branches are named
+  `<type>/NTS-<n>-<slug>`, but `NTS-` issues live in Linear, which the
+  GitHub MCP server cannot read. Check only the acceptance criteria
+  reproduced in the PR description or its comments against the diff,
+  and flag unmet ones. Do not attempt to fetch the Linear ticket, and
+  do not treat criteria you cannot see as satisfied — if the PR cites
+  an `NTS-` identifier without restating its criteria, say so under
+  `## Review Status`.
 
 Do not block a review waiting on MCP context. If a lookup fails or is
 unavailable, complete the review and name the check you could not

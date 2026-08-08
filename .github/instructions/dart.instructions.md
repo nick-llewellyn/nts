@@ -56,9 +56,12 @@ variant docs are the model.
 
 Argument validation happens in the Dart wrapper before FFI dispatch
 (port range, timeout and concurrency bounds) and raises
-`NtsErrorInvalidSpec`. A new parameter crossing the boundary without
-validation pushes the failure into Rust, where it produces a worse
-diagnostic.
+`NtsErrorInvalidSpec`. Where a *newly added* parameter carries a
+constraint Dart can check — a numeric range, a non-empty string, a
+mutually-exclusive combination — that check belongs in the wrapper;
+deferring it to Rust produces a worse diagnostic. Parameters with no
+Dart-checkable constraint (booleans, enums, opaque handles) need no
+wrapper check, and adding one would be noise.
 
 ## Style
 
