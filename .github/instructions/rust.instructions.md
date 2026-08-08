@@ -89,11 +89,18 @@ information the caller needs to decide whether to retry.
 ## Gates
 
 ```bash
-cd rust
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
+(cd rust && cargo build --locked && cargo test --lib --locked)
+(cd rust && cargo clippy --lib --tests --locked -- -D warnings)
+(cd rust && cargo tarpaulin --lib --locked --skip-clean \
+            --out Lcov --output-dir coverage)
+
+# Any rust/Cargo.toml or rust/Cargo.lock change
+(cd rust && cargo audit)
 ```
+
+`DEVELOPMENT.md` is authoritative. Run these verbatim — dropping
+`--locked`, widening the clippy scope, or skipping the coverage gate
+means the local run diverges from CI.
 
 Lint suppressions (`#[allow(...)]`) need a comment explaining why; see
 the lint-suppression policy in `DEVELOPMENT.md`.

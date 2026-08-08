@@ -33,13 +33,17 @@ Check on any PR touching `rust/src/api/`:
   `lib/src/ffi/` or in `rust/src/frb_generated.rs` means the bindings
   are stale. The CI check is authoritative — read it via MCP rather
   than inferring.
-- **Both sides regenerated.** The Dart and Rust artefacts are produced
-  together. One updated without the other means codegen was run
-  partially or the diff was hand-assembled.
+- **Both sides regenerated.** The Dart and Rust artefacts are usually
+  produced together, so one updated without the other is worth
+  checking — but it is not proof of a partial run. A codegen version or
+  configuration change, or a change to the script's patch passes, can
+  legitimately move one artefact only.
 - **Generated files not hand-edited.** A diff in `lib/src/ffi/` or
-  `rust/src/frb_generated.rs` that does not correspond to a
-  `rust/src/api/` change is a hand-edit and will be overwritten by the
-  next codegen run. Critical/Bug.
+  `rust/src/frb_generated.rs` with no `rust/src/api/` change is a
+  candidate hand-edit, not a confirmed one. The authoritative test is
+  whether regeneration reproduces the diff, which is what the CI check
+  answers. Report Critical/Bug when that check fails; when it passes,
+  a one-sided diff is explained and not a finding.
 - **ABI mismatch stays mapped.** Decode failures crossing the boundary
   surface as `NtsErrorAbiMismatch`, not as a bare Dart `Error`. A new
   FFI call path that does not route decode failures into that variant
@@ -143,7 +147,7 @@ and an operator should see it rather than read it as a transient blip.
 
 `AGENTS.md` holds the full policy. The classes of bytes treated as
 secret: AEAD key material (`rust/src/nts/aead.rs`), NTS cookies
-(`cookies.rs`, `ntp.rs`, `lib/src/api/nts.rs`), TLS exporter output
+(`cookies.rs`, `ntp.rs`, `rust/src/api/nts.rs`), TLS exporter output
 (`ke.rs`), and user-supplied root certificate bytes.
 
 Check on any diff touching those files:

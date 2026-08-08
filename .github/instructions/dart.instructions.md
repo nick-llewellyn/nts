@@ -11,8 +11,13 @@ Full checks in
 ## Generated bindings
 
 `lib/src/ffi/` is generated from `rust/src/api/`. Never hand-edit it — a
-diff there that does not correspond to a Rust-side change will be
-overwritten by the next codegen run. Report it as Critical/Bug.
+hand-edit is overwritten by the next codegen run. A diff there with no
+Rust-side change is a candidate hand-edit but not proof of one: a
+codegen version or configuration change, or a change to the script's
+Dart-side patch passes, produces the same shape. The authoritative test
+is whether regeneration reproduces the diff, which the "Verify FRB
+bindings are in sync" CI check answers. Report Critical/Bug when that
+check fails.
 
 Regeneration is `dart run tool/check_bindings.dart`, never bare
 `flutter_rust_bridge_codegen`; the script applies patches that give the

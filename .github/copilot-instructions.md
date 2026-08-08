@@ -99,13 +99,20 @@ Run from the repository root unless noted:
 
 ```bash
 dart format --output=none --set-exit-if-changed .
-dart analyze
+dart analyze .
+flutter test --coverage
 dart run tool/check_doc_snippets.dart
 
-(cd example && flutter test)         # example app suite
-(cd rust && cargo fmt --check && cargo clippy --all-targets -- -D warnings)
-(cd rust && cargo test)
+(cd example && flutter pub get && flutter analyze)
+
+(cd rust && cargo build --locked && cargo test --lib --locked)
+(cd rust && cargo clippy --lib --tests --locked -- -D warnings)
+(cd rust && cargo tarpaulin --lib --locked --skip-clean \
+            --out Lcov --output-dir coverage)
 ```
 
-`DEVELOPMENT.md` is authoritative for the full gate list and the
-branch-protection table.
+`DEVELOPMENT.md` is authoritative for the full gate list — including the
+FRB drift gate, `cargo audit`, and the hooks checks — and for the
+branch-protection table. Reproduce its commands verbatim rather than
+substituting equivalents; `--locked` and the `--lib --tests` clippy
+scope are what CI runs.
