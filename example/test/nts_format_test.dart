@@ -8,6 +8,16 @@ import 'package:nts/nts.dart'
     show
         NtsDnsPoolStats,
         NtsError,
+        NtsErrorAbiMismatch,
+        NtsErrorAuthentication,
+        NtsErrorInternal,
+        NtsErrorInvalidSpec,
+        NtsErrorKeProtocol,
+        NtsErrorNetwork,
+        NtsErrorNoCookies,
+        NtsErrorNtpProtocol,
+        NtsErrorTimeout,
+        NtsErrorTrustBackendUnavailable,
         NtsRustLib,
         NtsSyncedTime,
         NtsTimeSample,
@@ -180,16 +190,10 @@ void main() {
 
     test('error_type does not collide with any NtsError tag', () {
       final tags = <String>{
-        errorTypeName(const NtsError.invalidSpec(message: 'x')),
-        errorTypeName(const NtsError.network(message: 'x')),
-        errorTypeName(const NtsError.keProtocol(message: 'x')),
-        errorTypeName(const NtsError.ntpProtocol(message: 'x')),
-        errorTypeName(const NtsError.authentication(message: 'x')),
-        errorTypeName(const NtsError.timeout(phase: TimeoutPhase.ntp)),
-        errorTypeName(const NtsError.noCookies()),
-        errorTypeName(const NtsError.trustBackendUnavailable(message: 'x')),
-        errorTypeName(const NtsError.internal(message: 'x')),
-        errorTypeName(const NtsError.abiMismatch(message: 'x')),
+        for (final err in _allNtsErrors) errorTypeName(err),
+        // Not a sealed-type variant: the CLI's own synthetic tag for a
+        // throwable that is not an NtsError (`_Ctx.unhandled` in
+        // bin/nts_cli.dart), so it has no switch arm to derive from.
         'Unhandled',
       };
       final tag =
@@ -348,8 +352,8 @@ void main() {
   });
 
   group('NtsError severity + description', () {
-    test('authentication / KE / NTP / trust-backend / internal errors are '
-        'error-severity', () {
+    test('authentication / KE / NTP / trust-backend / internal / ABI errors '
+        'are error-severity', () {
       expect(
         isErrorSeverity(const NtsError.authentication(message: 'x')),
         isTrue,
@@ -366,6 +370,7 @@ void main() {
         isTrue,
       );
       expect(isErrorSeverity(const NtsError.internal(message: 'x')), isTrue);
+      expect(isErrorSeverity(const NtsError.abiMismatch(message: 'x')), isTrue);
     });
 
     test('network / timeout / spec / no-cookies errors are warn-severity', () {
@@ -403,6 +408,12 @@ void main() {
         'TrustBackendUnavailable: platform CA bundle missing',
       );
     });
+
+    test('describe leads with the variant tag for every NtsError shape', () {
+      for (final err in _allNtsErrors) {
+        expect(describeError(err), startsWith(errorTypeName(err)));
+      }
+    });
   });
 
   group('errorTypeName', () {
@@ -434,6 +445,17 @@ void main() {
         'TrustBackendUnavailable',
       );
       expect(errorTypeName(const NtsError.internal(message: 'x')), 'Internal');
+      expect(
+        errorTypeName(const NtsError.abiMismatch(message: 'x')),
+        'AbiMismatch',
+      );
+    });
+
+    test('assigns a distinct tag to every NtsError variant', () {
+      expect(
+        _allNtsErrors.map(errorTypeName).toSet(),
+        hasLength(_allNtsErrors.length),
+      );
     });
   });
 
@@ -707,6 +729,12 @@ void main() {
       expect(jsonDecode(jsonEncode(payload)), payload);
     });
   });
+
+  group('_allNtsErrors', () {
+    test('covers every NtsError variant exactly once', () {
+      expect(_allNtsErrors.map(_variantKind), _NtsErrorKind.values);
+    });
+  });
 }
 
 NtsDnsPoolStats _poolStats({
@@ -729,3 +757,60 @@ PhaseTimings _zeroPhaseTimings() => const PhaseTimings(
   tlsHandshakeMicros: 0,
   keRecordIoMicros: 0,
 );
+
+/// One kind per concrete `NtsError` subclass.
+///
+/// Exists so [_variantKind]'s switch can be exhaustive over the sealed
+/// type while [_allNtsErrors]' completeness stays checkable at runtime:
+/// the enum is the pivot both halves are compared against.
+enum _NtsErrorKind {
+  invalidSpec,
+  network,
+  keProtocol,
+  ntpProtocol,
+  authentication,
+  timeout,
+  noCookies,
+  trustBackendUnavailable,
+  internal,
+  abiMismatch,
+}
+
+/// Kind of [err]'s variant.
+///
+/// Exhaustive over the sealed `NtsError` type with no default or
+/// wildcard arm, so adding a variant to `lib/src/api/errors.dart` is a
+/// `dart analyze` error here rather than a silently under-checking
+/// test.
+_NtsErrorKind _variantKind(NtsError err) => switch (err) {
+  NtsErrorInvalidSpec() => _NtsErrorKind.invalidSpec,
+  NtsErrorNetwork() => _NtsErrorKind.network,
+  NtsErrorKeProtocol() => _NtsErrorKind.keProtocol,
+  NtsErrorNtpProtocol() => _NtsErrorKind.ntpProtocol,
+  NtsErrorAuthentication() => _NtsErrorKind.authentication,
+  NtsErrorTimeout() => _NtsErrorKind.timeout,
+  NtsErrorNoCookies() => _NtsErrorKind.noCookies,
+  NtsErrorTrustBackendUnavailable() => _NtsErrorKind.trustBackendUnavailable,
+  NtsErrorInternal() => _NtsErrorKind.internal,
+  NtsErrorAbiMismatch() => _NtsErrorKind.abiMismatch,
+};
+
+/// One sample instance of every `NtsError` variant, for tests that
+/// assert a property over the whole sealed hierarchy.
+///
+/// Dart has no reflection over sealed subtypes, so the instances are
+/// constructed by hand. Two guards keep the list honest: [_variantKind]
+/// fails analysis when a variant is added to the sealed type, and the
+/// `_allNtsErrors` group below fails when a kind has no sample here.
+const _allNtsErrors = <NtsError>[
+  NtsError.invalidSpec(message: 'x'),
+  NtsError.network(message: 'x'),
+  NtsError.keProtocol(message: 'x'),
+  NtsError.ntpProtocol(message: 'x'),
+  NtsError.authentication(message: 'x'),
+  NtsError.timeout(phase: TimeoutPhase.ntp),
+  NtsError.noCookies(),
+  NtsError.trustBackendUnavailable(message: 'x'),
+  NtsError.internal(message: 'x'),
+  NtsError.abiMismatch(message: 'x'),
+];
