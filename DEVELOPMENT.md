@@ -814,28 +814,86 @@ Two behaviours worth knowing:
   picked up for review tasks.
 
 The settings-side half is **not** a tracked file. MCP servers are
-configured per repository under **Settings → Copilot → Coding agent →
-MCP configuration**, as a JSON object.
+configured per repository under **Settings → Copilot → MCP servers**,
+as a JSON object. The configuration is shared by Copilot code review
+and Copilot cloud agent — there is no review-only server list.
 
 Two requirements, stated as requirements rather than as observed
 defaults, since GitHub's defaults are outside this repository's control
 and may change:
 
-1. **The GitHub MCP server must be enabled.** It is the only server the
-   review protocol depends on — for CI check results and prior PR
-   history. No custom MCP server is required, and nothing here needs
-   Playwright. Note that it cannot read Linear, so the reviewer checks
-   acceptance criteria only where the PR itself restates them; the
-   `NTS-` ticket is out of reach.
+1. **The GitHub MCP server must be enabled.** It is the server the
+   review protocol depends on for CI check results and prior PR
+   history. Nothing here needs Playwright.
 2. **"Allow Copilot to use MCP tools when reviewing pull requests"
-   must stay enabled**, in the same settings section. Disabling it
-   restricts MCP to the cloud agent, which would make the
+   must stay enabled**, under **Settings → Copilot → Code review**.
+   Disabling it restricts MCP to the cloud agent, which would make the
    MCP-dependent checks in `SKILL.md` silently unavailable — the
    reviewer reports them as not-performed under `## Review Status`
    rather than failing loudly, so the loss is easy to miss.
 
 At the time of writing both are GitHub defaults, so a fresh repository
 typically needs no action. Verify rather than assume.
+
+#### Optional: grounding the reviewer in Linear
+
+The GitHub MCP server cannot read Linear, so by default the reviewer
+checks acceptance criteria only where the PR itself restates them and
+the `NTS-` ticket is out of reach. That is what
+`.github/skills/code-review/SKILL.md` currently instructs.
+
+Linear can be reached by adding its MCP server to the same JSON
+object. Copilot does not support remote MCP servers that authenticate
+via OAuth, which is Linear's default, so the connection has to go
+through the `mcp-remote` stdio bridge with a bearer token:
+
+```jsonc
+{
+  "mcpServers": {
+    "linear": {
+      "type": "local",
+      "command": "npx",
+      "args": [
+        "mcp-remote@0.1.32",
+        "https://mcp.linear.app/mcp",
+        "--header",
+        "Authorization: Bearer $LINEAR_API_KEY"
+      ],
+      "env": { "LINEAR_API_KEY": "$COPILOT_MCP_LINEAR_API_KEY" },
+      "tools": ["get_issue", "list_issues", "list_comments"]
+    }
+  }
+}
+```
+
+Three things this needs beyond the JSON:
+
+- **An Agents secret** named `COPILOT_MCP_LINEAR_API_KEY` (the
+  `COPILOT_MCP_` prefix is mandatory; the remainder is what `env`
+  refers to). Use a **new, read-only** Linear API key, not the
+  read-write `LINEAR_API_KEY` that `bd linear sync` uses. Copilot
+  invokes configured tools autonomously without asking for approval,
+  so a read-only key is what bounds the damage from a prompt-injected
+  review.
+- **Firewall allowlisting** for `mcp.linear.app` and the npm registry,
+  or the bridge cannot start. Code review has its own firewall
+  configuration, separate from the cloud agent's.
+- **An enumerated `tools` list.** Unlike VS Code, the repository
+  configuration requires the key. `["*"]` grants the reviewer Linear's
+  write tools as well, which the autonomy note above makes the wrong
+  default.
+
+Two costs to weigh before enabling it. `mcp-remote` is a third-party
+npm shim fetched at review time into a session holding a Linear token,
+which is a supply-chain surface on every review — pin the version, as
+above, rather than tracking `@latest`. And the sync between the two
+halves is manual: enabling the server does not update `SKILL.md`, so
+the reviewer keeps treating Linear as unreachable until that file is
+changed to match.
+
+This is unrelated to the "Integrate cloud agent with Linear" feature in
+GitHub's documentation, which delegates Linear issues *to* Copilot
+rather than grounding a review in them.
 
 To confirm which skill or MCP server a given review actually used,
 check the attribution line at the bottom of each review comment, or
