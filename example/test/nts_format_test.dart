@@ -189,20 +189,24 @@ void main() {
     });
 
     test('error_type does not collide with any NtsError tag', () {
-      final tags = <String>{
-        for (final err in _allNtsErrors) errorTypeName(err),
-        // Not a sealed-type variant: the CLI's own synthetic tag for a
-        // throwable that is not an NtsError (`_Ctx.unhandled` in
-        // bin/nts_cli.dart), so it has no switch arm to derive from.
-        'Unhandled',
-      };
+      final variantTags = {for (final err in _allNtsErrors) errorTypeName(err)};
+      // Not a sealed-type variant: the CLI's own synthetic tag for a
+      // throwable that is not an NtsError (`_Ctx.unhandled` in
+      // bin/nts_cli.dart), so it has no switch arm to derive from.
+      const syntheticTags = {'Unhandled'};
+      // Kept in a separate set deliberately. Folding the synthetic tag
+      // in with the variant tags would let a variant that returned
+      // 'Unhandled' deduplicate silently, so the collision this test is
+      // named for would pass unnoticed.
+      expect(variantTags.intersection(syntheticTags), isEmpty);
       final tag =
           jsonTrustMismatch(
                 TrustBackend.custom,
                 TrustBackend.platform,
               )['error_type']
               as String;
-      expect(tags, isNot(contains(tag)));
+      expect(variantTags, isNot(contains(tag)));
+      expect(syntheticTags, isNot(contains(tag)));
     });
 
     test('is JSON-encodable for every backend pair', () {
@@ -352,38 +356,14 @@ void main() {
   });
 
   group('NtsError severity + description', () {
-    test('authentication / KE / NTP / trust-backend / internal / ABI errors '
-        'are error-severity', () {
-      expect(
-        isErrorSeverity(const NtsError.authentication(message: 'x')),
-        isTrue,
-      );
-      expect(isErrorSeverity(const NtsError.keProtocol(message: 'x')), isTrue);
-      expect(isErrorSeverity(const NtsError.ntpProtocol(message: 'x')), isTrue);
-      // TrustBackendUnavailable is a deliberate caller-side
-      // configuration choice (`PlatformOnly`) the runtime cannot
-      // honour; classified as error so an operator notices the
-      // misconfiguration rather than treating it as a transient
-      // network blip.
-      expect(
-        isErrorSeverity(const NtsError.trustBackendUnavailable(message: 'x')),
-        isTrue,
-      );
-      expect(isErrorSeverity(const NtsError.internal(message: 'x')), isTrue);
-      expect(isErrorSeverity(const NtsError.abiMismatch(message: 'x')), isTrue);
-    });
-
-    test('network / timeout / spec / no-cookies errors are warn-severity', () {
-      expect(isErrorSeverity(const NtsError.network(message: 'x')), isFalse);
-      expect(
-        isErrorSeverity(const NtsError.timeout(phase: TimeoutPhase.ntp)),
-        isFalse,
-      );
-      expect(
-        isErrorSeverity(const NtsError.invalidSpec(message: 'x')),
-        isFalse,
-      );
-      expect(isErrorSeverity(const NtsError.noCookies()), isFalse);
+    test('classifies severity for every NtsError shape', () {
+      for (final err in _allNtsErrors) {
+        expect(
+          isErrorSeverity(err),
+          _expectedErrorSeverity(_variantKind(err)),
+          reason: errorTypeName(err),
+        );
+      }
     });
 
     test('describe round-trips the variant payload', () {
@@ -418,37 +398,9 @@ void main() {
 
   group('errorTypeName', () {
     test('returns the stable variant tag for every NtsError shape', () {
-      expect(
-        errorTypeName(const NtsError.invalidSpec(message: 'x')),
-        'InvalidSpec',
-      );
-      expect(errorTypeName(const NtsError.network(message: 'x')), 'Network');
-      expect(
-        errorTypeName(const NtsError.keProtocol(message: 'x')),
-        'KeProtocol',
-      );
-      expect(
-        errorTypeName(const NtsError.ntpProtocol(message: 'x')),
-        'NtpProtocol',
-      );
-      expect(
-        errorTypeName(const NtsError.authentication(message: 'x')),
-        'Authentication',
-      );
-      expect(
-        errorTypeName(const NtsError.timeout(phase: TimeoutPhase.ntp)),
-        'Timeout',
-      );
-      expect(errorTypeName(const NtsError.noCookies()), 'NoCookies');
-      expect(
-        errorTypeName(const NtsError.trustBackendUnavailable(message: 'x')),
-        'TrustBackendUnavailable',
-      );
-      expect(errorTypeName(const NtsError.internal(message: 'x')), 'Internal');
-      expect(
-        errorTypeName(const NtsError.abiMismatch(message: 'x')),
-        'AbiMismatch',
-      );
+      for (final err in _allNtsErrors) {
+        expect(errorTypeName(err), _expectedTag(_variantKind(err)));
+      }
     });
 
     test('assigns a distinct tag to every NtsError variant', () {
@@ -467,17 +419,8 @@ void main() {
     });
 
     test('returns null for every non-Timeout shape', () {
-      for (final err in <NtsError>[
-        const NtsError.network(message: 'x'),
-        const NtsError.noCookies(),
-        const NtsError.invalidSpec(message: 'x'),
-        const NtsError.authentication(message: 'x'),
-        const NtsError.keProtocol(message: 'x'),
-        const NtsError.ntpProtocol(message: 'x'),
-        const NtsError.trustBackendUnavailable(message: 'x'),
-        const NtsError.internal(message: 'x'),
-      ]) {
-        expect(timeoutPhaseName(err), isNull);
+      for (final err in _nonTimeoutErrors) {
+        expect(timeoutPhaseName(err), isNull, reason: errorTypeName(err));
       }
     });
   });
@@ -628,16 +571,12 @@ void main() {
       // `phase: null` (or a stale phase from a previous error) on a
       // non-Timeout shape. Strict containsPair / isNot ensures the
       // key is *absent*, not just falsy.
-      for (final err in <NtsError>[
-        const NtsError.network(message: 'x'),
-        const NtsError.noCookies(),
-        const NtsError.invalidSpec(message: 'x'),
-        const NtsError.authentication(message: 'x'),
-        const NtsError.keProtocol(message: 'x'),
-        const NtsError.ntpProtocol(message: 'x'),
-        const NtsError.internal(message: 'x'),
-      ]) {
-        expect(jsonError(err), isNot(contains('phase')));
+      for (final err in _nonTimeoutErrors) {
+        expect(
+          jsonError(err),
+          isNot(contains('phase')),
+          reason: errorTypeName(err),
+        );
       }
     });
 
@@ -801,7 +740,7 @@ _NtsErrorKind _variantKind(NtsError err) => switch (err) {
 /// Dart has no reflection over sealed subtypes, so the instances are
 /// constructed by hand. Two guards keep the list honest: [_variantKind]
 /// fails analysis when a variant is added to the sealed type, and the
-/// `_allNtsErrors` group below fails when a kind has no sample here.
+/// `_allNtsErrors` group above fails when a kind has no sample here.
 const _allNtsErrors = <NtsError>[
   NtsError.invalidSpec(message: 'x'),
   NtsError.network(message: 'x'),
@@ -814,3 +753,56 @@ const _allNtsErrors = <NtsError>[
   NtsError.internal(message: 'x'),
   NtsError.abiMismatch(message: 'x'),
 ];
+
+/// Every [_allNtsErrors] sample except the `Timeout` variant.
+///
+/// Derived rather than hand-listed so the "no phase key" assertions
+/// pick up new variants automatically; both call sites had already
+/// drifted from the hierarchy when they were literal lists.
+final _nonTimeoutErrors = _allNtsErrors
+    .where((err) => _variantKind(err) != _NtsErrorKind.timeout)
+    .toList();
+
+/// Public tag [errorTypeName] must emit for [kind].
+///
+/// Exhaustive over [_NtsErrorKind] with no default arm, so a new
+/// variant cannot reach the CLI without someone pinning the tag its
+/// JSON output will carry. The tags are a public contract: consumers
+/// match on them, so a rename is a breaking change and is meant to
+/// require an edit here.
+String _expectedTag(_NtsErrorKind kind) => switch (kind) {
+  _NtsErrorKind.invalidSpec => 'InvalidSpec',
+  _NtsErrorKind.network => 'Network',
+  _NtsErrorKind.keProtocol => 'KeProtocol',
+  _NtsErrorKind.ntpProtocol => 'NtpProtocol',
+  _NtsErrorKind.authentication => 'Authentication',
+  _NtsErrorKind.timeout => 'Timeout',
+  _NtsErrorKind.noCookies => 'NoCookies',
+  _NtsErrorKind.trustBackendUnavailable => 'TrustBackendUnavailable',
+  _NtsErrorKind.internal => 'Internal',
+  _NtsErrorKind.abiMismatch => 'AbiMismatch',
+};
+
+/// Whether [kind] is error-severity rather than warn-severity.
+///
+/// Exhaustive over [_NtsErrorKind] with no default arm, so a new
+/// variant forces an explicit severity decision instead of inheriting
+/// whatever `isErrorSeverity` happens to fall through to.
+bool _expectedErrorSeverity(_NtsErrorKind kind) => switch (kind) {
+  // Transient or caller-input conditions: a retry or a corrected
+  // argument can resolve them without operator involvement.
+  _NtsErrorKind.network ||
+  _NtsErrorKind.timeout ||
+  _NtsErrorKind.invalidSpec ||
+  _NtsErrorKind.noCookies => false,
+  // TrustBackendUnavailable is a deliberate caller-side configuration
+  // choice (`PlatformOnly`) the runtime cannot honour; classified as
+  // error so an operator notices the misconfiguration rather than
+  // treating it as a transient network blip.
+  _NtsErrorKind.authentication ||
+  _NtsErrorKind.keProtocol ||
+  _NtsErrorKind.ntpProtocol ||
+  _NtsErrorKind.trustBackendUnavailable ||
+  _NtsErrorKind.internal ||
+  _NtsErrorKind.abiMismatch => true,
+};
