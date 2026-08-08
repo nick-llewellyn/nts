@@ -760,7 +760,7 @@ dart analyze .
 flutter test --coverage
 
 # Example app (any Dart change touching the public surface)
-(cd example && flutter pub get && flutter analyze)
+(cd example && flutter pub get && flutter analyze && flutter test)
 
 # Rust side (any rust/** change)
 (cd rust && cargo build --locked && cargo test --lib --locked)
