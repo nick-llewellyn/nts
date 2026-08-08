@@ -788,6 +788,56 @@ The PR template (`.github/pull_request_template.md`) carries the
 canonical checklist; tick the boxes you actually ran rather than
 the full set.
 
+### Copilot code review configuration
+
+Copilot code review is configured from tracked files plus one
+settings-side toggle. The tracked half:
+
+| Path | Role |
+|---|---|
+| `.github/copilot-instructions.md` | Repository-wide review guidance. Applies to every review. |
+| `.github/skills/code-review/SKILL.md` | The review protocol: reporting threshold, procedure, MCP usage. |
+| `.github/skills/code-review/architecture.md` | Architecture-specific checks — FFI boundary, sealed `NtsError`, `TrustMode` fallback paths, zeroization, versioning. |
+| `.github/skills/code-review/output-format.md` | The mandatory summary-comment format. |
+| `.github/instructions/dart.instructions.md` | Applies to `**/*.dart`. |
+| `.github/instructions/rust.instructions.md` | Applies to `rust/**/*.rs`. |
+
+Two behaviours worth knowing:
+
+- **Copilot reads these from the PR head branch, not the base
+  branch.** A change to the review configuration is testable in the
+  same PR that introduces it — request a review from `@copilot` on
+  that PR and the new instructions apply immediately.
+- **The skill directory name matters.** Copilot code review is more
+  likely to load a skill whose directory has a review-focused name.
+  Keep it `code-review`; renaming it makes the skill less likely to be
+  picked up for review tasks.
+
+The settings-side half is **not** a tracked file. MCP servers are
+configured per repository under **Settings → Copilot → Coding agent →
+MCP configuration**, as a JSON object. The GitHub MCP server and the
+Playwright MCP server are enabled by default, and the GitHub server is
+the only one this repository's review protocol depends on — for CI
+check results, linked `NTS-` issues, and prior PR history. No custom
+MCP server is required.
+
+One toggle to leave alone: **Allow Copilot to use MCP tools when
+reviewing pull requests**, in the same settings section, is enabled by
+default. Disabling it restricts MCP to the cloud agent and would make
+the MCP-dependent checks in `SKILL.md` silently unavailable — the
+reviewer would report them as not-performed under **Review Status**
+rather than failing loudly.
+
+To confirm which skill or MCP server a given review actually used,
+check the attribution line at the bottom of each review comment, or
+open the review session from the PR timeline and read the session logs.
+
+Requesting a review:
+
+```bash
+gh pr edit <number> --add-reviewer @copilot
+```
+
 ## Lint suppression policy
 
 The Rust crate runs the curated `[lints.clippy]` set declared in
