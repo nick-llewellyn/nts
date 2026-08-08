@@ -78,12 +78,14 @@ report. The check that matters is the one the analyzer cannot make:
   variants, tags, or severities written out by hand can drift. It
   already did once — the tag-collision test in
   `example/test/nts_format_test.dart` omitted `AbiMismatch`.
-  `_allNtsErrors` in that file is now guarded two ways: `_variantKind`
-  is an exhaustive switch with no wildcard arm, so a new variant fails
-  analysis, and a runtime test asserts the samples map onto
-  `_NtsErrorKind.values` so an arm added without a sample fails too. A
-  new hand-maintained list without an equivalent guard is a Test
-  Coverage finding.
+  The guard pattern for `_allNtsErrors` in that file is two-sided:
+  `_variantKind` is an exhaustive switch with no wildcard arm, so a new
+  variant fails analysis, and a runtime test asserts the samples map
+  onto `_NtsErrorKind.values` so an arm added without a sample fails
+  too. That pattern arrives with PR #293 and is not in the tree until
+  it merges, so treat it as the shape to follow rather than as
+  something already present. A new hand-maintained list without an
+  equivalent guard is a Test Coverage finding.
 - **Wildcard arms.** A `_ =>` or `default:` in a switch over `NtsError`
   defeats the compile-time gate. It is occasionally correct; flag it
   and ask, rather than assuming either way.

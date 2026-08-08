@@ -865,6 +865,7 @@ has to go through the `mcp-remote` stdio bridge with a bearer token:
       "type": "local",
       "command": "npx",
       "args": [
+        "-y",
         "mcp-remote@0.1.38",
         "https://mcp.linear.app/mcp",
         "--header",
@@ -876,6 +877,11 @@ has to go through the `mcp-remote` stdio bridge with a bearer token:
   }
 }
 ```
+
+The `-y` is not decoration. `mcp-remote` is not preinstalled on the
+review runner, and `npx` prompts before fetching a package it does not
+have. MCP startup is non-interactive, so without it the server can hang
+at that prompt and never come up.
 
 Two things this needs beyond the JSON:
 

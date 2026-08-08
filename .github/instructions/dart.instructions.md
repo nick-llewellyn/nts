@@ -44,11 +44,14 @@ variants: `InvalidSpec`, `Network`, `KeProtocol`, `NtpProtocol`,
   tags, or severities written out by hand can drift from the type it
   mirrors, and the analyzer cannot see it. It has already happened
   once: the tag-collision test omitted `AbiMismatch`.
-  `_allNtsErrors` in `example/test/nts_format_test.dart` is the pattern
-  to follow — an exhaustive `_variantKind` switch with no wildcard for
-  the analysis-time half, plus a runtime test asserting the samples map
-  onto `_NtsErrorKind.values` for the other half. A new hand-maintained
-  list without an equivalent guard is a Test Coverage finding.
+  The pattern to follow is the `_allNtsErrors` guard for
+  `example/test/nts_format_test.dart` — an exhaustive `_variantKind`
+  switch with no wildcard for the analysis-time half, plus a runtime
+  test asserting the samples map onto `_NtsErrorKind.values` for the
+  other half. It arrives with PR #293 and is not in the tree until that
+  merges, so cite it as the shape to follow, not as existing code. A
+  new hand-maintained list without an equivalent guard is a Test
+  Coverage finding.
 - **`errorTypeName` tags stay unique.** The namespace also holds
   `TrustBackendMismatch` and the CLI's synthetic `Unhandled` tag, which
   is not a sealed variant. A collision breaks log parsing silently.
