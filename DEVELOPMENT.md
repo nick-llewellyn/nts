@@ -815,18 +815,25 @@ Two behaviours worth knowing:
 
 The settings-side half is **not** a tracked file. MCP servers are
 configured per repository under **Settings → Copilot → Coding agent →
-MCP configuration**, as a JSON object. The GitHub MCP server and the
-Playwright MCP server are enabled by default, and the GitHub server is
-the only one this repository's review protocol depends on — for CI
-check results, linked `NTS-` issues, and prior PR history. No custom
-MCP server is required.
+MCP configuration**, as a JSON object.
 
-One toggle to leave alone: **Allow Copilot to use MCP tools when
-reviewing pull requests**, in the same settings section, is enabled by
-default. Disabling it restricts MCP to the cloud agent and would make
-the MCP-dependent checks in `SKILL.md` silently unavailable — the
-reviewer would report them as not-performed under **Review Status**
-rather than failing loudly.
+Two requirements, stated as requirements rather than as observed
+defaults, since GitHub's defaults are outside this repository's control
+and may change:
+
+1. **The GitHub MCP server must be enabled.** It is the only server the
+   review protocol depends on — for CI check results, linked `NTS-`
+   issues, and prior PR history. No custom MCP server is required, and
+   nothing here needs Playwright.
+2. **"Allow Copilot to use MCP tools when reviewing pull requests"
+   must stay enabled**, in the same settings section. Disabling it
+   restricts MCP to the cloud agent, which would make the
+   MCP-dependent checks in `SKILL.md` silently unavailable — the
+   reviewer reports them as not-performed under `## Review Status`
+   rather than failing loudly, so the loss is easy to miss.
+
+At the time of writing both are GitHub defaults, so a fresh repository
+typically needs no action. Verify rather than assume.
 
 To confirm which skill or MCP server a given review actually used,
 check the attribution line at the bottom of each review comment, or

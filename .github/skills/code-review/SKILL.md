@@ -86,8 +86,9 @@ thorough are different things.
 
 ## Using MCP context
 
-The GitHub MCP server is enabled for this repository. Use it during
-review when it will settle a question the diff alone cannot:
+The GitHub MCP server is expected to be available for this repository
+(see "Copilot code review configuration" in `DEVELOPMENT.md`). When it
+is, use it during review to settle a question the diff alone cannot:
 
 - **CI status.** When a PR touches `rust/src/api/*.rs`, the "Verify
   FRB bindings are in sync" check is the authoritative answer to

@@ -10,12 +10,15 @@ tarball.
 
 ### Added
 
-- Copilot code review is now configured from the repository. A
-  `code-review` agent skill (`.github/skills/code-review/`) carries the
-  review protocol, the architecture-specific checks, and a mandatory
-  summary-comment format; `.github/copilot-instructions.md` holds the
-  repository-wide guidance, and `.github/instructions/` adds
-  path-specific guidance for `**/*.dart` and `rust/**/*.rs`.
+- Copilot code review now follows a review protocol tracked in the
+  repository. A `code-review` agent skill
+  (`.github/skills/code-review/`) carries the protocol, the
+  architecture-specific checks, and a mandatory summary-comment
+  format; `.github/copilot-instructions.md` holds the repository-wide
+  guidance, and `.github/instructions/` adds path-specific guidance for
+  `**/*.dart` and `rust/**/*.rs`. MCP server availability is a
+  repository-settings concern rather than a tracked file, and is
+  documented in `DEVELOPMENT.md`.
 
   The checks are grounded in the surfaces where this repository's
   defects actually appear: generated-binding drift across the FRB
