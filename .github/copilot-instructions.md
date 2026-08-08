@@ -49,9 +49,10 @@ which drops the script's diagnostic-message patches — and let the
 ### Versioning
 
 Release-only bumping. Do not change `version:` in `pubspec.yaml` or
-`version` in `rust/Cargo.toml` in a feature, fix, or refactor PR —
-bumps land in a dedicated release commit. The Dart package and the
-Rust crate version independently.
+`version` in `rust/Cargo.toml` in any non-release PR — `chore`, `test`,
+and `docs` included, not only `feat`, `fix`, and `refactor`. Bumps land
+in a dedicated release commit. The Dart package and the Rust crate
+version independently.
 
 CHANGELOG entries go under the next intended release header (e.g.
 `## 9.1`), never under `## Unreleased`.

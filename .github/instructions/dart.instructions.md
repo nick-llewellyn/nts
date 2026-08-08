@@ -44,12 +44,12 @@ variants: `InvalidSpec`, `Network`, `KeProtocol`, `NtpProtocol`,
   tags, or severities written out by hand can drift from the type it
   mirrors, and the analyzer cannot see it. It has already happened
   once: the tag-collision test omitted `AbiMismatch`.
-  The pattern to follow, in `example/test/nts_format_test.dart` and
-  anywhere else such a list appears, is two-sided — an exhaustive
-  switch over the sealed type with no wildcard for the analysis-time
-  half, plus a runtime test asserting the samples cover every arm for
-  the other half. Check whether the file has it rather than assuming.
-  A hand-maintained list without an equivalent guard is a Test
+  The pattern to require, wherever such a list appears, is two-sided —
+  an exhaustive switch over the sealed type with no wildcard for the
+  analysis-time half, plus a runtime test asserting the samples cover
+  every arm for the other half. Read the file under review to see
+  whether it has that guard; do not assume any named file already
+  does. A hand-maintained list without an equivalent guard is a Test
   Coverage finding.
 - **`errorTypeName` tags stay unique.** The namespace also holds
   `TrustBackendMismatch` and the CLI's synthetic `Unhandled` tag, which

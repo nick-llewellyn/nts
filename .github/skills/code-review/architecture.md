@@ -180,11 +180,12 @@ Apply to every PR.
 
 ### Versioning
 
-Release-only bumping. A feature, fix, or refactor PR must **not** touch
-`version:` in `pubspec.yaml` or `version` in `rust/Cargo.toml`. Bumps
-land in a dedicated release commit. A version bump in a feature PR is a
-Documentation finding unless the description justifies it as a
-dependency-resolution constraint.
+Release-only bumping. Any non-release PR must **not** touch `version:`
+in `pubspec.yaml` or `version` in `rust/Cargo.toml` — that includes
+`chore`, `test`, and `docs` work, not just `feat`, `fix`, and
+`refactor`. Bumps land in a dedicated release commit. A version bump in
+a non-release PR is a Documentation finding unless the description
+justifies it as a dependency-resolution constraint.
 
 The two versions are independent — a Dart-only release leaves the crate
 version alone.
