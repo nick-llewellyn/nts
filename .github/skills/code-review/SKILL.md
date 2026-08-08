@@ -103,8 +103,11 @@ review when it will settle a question the diff alone cannot:
   acceptance criteria against the diff and flag unmet ones.
 
 Do not block a review waiting on MCP context. If a lookup fails or is
-unavailable, complete the review and note which check you could not
-perform under **Needs Clarification** rather than dropping it.
+unavailable, complete the review and name the check you could not
+perform in the `## Review Status` section rather than dropping it. A
+failed lookup does not by itself change the verdict — reach for
+**Needs Clarification** only when the missing information genuinely
+blocks the assessment.
 
 ## What not to comment on
 

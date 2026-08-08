@@ -182,7 +182,7 @@ Prose making a claim about runtime behaviour is verified against the
 implementation, not against the diff. This is where the repo's
 recurring defects appear: the CLI guide's fallback description, and
 `README.md` help text drifting from the actual argument parsing in
-`example/lib/src/cli/nts_cli.dart`.
+`example/bin/nts_cli.dart`.
 
 `dart` code fences in `README.md`, `CHANGELOG.md`, `ARCHITECTURE.md`,
 and `example/example.md` are extracted and analyzed by

@@ -15,14 +15,19 @@ thread.
 
 ### 1. Executive summary
 
-One short paragraph, then a verdict line. The verdict is exactly one
-of the following, rendered in bold:
+One short paragraph, then a verdict line of the form
+`**Verdict: <value>**`, where `<value>` is exactly one of the three
+below:
 
-| Verdict | Use when |
+| Value | Use when |
 |---|---|
-| **Ready to Merge** | No Critical/Bug findings. Any remaining findings are follow-up material and are labelled as such. |
-| **Changes Requested** | At least one Critical/Bug finding, or a Documentation or Test Coverage finding whose action is *Fix required before merge*. |
-| **Needs Clarification** | The diff cannot be assessed without an answer from the author — intent is ambiguous, or a claim could not be verified against the code. Do not use this as a hedge; use it only when a specific question genuinely blocks the assessment, and state the question. |
+| `Ready to Merge` | No Critical/Bug findings. Any remaining findings are follow-up material and are labelled as such. |
+| `Changes Requested` | At least one Critical/Bug finding, or a Documentation or Test Coverage finding whose action is *Fix required before merge*. |
+| `Needs Clarification` | The diff cannot be assessed without an answer from the author — intent is ambiguous, or a claim could not be verified against the code. Do not use this as a hedge; use it only when a specific question genuinely blocks the assessment, and state the question. |
+
+So the line reads `**Verdict: Ready to Merge**`, and no other
+phrasing. Do not add qualifiers to it — any nuance belongs in the
+paragraph above or in the findings, not in the verdict.
 
 The paragraph says what the PR does and what the headline concern is.
 Do not restate the PR description back to the author.
@@ -34,7 +39,7 @@ headings with no findings** — do not emit an empty section.
 
 | Heading | Contents |
 |---|---|
-| **Critical / Bug** | Incorrect behaviour, unsound FFI usage, a secret-handling regression, a broken invariant, an unintended breaking API change. |
+| **Critical/Bug** | Incorrect behaviour, unsound FFI usage, a secret-handling regression, a broken invariant, an unintended breaking API change. |
 | **Documentation** | Docs contradicting code, missing CHANGELOG entry, a stale doc comment, a rustdoc/dartdoc claim not matching the implementation. |
 | **Test Coverage** | Untested branch, a hand-maintained list that can drift from the type it mirrors, a test asserting something weaker than its name implies. |
 | **Optimization** | Performance, clarity, structure. Never blocking. |
