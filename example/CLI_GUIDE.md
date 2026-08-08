@@ -43,6 +43,9 @@ starting points but in no way special.
 | `-p`, `--port <n>`         | TCP port the key-establishment handshake speaks on. Most public NTS servers use the IANA-assigned 4460; only override when an operator publishes a different port.   | 4460    |
 | `-t`, `--timeout <ms>`     | Per-request timeout, in milliseconds. Single global wall-clock budget shared across DNS, NTS-KE, and the AEAD-NTPv4 UDP exchange as one shrinking deadline — worst-case wall time tracks the value, not a multiple.                                                              | 5000    |
 | `--dns-cap <n>`            | Ceiling on the engine's process-wide pool of in-flight DNS lookups. Left alone, the tool sizes it to the number of hosts so a multi-host run never queues on name resolution; setting it below the host count makes the excess lookups fail fast instead of waiting.             | auto    |
+| `--trust-mode <mode>`      | Which root certificates the TLS handshake is allowed to trust: `platform-with-fallback`, `platform-only`, `bundled-only`, or `custom`. See [Trust modes](#trust-modes).                                                                                                          | platform-with-fallback |
+| `--custom-roots <path>`    | A PEM certificate bundle or a single DER-encoded certificate to trust. Required by `--trust-mode=custom`, and rejected with every other mode.                        | —       |
+| `--require-trust-backend <b>` | Assert that each handshake actually authenticated through this backend: `platform`, `platform-with-hybrid-fallback`, `webpki-roots`, or `custom`. A host that used a different one is reported as a failure instead of a success.                                              | —       |
 | `-w`, `--warm`             | Run the cookie-warming pass instead of a time query. Useful before a burst of subsequent calls so they skip the handshake.                                           | off     |
 | `--mock`                   | Skip the real network and run against an in-memory simulator. Handy for trying the tool out, smoke-testing a script, or running where the engine isn't installed.    | off     |
 | `--json`                   | Emit one self-contained JSON object per line (NDJSON) instead of the human-readable log format. Successes go to stdout, failures to stderr, same as text mode.       | off     |
@@ -79,6 +82,64 @@ or returns a bad answer:
 fvm dart run bin/nts_cli.dart --exit-on-error --json \
     nts.netnod.se time.cloudflare.com
 ```
+
+Check that a host authenticates without leaning on the operating
+system's trust store, and fail the run if it silently used something
+else:
+
+```bash
+fvm dart run bin/nts_cli.dart --exit-on-error \
+    --trust-mode bundled-only --require-trust-backend webpki-roots \
+    time.cloudflare.com
+```
+
+## Trust modes
+
+By default the tool asks the operating system's trust store to vouch
+for the server's certificate, and quietly falls back to the engine's
+own bundled root list along either of two paths: when the OS verifier
+cannot be constructed at all, which is decided once at TLS-config
+construction and is independent of the server's certificate, and
+per-chain for a few known-awkward certificate shapes. That is the most
+permissive setting, and it is what every run does when `--trust-mode`
+is omitted. Both paths are silent, which is what makes
+`--require-trust-backend` worth passing: the negotiated backend is the
+only way to tell from the outside which one was taken.
+
+| Mode | Trusts |
+| ---- | ------ |
+| `platform-with-fallback` | The OS trust store, falling back to the bundled roots when the OS verifier cannot be built at all, and per-chain for a narrow set of known shapes. |
+| `platform-only` | The OS trust store, and nothing else. Fails rather than falling back. |
+| `bundled-only` | Only the roots shipped inside the engine. Ignores the OS store entirely, including any corporate CA installed on the machine. |
+| `custom` | Only the certificates in the file you pass to `--custom-roots`. |
+
+Two consequences worth knowing before you reach for the stricter
+modes:
+
+- `bundled-only` and `custom` will fail against a server whose
+  certificate comes from a private or corporate CA, because that CA is
+  by definition not in the set you asked for. The failure arrives as a
+  `KeProtocol` error naming an unknown issuer — the handshake got far
+  enough to check the certificate and rejected it.
+- `platform-only` can fail before any network traffic happens, on a
+  platform where the OS verifier cannot be constructed at all. That
+  case reports `TrustBackendUnavailable`.
+
+`--require-trust-backend` is a separate question: not "what may this
+run trust?" but "what did it actually end up trusting?". It is worth
+pairing with `platform-with-fallback`, which is the one mode that can
+resolve several different ways, so you can detect a silent fallback
+rather than assuming it didn't happen.
+
+Contradictory combinations are allowed on purpose — asking for
+`--trust-mode bundled-only --require-trust-backend platform` is a
+reasonable way to prove to yourself that it cannot succeed, and the
+resulting message says exactly what happened.
+
+Both flags work with `--mock`, so a script can be exercised without
+network access. The simulator honours the mode you select but does not
+read the bytes in `--custom-roots`, so `custom` reports success against
+any non-empty file.
 
 ## Reading the output
 
@@ -171,6 +232,27 @@ Common variants:
   checks. These usually indicate a misconfigured or non-conforming
   server.
 
+### Trust backend mismatch
+
+If `--require-trust-backend` was passed and a host authenticated
+through a different backend, that host reports a mismatch instead of
+its usual success line:
+
+```text
+2026-04-26T11:05:02.091473Z ERROR nts_query [nts.netnod.se]  FAIL  trust backend mismatch: required=platform  actual=webpki-fallback
+```
+
+The handshake itself worked — this is your own assertion failing, not
+the server misbehaving. The host still gets its usual `Starting query`
+line first; what changes is the terminal result, of which there is
+exactly one: the mismatch replaces the success line rather than
+following it, so a per-host count over the terminal results stays
+accurate. The mismatch counts as a failure for `--exit-on-error`.
+
+`actual=` uses the same short labels as the `trust=` field on a success
+line, so `platform-with-hybrid-fallback` appears as `webpki-fallback`
+there. The flag itself takes the longer spelling.
+
 One warning is emitted before any host is contacted and is not about a
 server at all:
 
@@ -213,6 +295,25 @@ envelope:
 human-readable description text mode prints), and `severity` (`warn`
 or `error`).
 
+Two envelope fields are conditional, because they describe the
+invocation rather than any one handshake: `trust_mode` appears only
+when `--trust-mode` was passed, and `required_trust_backend` only when
+`--require-trust-backend` was. A run using neither flag produces
+exactly the records it always has. When present they ride every record
+in the stream, including the trailing `dns_pool_stats` one, so a
+consumer can read the policy off whichever line it happens to hold.
+
+A `--require-trust-backend` mismatch arrives as an `error` event with
+`error_type` set to `TrustBackendMismatch`, alongside the negotiated
+`trust_backend`. The tag sits in the same namespace as the protocol
+error tags and does not collide with any of them, so `jq` can tell a
+policy assertion failure from a server-side one:
+
+```bash
+… --json --require-trust-backend platform 2>&1 \
+  | jq -r 'select(.error_type == "TrustBackendMismatch") | .host'
+```
+
 The trailing DNS pool lines cannot appear as a block here without
 breaking the one-object-per-line rule, so they arrive as a final
 `dns_pool_stats` event carrying the same figures described under
@@ -240,8 +341,8 @@ mode.
 | Code | Meaning                                                                  |
 | ---- | ------------------------------------------------------------------------ |
 | `0`  | The engine started and every host completed (success or fail)            |
-| `1`  | `--exit-on-error` was passed and at least one host produced warn / error |
-| `64` | Argument problem (bad `--port`, `--timeout`, no hosts given)             |
+| `1`  | `--exit-on-error` was passed and at least one host produced warn / error, including a trust-backend mismatch |
+| `64` | Argument problem (bad `--port`, `--timeout`, no hosts given, an unreadable `--custom-roots` file, or a `--trust-mode` / `--custom-roots` pairing that cannot be honoured) |
 | `70` | The engine itself failed to start                                        |
 
 By default, a run where every host produced a `WARN` still exits `0`

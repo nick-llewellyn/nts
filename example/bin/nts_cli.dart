@@ -60,9 +60,12 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:nts/nts.dart'
     show
+        NtsClient,
         NtsDnsPoolStats,
         NtsError,
         NtsServerSpec,
+        TrustBackend,
+        TrustMode,
         kDefaultBridgeConcurrencyCap,
         kDefaultDnsConcurrencyCap,
         ntsDnsPoolStats,
@@ -109,6 +112,32 @@ ArgParser _buildParser() => ArgParser()
         'sized up to the host fan-out so a multi-host run cannot '
         'self-saturate the pool; values below the fan-out can '
         'surface dnsSaturation fast-fails.',
+  )
+  ..addOption(
+    'trust-mode',
+    allowed: kTrustModeFlagValues,
+    help:
+        'TLS trust-anchor policy for every handshake this run '
+        'initiates. Left at platform-with-fallback, whether by '
+        'omission or passed explicitly, the run goes through the '
+        'package\'s process-wide default client; any stricter value '
+        'mints one call-scoped NtsClient for the batch.',
+  )
+  ..addOption(
+    'custom-roots',
+    help:
+        'Path to a PEM certificate bundle or a single DER-encoded '
+        'certificate. Required by --trust-mode=custom, and rejected '
+        'with every other mode.',
+  )
+  ..addOption(
+    'require-trust-backend',
+    allowed: kTrustBackendFlagValues,
+    help:
+        'Assert that each handshake negotiated this backend. A host '
+        'that authenticated under a different one reports '
+        'TrustBackendMismatch instead of success, which counts as a '
+        'failure for --exit-on-error.',
   )
   ..addFlag(
     'warm',
@@ -175,12 +204,64 @@ Future<void> main(List<String> argv) async {
     }
   }
 
+  // `allowed:` on both options means the parser has already rejected
+  // anything outside the two value sets, so the parse helpers cannot
+  // return null here; the `?? ` arms exist only to keep the locals
+  // non-nullable.
+  final trustModeRaw = args['trust-mode'] as String?;
+  final trustMode = trustModeRaw == null
+      ? TrustMode.platformWithFallback
+      : parseTrustMode(trustModeRaw) ?? TrustMode.platformWithFallback;
+  final requiredBackendRaw = args['require-trust-backend'] as String?;
+  final requiredBackend = requiredBackendRaw == null
+      ? null
+      : parseTrustBackend(requiredBackendRaw);
+
+  // Read the roots ahead of client construction so an unreadable path
+  // is an argument error rather than a trust-policy one. No wipe of
+  // this buffer: the package copies the bytes at the FFI boundary and
+  // zeroises its own copy, and the process is short-lived.
+  final customRootsPath = args['custom-roots'] as String?;
+  List<int>? customRoots;
+  if (customRootsPath != null) {
+    try {
+      customRoots = File(customRootsPath).readAsBytesSync();
+    } on FileSystemException catch (e) {
+      stderr.writeln('argument error: --custom-roots: ${e.message}');
+      exit(64);
+    }
+  }
+
   await initBridge(
     useMock: args['mock'] as bool,
     libraryPath: args['library'] as String?,
   );
 
-  final ctx = _Ctx(json: args['json'] as bool);
+  // Default policy keeps routing through the top-level functions and
+  // the process-wide default client they share, so the path every
+  // pre-existing invocation takes gains no client lifecycle and no new
+  // failure surface. Anything else — including a `--custom-roots`
+  // passed against a non-custom mode, which the client constructor
+  // rejects — mints exactly one client for the whole fan-out, which
+  // the package documents as safe to share across concurrent calls.
+  NtsClient? client;
+  if (trustMode != TrustMode.platformWithFallback || customRoots != null) {
+    try {
+      client = NtsClient(trustMode: trustMode, customRoots: customRoots);
+    } on NtsError catch (err) {
+      stderr.writeln('argument error: ${describeError(err)}');
+      exit(64);
+    }
+  }
+
+  final ctx = _Ctx(
+    json: args['json'] as bool,
+    trustFields: {
+      if (trustModeRaw != null) 'trust_mode': trustMode.name,
+      if (requiredBackend != null)
+        'required_trust_backend': requiredBackend.name,
+    },
+  );
 
   // Every positional host is distinct and the loop below fans out one
   // concurrent call per host, so size both shared concurrency
@@ -225,6 +306,8 @@ Future<void> main(List<String> argv) async {
               spec,
               timeout,
               ctx,
+              client: client,
+              requiredBackend: requiredBackend,
               dnsConcurrencyCap: dnsCap,
               bridgeConcurrencyCap: bridgeCap,
             )
@@ -232,12 +315,22 @@ Future<void> main(List<String> argv) async {
               spec,
               timeout,
               ctx,
+              client: client,
+              requiredBackend: requiredBackend,
               dnsConcurrencyCap: dnsCap,
               bridgeConcurrencyCap: bridgeCap,
             ),
     );
   }
-  await Future.wait(pending);
+  try {
+    await Future.wait(pending);
+  } finally {
+    // The per-host helpers swallow their own failures, so the only way
+    // here is a defect in the fan-out itself — but the session table
+    // this client owns holds cookies and derived keys, so release it
+    // on that path too rather than leaving it to process teardown.
+    client?.dispose();
+  }
 
   ctx.poolStats(poolBefore, ntsDnsPoolStats());
 
@@ -246,21 +339,42 @@ Future<void> main(List<String> argv) async {
   }
 }
 
+/// One `ntsQuery` probe. Routes through [client] when the run selected
+/// a non-default trust policy, and through the top-level function
+/// (hence the package's default client) otherwise.
 Future<void> _runQuery(
   NtsServerSpec spec,
   Duration timeout,
   _Ctx ctx, {
+  required NtsClient? client,
+  required TrustBackend? requiredBackend,
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
 }) async {
   ctx.start('nts_query', spec.host, 'Starting query');
   try {
-    final sample = await ntsQuery(
-      spec: spec,
-      timeout: timeout,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-    );
+    final sample = client == null
+        ? await ntsQuery(
+            spec: spec,
+            timeout: timeout,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            bridgeConcurrencyCap: bridgeConcurrencyCap,
+          )
+        : await client.query(
+            spec: spec,
+            timeout: timeout,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            bridgeConcurrencyCap: bridgeConcurrencyCap,
+          );
+    if (requiredBackend != null && sample.trustBackend != requiredBackend) {
+      ctx.trustMismatch(
+        'nts_query',
+        spec.host,
+        requiredBackend,
+        sample.trustBackend,
+      );
+      return;
+    }
     ctx.success(
       'nts_query',
       spec.host,
@@ -274,21 +388,41 @@ Future<void> _runQuery(
   }
 }
 
+/// One `ntsWarmCookies` probe, with the same [client] routing and
+/// [requiredBackend] assertion as [_runQuery].
 Future<void> _runWarm(
   NtsServerSpec spec,
   Duration timeout,
   _Ctx ctx, {
+  required NtsClient? client,
+  required TrustBackend? requiredBackend,
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
 }) async {
   ctx.start('nts_warm_cookies', spec.host, 'Starting warm');
   try {
-    final outcome = await ntsWarmCookies(
-      spec: spec,
-      timeout: timeout,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-    );
+    final outcome = client == null
+        ? await ntsWarmCookies(
+            spec: spec,
+            timeout: timeout,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            bridgeConcurrencyCap: bridgeConcurrencyCap,
+          )
+        : await client.warmCookies(
+            spec: spec,
+            timeout: timeout,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            bridgeConcurrencyCap: bridgeConcurrencyCap,
+          );
+    if (requiredBackend != null && outcome.trustBackend != requiredBackend) {
+      ctx.trustMismatch(
+        'nts_warm_cookies',
+        spec.host,
+        requiredBackend,
+        outcome.trustBackend,
+      );
+      return;
+    }
     ctx.success(
       'nts_warm_cookies',
       spec.host,
@@ -307,9 +441,19 @@ Future<void> _runWarm(
 /// whether any host produced a warn / error result so `--exit-on-error`
 /// can resolve to the right exit code after `Future.wait` completes.
 class _Ctx {
-  _Ctx({required this.json});
+  _Ctx({required this.json, this.trustFields = const {}});
 
   final bool json;
+
+  /// Run-scoped trust provenance merged into every `--json` record:
+  /// `trust_mode` when `--trust-mode` was passed and
+  /// `required_trust_backend` when `--require-trust-backend` was. Empty
+  /// when neither flag appeared, which keeps a flagless run's records
+  /// byte-identical to the pre-flag tool's. This belongs to the CLI
+  /// rather than to the shared `json…` formatters, whose payloads
+  /// describe one handshake, not the invocation that requested it.
+  final Map<String, Object?> trustFields;
+
   bool anyFailed = false;
 
   void start(String source, String host, String message) {
@@ -347,6 +491,36 @@ class _Ctx {
       });
     } else {
       _writeText(stderr, level, source, host, describeError(err));
+    }
+  }
+
+  /// A `--require-trust-backend` assertion failure: the handshake
+  /// completed, but under a different backend than the run demanded.
+  ///
+  /// Emitted *instead of* the host's success record, so exactly one
+  /// terminal record per host survives, and always at `ERROR` — the
+  /// assertion is the operator's own policy, so there is no
+  /// warn-severity variant to classify against.
+  void trustMismatch(
+    String source,
+    String host,
+    TrustBackend requiredBackend,
+    TrustBackend actualBackend,
+  ) {
+    anyFailed = true;
+    if (json) {
+      _writeJson(stderr, {
+        ..._envelope('ERROR', source, host, 'error'),
+        ...jsonTrustMismatch(requiredBackend, actualBackend),
+      });
+    } else {
+      _writeText(
+        stderr,
+        'ERROR',
+        source,
+        host,
+        formatTrustMismatch(requiredBackend, actualBackend),
+      );
     }
   }
 
@@ -403,6 +577,10 @@ class _Ctx {
     'source': source,
     'host': host,
     'event': event,
+    // Run-scoped, so it rides the envelope rather than the per-event
+    // payloads: a consumer filtering a mixed stream reads the policy
+    // off any record, including the trailing dns_pool_stats one.
+    ...trustFields,
   };
 
   void _writeJson(IOSink sink, Map<String, Object?> payload) {
