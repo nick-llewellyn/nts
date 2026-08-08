@@ -14,9 +14,12 @@ fallback logic — see [`architecture.md`](architecture.md) for the
 specific checks, which are the substance of a review here.
 
 Read [`architecture.md`](architecture.md) before commenting on any
-diff that touches `rust/`, `lib/`, or `example/`. Read
-[`output-format.md`](output-format.md) for the exact shape of the
-summary comment.
+diff, including a documentation-only one. Its cross-cutting checks
+apply to every PR, and its prose-verification section exists precisely
+to catch documentation that drifts from the implementation — a diff
+touching only `README.md` or `CHANGELOG.md` is the case it is for, not
+an exemption from it. Read [`output-format.md`](output-format.md) for
+the exact shape of the summary comment.
 
 ## Reporting threshold
 
