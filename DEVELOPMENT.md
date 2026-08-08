@@ -790,7 +790,7 @@ the full set.
 
 ### Copilot code review configuration
 
-Copilot code review is configured from tracked files plus two
+Copilot code review is configured from tracked files plus three
 settings-side requirements (enumerated below). The tracked half:
 
 | Path | Role |
@@ -823,9 +823,9 @@ empty on a fresh one. The built-in GitHub and Playwright servers are
 applied implicitly and do not appear in it, so there is nothing to
 preserve when pasting a first entry.
 
-Two requirements, stated as requirements rather than as observed
-defaults, since GitHub's defaults are outside this repository's control
-and may change:
+Three requirements. The first two are stated as requirements rather
+than as observed defaults, since GitHub's defaults are outside this
+repository's control and may change:
 
 1. **The built-in GitHub MCP server must stay enabled.** It is the
    server the review protocol depends on for CI check results and prior
@@ -836,21 +836,27 @@ and may change:
    MCP-dependent checks in `SKILL.md` silently unavailable — the
    reviewer reports them as not-performed under `## Review Status`
    rather than failing loudly, so the loss is easy to miss.
+3. **The `linear` MCP server must be added** to that JSON object, per
+   the subsection below. `SKILL.md`'s acceptance-criteria check depends
+   on it.
 
-At the time of writing both are GitHub defaults, so a fresh repository
-typically needs no action. Verify rather than assume.
+The first two are GitHub defaults at the time of writing, so a fresh
+repository typically needs no action on them. Verify rather than
+assume. The third is not a default and has to be added by hand.
 
-#### Optional: grounding the reviewer in Linear
+#### Grounding the reviewer in Linear
 
-The GitHub MCP server cannot read Linear, so by default the reviewer
-checks acceptance criteria only where the PR itself restates them and
-the `NTS-` ticket is out of reach. That is what
-`.github/skills/code-review/SKILL.md` currently instructs.
+`.github/skills/code-review/SKILL.md` instructs the reviewer to fetch
+the `NTS-` issue named in the branch and check its acceptance criteria
+against the diff, so this server is a prerequisite for that check
+rather than an optional extra. Without it the lookup fails and the
+reviewer falls back to the criteria the PR itself restates, reporting
+the fallback under `## Review Status`.
 
-Linear can be reached by adding its MCP server to that JSON object.
-Copilot does not support remote MCP servers that authenticate via
-OAuth, which is Linear's default, so the connection has to go through
-the `mcp-remote` stdio bridge with a bearer token:
+The GitHub MCP server cannot read Linear, so Linear needs its own entry
+in that JSON object. Copilot does not support remote MCP servers that
+authenticate via OAuth, which is Linear's default, so the connection
+has to go through the `mcp-remote` stdio bridge with a bearer token:
 
 ```jsonc
 {
@@ -895,13 +901,11 @@ server widens the review's network reach past whatever the firewall
 allows, which is the reason to keep `tools` enumerated and the key
 read-only.
 
-Two costs to weigh before enabling it. `mcp-remote` is a third-party
+The standing cost is the bridge itself. `mcp-remote` is a third-party
 npm shim fetched at review time into a session holding a Linear token,
 which is a supply-chain surface on every review, outside the firewall
-per the paragraph above — pin the version, as above, rather than
-tracking `@latest`. And the sync between the two halves is manual:
-enabling the server does not update `SKILL.md`, so the reviewer keeps
-treating Linear as unreachable until that file is changed to match.
+per the paragraph above. Keep the version pinned, as above, rather than
+tracking `@latest`, and re-read the diff when moving the pin.
 
 This is unrelated to the "Integrate cloud agent with Linear" feature in
 GitHub's documentation, which delegates Linear issues *to* Copilot
