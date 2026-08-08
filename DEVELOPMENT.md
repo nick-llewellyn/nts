@@ -760,7 +760,7 @@ dart analyze .
 flutter test --coverage
 
 # Example app (any Dart change touching the public surface)
-(cd example && flutter pub get && flutter analyze)
+(cd example && flutter pub get && flutter analyze && flutter test)
 
 # Rust side (any rust/** change)
 (cd rust && cargo build --locked && cargo test --lib --locked)
@@ -787,6 +787,152 @@ Note: The local `cargo audit` command requires the `cargo-audit` tool to be inst
 The PR template (`.github/pull_request_template.md`) carries the
 canonical checklist; tick the boxes you actually ran rather than
 the full set.
+
+### Copilot code review configuration
+
+Copilot code review is configured from tracked files plus three
+settings-side requirements (enumerated below). The tracked half:
+
+| Path | Role |
+|---|---|
+| `.github/copilot-instructions.md` | Repository-wide review guidance. Applies to every review. |
+| `.github/skills/code-review/SKILL.md` | The review protocol: reporting threshold, procedure, MCP usage. |
+| `.github/skills/code-review/architecture.md` | Architecture-specific checks — FFI boundary, sealed `NtsError`, `TrustMode` fallback paths, zeroization, versioning. |
+| `.github/skills/code-review/output-format.md` | The mandatory summary-comment format. |
+| `.github/instructions/dart.instructions.md` | Applies to `**/*.dart`. |
+| `.github/instructions/rust.instructions.md` | Applies to `rust/**/*.rs`. |
+
+Two behaviours worth knowing:
+
+- **Copilot reads these from the PR head branch, not the base
+  branch.** A change to the review configuration is testable in the
+  same PR that introduces it — request a review from `@copilot` on
+  that PR and the new instructions apply immediately.
+- **The skill directory name matters.** Copilot code review is more
+  likely to load a skill whose directory has a review-focused name.
+  Keep it `code-review`; renaming it makes the skill less likely to be
+  picked up for review tasks.
+
+The settings-side half is **not** a tracked file. MCP servers are
+configured per repository under **Settings → Copilot → MCP servers**,
+as a JSON object. The configuration is shared by Copilot code review
+and Copilot cloud agent — there is no review-only server list.
+
+That object holds only the servers added for this repository, and is
+empty on a fresh one. The built-in GitHub and Playwright servers are
+applied implicitly and do not appear in it, so there is nothing to
+preserve when pasting a first entry.
+
+Three requirements. The first two are stated as requirements rather
+than as observed defaults, since GitHub's defaults are outside this
+repository's control and may change:
+
+1. **The built-in GitHub MCP server must stay enabled.** It is the
+   server the review protocol depends on for CI check results and prior
+   PR history. Nothing here needs Playwright.
+2. **"Allow Copilot to use MCP tools when reviewing pull requests"
+   must stay enabled**, under **Settings → Copilot → Code review**.
+   Disabling it restricts MCP to the cloud agent, which would make the
+   MCP-dependent checks in `SKILL.md` silently unavailable — the
+   reviewer reports them as not-performed under `## Review Status`
+   rather than failing loudly, so the loss is easy to miss.
+3. **The `linear` MCP server must be added** to that JSON object, per
+   the subsection below. `SKILL.md`'s acceptance-criteria check depends
+   on it.
+
+The first two are GitHub defaults at the time of writing, so a fresh
+repository typically needs no action on them. Verify rather than
+assume. The third is not a default and has to be added by hand.
+
+#### Grounding the reviewer in Linear
+
+`.github/skills/code-review/SKILL.md` instructs the reviewer to fetch
+the `NTS-` issue named in the branch and check its acceptance criteria
+against the diff, so this server is a prerequisite for that check
+rather than an optional extra. Without it the lookup fails and the
+reviewer falls back to the criteria the PR itself restates, reporting
+the fallback under `## Review Status`.
+
+The GitHub MCP server cannot read Linear, so Linear needs its own entry
+in that JSON object. Copilot does not support remote MCP servers that
+authenticate via OAuth, which is Linear's default, so the connection
+has to go through the `mcp-remote` stdio bridge with a bearer token:
+
+```jsonc
+{
+  "mcpServers": {
+    "linear": {
+      "type": "local",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote@0.1.38",
+        "https://mcp.linear.app/mcp",
+        "--header",
+        "Authorization: Bearer $LINEAR_API_KEY"
+      ],
+      "env": { "LINEAR_API_KEY": "$COPILOT_MCP_LINEAR_API_KEY" },
+      "tools": ["get_issue", "list_issues", "list_comments"]
+    }
+  }
+}
+```
+
+The `-y` is not decoration. `mcp-remote` is not preinstalled on the
+review runner, and `npx` prompts before fetching a package it does not
+have. MCP startup is non-interactive, so without it the server can hang
+at that prompt and never come up.
+
+Two things this needs beyond the JSON:
+
+- **An Agents secret** named `COPILOT_MCP_LINEAR_API_KEY` (the
+  `COPILOT_MCP_` prefix is mandatory; the remainder is what `env`
+  refers to). Use a **new, read-only** Linear API key, not the
+  read-write `LINEAR_API_KEY` that `bd linear sync` uses. Copilot
+  invokes configured tools autonomously without asking for approval,
+  so a read-only key is what bounds the damage from a prompt-injected
+  review.
+- **An enumerated `tools` list.** Unlike VS Code, the repository
+  configuration requires the key. `["*"]` grants the reviewer Linear's
+  write tools as well, which the autonomy note above makes the wrong
+  default.
+
+No firewall allowlisting is needed, and this cuts against the intuition
+that the egress has to be opened. Copilot's firewall — configured under
+**Settings → Copilot → Internet access** — applies only to processes
+the agent starts through its Bash tool, explicitly *not* to MCP
+servers. So neither the `npx` fetch nor the connection to
+`mcp.linear.app` is subject to it. The corollary is that adding an MCP
+server widens the review's network reach past whatever the firewall
+allows, which is the reason to keep `tools` enumerated and the key
+read-only.
+
+The standing cost is the bridge itself. `mcp-remote` is a third-party
+npm shim fetched at review time into a session holding a Linear token,
+which is a supply-chain surface on every review, outside the firewall
+per the paragraph above. Keep the version pinned, as above, rather than
+tracking `@latest`, and re-read the diff when moving the pin.
+
+This is unrelated to the "Integrate cloud agent with Linear" feature in
+GitHub's documentation, which delegates Linear issues *to* Copilot
+rather than grounding a review in them.
+
+To confirm which skill or MCP server a given review actually used,
+check the attribution line at the bottom of each review comment, or
+open the review session from the PR timeline and read the session logs.
+
+Requesting a review:
+
+```bash
+gh api -X POST repos/<owner>/<repo>/pulls/<number>/requested_reviewers \
+  -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+```
+
+`gh pr edit --add-reviewer` does not work for this. It resolves the
+reviewer through GraphQL, which rejects the bot login with `Could not
+resolve user`; the REST endpoint above accepts it. A `@copilot review`
+issue comment is the other option, but it is unreliable — it silently
+produced no review at least once.
 
 ## Lint suppression policy
 

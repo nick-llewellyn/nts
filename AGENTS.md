@@ -888,9 +888,10 @@ artefact, not work-in-progress.
 
 1. **Metadata files stay at the current stable version during
    development.** Do not edit the `version:` field in `pubspec.yaml` or
-   the `version = ` field in `rust/Cargo.toml` as part of a feature,
-   fix, or refactor PR. They must remain pinned to the last released
-   version (e.g. `5.1.0` / `0.5.0`) until the release commit lands.
+   the `version = ` field in `rust/Cargo.toml` in any non-release PR —
+   `feat`, `fix`, `refactor`, `chore`, `test`, and `docs` alike. They
+   must remain pinned to the last released version (e.g. `5.1.0` /
+   `0.5.0`) until the release commit lands.
 
 2. **Document ongoing work under the next intended release header in
    `CHANGELOG.md`.** Do **not** use an `## Unreleased` section — file

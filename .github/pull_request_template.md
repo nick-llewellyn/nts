@@ -39,7 +39,7 @@ leg fails only on the floor, that's a real signal, not a flake.
 - [ ] `dart analyze .`
 - [ ] `flutter test --coverage` (Dart smoke tests in mock-mode FRB;
       mirrors CI and emits `coverage/lcov.info`)
-- [ ] `(cd example && flutter pub get && flutter analyze)`
+- [ ] `(cd example && flutter pub get && flutter analyze && flutter test)`
 - [ ] `(cd rust && cargo build --locked && cargo test --lib --locked)`
       (Rust-touching changes)
 - [ ] `(cd rust && cargo clippy --lib --tests --locked -- -D warnings)`
