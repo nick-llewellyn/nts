@@ -238,10 +238,11 @@ its usual success line:
 ```
 
 The handshake itself worked — this is your own assertion failing, not
-the server misbehaving. Exactly one line is printed for the host: the
-mismatch replaces the success line rather than following it, so a
-per-host count over the output stays accurate. The mismatch counts as a
-failure for `--exit-on-error`.
+the server misbehaving. The host still gets its usual `Starting query`
+line first; what changes is the terminal result, of which there is
+exactly one: the mismatch replaces the success line rather than
+following it, so a per-host count over the terminal results stays
+accurate. The mismatch counts as a failure for `--exit-on-error`.
 
 `actual=` uses the same short labels as the `trust=` field on a success
 line, so `platform-with-hybrid-fallback` appears as `webpki-fallback`
