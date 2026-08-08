@@ -854,7 +854,7 @@ through the `mcp-remote` stdio bridge with a bearer token:
       "type": "local",
       "command": "npx",
       "args": [
-        "mcp-remote@0.1.32",
+        "mcp-remote@0.1.38",
         "https://mcp.linear.app/mcp",
         "--header",
         "Authorization: Bearer $LINEAR_API_KEY"
