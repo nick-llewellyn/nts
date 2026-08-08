@@ -103,7 +103,7 @@ dart analyze .
 flutter test --coverage
 dart run tool/check_doc_snippets.dart
 
-(cd example && flutter pub get && flutter analyze)
+(cd example && flutter pub get && flutter analyze && flutter test)
 
 (cd rust && cargo build --locked && cargo test --lib --locked)
 (cd rust && cargo clippy --lib --tests --locked -- -D warnings)
