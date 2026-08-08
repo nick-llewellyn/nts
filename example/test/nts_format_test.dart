@@ -189,6 +189,7 @@ void main() {
         errorTypeName(const NtsError.noCookies()),
         errorTypeName(const NtsError.trustBackendUnavailable(message: 'x')),
         errorTypeName(const NtsError.internal(message: 'x')),
+        errorTypeName(const NtsError.abiMismatch(message: 'x')),
         'Unhandled',
       };
       final tag =

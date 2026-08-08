@@ -97,13 +97,18 @@ fvm dart run bin/nts_cli.dart --exit-on-error \
 
 By default the tool asks the operating system's trust store to vouch
 for the server's certificate, and quietly falls back to the engine's
-own bundled root list for a few known-awkward certificate shapes. That
-is the most permissive setting, and it is what every run does when
-`--trust-mode` is omitted.
+own bundled root list along either of two paths: when the OS verifier
+cannot be constructed at all, which is decided once at TLS-config
+construction and is independent of the server's certificate, and
+per-chain for a few known-awkward certificate shapes. That is the most
+permissive setting, and it is what every run does when `--trust-mode`
+is omitted. Both paths are silent, which is what makes
+`--require-trust-backend` worth passing: the negotiated backend is the
+only way to tell from the outside which one was taken.
 
 | Mode | Trusts |
 | ---- | ------ |
-| `platform-with-fallback` | The OS trust store, falling back to the bundled roots for a narrow set of known chain shapes. |
+| `platform-with-fallback` | The OS trust store, falling back to the bundled roots when the OS verifier cannot be built at all, and per-chain for a narrow set of known shapes. |
 | `platform-only` | The OS trust store, and nothing else. Fails rather than falling back. |
 | `bundled-only` | Only the roots shipped inside the engine. Ignores the OS store entirely, including any corporate CA installed on the machine. |
 | `custom` | Only the certificates in the file you pass to `--custom-roots`. |

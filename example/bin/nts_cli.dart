@@ -118,9 +118,10 @@ ArgParser _buildParser() => ArgParser()
     allowed: kTrustModeFlagValues,
     help:
         'TLS trust-anchor policy for every handshake this run '
-        'initiates. Omitted, the run goes through the package\'s '
-        'process-wide default client (platform-with-fallback); any '
-        'other value mints one call-scoped NtsClient for the batch.',
+        'initiates. Left at platform-with-fallback, whether by '
+        'omission or passed explicitly, the run goes through the '
+        'package\'s process-wide default client; any stricter value '
+        'mints one call-scoped NtsClient for the batch.',
   )
   ..addOption(
     'custom-roots',

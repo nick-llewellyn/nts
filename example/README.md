@@ -277,10 +277,11 @@ Usage: nts_cli [options] <host> [<host>...]
                               self-saturate the pool; values below the fan-out
                               can surface dnsSaturation fast-fails.
     --trust-mode              TLS trust-anchor policy for every handshake this
-                              run initiates. Omitted, the run goes through the
-                              package's process-wide default client
-                              (platform-with-fallback); any other value mints
-                              one call-scoped NtsClient for the batch.
+                              run initiates. Left at platform-with-fallback,
+                              whether by omission or passed explicitly, the
+                              run goes through the package's process-wide
+                              default client; any stricter value mints one
+                              call-scoped NtsClient for the batch.
                               [platform-with-fallback, platform-only,
                               bundled-only, custom]
     --custom-roots            Path to a PEM certificate bundle or a single
