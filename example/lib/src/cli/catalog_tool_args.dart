@@ -32,7 +32,8 @@ import '../state/nts_format.dart'
         kTrustModeFlagValues,
         parseTrustBackend,
         parseTrustMode,
-        trustPolicyPairingError;
+        trustPolicyPairingError,
+        wipeCustomRoots;
 import 'bridge_loader.dart' show initBridge;
 
 const int kDefaultPort = 4460;
@@ -165,6 +166,10 @@ class CommonProbeArgs {
   final TrustMode trustMode;
 
   /// Bytes read from `--custom-roots`, or null when the flag is omitted.
+  ///
+  /// Wiped in place by [loadAndProbeCatalog] once the client has copied
+  /// them, so this field reads as zeros for the rest of the run. Do not
+  /// treat it as a live copy of the anchor set.
   final List<int>? customRoots;
 
   /// Resolved `--require-trust-backend`, or null for no assertion.
@@ -234,9 +239,9 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
       : parseTrustBackend(requiredBackendRaw);
 
   // Read the roots here so an unreadable path is an argument error
-  // rather than a trust-policy one. No wipe of this buffer: the package
-  // copies the bytes at the FFI boundary and zeroises its own copy, and
-  // the process is short-lived.
+  // rather than a trust-policy one. `loadAndProbeCatalog` wipes the
+  // buffer once the client has copied it; the package zeroises only its
+  // own FFI-side copy and leaves the caller's list untouched.
   final customRootsPath = args['custom-roots'] as String?;
   List<int>? customRoots;
   if (customRootsPath != null) {
@@ -356,6 +361,13 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
     } on NtsError catch (err) {
       stderr.writeln('argument error: ${describeError(err)}');
       exit(kExitUsage);
+    } finally {
+      // The constructor has copied the bytes by now, on both the
+      // success and the throw path. The wipe is in place, so it also
+      // clears the view reachable through `common` and the
+      // `CatalogProbeOutcome.args` this function returns — those alias
+      // the same buffer rather than holding copies of it.
+      wipeCustomRoots(common.customRoots);
     }
   }
 

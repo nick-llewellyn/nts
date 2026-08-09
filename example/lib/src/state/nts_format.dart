@@ -148,6 +148,28 @@ String? trustPolicyPairingError({
   return null;
 }
 
+/// Overwrite a `--custom-roots` buffer in place once the `NtsClient`
+/// constructor has copied it.
+///
+/// The package zeroises only the copy it makes at the FFI boundary and
+/// documents the caller's list as read-but-never-retained, so wiping
+/// the caller-side buffer is the caller's job. Trust anchors are public
+/// certificates in the common case; this matters for the deployments
+/// where the anchor set is itself confidential, which is the only
+/// reason `--custom-roots` exists.
+///
+/// A no-op on a null or unmodifiable list — the CLIs read their roots
+/// with `readAsBytesSync`, which returns a mutable `Uint8List`.
+void wipeCustomRoots(List<int>? customRoots) {
+  if (customRoots == null) return;
+  try {
+    customRoots.fillRange(0, customRoots.length, 0);
+  } on UnsupportedError {
+    // A const or otherwise fixed list cannot be wiped; nothing this
+    // helper can do, and no reason to fail the run over it.
+  }
+}
+
 /// Human rendering of a `--require-trust-backend` assertion failure:
 /// the handshake succeeded, but negotiated a backend other than the
 /// one the run demanded.

@@ -218,9 +218,10 @@ Future<void> main(List<String> argv) async {
       : parseTrustBackend(requiredBackendRaw);
 
   // Read the roots ahead of client construction so an unreadable path
-  // is an argument error rather than a trust-policy one. No wipe of
-  // this buffer: the package copies the bytes at the FFI boundary and
-  // zeroises its own copy, and the process is short-lived.
+  // is an argument error rather than a trust-policy one. Wiping this
+  // buffer once the constructor has copied it is the caller's job:
+  // the package zeroises only its own FFI-side copy and documents the
+  // caller's list as never touched.
   final customRootsPath = args['custom-roots'] as String?;
   List<int>? customRoots;
   if (customRootsPath != null) {
@@ -265,6 +266,12 @@ Future<void> main(List<String> argv) async {
     } on NtsError catch (err) {
       stderr.writeln('argument error: ${describeError(err)}');
       exit(64);
+    } finally {
+      // The constructor has copied the bytes by now, on both the
+      // success and the throw path; the local is the last live
+      // reference the run holds, so wipe it here rather than leaving
+      // it to process teardown.
+      wipeCustomRoots(customRoots);
     }
   }
 

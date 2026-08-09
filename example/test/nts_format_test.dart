@@ -2,10 +2,12 @@
 // the on-screen log (`NtsController`) and the CLI (`bin/nts_cli.dart`).
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show
+        NtsClient,
         NtsDnsPoolStats,
         NtsError,
         NtsErrorAbiMismatch,
@@ -144,18 +146,40 @@ void main() {
   });
 
   group('trustPolicyPairingError', () {
-    test('accepts every pairing the NtsClient constructor accepts', () {
-      for (final mode in TrustMode.values) {
-        expect(
-          trustPolicyPairingError(
+    // The helper duplicates the package's own pair validation so the
+    // CLIs can reject a bad pairing before `initBridge`, which the
+    // constructor runs after. Duplication means drift, so every case
+    // below asserts the helper's verdict *and* the constructor's on
+    // the same pairing rather than trusting the helper alone.
+    for (final mode in TrustMode.values) {
+      for (final roots in const [
+        null,
+        <int>[],
+        <int>[1, 2, 3],
+      ]) {
+        final label = '$mode + ${roots == null ? 'null' : '${roots.length}B'}';
+        test('agrees with the NtsClient constructor for $label', () {
+          final helperError = trustPolicyPairingError(
             trustMode: mode,
-            customRoots: mode == TrustMode.custom ? const [1, 2, 3] : null,
-          ),
-          isNull,
-          reason: '$mode',
-        );
+            customRoots: roots,
+          );
+          NtsClient? client;
+          Object? constructorError;
+          try {
+            client = NtsClient(trustMode: mode, customRoots: roots);
+          } catch (e) {
+            constructorError = e;
+          } finally {
+            client?.dispose();
+          }
+          expect(
+            helperError == null,
+            constructorError == null,
+            reason: 'helper=$helperError constructor=$constructorError',
+          );
+        });
       }
-    });
+    }
 
     test('rejects roots supplied against a non-custom mode', () {
       for (final mode in TrustMode.values.where((m) => m != TrustMode.custom)) {
@@ -177,6 +201,22 @@ void main() {
           contains('requires a non-empty --custom-roots'),
         );
       }
+    });
+  });
+
+  group('wipeCustomRoots', () {
+    test('zeroes a mutable buffer in place, so aliases see the wipe', () {
+      final roots = Uint8List.fromList([1, 2, 3, 4]);
+      final alias = roots;
+      wipeCustomRoots(roots);
+      expect(roots, everyElement(0));
+      expect(alias, everyElement(0));
+      expect(roots, hasLength(4));
+    });
+
+    test('tolerates null and an unmodifiable list', () {
+      expect(() => wipeCustomRoots(null), returnsNormally);
+      expect(() => wipeCustomRoots(const [1, 2, 3]), returnsNormally);
     });
   });
 

@@ -88,8 +88,13 @@ enum ProbeStage { ke, ntp }
 /// server-side no-reply rather than collapsing both onto `Timeout`.
 ///
 /// [stage] attributes the failure to the KE handshake or the NTP burst;
-/// it defaults to [ProbeStage.ntp] (the post-warm queries) since the
-/// single per-host warm is the only [ProbeStage.ke] source.
+/// it defaults to [ProbeStage.ntp] (the post-warm queries). A
+/// [ProbeStage.ke] failure is not necessarily the warm's: a
+/// `--require-trust-backend` violation is attributed to the handshake
+/// that negotiated the wrong backend, and a query re-handshakes once
+/// the warmed cookie pool is spent or its session was evicted, so a
+/// sample can raise one too. Treat the stage as "a handshake failed",
+/// not "the warm failed".
 class ProbeFailure extends ProbeResult {
   final String errorType;
   final bool errorSeverity;

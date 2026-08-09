@@ -78,6 +78,12 @@ tarball.
   on a machine with no loadable dylib an invalid pairing previously
   exited with the bridge-load code instead of the usage code both
   README exit-code tables document.
+
+  The `--custom-roots` buffer is wiped in place once the client has
+  copied it. The package zeroises only the copy it makes at the FFI
+  boundary and documents the caller's list as read-but-never-retained,
+  so wiping the caller-side bytes is the caller's job — and the buffer
+  was otherwise reachable for the rest of the run.
   Example app only; no package API change. (NTS-147)
 
 - RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example
