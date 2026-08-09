@@ -34,6 +34,25 @@ skip = [
     # windows-sys 0.52 rides along with older windows-targets users;
     # 0.61 is the current line.
     { name = "windows-sys", version = "=0.52.0" },
+    # RustCrypto generation split: `aes-gcm-siv` 0.12 moved to the
+    # hybrid-array traits line (aead 0.6 / cipher 0.5 / crypto-common
+    # 0.2), while `aes-siv` is still on the generic-array line -- its
+    # 0.8 release is `-rc` only. Both are direct dependencies (AEAD IDs
+    # 30 and 15/17 respectively, RFC 8915 §5.1), so the duplication is
+    # unavoidable until `aes-siv` 0.8 ships stable. Each skip pins the
+    # older version so it expires when that happens.
+    { name = "aead", version = "=0.5.2" },
+    { name = "aes", version = "=0.8.4" },
+    { name = "cipher", version = "=0.4.4" },
+    { name = "cpufeatures", version = "=0.2.17" },
+    { name = "ctr", version = "=0.9.2" },
+    { name = "inout", version = "=0.1.4" },
+    # The next two are held by a second, independent chain --
+    # `flutter_rust_bridge_macros -> md-5 -> digest 0.10` -- as well as
+    # by `aes-siv`. Upgrading `aes-siv` alone will not retire them; do
+    # not remove these two along with the six above.
+    { name = "block-buffer", version = "=0.10.4" },
+    { name = "crypto-common", version = "=0.1.7" },
 ]
 
 [licenses]

@@ -53,6 +53,41 @@ tarball.
   so a flagless run's records are unchanged. Example app only; no
   package API change. (NTS-146)
 
+- RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example
+  and a §C.1 case with a multi-block AAD), driven through
+  `seal_packet` / `open_packet`, plus an open-path counterpart to the
+  existing GCM-SIV nonce-length rejection test.
+
+### Security
+
+- `aes-gcm-siv` is now pinned to 0.12 with its `zeroize` feature
+  requested explicitly. 0.11 depended on `zeroize` unconditionally;
+  0.12 made it an optional feature that is absent from `default`, so
+  this crate's `default-features = false` build would otherwise have
+  silently stopped wiping the derived POLYVAL and AES subkeys and the
+  per-message counter block that `AesGcmSiv` allocates on the stack
+  per operation. The resolved `zeroize` remains 1.9, above the ≥ 1.8
+  floor the project's zeroization policy requires.
+
+### Changed
+
+- The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
+  0.12 API. The crate moved to the RustCrypto `hybrid-array` traits
+  line, so `KeyInit` now comes from `aes_gcm_siv` rather than
+  `aes_siv`, and the deprecated `Array::from_slice` constructors are
+  replaced by the infallible `&[u8; 16]` conversion for the key and a
+  `TryFrom` conversion for the nonce. The nonce conversion subsumes
+  the hand-written length check in `seal_packet` / `open_packet`,
+  which now maps its failure to the same `InvalidNonceLength` error —
+  no behavioural change on either path. `aes-siv` (AEAD IDs 15 and
+  17) is still on the older `generic-array` line because its 0.8
+  release is release-candidate only, so `cargo deny`'s
+  `multiple-versions` gate carries version-pinned skips for the eight
+  duplicated RustCrypto crates. Six of them expire when `aes-siv` 0.8
+  ships; `block-buffer` and `crypto-common` are additionally held by
+  `flutter_rust_bridge_macros -> md-5 -> digest 0.10` and will remain
+  needed until that chain also moves.
+
 ## 9.0.0
 
 ### Breaking
