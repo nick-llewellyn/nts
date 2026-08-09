@@ -544,6 +544,53 @@ void main() {
     });
   });
 
+  group('errorTrustBackend', () {
+    test('returns the attribution every carrying variant holds', () {
+      const backend = TrustBackend.webpkiRoots;
+      const carrying = <NtsError>[
+        NtsError.network(message: 'x', trustBackend: backend),
+        NtsError.keProtocol(message: 'x', trustBackend: backend),
+        NtsError.ntpProtocol(message: 'x', trustBackend: backend),
+        NtsError.authentication(message: 'x', trustBackend: backend),
+        NtsError.timeout(phase: TimeoutPhase.ntp, trustBackend: backend),
+        NtsError.noCookies(trustBackend: backend),
+      ];
+      for (final err in carrying) {
+        expect(errorTrustBackend(err), backend, reason: errorTypeName(err));
+      }
+    });
+
+    test('returns null for a carrying variant left unattributed', () {
+      // `null` on one of these means the failure fired before the
+      // backend was resolved, which is not evidence of a mismatch.
+      expect(errorTrustBackend(const NtsError.network(message: 'x')), isNull);
+      expect(errorTrustBackend(const NtsError.noCookies()), isNull);
+    });
+
+    test('returns null for every shape that carries no attribution', () {
+      // These either precede any handshake or describe the backend
+      // itself being unusable, so there is no field to read.
+      const bare = <NtsError>[
+        NtsError.invalidSpec(message: 'x'),
+        NtsError.trustBackendUnavailable(message: 'x'),
+        NtsError.internal(message: 'x'),
+        NtsError.abiMismatch(message: 'x'),
+      ];
+      for (final err in bare) {
+        expect(errorTrustBackend(err), isNull, reason: errorTypeName(err));
+      }
+    });
+
+    test('accepts every NtsError shape', () {
+      // The switch is exhaustive over the sealed hierarchy, so a new
+      // variant is a compile error rather than a silent null here;
+      // this pins that no existing shape throws.
+      for (final err in _allNtsErrors) {
+        expect(() => errorTrustBackend(err), returnsNormally);
+      }
+    });
+  });
+
   group('jsonQuerySuccess', () {
     test('exposes the raw NtsTimeSample fields plus aead label / utc', () {
       // utc_unix_micros chosen so the ISO rendering is exact and stable;

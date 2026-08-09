@@ -31,6 +31,44 @@ import '../state/nts_format.dart' show wipeRegisteredCustomRoots;
 /// the value documented in `CLI_GUIDE.md`.
 const int kExitBridgeFailure = 70;
 
+/// What a `--mock` request should do about the bridge state it finds.
+enum MockBridgeDisposition {
+  /// Nothing installed: install the mock.
+  fresh,
+
+  /// A mock is already installed and satisfies the request.
+  reuse,
+
+  /// A native bridge is installed; `--mock` cannot be honoured.
+  conflict,
+}
+
+/// Classify the bridge state a `--mock` run encounters.
+///
+/// The bridge rejects a second initialisation with a `StateError`. A
+/// CLI run reaches [initBridge] once, but a caller that already
+/// installed a mock (a test driving this function) would otherwise get
+/// an unhandled throw, so an installed mock satisfies the request.
+///
+/// An installed *native* bridge does not: reusing it would let a run
+/// that asked for `--mock` issue real network work against real
+/// servers. That is a caller error, reported rather than silently
+/// downgraded, since `NtsRustLib` has no de-init. [initialized] alone
+/// cannot tell the two apart, hence [api] — the installed
+/// implementation, or `null` when nothing is installed.
+///
+/// Split out from [initBridge] because the conflict arm there ends in
+/// `exit`, which no in-process test can observe.
+MockBridgeDisposition mockBridgeDisposition({
+  required bool initialized,
+  required Object? api,
+}) {
+  if (!initialized) return MockBridgeDisposition.fresh;
+  return api is MockNtsApi
+      ? MockBridgeDisposition.reuse
+      : MockBridgeDisposition.conflict;
+}
+
 /// Initialise the FRB bridge for a CLI invocation.
 ///
 /// When [useMock] is set, binds the in-memory [MockNtsApi] (no native
@@ -48,26 +86,26 @@ Future<void> initBridge({
   required String? libraryPath,
 }) async {
   if (useMock) {
-    // The bridge rejects a second initialisation with a `StateError`.
-    // A CLI run reaches this once, but a caller that already installed
-    // a mock (a test driving this function) would otherwise get an
-    // unhandled throw, so an installed mock satisfies the request.
-    //
-    // An installed *native* bridge does not: reusing it would let a run
-    // that asked for --mock issue real network work against real
-    // servers. That is a caller error, so it reports rather than
-    // silently downgrading. Checking `initialized` alone cannot tell
-    // the two apart, hence the type test on the installed api.
     // ignore: invalid_use_of_internal_member
-    if (NtsRustLib.instance.initialized) {
+    final installed = NtsRustLib.instance.initialized;
+    switch (mockBridgeDisposition(
+      initialized: installed,
+      // Reading `api` before anything is installed throws, so the
+      // classifier is only shown one once `initialized` says there is.
       // ignore: invalid_use_of_internal_member
-      if (NtsRustLib.instance.api is MockNtsApi) return;
-      wipeRegisteredCustomRoots();
-      stderr.writeln(
-        'error: --mock requested but a native bridge is already '
-        'initialized; the two cannot coexist in one process.',
-      );
-      exit(kExitBridgeFailure);
+      api: installed ? NtsRustLib.instance.api : null,
+    )) {
+      case MockBridgeDisposition.reuse:
+        return;
+      case MockBridgeDisposition.conflict:
+        wipeRegisteredCustomRoots();
+        stderr.writeln(
+          'error: --mock requested but a native bridge is already '
+          'initialized; the two cannot coexist in one process.',
+        );
+        exit(kExitBridgeFailure);
+      case MockBridgeDisposition.fresh:
+        break;
     }
     try {
       NtsRustLib.initMock(api: MockNtsApi());

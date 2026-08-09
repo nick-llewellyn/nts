@@ -39,7 +39,11 @@ tarball.
   the `custom` mode requires; `--require-trust-backend` asserts that
   each handshake negotiated a named `TrustBackend`, reporting
   `TrustBackendMismatch` instead of success when it did not and
-  counting that as a failure for `--exit-on-error`.
+  counting that as a failure for `--exit-on-error`. The assertion
+  reads the attribution off failures too: an `NtsError` that carries a
+  `trustBackend` proves its handshake resolved one, so a call that
+  authenticated under the wrong anchor set and only then lost the NTP
+  leg reports the mismatch rather than the timeout it surfaced as.
 
   Previously every run went through the top-level `ntsQuery` /
   `ntsWarmCookies` and therefore the process-wide default client, whose
@@ -66,7 +70,9 @@ tarball.
   functions, so a flagless run is unchanged. `--require-trust-backend`
   is asserted on the NTS-KE warm *and* on every sample's own
   attribution, since a query re-handshakes once the warmed cookie pool
-  is spent or its session was evicted; the first mismatch abandons the
+  is spent or its session was evicted, and on the attribution carried
+  by a *failed* call, which is what a wrong-backend re-handshake that
+  then loses the NTP leg looks like; the first mismatch abandons the
   rest of the host's run and is classified as a severe
   `TrustBackendMismatch` KE-stage failure, which makes the host
   `nonConforming` and therefore a drop candidate for

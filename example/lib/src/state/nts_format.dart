@@ -426,6 +426,35 @@ String describeError(NtsError err) => switch (err) {
 String? timeoutPhaseName(NtsError err) =>
     err is NtsErrorTimeout ? err.phase.name : null;
 
+/// Per-handshake trust-anchor attribution carried by [err], or `null`
+/// when the shape carries none.
+///
+/// The six variants whose precondition is "the TLS handshake had at
+/// least reached config-build time" carry the backend resolved for
+/// that handshake; a `null` on one of them means the failure fired
+/// before the backend was resolved. The remaining variants
+/// ([NtsErrorInvalidSpec], [NtsErrorTrustBackendUnavailable],
+/// [NtsErrorInternal], [NtsErrorAbiMismatch]) have no field to read:
+/// they either precede any handshake or describe the backend itself
+/// being unusable.
+///
+/// Lets a caller enforcing a required backend attribute a *failed*
+/// call, not just a successful one — a re-handshake can authenticate
+/// against the wrong anchor set and then lose the NTP leg, which
+/// would otherwise be recorded as an ordinary timeout.
+TrustBackend? errorTrustBackend(NtsError err) => switch (err) {
+  NtsErrorNetwork(:final trustBackend) => trustBackend,
+  NtsErrorKeProtocol(:final trustBackend) => trustBackend,
+  NtsErrorNtpProtocol(:final trustBackend) => trustBackend,
+  NtsErrorAuthentication(:final trustBackend) => trustBackend,
+  NtsErrorTimeout(:final trustBackend) => trustBackend,
+  NtsErrorNoCookies(:final trustBackend) => trustBackend,
+  NtsErrorInvalidSpec() ||
+  NtsErrorTrustBackendUnavailable() ||
+  NtsErrorInternal() ||
+  NtsErrorAbiMismatch() => null,
+};
+
 /// Stable variant tag for an [NtsError], used as the `error_type`
 /// field in machine-readable output. Mirrors the Rust enum names so
 /// downstream consumers can switch on a single short string.

@@ -416,6 +416,16 @@ Future<void> _runQuery(
       jsonPayload: jsonQuerySuccess(sample),
     );
   } on NtsError catch (err) {
+    final attributed = errorTrustBackend(err);
+    if (requiredBackend != null &&
+        attributed != null &&
+        attributed != requiredBackend) {
+      // The handshake resolved a backend, so the assertion applies to
+      // this failure as much as to a success: report the violation
+      // rather than the symptom it surfaced as.
+      ctx.trustMismatch('nts_query', spec.host, requiredBackend, attributed);
+      return;
+    }
     ctx.failure('nts_query', spec.host, err);
   } catch (err) {
     ctx.unhandled('nts_query', spec.host, err);
@@ -464,6 +474,18 @@ Future<void> _runWarm(
       jsonPayload: jsonWarmSuccess(outcome),
     );
   } on NtsError catch (err) {
+    final attributed = errorTrustBackend(err);
+    if (requiredBackend != null &&
+        attributed != null &&
+        attributed != requiredBackend) {
+      ctx.trustMismatch(
+        'nts_warm_cookies',
+        spec.host,
+        requiredBackend,
+        attributed,
+      );
+      return;
+    }
     ctx.failure('nts_warm_cookies', spec.host, err);
   } catch (err) {
     ctx.unhandled('nts_warm_cookies', spec.host, err);

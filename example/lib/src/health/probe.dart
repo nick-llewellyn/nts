@@ -24,7 +24,7 @@ import 'package:nts/nts.dart'
 
 import '../data/server_entry.dart' show NtsServerEntry;
 import '../state/nts_format.dart'
-    show errorTypeName, isErrorSeverity, timeoutPhaseName;
+    show errorTrustBackend, errorTypeName, isErrorSeverity, timeoutPhaseName;
 import 'server_health.dart';
 
 /// Invoked after each host finishes, carrying the running [done]/[total]
@@ -108,11 +108,15 @@ Future<List<ServerHealth>> probeAll(
 /// performs must have negotiated that [TrustBackend]: the warm's
 /// outcome is checked, and so is each sample's own attribution, since
 /// a query re-handshakes when the warmed cookie pool is spent or its
-/// session was evicted. The first mismatch, whichever stage observes
-/// it, abandons the rest of the run and reports a severe
-/// `TrustBackendMismatch` [ProbeStage.ke] failure on its own, so the
-/// host classifies as [HealthVerdict.nonConforming] and becomes a drop
-/// candidate.
+/// session was evicted. Failures are checked too — an [NtsError] that
+/// carries a backend (see `errorTrustBackend`) proves its handshake
+/// resolved one, so a call that authenticated against the wrong
+/// anchor set and only then lost the NTP leg is attributed to the
+/// policy violation rather than to the timeout it surfaced as. The
+/// first mismatch, whichever stage observes it, abandons the rest of
+/// the run and reports a severe `TrustBackendMismatch`
+/// [ProbeStage.ke] failure on its own, so the host classifies as
+/// [HealthVerdict.nonConforming] and becomes a drop candidate.
 Future<ServerHealth> probeHost(
   NtsServerEntry entry, {
   required int port,
@@ -161,6 +165,15 @@ Future<ServerHealth> probeHost(
       );
     }
   } on NtsError catch (err) {
+    // Same attribution rule as the burst below: a warm that resolved a
+    // backend and then failed still violated the policy, so report the
+    // violation rather than the downstream symptom.
+    final attributed = errorTrustBackend(err);
+    if (requiredBackend != null &&
+        attributed != null &&
+        attributed != requiredBackend) {
+      return _trustMismatch(entry.hostname, thresholds);
+    }
     return summarizeServer(
       hostname: entry.hostname,
       results: [
@@ -222,6 +235,18 @@ Future<ServerHealth> probeHost(
         ),
       );
     } on NtsError catch (err) {
+      // A failure that carries backend attribution proves its
+      // handshake reached config-build time, so the assertion applies
+      // to it exactly as it does to a success: a re-handshake that
+      // authenticated against the wrong anchor set and then lost the
+      // NTP leg is a policy violation, not the ordinary timeout the
+      // shape would otherwise be recorded as.
+      final attributed = errorTrustBackend(err);
+      if (requiredBackend != null &&
+          attributed != null &&
+          attributed != requiredBackend) {
+        return _trustMismatch(entry.hostname, thresholds);
+      }
       results.add(
         ProbeFailure(
           errorType: errorTypeName(err),

@@ -8,9 +8,11 @@
 // than reading as a server-side `notReplying`.
 //
 // The `probeHost` group drives the real runner over a scripted bridge
-// so both mismatch sites are exercised: the warm's own attribution and
+// so every mismatch site is exercised: the warm's own attribution and
 // each sample's, the latter reachable because a query re-handshakes
-// when the warmed cookie pool is spent or its session was evicted.
+// when the warmed cookie pool is spent or its session was evicted, and
+// the attribution carried by a *failed* call, which is what a
+// wrong-backend re-handshake that then loses the NTP leg looks like.
 //
 // The scripted bridge deals in the FFI DTOs `NtsRustLibApi` is defined
 // over, the same way `lib/src/mock_api.dart` does.
@@ -26,10 +28,12 @@ import 'package:nts/src/ffi/api/nts.dart'
     as ffi
     show
         NtsClient,
+        NtsError,
         NtsServerSpec,
         NtsTimeSample,
         NtsWarmCookiesOutcome,
         PhaseTimings,
+        TimeoutPhase,
         TrustBackend;
 import 'package:nts/src/ffi/frb_generated.dart' show NtsRustLib;
 import 'package:nts_example/src/data/server_entry.dart' show NtsServerEntry;
@@ -342,6 +346,68 @@ void main() {
       expect(api.queryCalls, 2);
     });
 
+    test('a mismatching sample that then fails is a mismatch', () async {
+      // The re-handshake authenticated against the wrong anchor set
+      // and only then lost the NTP leg. The attribution rides on the
+      // error, so the run must report the policy violation rather than
+      // the timeout it surfaced as — which alone would classify the
+      // host as `notReplying`.
+      api.warmBackend = ffi.TrustBackend.platform;
+      api.queryErrors = [
+        null,
+        const ffi.NtsError.timeout(
+          phase: ffi.TimeoutPhase.ntp,
+          trustBackend: ffi.TrustBackend.webpkiRoots,
+        ),
+      ];
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.nonConforming);
+      expect(h.isDropCandidate, isTrue);
+      expect(h.dominantErrorType, 'ke:TrustBackendMismatch');
+      expect(api.queryCalls, 2);
+    });
+
+    test('a warm that fails on the wrong backend is a mismatch', () async {
+      api.warmError = const ffi.NtsError.noCookies(
+        trustBackend: ffi.TrustBackend.webpkiRoots,
+      );
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.nonConforming);
+      expect(h.dominantErrorType, 'ke:TrustBackendMismatch');
+      expect(api.queryCalls, 0);
+    });
+
+    test('an unattributed failure stays an ordinary failure', () async {
+      // `trustBackend: null` means the failure fired before any
+      // backend was resolved, so it carries no evidence either way and
+      // must not be reported as a policy violation.
+      api.warmBackend = ffi.TrustBackend.platform;
+      api.queryErrors = [
+        const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.connect),
+        const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.connect),
+        const ffi.NtsError.timeout(phase: ffi.TimeoutPhase.connect),
+      ];
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.notReplying);
+      expect(h.dominantErrorType, 'Timeout(connect)');
+      // No short-circuit: every sample dispatched.
+      expect(api.queryCalls, 3);
+    });
+
+    test('a failure on the required backend stays an ordinary failure', () {
+      api.warmBackend = ffi.TrustBackend.platform;
+      api.queryErrors = [
+        const ffi.NtsError.timeout(
+          phase: ffi.TimeoutPhase.ntp,
+          trustBackend: ffi.TrustBackend.platform,
+        ),
+      ];
+      return probe(samples: 1).then((h) {
+        expect(h.verdict, HealthVerdict.notReplying);
+        expect(h.dominantErrorType, 'Timeout(ntp)');
+      });
+    });
+
     test('null requiredBackend accepts a mixed-backend run', () async {
       // The assertion is opt-in: without it, a re-handshake onto a
       // different backend is not a fault.
@@ -381,10 +447,18 @@ void main() {
 class _ScriptedApi extends MockNtsApi {
   ffi.TrustBackend warmBackend = ffi.TrustBackend.platform;
 
+  /// Thrown instead of returning an outcome, so a test can script a
+  /// warm that resolved a backend and then failed.
+  ffi.NtsError? warmError;
+
   /// Backend for each query in dispatch order. Exhausting the list
   /// falls back to [warmBackend], matching a real client's cached
   /// session reporting the original handshake's attribution.
   List<ffi.TrustBackend> queryBackends = const [];
+
+  /// Error to throw for each query in dispatch order, `null` for a
+  /// success. A shorter list leaves the remaining queries succeeding.
+  List<ffi.NtsError?> queryErrors = const [];
 
   int queryCalls = 0;
 
@@ -392,7 +466,9 @@ class _ScriptedApi extends MockNtsApi {
   /// only admits one `initMock` per process.
   void reset() {
     warmBackend = ffi.TrustBackend.platform;
+    warmError = null;
     queryBackends = const [];
+    queryErrors = const [];
     queryCalls = 0;
   }
 
@@ -403,12 +479,16 @@ class _ScriptedApi extends MockNtsApi {
     required int timeoutMs,
     required int dnsConcurrencyCap,
     int? verificationTimeMs,
-  }) async => ffi.NtsWarmCookiesOutcome(
-    freshCookies: 8,
-    phaseTimings: _zeroTimings(),
-    trustBackend: warmBackend,
-    keWarnings: Uint16List(0),
-  );
+  }) async {
+    final err = warmError;
+    if (err != null) throw err;
+    return ffi.NtsWarmCookiesOutcome(
+      freshCookies: 8,
+      phaseTimings: _zeroTimings(),
+      trustBackend: warmBackend,
+      keWarnings: Uint16List(0),
+    );
+  }
 
   @override
   Future<ffi.NtsTimeSample> crateApiNtsNtsClientQuery({
@@ -421,7 +501,11 @@ class _ScriptedApi extends MockNtsApi {
     final backend = queryCalls < queryBackends.length
         ? queryBackends[queryCalls]
         : warmBackend;
+    final err = queryCalls < queryErrors.length
+        ? queryErrors[queryCalls]
+        : null;
     queryCalls++;
+    if (err != null) throw err;
     return ffi.NtsTimeSample(
       utcUnixMicros: PlatformInt64Util.from(
         DateTime.now().toUtc().microsecondsSinceEpoch,
