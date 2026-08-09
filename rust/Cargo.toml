@@ -64,7 +64,7 @@ log-strip = ["log/release_max_level_warn", "tracing/release_max_level_warn"]
 __internal-fuzz = []
 
 [dependencies]
-aes-gcm-siv = { version = "0.11", default-features = false, features = ["alloc", "aes"] }
+aes-gcm-siv = { version = "0.12", default-features = false, features = ["alloc", "aes"] }
 aes-siv = { version = "0.7", default-features = false, features = ["alloc"] }
 # Pinned to match the `flutter_rust_bridge` Dart dependency in pubspec.yaml.
 # Bumps must be coordinated across both sides (`cargo update` + `flutter pub upgrade`).
