@@ -53,6 +53,11 @@ tarball.
   so a flagless run's records are unchanged. Example app only; no
   package API change. (NTS-146)
 
+- RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example
+  and a §C.1 case with a multi-block AAD), driven through
+  `seal_packet` / `open_packet`, plus an open-path counterpart to the
+  existing GCM-SIV nonce-length rejection test.
+
 ### Security
 
 - `aes-gcm-siv` is now pinned to 0.12 with its `zeroize` feature
@@ -82,13 +87,6 @@ tarball.
   ships; `block-buffer` and `crypto-common` are additionally held by
   `flutter_rust_bridge_macros -> md-5 -> digest 0.10` and will remain
   needed until that chain also moves.
-
-### Added
-
-- RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example
-  and a §C.1 case with a multi-block AAD), driven through
-  `seal_packet` / `open_packet`, plus an open-path counterpart to the
-  existing GCM-SIV nonce-length rejection test.
 
 ## 9.0.0
 
