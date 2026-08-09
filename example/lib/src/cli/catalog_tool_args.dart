@@ -353,21 +353,26 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   NtsClient? client;
   if (common.trustMode != TrustMode.platformWithFallback ||
       common.customRoots != null) {
+    NtsError? constructionError;
     try {
       client = NtsClient(
         trustMode: common.trustMode,
         customRoots: common.customRoots,
       );
     } on NtsError catch (err) {
-      stderr.writeln('argument error: ${describeError(err)}');
+      constructionError = err;
+    }
+    // The constructor has copied the bytes by now, on both the success
+    // and the throw path. The wipe is in place, so it also clears the
+    // view reachable through `common` and the `CatalogProbeOutcome.args`
+    // this function returns — those alias the same buffer rather than
+    // holding copies of it. It runs before the failure exit because
+    // `exit` terminates the VM without unwinding, so a `finally` here
+    // would be skipped on exactly the path that needs the wipe.
+    wipeCustomRoots(common.customRoots);
+    if (constructionError != null) {
+      stderr.writeln('argument error: ${describeError(constructionError)}');
       exit(kExitUsage);
-    } finally {
-      // The constructor has copied the bytes by now, on both the
-      // success and the throw path. The wipe is in place, so it also
-      // clears the view reachable through `common` and the
-      // `CatalogProbeOutcome.args` this function returns — those alias
-      // the same buffer rather than holding copies of it.
-      wipeCustomRoots(common.customRoots);
     }
   }
 

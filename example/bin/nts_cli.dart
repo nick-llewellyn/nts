@@ -261,17 +261,22 @@ Future<void> main(List<String> argv) async {
   // only fires if the two ever drift.
   NtsClient? client;
   if (trustMode != TrustMode.platformWithFallback || customRoots != null) {
+    NtsError? constructionError;
     try {
       client = NtsClient(trustMode: trustMode, customRoots: customRoots);
     } on NtsError catch (err) {
-      stderr.writeln('argument error: ${describeError(err)}');
+      constructionError = err;
+    }
+    // The constructor has copied the bytes by now, on both the success
+    // and the throw path; the local is the last live reference the run
+    // holds, so wipe it here rather than leaving it to process
+    // teardown. It runs before the failure exit because `exit`
+    // terminates the VM without unwinding, so a `finally` here would be
+    // skipped on exactly the path that needs the wipe.
+    wipeCustomRoots(customRoots);
+    if (constructionError != null) {
+      stderr.writeln('argument error: ${describeError(constructionError)}');
       exit(64);
-    } finally {
-      // The constructor has copied the bytes by now, on both the
-      // success and the throw path; the local is the last live
-      // reference the run holds, so wipe it here rather than leaving
-      // it to process teardown.
-      wipeCustomRoots(customRoots);
     }
   }
 
