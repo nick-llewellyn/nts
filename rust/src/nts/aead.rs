@@ -21,6 +21,7 @@
 
 use aes_gcm_siv::aead::Aead as _;
 use aes_gcm_siv::Aes128GcmSiv;
+use aes_gcm_siv::KeyInit as _;
 use aes_gcm_siv::Nonce;
 use aes_siv::aead::generic_array::GenericArray;
 use aes_siv::siv::{Aes128Siv, Aes256Siv};
@@ -191,7 +192,7 @@ impl Aes128GcmSivKey {
     }
 
     fn cipher(&self) -> Aes128GcmSiv {
-        Aes128GcmSiv::new(GenericArray::from_slice(&self.bytes))
+        Aes128GcmSiv::new((&self.bytes).into())
     }
 }
 
@@ -320,15 +321,14 @@ impl AeadKey {
             Self::SivCmac256(k) => siv_seal(k, &[packet_aad, nonce], plaintext),
             Self::SivCmac512(k) => siv_seal_512(k, &[packet_aad, nonce], plaintext),
             Self::Aes128GcmSiv(k) => {
-                if nonce.len() != NONCE_LEN_GCM_SIV {
-                    return Err(AeadError::InvalidNonceLength {
+                let nonce =
+                    <&Nonce>::try_from(nonce).map_err(|_| AeadError::InvalidNonceLength {
                         actual: nonce.len(),
                         expected: NONCE_LEN_GCM_SIV,
-                    });
-                }
+                    })?;
                 k.cipher()
                     .encrypt(
-                        Nonce::from_slice(nonce),
+                        nonce,
                         aes_gcm_siv::aead::Payload {
                             msg: plaintext,
                             aad: packet_aad,
@@ -351,15 +351,14 @@ impl AeadKey {
             Self::SivCmac256(k) => siv_open(k, &[packet_aad, nonce], sealed),
             Self::SivCmac512(k) => siv_open_512(k, &[packet_aad, nonce], sealed),
             Self::Aes128GcmSiv(k) => {
-                if nonce.len() != NONCE_LEN_GCM_SIV {
-                    return Err(AeadError::InvalidNonceLength {
+                let nonce =
+                    <&Nonce>::try_from(nonce).map_err(|_| AeadError::InvalidNonceLength {
                         actual: nonce.len(),
                         expected: NONCE_LEN_GCM_SIV,
-                    });
-                }
+                    })?;
                 k.cipher()
                     .decrypt(
-                        Nonce::from_slice(nonce),
+                        nonce,
                         aes_gcm_siv::aead::Payload {
                             msg: sealed,
                             aad: packet_aad,
