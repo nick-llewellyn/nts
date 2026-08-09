@@ -153,20 +153,24 @@ String? trustPolicyPairingError({
 ///
 /// The package zeroises only the copy it makes at the FFI boundary and
 /// documents the caller's list as read-but-never-retained, so wiping
-/// the caller-side buffer is the caller's job. Trust anchors are public
-/// certificates in the common case; this matters for the deployments
-/// where the anchor set is itself confidential, which is the only
-/// reason `--custom-roots` exists.
+/// the caller-side buffer is the caller's job. `--custom-roots` exists
+/// to select a private or otherwise non-platform CA; wiping matters for
+/// the subset of those deployments where the anchor set is itself
+/// confidential, since trust anchors are public certificates in the
+/// common case.
 ///
-/// A no-op on a null or unmodifiable list — the CLIs read their roots
-/// with `readAsBytesSync`, which returns a mutable `Uint8List`.
+/// A no-op on a null or unmodifiable list. Fixed length is not the
+/// obstacle — `Uint8List` is fixed-length and wipes fine, which is what
+/// the CLIs get from `readAsBytesSync`; only a list that rejects element
+/// assignment (a `const` list, `List.unmodifiable`, an unmodifiable
+/// view) cannot be cleared.
 void wipeCustomRoots(List<int>? customRoots) {
   if (customRoots == null) return;
   try {
     customRoots.fillRange(0, customRoots.length, 0);
   } on UnsupportedError {
-    // A const or otherwise fixed list cannot be wiped; nothing this
-    // helper can do, and no reason to fail the run over it.
+    // An unmodifiable list cannot be wiped; nothing this helper can do,
+    // and no reason to fail the run over it.
   }
 }
 

@@ -176,6 +176,13 @@ class CommonProbeArgs {
   /// Wiped in place by [loadAndProbeCatalog] once the client has copied
   /// them, so this field reads as zeros for the rest of the run. Do not
   /// treat it as a live copy of the anchor set.
+  ///
+  /// The wipe needs a list that accepts element assignment. That holds
+  /// for what `parseCommonProbeArgs` reads (`readAsBytesSync` returns a
+  /// `Uint8List`), but this constructor is public: a caller passing a
+  /// `const` list, a `List.unmodifiable`, or an unmodifiable view keeps
+  /// its own bytes resident, because [wipeCustomRoots] cannot clear
+  /// them.
   final List<int>? customRoots;
 
   /// Resolved `--require-trust-backend`, or null for no assertion.
@@ -384,13 +391,15 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
     } on NtsError catch (err) {
       constructionError = err;
     } finally {
-      // The constructor has copied the bytes by now, on every path. The
-      // wipe is in place, so it also clears the view reachable through
-      // `common` and the `CatalogProbeOutcome.args` this function
-      // returns — those alias the same buffer rather than holding
-      // copies of it. `finally` covers the success path and a
-      // non-[NtsError] escape; the usage exit below is deliberately
-      // outside it, because `exit` terminates the VM without unwinding.
+      // The constructor has either consumed the bytes or rejected the
+      // arguments by now — its pair validation throws before the copy —
+      // so nothing downstream still needs them either way. The wipe is
+      // in place, so it also clears the view reachable through `common`
+      // and the `CatalogProbeOutcome.args` this function returns —
+      // those alias the same buffer rather than holding copies of it.
+      // `finally` covers the success path and a non-[NtsError] escape;
+      // the usage exit below is deliberately outside it, because `exit`
+      // terminates the VM without unwinding.
       wipeRegisteredCustomRoots();
     }
     if (constructionError != null) {

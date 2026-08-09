@@ -14,6 +14,7 @@
 import 'dart:io';
 import 'dart:math' show Random;
 
+import 'package:args/args.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart' as nts show TrustBackend, TrustMode;
 import 'package:nts/src/ffi/api/nts.dart'
@@ -23,7 +24,8 @@ import 'package:nts/src/ffi/api/nts.dart'
         NtsServerSpec,
         NtsTimeSample,
         TrustMode,
-        TrustMode_BundledOnly;
+        TrustMode_BundledOnly,
+        TrustMode_Custom;
 import 'package:nts/src/ffi/frb_generated.dart' show NtsRustLib;
 import 'package:nts_example/src/cli/catalog_tool_args.dart';
 import 'package:nts_example/src/health/server_health.dart';
@@ -39,6 +41,11 @@ class _CountingApi extends MockNtsApi {
   int singletonQueries = 0;
   int clientQueries = 0;
   final List<ffi.TrustMode> mintedModes = [];
+
+  /// Snapshot of the bytes a `TrustMode.custom` arrived with. Taken at
+  /// mint time because `NtsClient` wipes its own FFI-side copy in a
+  /// `finally`, so the retained mode reads as zeros afterwards.
+  final List<List<int>> mintedCustomRoots = [];
 
   @override
   Future<ffi.NtsTimeSample> crateApiNtsNtsQuery({
@@ -61,6 +68,9 @@ class _CountingApi extends MockNtsApi {
     required ffi.TrustMode trustMode,
   }) {
     mintedModes.add(trustMode);
+    if (trustMode is ffi.TrustMode_Custom) {
+      mintedCustomRoots.add(List<int>.of(trustMode.field0));
+    }
     return super.crateApiNtsNtsClientWithTrustMode(trustMode: trustMode);
   }
 
@@ -108,6 +118,7 @@ void main() {
       api.singletonQueries = 0;
       api.clientQueries = 0;
       api.mintedModes.clear();
+      api.mintedCustomRoots.clear();
     });
 
     tearDown(() => dir.deleteSync(recursive: true));
@@ -150,6 +161,52 @@ void main() {
       expect(api.singletonQueries, 0);
       expect(outcome.report.single.verdict, HealthVerdict.healthy);
     });
+
+    test(
+      '--custom-roots reaches the FFI mode and the buffer is wiped',
+      () async {
+        // The other cases construct `CommonProbeArgs` directly, which
+        // cannot supply roots, so this one starts at the parser: it is the
+        // only coverage of the roots-file read, of the bytes arriving at
+        // the FFI boundary as `TrustMode.custom`, and of the caller-side
+        // buffer being cleared once the client has copied them.
+        final rootsPath = '${dir.path}/roots.pem';
+        final rootsBytes = List<int>.generate(64, (i) => i + 1);
+        File(rootsPath).writeAsBytesSync(rootsBytes);
+
+        final parser = ArgParser();
+        addCommonProbeOptions(parser);
+        addBridgeAndHelpFlags(parser);
+        final parsed = parseCommonProbeArgs(
+          parser.parse([
+            '--mock',
+            '--trust-mode',
+            'custom',
+            '--custom-roots',
+            rootsPath,
+            '-c',
+            '1',
+            '-n',
+            '1',
+            path,
+          ]),
+          usage: parser.usage,
+        );
+        expect(parsed.customRoots, rootsBytes);
+
+        final outcome = await loadAndProbeCatalog(parsed);
+
+        expect(api.mintedModes.single, isA<ffi.TrustMode_Custom>());
+        expect(api.mintedCustomRoots.single, rootsBytes);
+        expect(api.clientQueries, 1);
+        expect(api.singletonQueries, 0);
+        expect(outcome.report.single.verdict, HealthVerdict.healthy);
+
+        // Same buffer reachable two ways; both must read as zeros.
+        expect(parsed.customRoots, everyElement(0));
+        expect(outcome.args.customRoots, everyElement(0));
+      },
+    );
 
     test('requiredBackend reaches the probe and can fail the host', () async {
       // A bundled-only client authenticates on webpki-roots under the

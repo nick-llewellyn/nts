@@ -50,12 +50,25 @@ Future<void> initBridge({
   if (useMock) {
     // The bridge rejects a second initialisation with a `StateError`.
     // A CLI run reaches this once, but a caller that already installed
-    // a bridge (a test driving this function) would otherwise get an
-    // unhandled throw, so treat an initialised bridge as satisfying the
-    // request. Anything else that escapes still has to wipe: the roots
-    // are live from here until client construction.
+    // a mock (a test driving this function) would otherwise get an
+    // unhandled throw, so an installed mock satisfies the request.
+    //
+    // An installed *native* bridge does not: reusing it would let a run
+    // that asked for --mock issue real network work against real
+    // servers. That is a caller error, so it reports rather than
+    // silently downgrading. Checking `initialized` alone cannot tell
+    // the two apart, hence the type test on the installed api.
     // ignore: invalid_use_of_internal_member
-    if (NtsRustLib.instance.initialized) return;
+    if (NtsRustLib.instance.initialized) {
+      // ignore: invalid_use_of_internal_member
+      if (NtsRustLib.instance.api is MockNtsApi) return;
+      wipeRegisteredCustomRoots();
+      stderr.writeln(
+        'error: --mock requested but a native bridge is already '
+        'initialized; the two cannot coexist in one process.',
+      );
+      exit(kExitBridgeFailure);
+    }
     try {
       NtsRustLib.initMock(api: MockNtsApi());
     } catch (e) {
