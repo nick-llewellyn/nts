@@ -614,6 +614,66 @@ mod tests {
         }
     }
 
+    /// Pairs with [`aead_key_rejects_wrong_gcm_siv_nonce_len`]: the
+    /// open path performs the same checked nonce conversion and must
+    /// report the same error rather than reaching the AEAD and failing
+    /// as `OpenFailed`. Without this, a regression that dropped the
+    /// check on one side only would still pass the seal-side test.
+    #[test]
+    fn aead_key_rejects_wrong_gcm_siv_nonce_len_on_open() {
+        let key = AeadKey::from_keying_material(30, &[0u8; KEY_LEN_GCM_SIV]).unwrap();
+        let sealed = key
+            .seal_packet(b"ad", &[0u8; NONCE_LEN_GCM_SIV], b"x")
+            .unwrap();
+        match key.open_packet(b"ad", &[0u8; 16], &sealed) {
+            Err(AeadError::InvalidNonceLength {
+                actual: 16,
+                expected: 12,
+            }) => {}
+            other => panic!("expected InvalidNonceLength, got {other:?}"),
+        }
+    }
+
+    /// RFC 8452 §8 worked example for AEAD_AES_128_GCM_SIV (AEAD ID 30),
+    /// driven through `seal_packet` / `open_packet`. The round-trip
+    /// tests above only prove this build is self-consistent; a
+    /// known-answer vector is what pins wire compatibility across an
+    /// `aes-gcm-siv` upgrade.
+    #[test]
+    fn rfc_8452_worked_example_vector() {
+        let key_bytes = hex("ee8e1ed9ff2540ae8f2ba9f50bc2f27c");
+        let nonce = hex("752abad3e0afb5f434dc4310");
+        let aad = b"example";
+        let plaintext = b"Hello world";
+        let expected = hex("5d349ead175ef6b1def6fd4fbcdeb7e4793f4a1d7e4faa70100af1");
+
+        let key = AeadKey::from_keying_material(30, &key_bytes).unwrap();
+        let sealed = key.seal_packet(aad, &nonce, plaintext).unwrap();
+        assert_eq!(sealed, expected);
+
+        let opened = key.open_packet(aad, &nonce, &sealed).unwrap();
+        assert_eq!(opened, plaintext);
+    }
+
+    /// RFC 8452 §C.1 vector with a multi-block AAD, chosen because the
+    /// §8 example has both AAD and plaintext under one AES block and so
+    /// never exercises POLYVAL's block iteration.
+    #[test]
+    fn rfc_8452_c1_multi_block_aad_vector() {
+        let key_bytes = hex("b3fed1473c528b8426a582995929a149");
+        let nonce = hex("9e9ad8780c8d63d0ab4149c0");
+        let aad = hex("c9882e5386fd9f92ec489c8fde2be2cf97e74e93");
+        let plaintext = hex("9f572c614b4745914474e7c7");
+        let expected = hex("f54673c5ddf710c745641c8bc1dc2f871fb7561da1286e655e24b7b0");
+
+        let key = AeadKey::from_keying_material(30, &key_bytes).unwrap();
+        let sealed = key.seal_packet(&aad, &nonce, &plaintext).unwrap();
+        assert_eq!(sealed, expected);
+
+        let opened = key.open_packet(&aad, &nonce, &sealed).unwrap();
+        assert_eq!(opened, plaintext);
+    }
+
     #[test]
     fn aead_key_siv_dispatches_to_multi_ad() {
         // Equivalence proof: AeadKey::SivCmac256(...).seal_packet(aad, nonce, pt)

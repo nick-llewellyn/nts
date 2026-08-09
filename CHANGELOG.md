@@ -78,7 +78,17 @@ tarball.
   17) is still on the older `generic-array` line because its 0.8
   release is release-candidate only, so `cargo deny`'s
   `multiple-versions` gate carries version-pinned skips for the eight
-  duplicated RustCrypto crates until that lands.
+  duplicated RustCrypto crates. Six of them expire when `aes-siv` 0.8
+  ships; `block-buffer` and `crypto-common` are additionally held by
+  `flutter_rust_bridge_macros -> md-5 -> digest 0.10` and will remain
+  needed until that chain also moves.
+
+### Added
+
+- RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example
+  and a §C.1 case with a multi-block AAD), driven through
+  `seal_packet` / `open_packet`, plus an open-path counterpart to the
+  existing GCM-SIV nonce-length rejection test.
 
 ## 9.0.0
 
