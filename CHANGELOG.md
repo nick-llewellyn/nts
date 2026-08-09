@@ -53,6 +53,24 @@ tarball.
   so a flagless run's records are unchanged. Example app only; no
   package API change. (NTS-146)
 
+- The two catalog tools (`example/bin/nts_health.dart`,
+  `example/bin/nts_manifest.dart`) accept the same `--trust-mode`,
+  `--custom-roots`, and `--require-trust-backend` flags, so a whole
+  server list can be vetted under a stricter trust policy rather than
+  only the hostnames passed to `nts_cli`. The flags live on the shared
+  `addCommonProbeOptions` block, so both tools gain them together.
+
+  A non-default policy mints one call-scoped `NtsClient` for the whole
+  catalog and disposes it after the probe wave; the default path
+  constructs no client and keeps routing through the top-level
+  functions, so a flagless run is unchanged. `--require-trust-backend`
+  is asserted on each host's single NTS-KE warm — the sample burst
+  reuses that session — and a mismatch is classified as a severe
+  `TrustBackendMismatch` KE-stage failure, which makes the host
+  `nonConforming` and therefore a drop candidate for
+  `--fail-on-drops` and an exclusion from the generated manifest.
+  Example app only; no package API change. (NTS-147)
+
 - RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example
   and a §C.1 case with a multi-block AAD), driven through
   `seal_packet` / `open_packet`, plus an open-path counterpart to the

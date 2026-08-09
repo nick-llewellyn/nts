@@ -13,12 +13,25 @@ import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:nts/nts.dart'
-    show kDefaultBridgeConcurrencyCap, kDefaultDnsConcurrencyCap;
+    show
+        NtsClient,
+        NtsError,
+        TrustBackend,
+        TrustMode,
+        kDefaultBridgeConcurrencyCap,
+        kDefaultDnsConcurrencyCap;
 
 import '../data/server_catalog.dart' show parseServerYaml;
 import '../data/server_entry.dart' show NtsServerEntry;
 import '../health/probe.dart' show probeAll;
 import '../health/server_health.dart' show HealthThresholds, ServerHealth;
+import '../state/nts_format.dart'
+    show
+        describeError,
+        kTrustBackendFlagValues,
+        kTrustModeFlagValues,
+        parseTrustBackend,
+        parseTrustMode;
 import 'bridge_loader.dart' show initBridge;
 
 const int kDefaultPort = 4460;
@@ -71,6 +84,32 @@ void addCommonProbeOptions(ArgParser parser) {
           'sized up to --concurrency so a probe wave cannot '
           'self-saturate the pool; values below --concurrency can '
           'surface dnsSaturation fast-fails.',
+    )
+    ..addOption(
+      'trust-mode',
+      allowed: kTrustModeFlagValues,
+      help:
+          'TLS trust-anchor policy for every handshake this run '
+          'initiates. Left at platform-with-fallback, whether by '
+          'omission or passed explicitly, the run goes through the '
+          'package\'s process-wide default client; any stricter value '
+          'mints one call-scoped NtsClient for the whole catalog.',
+    )
+    ..addOption(
+      'custom-roots',
+      help:
+          'Path to a PEM certificate bundle or a single DER-encoded '
+          'certificate. Required by --trust-mode=custom, and rejected '
+          'with every other mode.',
+    )
+    ..addOption(
+      'require-trust-backend',
+      allowed: kTrustBackendFlagValues,
+      help:
+          'Assert that each handshake negotiated this backend. A host '
+          'that authenticated under a different one is classified as a '
+          'severe KE-stage TrustBackendMismatch failure, making it a '
+          'drop candidate.',
     );
 }
 
@@ -119,6 +158,16 @@ class CommonProbeArgs {
   final bool useMock;
   final String? libraryPath;
   final String path;
+
+  /// Resolved `--trust-mode`, defaulting to
+  /// [TrustMode.platformWithFallback] when the flag is omitted.
+  final TrustMode trustMode;
+
+  /// Bytes read from `--custom-roots`, or null when the flag is omitted.
+  final List<int>? customRoots;
+
+  /// Resolved `--require-trust-backend`, or null for no assertion.
+  final TrustBackend? requiredBackend;
   const CommonProbeArgs({
     required this.port,
     required this.timeoutMs,
@@ -129,6 +178,9 @@ class CommonProbeArgs {
     required this.useMock,
     required this.libraryPath,
     required this.path,
+    this.trustMode = TrustMode.platformWithFallback,
+    this.customRoots,
+    this.requiredBackend,
   });
 }
 
@@ -166,6 +218,34 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
       usageError('--dns-cap must be >= 1', usage: usage);
     }
   }
+
+  // `allowed:` on both trust options means the parser has already
+  // rejected anything outside the two value sets, so the parse helpers
+  // cannot return null here; the `??` arm exists only to keep the local
+  // non-nullable.
+  final trustModeRaw = args['trust-mode'] as String?;
+  final trustMode = trustModeRaw == null
+      ? TrustMode.platformWithFallback
+      : parseTrustMode(trustModeRaw) ?? TrustMode.platformWithFallback;
+  final requiredBackendRaw = args['require-trust-backend'] as String?;
+  final requiredBackend = requiredBackendRaw == null
+      ? null
+      : parseTrustBackend(requiredBackendRaw);
+
+  // Read the roots here so an unreadable path is an argument error
+  // rather than a trust-policy one. No wipe of this buffer: the package
+  // copies the bytes at the FFI boundary and zeroises its own copy, and
+  // the process is short-lived.
+  final customRootsPath = args['custom-roots'] as String?;
+  List<int>? customRoots;
+  if (customRootsPath != null) {
+    try {
+      customRoots = File(customRootsPath).readAsBytesSync();
+    } on FileSystemException catch (e) {
+      usageError('--custom-roots: ${e.message}', usage: usage);
+    }
+  }
+
   return CommonProbeArgs(
     port: port,
     timeoutMs: timeoutMs,
@@ -176,6 +256,9 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
     useMock: args['mock'] as bool,
     libraryPath: args['library'] as String?,
     path: args.rest.single,
+    trustMode: trustMode,
+    customRoots: customRoots,
+    requiredBackend: requiredBackend,
   );
 }
 
@@ -240,21 +323,54 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   final bridgeCap = common.concurrency > kDefaultBridgeConcurrencyCap
       ? common.concurrency
       : kDefaultBridgeConcurrencyCap;
-  final report = await probeAll(
-    entries,
-    port: common.port,
-    // Single conversion point: the CLI surface stays milliseconds.
-    timeout: Duration(milliseconds: common.timeoutMs),
-    samples: common.samples,
-    concurrency: common.concurrency,
-    dnsConcurrencyCap: dnsCap,
-    bridgeConcurrencyCap: bridgeCap,
-    thresholds: HealthThresholds(
-      offsetThresholdMicros: common.offsetThresholdMs * 1000,
-    ),
-    onProgress: (done, total, health) => stderr.writeln(
-      '[$done/$total] ${health.hostname}: ${health.verdict.name}',
-    ),
-  );
+
+  // Default policy keeps routing through the top-level functions and
+  // the process-wide default client they share, so the path every
+  // pre-existing invocation takes gains no client lifecycle and no new
+  // failure surface. Anything else — including a `--custom-roots`
+  // passed against a non-custom mode, which the client constructor
+  // rejects — mints exactly one client for the whole catalog, which the
+  // package documents as safe to share across concurrent calls.
+  NtsClient? client;
+  if (common.trustMode != TrustMode.platformWithFallback ||
+      common.customRoots != null) {
+    try {
+      client = NtsClient(
+        trustMode: common.trustMode,
+        customRoots: common.customRoots,
+      );
+    } on NtsError catch (err) {
+      stderr.writeln('argument error: ${describeError(err)}');
+      exit(kExitUsage);
+    }
+  }
+
+  final List<ServerHealth> report;
+  try {
+    report = await probeAll(
+      entries,
+      port: common.port,
+      // Single conversion point: the CLI surface stays milliseconds.
+      timeout: Duration(milliseconds: common.timeoutMs),
+      samples: common.samples,
+      concurrency: common.concurrency,
+      dnsConcurrencyCap: dnsCap,
+      bridgeConcurrencyCap: bridgeCap,
+      thresholds: HealthThresholds(
+        offsetThresholdMicros: common.offsetThresholdMs * 1000,
+      ),
+      client: client,
+      requiredBackend: common.requiredBackend,
+      onProgress: (done, total, health) => stderr.writeln(
+        '[$done/$total] ${health.hostname}: ${health.verdict.name}',
+      ),
+    );
+  } finally {
+    // probeHost swallows every per-host failure, so the only way out
+    // here is a defect in the fan-out itself — but the session table
+    // this client owns holds cookies and derived keys, so release it on
+    // that path too rather than leaving it to process teardown.
+    client?.dispose();
+  }
   return CatalogProbeOutcome(entries: entries, report: report, args: common);
 }

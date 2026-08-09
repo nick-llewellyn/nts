@@ -14,7 +14,13 @@
 import 'dart:math' show min;
 
 import 'package:nts/nts.dart'
-    show NtsError, NtsServerSpec, ntsQuery, ntsWarmCookies;
+    show
+        NtsClient,
+        NtsError,
+        NtsServerSpec,
+        TrustBackend,
+        ntsQuery,
+        ntsWarmCookies;
 
 import '../data/server_entry.dart' show NtsServerEntry;
 import '../state/nts_format.dart'
@@ -33,6 +39,12 @@ typedef ProbeProgress = void Function(int done, int total, ServerHealth health);
 ///
 /// [onProgress] is called once per completed host so a long run can show
 /// liveness; pass `null` for a silent run.
+///
+/// [client] routes every handshake through a caller-owned
+/// [NtsClient] — used when the run selected a non-default trust
+/// policy — and `null` keeps the probes on the top-level functions and
+/// the package's process-wide default client. [requiredBackend] asserts
+/// the negotiated trust backend; see [probeHost].
 Future<List<ServerHealth>> probeAll(
   List<NtsServerEntry> entries, {
   required int port,
@@ -42,6 +54,8 @@ Future<List<ServerHealth>> probeAll(
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
   required HealthThresholds thresholds,
+  NtsClient? client,
+  TrustBackend? requiredBackend,
   ProbeProgress? onProgress,
 }) async {
   final pending = List<NtsServerEntry>.of(entries);
@@ -60,6 +74,8 @@ Future<List<ServerHealth>> probeAll(
         dnsConcurrencyCap: dnsConcurrencyCap,
         bridgeConcurrencyCap: bridgeConcurrencyCap,
         thresholds: thresholds,
+        client: client,
+        requiredBackend: requiredBackend,
       );
       out.add(health);
       done++;
@@ -85,6 +101,15 @@ Future<List<ServerHealth>> probeAll(
 /// a signed server-minus-local clock offset estimated at reply receipt);
 /// an [NtsError] becomes a typed [ProbeStage.ntp] [ProbeFailure]; any
 /// other throwable is bucketed as a severe `Unhandled` failure.
+///
+/// [client] routes both stages through a caller-owned [NtsClient]
+/// instead of the top-level functions' process-wide default client.
+/// When [requiredBackend] is non-null the warm's negotiated
+/// [TrustBackend] must match it: a mismatch short-circuits the burst as
+/// a severe `TrustBackendMismatch` [ProbeStage.ke] failure, so the host
+/// classifies as [HealthVerdict.nonConforming] and becomes a drop
+/// candidate. The assertion is made on the warm alone — the burst
+/// reuses that same session, so its handshake is the only one to check.
 Future<ServerHealth> probeHost(
   NtsServerEntry entry, {
   required int port,
@@ -93,18 +118,40 @@ Future<ServerHealth> probeHost(
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
   required HealthThresholds thresholds,
+  NtsClient? client,
+  TrustBackend? requiredBackend,
 }) async {
   final spec = NtsServerSpec(host: entry.hostname, port: port);
 
   // Stage 1: one NTS-KE handshake to establish the session and harvest
   // the cookie pool the burst will spend. Failures here are KE-stage.
   try {
-    final warm = await ntsWarmCookies(
-      spec: spec,
-      timeout: timeout,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-    );
+    final warm = client == null
+        ? await ntsWarmCookies(
+            spec: spec,
+            timeout: timeout,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            bridgeConcurrencyCap: bridgeConcurrencyCap,
+          )
+        : await client.warmCookies(
+            spec: spec,
+            timeout: timeout,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            bridgeConcurrencyCap: bridgeConcurrencyCap,
+          );
+    if (requiredBackend != null && warm.trustBackend != requiredBackend) {
+      return summarizeServer(
+        hostname: entry.hostname,
+        results: const [
+          ProbeFailure(
+            errorType: 'TrustBackendMismatch',
+            errorSeverity: true,
+            stage: ProbeStage.ke,
+          ),
+        ],
+        thresholds: thresholds,
+      );
+    }
     if (warm.freshCookies < 1) {
       // KE completed but issued no cookies: the burst cannot run as a
       // client would, so treat it as a severe (non-conforming) fault.
@@ -153,12 +200,19 @@ Future<ServerHealth> probeHost(
   final results = <ProbeResult>[];
   for (var i = 0; i < samples; i++) {
     try {
-      final s = await ntsQuery(
-        spec: spec,
-        timeout: timeout,
-        dnsConcurrencyCap: dnsConcurrencyCap,
-        bridgeConcurrencyCap: bridgeConcurrencyCap,
-      );
+      final s = client == null
+          ? await ntsQuery(
+              spec: spec,
+              timeout: timeout,
+              dnsConcurrencyCap: dnsConcurrencyCap,
+              bridgeConcurrencyCap: bridgeConcurrencyCap,
+            )
+          : await client.query(
+              spec: spec,
+              timeout: timeout,
+              dnsConcurrencyCap: dnsConcurrencyCap,
+              bridgeConcurrencyCap: bridgeConcurrencyCap,
+            );
       final localMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
       final serverEstimate = s.utcUnixMicros + s.roundTripMicros ~/ 2;
       results.add(

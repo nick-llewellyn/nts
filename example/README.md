@@ -535,6 +535,23 @@ Usage: nts_health [options] <path-to-server-list.yml>
                             cannot self-saturate the pool; values below
                             --concurrency can surface dnsSaturation
                             fast-fails.
+    --trust-mode            TLS trust-anchor policy for every handshake
+                            this run initiates. Any value other than
+                            platform-with-fallback mints one call-scoped
+                            NtsClient for the whole catalog.
+                            [platform-with-fallback (default),
+                            platform-only, bundled-only, custom]
+    --custom-roots          Path to a PEM certificate bundle or a single
+                            DER-encoded certificate. Required by
+                            --trust-mode=custom, and rejected with every
+                            other mode.
+    --require-trust-backend Assert that each handshake negotiated this
+                            backend. A host that authenticated under a
+                            different one is a severe KE-stage
+                            TrustBackendMismatch failure, making it a
+                            drop candidate. [platform,
+                            platform-with-hybrid-fallback, webpki-roots,
+                            custom]
 -f, --format                Output format. [text (default), json, csv]
 -l, --library               Path to a prebuilt nts_rust dylib file. If
                             omitted, auto-locates one under
@@ -605,6 +622,15 @@ CI gate — non-zero exit if any server is a drop candidate:
 fvm dart run bin/nts_health.dart --fail-on-drops assets/nts-sources.yml
 ```
 
+Vet the whole catalog under a stricter trust policy, condemning any
+host that did not authenticate against the bundled `webpki-roots`:
+
+```bash
+fvm dart run bin/nts_health.dart --fail-on-drops \
+    --trust-mode bundled-only --require-trust-backend webpki-roots \
+    assets/nts-sources.yml
+```
+
 ### Verdict buckets
 
 Each host is reduced to one verdict across all its probes:
@@ -614,7 +640,7 @@ Each host is reduced to one verdict across all its probes:
 | `healthy`        | ✅    | Replied and every parameter is in range.                                                |
 | `nonStandard`    | ❌    | Replied, but non-baseline AEAD, unusable stratum, or median clock offset over threshold. |
 | `notReplying`    | ❌    | No successful sample; only timeouts / no-reply (no protocol-level error).                |
-| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, or trust-backend-unavailable. |
+| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, or trust-backend-unavailable — or a `--require-trust-backend` mismatch on the host's KE handshake. |
 | `dnsExhausted`   | ✅    | Every probe fast-failed on the *local* DNS resolver cap — a probe-side artifact, so the server was never contacted and is **not** condemned. |
 
 The default thresholds are ±1 s clock offset, the two RFC 8915 AEADs
@@ -661,7 +687,7 @@ Suggested removals (2):
 | ---- | ----------------------------------------------------------------------------- |
 | `0`  | Report produced (default — per-host verdicts do not affect the code)          |
 | `1`  | `--fail-on-drops` was passed and at least one host is a drop candidate        |
-| `64` | Usage error (bad option, file not found, parse failure, or zero servers)      |
+| `64` | Usage error (bad option, file not found, parse failure, zero servers, unreadable `--custom-roots`, or a `--trust-mode` / `--custom-roots` pairing the `NtsClient` constructor rejects) |
 | `70` | Bridge-load failure (no dylib found, `--library` path missing, or Rust init threw) — non-`--mock` runs only, before any probing |
 
 Unlike `nts_cli`, the exit code never reflects individual host outcomes
