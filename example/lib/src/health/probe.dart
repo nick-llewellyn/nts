@@ -104,17 +104,24 @@ Future<List<ServerHealth>> probeAll(
 ///
 /// [client] routes both stages through a caller-owned [NtsClient]
 /// instead of the top-level functions' process-wide default client.
-/// When [requiredBackend] is non-null every handshake this host
-/// performs must have negotiated that [TrustBackend]: the warm's
-/// outcome is checked, and so is each sample's own attribution, since
-/// a query re-handshakes when the warmed cookie pool is spent or its
-/// session was evicted. Failures are checked too — an [NtsError] that
-/// carries a backend (see `errorTrustBackend`) proves its handshake
-/// resolved one, so a call that authenticated against the wrong
-/// anchor set and only then lost the NTP leg is attributed to the
-/// policy violation rather than to the timeout it surfaced as. The
-/// first mismatch, whichever stage observes it, abandons the rest of
-/// the run and reports a severe `TrustBackendMismatch`
+/// When [requiredBackend] is non-null every call this host makes must
+/// have resolved that [TrustBackend]: the warm's outcome is checked,
+/// and so is each sample's own attribution, since a query re-handshakes
+/// when the warmed cookie pool is spent or its session was evicted.
+/// Failures are checked too — an [NtsError] carrying a backend (see
+/// `errorTrustBackend`) names the anchor set its call was configured
+/// with, so a call configured wrongly that then lost the NTP leg is
+/// attributed to the policy violation rather than to the timeout it
+/// surfaced as.
+///
+/// This is a backend-*resolution* assertion, not a proof that a chain
+/// was verified: the attribution is attached before any DNS, connect,
+/// or TLS I/O, so a host that was never reached can still be reported
+/// as mismatching. That is intended — the policy is about which anchor
+/// set the call would have trusted.
+///
+/// The first mismatch, whichever stage observes it, abandons the rest
+/// of the run and reports a severe `TrustBackendMismatch`
 /// [ProbeStage.ke] failure on its own, so the host classifies as
 /// [HealthVerdict.nonConforming] and becomes a drop candidate.
 Future<ServerHealth> probeHost(

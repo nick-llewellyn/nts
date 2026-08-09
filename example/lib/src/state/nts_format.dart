@@ -204,6 +204,13 @@ int get registeredCustomRootsCountForTesting => _registeredCustomRoots.length;
 
 /// Wipe every buffer passed to [registerCustomRootsForWipe] and forget
 /// it. Idempotent: a second call has nothing left to wipe.
+///
+/// Reserved for the termination paths, which are about to end the
+/// process and so cannot strand another caller's bytes. A caller
+/// disposing of its *own* roots after a normal client construction
+/// must use [wipeAndDeregisterCustomRoots] instead: this one would
+/// also clear a concurrently-registered buffer whose constructor has
+/// not run yet, handing that call an all-zero bundle.
 void wipeRegisteredCustomRoots() {
   for (final roots in _registeredCustomRoots) {
     wipeCustomRoots(roots);
@@ -211,9 +218,33 @@ void wipeRegisteredCustomRoots() {
   _registeredCustomRoots.clear();
 }
 
+/// Wipe [customRoots] and drop it from the registry, leaving every
+/// other registered buffer intact.
+///
+/// The registry is process-global and its entry points suspend
+/// (`await initBridge`), so two concurrent custom-policy calls can both
+/// be registered at once. A blanket [wipeRegisteredCustomRoots] on the
+/// first call's success path would zero the second call's bytes before
+/// its `NtsClient` constructor reads them. Scoping the wipe to the
+/// buffer the caller owns removes that window; the exit paths keep the
+/// blanket form, since nothing survives them to be starved.
+///
+/// A no-op on null, on an unregistered buffer, and on a second call
+/// for the same buffer.
+void wipeAndDeregisterCustomRoots(List<int>? customRoots) {
+  if (customRoots == null) return;
+  _registeredCustomRoots.removeWhere((r) => identical(r, customRoots));
+  wipeCustomRoots(customRoots);
+}
+
 /// Human rendering of a `--require-trust-backend` assertion failure:
-/// the handshake succeeded, but negotiated a backend other than the
-/// one the run demanded.
+/// the call resolved a trust-anchor backend other than the one the run
+/// demanded.
+///
+/// "Resolved", not "authenticated": the attribution is attached once
+/// the TLS config is built, so a call that never completed a chain —
+/// one that timed out in DNS or connect, say — still names the backend
+/// it would have used, and still violates the assertion.
 ///
 /// Both backends render through [formatTrustBackend] so the line reads
 /// in the same vocabulary as the `trust=` segment on the success lines
@@ -439,9 +470,20 @@ String? timeoutPhaseName(NtsError err) =>
 /// being unusable.
 ///
 /// Lets a caller enforcing a required backend attribute a *failed*
-/// call, not just a successful one — a re-handshake can authenticate
-/// against the wrong anchor set and then lose the NTP leg, which
-/// would otherwise be recorded as an ordinary timeout.
+/// call, not just a successful one — a re-handshake can resolve the
+/// wrong anchor set and then fail, which would otherwise be recorded
+/// as an ordinary timeout.
+///
+/// What a non-null result establishes is *resolution*, not
+/// authentication: `build_tls_config` runs before any DNS, connect, or
+/// TLS I/O, and the Rust side attaches the resolved backend to every
+/// failure site downstream of it — `dnsSaturation`, `dnsTimeout`,
+/// `connect` and `tls` included (see the `NtsError.timeout` dartdoc).
+/// So an unreachable host can carry an attribution without ever having
+/// presented a chain. That is still the right thing to assert on: the
+/// policy under test is which anchor set the call was configured to
+/// trust, and a call configured wrongly violated it whether or not it
+/// got far enough to use it.
 TrustBackend? errorTrustBackend(NtsError err) => switch (err) {
   NtsErrorNetwork(:final trustBackend) => trustBackend,
   NtsErrorKeProtocol(:final trustBackend) => trustBackend,

@@ -91,7 +91,8 @@ Future<void> initBridge({
     switch (mockBridgeDisposition(
       initialized: installed,
       // Reading `api` before anything is installed throws, so the
-      // classifier is only shown one once `initialized` says there is.
+      // classifier is handed one only once `initialized` confirms one
+      // is installed.
       // ignore: invalid_use_of_internal_member
       api: installed ? NtsRustLib.instance.api : null,
     )) {

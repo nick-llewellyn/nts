@@ -288,11 +288,12 @@ Usage: nts_cli [options] <host> [<host>...]
                               DER-encoded certificate. Required by
                               --trust-mode=custom, and rejected with every
                               other mode.
-    --require-trust-backend   Assert that each handshake negotiated this
-                              backend. A host that authenticated under a
-                              different one reports TrustBackendMismatch
-                              instead of its success or its failure, which
-                              counts as a failure for --exit-on-error.
+    --require-trust-backend   Assert that every call resolves this
+                              trust-anchor backend. A host whose call
+                              resolved a different one reports
+                              TrustBackendMismatch instead of its success
+                              or its failure, which counts as a failure
+                              for --exit-on-error.
                               [platform, platform-with-hybrid-fallback,
                               webpki-roots, custom]
 -w, --warm                    Run ntsWarmCookies instead of ntsQuery.
@@ -473,11 +474,13 @@ records it always has. When present they ride every record in the
 stream, `dns_pool_stats` included. A `--require-trust-backend`
 mismatch arrives as an `error` event whose `error_type` is
 `TrustBackendMismatch` — distinct from every `NtsError` tag — carrying
-the negotiated `trust_backend` alongside the demanded
-`required_trust_backend`. A call that authenticated under the wrong
-backend and *then* failed reports the mismatch rather than the
-`NtsError` it surfaced as, since the attribution rides on the error
-too.
+the resolved `trust_backend` alongside the demanded
+`required_trust_backend`. A call that resolved the wrong backend and
+*then* failed reports the mismatch rather than the `NtsError` it
+surfaced as, since the attribution rides on the error too. The backend
+is resolved before any DNS, connect, or TLS I/O, so this asserts which
+anchor set the call was configured with, not that a chain was verified
+against it — an unreachable host can mismatch.
 
 The trailing DNS pool report cannot be a human-readable block in this
 mode without corrupting the one-object-per-line stream, so it is
@@ -551,13 +554,14 @@ Usage: nts_health [options] <path-to-server-list.yml>
                             DER-encoded certificate. Required by
                             --trust-mode=custom, and rejected with every
                             other mode.
-    --require-trust-backend Assert that each handshake negotiated this
-                            backend. A host that authenticated under a
-                            different one is a severe KE-stage
-                            TrustBackendMismatch failure, making it a
-                            drop candidate, whether the call that
-                            observed it went on to succeed or to fail.
-                            [platform,
+    --require-trust-backend Assert that every call resolves this
+                            trust-anchor backend. A host whose call
+                            resolved a different one is a severe
+                            KE-stage TrustBackendMismatch failure,
+                            making it a drop candidate. Checked whether
+                            the call succeeded or failed, since the
+                            backend is resolved before any network I/O
+                            and so is reported on both. [platform,
                             platform-with-hybrid-fallback, webpki-roots,
                             custom]
 -f, --format                Output format. [text (default), json, csv]
@@ -648,7 +652,7 @@ Each host is reduced to one verdict across all its probes:
 | `healthy`        | ✅    | Replied and every parameter is in range.                                                |
 | `nonStandard`    | ❌    | Replied, but non-baseline AEAD, unusable stratum, or median clock offset over threshold. |
 | `notReplying`    | ❌    | No successful sample; only timeouts / no-reply (no protocol-level error).                |
-| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, or trust-backend-unavailable — or a `--require-trust-backend` mismatch on any handshake the host performed, whether the call that observed it succeeded or failed. |
+| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, or trust-backend-unavailable — or a `--require-trust-backend` mismatch on any call the host was probed with — any call whose resolved backend differed, whether it went on to succeed or to fail, and including one that failed before reaching TLS. |
 | `dnsExhausted`   | ✅    | Every probe fast-failed on the *local* DNS resolver cap — a probe-side artifact, so the server was never contacted and is **not** condemned. |
 
 The default thresholds are ±1 s clock offset, the two RFC 8915 AEADs

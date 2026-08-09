@@ -262,6 +262,55 @@ void main() {
     });
   });
 
+  group('wipeAndDeregisterCustomRoots', () {
+    tearDown(wipeRegisteredCustomRoots);
+
+    test('wipes the named buffer and leaves every other one intact', () {
+      // The property the concurrent case needs: the entry points
+      // suspend at `await initBridge`, so one call's success-path wipe
+      // must not reach roots another call has registered but not yet
+      // handed to its own NtsClient constructor.
+      final mine = Uint8List.fromList([1, 2, 3]);
+      final theirs = Uint8List.fromList([4, 5, 6]);
+      registerCustomRootsForWipe(mine);
+      registerCustomRootsForWipe(theirs);
+      wipeAndDeregisterCustomRoots(mine);
+      expect(mine, everyElement(0));
+      expect(theirs, [4, 5, 6]);
+      expect(registeredCustomRootsCountForTesting, 1);
+    });
+
+    test('deregisters, so a later blanket wipe cannot clear it again', () {
+      final roots = Uint8List.fromList([1, 2, 3]);
+      registerCustomRootsForWipe(roots);
+      wipeAndDeregisterCustomRoots(roots);
+      roots.setAll(0, [7, 8, 9]);
+      wipeRegisteredCustomRoots();
+      expect(roots, [7, 8, 9]);
+    });
+
+    test('wipes an unregistered buffer without disturbing the registry', () {
+      // nts_cli holds its roots in a local and registers them, but the
+      // helper is not allowed to assume registration.
+      final tracked = Uint8List.fromList([1, 2]);
+      final loose = Uint8List.fromList([3, 4]);
+      registerCustomRootsForWipe(tracked);
+      wipeAndDeregisterCustomRoots(loose);
+      expect(loose, everyElement(0));
+      expect(tracked, [1, 2]);
+      expect(registeredCustomRootsCountForTesting, 1);
+    });
+
+    test('tolerates null and a repeat call', () {
+      final roots = Uint8List.fromList([1, 2, 3]);
+      registerCustomRootsForWipe(roots);
+      expect(() => wipeAndDeregisterCustomRoots(null), returnsNormally);
+      wipeAndDeregisterCustomRoots(roots);
+      expect(() => wipeAndDeregisterCustomRoots(roots), returnsNormally);
+      expect(registeredCustomRootsCountForTesting, 0);
+    });
+  });
+
   group('formatTrustMismatch', () {
     test('renders both backends through the success-line vocabulary', () {
       expect(

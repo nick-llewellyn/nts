@@ -34,6 +34,7 @@ import '../state/nts_format.dart'
         parseTrustMode,
         registerCustomRootsForWipe,
         trustPolicyPairingError,
+        wipeAndDeregisterCustomRoots,
         wipeRegisteredCustomRoots;
 import 'bridge_loader.dart' show initBridge;
 
@@ -109,10 +110,12 @@ void addCommonProbeOptions(ArgParser parser) {
       'require-trust-backend',
       allowed: kTrustBackendFlagValues,
       help:
-          'Assert that each handshake negotiated this backend. A host '
-          'that authenticated under a different one is classified as a '
-          'severe KE-stage TrustBackendMismatch failure, making it a '
-          'drop candidate.',
+          'Assert that every call resolves this trust-anchor backend. '
+          'A host whose call resolved a different one is classified as '
+          'a severe KE-stage TrustBackendMismatch failure, making it a '
+          'drop candidate. Checked whether the call succeeded or '
+          'failed, since the backend is resolved before any network '
+          'I/O and so is reported on both.',
     );
 }
 
@@ -400,7 +403,14 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
       // `finally` covers the success path and a non-[NtsError] escape;
       // the usage exit below is deliberately outside it, because `exit`
       // terminates the VM without unwinding.
-      wipeRegisteredCustomRoots();
+      //
+      // Scoped to this call's buffer, not the whole registry: this
+      // function suspends at `await initBridge`, so a second concurrent
+      // custom-policy call can be registered by the time we resume, and
+      // a blanket wipe would zero its bytes before its own constructor
+      // reads them. The exits above keep the blanket form — they end
+      // the process, so there is nothing left to starve.
+      wipeAndDeregisterCustomRoots(common.customRoots);
     }
     if (constructionError != null) {
       stderr.writeln('argument error: ${describeError(constructionError)}');

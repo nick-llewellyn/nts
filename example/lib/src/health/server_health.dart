@@ -90,11 +90,13 @@ enum ProbeStage { ke, ntp }
 /// [stage] attributes the failure to the KE handshake or the NTP burst;
 /// it defaults to [ProbeStage.ntp] (the post-warm queries). A
 /// [ProbeStage.ke] failure is not necessarily the warm's: a
-/// `--require-trust-backend` violation is attributed to the handshake
-/// that negotiated the wrong backend, and a query re-handshakes once
-/// the warmed cookie pool is spent or its session was evicted, so a
-/// sample can raise one too. Treat the stage as "a handshake failed",
-/// not "the warm failed".
+/// `--require-trust-backend` violation is attributed to the call that
+/// resolved the wrong backend, and a query re-handshakes once the
+/// warmed cookie pool is spent or its session was evicted, so a sample
+/// can raise one too. Treat the stage as "a handshake failed", not
+/// "the warm failed" — and note that a mismatch is a trust-backend
+/// *resolution* mismatch, so it can be raised by a call that never
+/// completed a TLS chain at all.
 class ProbeFailure extends ProbeResult {
   final String errorType;
   final bool errorSeverity;

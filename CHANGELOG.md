@@ -32,18 +32,25 @@ tarball.
   tooling only; no package or example change. (NTS-149)
 
 - The example CLI (`example/bin/nts_cli.dart`) can now select a
-  trust-anchor policy and assert the backend that actually
-  authenticated. `--trust-mode` takes `platform-with-fallback`
+  trust-anchor policy and assert the backend the call resolved.
+  `--trust-mode` takes `platform-with-fallback`
   (default), `platform-only`, `bundled-only`, or `custom`;
   `--custom-roots <path>` supplies the PEM bundle or DER certificate
   the `custom` mode requires; `--require-trust-backend` asserts that
-  each handshake negotiated a named `TrustBackend`, reporting
+  every call resolved a named `TrustBackend`, reporting
   `TrustBackendMismatch` instead of success when it did not and
   counting that as a failure for `--exit-on-error`. The assertion
-  reads the attribution off failures too: an `NtsError` that carries a
-  `trustBackend` proves its handshake resolved one, so a call that
-  authenticated under the wrong anchor set and only then lost the NTP
-  leg reports the mismatch rather than the timeout it surfaced as.
+  reads the attribution off failures too, so a mismatch replaces
+  either a success or an attributed failure: a call that resolved the
+  wrong anchor set and only then lost the NTP leg reports the mismatch
+  rather than the timeout it surfaced as.
+
+  This is a backend-*resolution* assertion, not evidence that a chain
+  was verified. Rust attaches the backend once `build_tls_config`
+  returns, which is before any DNS, connect, or TLS I/O, so a DNS or
+  connect failure carries one too and an unreachable host can be
+  reported as mismatching. That is the intended scope — the policy
+  under test is which anchor set the call was configured to trust.
 
   Previously every run went through the top-level `ntsQuery` /
   `ntsWarmCookies` and therefore the process-wide default client, whose
@@ -72,7 +79,7 @@ tarball.
   attribution, since a query re-handshakes once the warmed cookie pool
   is spent or its session was evicted, and on the attribution carried
   by a *failed* call, which is what a wrong-backend re-handshake that
-  then loses the NTP leg looks like; the first mismatch abandons the
+  then fails looks like; the first mismatch abandons the
   rest of the host's run and is classified as a severe
   `TrustBackendMismatch` KE-stage failure, which makes the host
   `nonConforming` and therefore a drop candidate for

@@ -134,10 +134,10 @@ ArgParser _buildParser() => ArgParser()
     'require-trust-backend',
     allowed: kTrustBackendFlagValues,
     help:
-        'Assert that each handshake negotiated this backend. A host '
-        'that authenticated under a different one reports '
-        'TrustBackendMismatch instead of success, which counts as a '
-        'failure for --exit-on-error.',
+        'Assert that every call resolves this trust-anchor backend. A '
+        'host whose call resolved a different one reports '
+        'TrustBackendMismatch instead of its success or its failure, '
+        'which counts as a failure for --exit-on-error.',
   )
   ..addFlag(
     'warm',
@@ -280,7 +280,12 @@ Future<void> main(List<String> argv) async {
       // success path and a non-[NtsError] escape; the usage exit below
       // is deliberately outside it, because `exit` terminates the VM
       // without unwinding.
-      wipeRegisteredCustomRoots();
+      //
+      // Scoped to this run's buffer rather than the whole registry, so
+      // the wipe cannot reach a buffer some other registrant is still
+      // waiting to hand to its own constructor. The exits keep the
+      // blanket form: they end the process.
+      wipeAndDeregisterCustomRoots(customRoots);
     }
     if (constructionError != null) {
       stderr.writeln('argument error: ${describeError(constructionError)}');

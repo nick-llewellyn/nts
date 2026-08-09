@@ -13,6 +13,7 @@
 
 import 'dart:io';
 import 'dart:math' show Random;
+import 'dart:typed_data';
 
 import 'package:args/args.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,6 +31,8 @@ import 'package:nts/src/ffi/frb_generated.dart' show NtsRustLib;
 import 'package:nts_example/src/cli/catalog_tool_args.dart';
 import 'package:nts_example/src/health/server_health.dart';
 import 'package:nts_example/src/mock_api.dart';
+import 'package:nts_example/src/state/nts_format.dart'
+    show registerCustomRootsForWipe, wipeRegisteredCustomRoots;
 
 /// [MockNtsApi] that records which of the two dispatch paths a run took
 /// and, for the per-client one, the mode the client was minted with.
@@ -207,6 +210,47 @@ void main() {
         expect(outcome.args.customRoots, everyElement(0));
       },
     );
+
+    test('the success-path wipe spares a concurrent call\'s roots', () async {
+      // `loadAndProbeCatalog` suspends at `await initBridge`, so a
+      // second custom-policy call can register before the first
+      // resumes. The first call's wipe must clear only its own buffer;
+      // clearing the registry wholesale would hand the second call an
+      // all-zero bundle at its constructor.
+      final rootsPath = '${dir.path}/concurrent.pem';
+      final mine = List<int>.generate(32, (i) => i + 1);
+      File(rootsPath).writeAsBytesSync(mine);
+
+      final parser = ArgParser();
+      addCommonProbeOptions(parser);
+      addBridgeAndHelpFlags(parser);
+      final parsed = parseCommonProbeArgs(
+        parser.parse([
+          '--mock',
+          '--trust-mode',
+          'custom',
+          '--custom-roots',
+          rootsPath,
+          '-c',
+          '1',
+          '-n',
+          '1',
+          path,
+        ]),
+        usage: parser.usage,
+      );
+
+      // Stands in for the in-flight second call: registered, not yet
+      // consumed by a constructor.
+      final theirs = Uint8List.fromList([9, 9, 9, 9]);
+      registerCustomRootsForWipe(theirs);
+      addTearDown(wipeRegisteredCustomRoots);
+
+      await loadAndProbeCatalog(parsed);
+
+      expect(parsed.customRoots, everyElement(0));
+      expect(theirs, [9, 9, 9, 9]);
+    });
 
     test('requiredBackend reaches the probe and can fail the host', () async {
       // A bundled-only client authenticates on webpki-roots under the
