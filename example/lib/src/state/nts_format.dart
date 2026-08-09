@@ -170,6 +170,34 @@ void wipeCustomRoots(List<int>? customRoots) {
   }
 }
 
+/// Buffers registered with [registerCustomRootsForWipe] and not yet
+/// wiped.
+final List<List<int>> _registeredCustomRoots = [];
+
+/// Track [customRoots] so any termination path can clear it through
+/// [wipeRegisteredCustomRoots] without the buffer being in scope.
+///
+/// The CLIs read their roots early, so an unreadable path is an
+/// argument error rather than a trust-policy one. That leaves several
+/// `exit` sites between the read and the client construction that
+/// consumes the bytes — remaining argument validation, catalog load,
+/// bridge init — and `exit` terminates the VM without unwinding, so a
+/// `finally` cannot cover them. Registering once lets each of those
+/// sites wipe without threading the buffer down to it.
+void registerCustomRootsForWipe(List<int>? customRoots) {
+  if (customRoots == null) return;
+  _registeredCustomRoots.add(customRoots);
+}
+
+/// Wipe every buffer passed to [registerCustomRootsForWipe] and forget
+/// it. Idempotent: a second call has nothing left to wipe.
+void wipeRegisteredCustomRoots() {
+  for (final roots in _registeredCustomRoots) {
+    wipeCustomRoots(roots);
+  }
+  _registeredCustomRoots.clear();
+}
+
 /// Human rendering of a `--require-trust-backend` assertion failure:
 /// the handshake succeeded, but negotiated a backend other than the
 /// one the run demanded.

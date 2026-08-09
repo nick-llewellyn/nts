@@ -80,13 +80,18 @@ tarball.
   README exit-code tables document.
 
   The `--custom-roots` buffer is wiped in place once the client has
-  copied it, on the construction-failure path as well as the success
-  one. The package zeroises only the copy it makes at the FFI boundary
-  and documents the caller's list as read-but-never-retained, so wiping
-  the caller-side bytes is the caller's job — and the buffer was
-  otherwise reachable for the rest of the run. The wipe runs before the
-  usage-error exit rather than from a `finally`, since `exit`
-  terminates the VM without unwinding.
+  copied it. The package zeroises only the copy it makes at the FFI
+  boundary and documents the caller's list as read-but-never-retained,
+  so wiping the caller-side bytes is the caller's job — and the buffer
+  was otherwise reachable for the rest of the run. Because the roots are
+  read early (so an unreadable path is an argument error rather than a
+  trust-policy one), several terminations sit between that read and the
+  wipe: the remaining flag validation, `nts_manifest`'s `--per-region`
+  check, the catalog load, and every `initBridge` failure. `exit`
+  terminates the VM without unwinding, so a `finally` cannot cover them;
+  the buffer is instead registered on read and cleared at each of those
+  sites, with the client construction keeping a `finally` for the
+  success and non-`NtsError` paths.
   Example app only; no package API change. (NTS-147)
 
 - RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example

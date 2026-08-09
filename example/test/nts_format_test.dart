@@ -220,6 +220,36 @@ void main() {
     });
   });
 
+  group('registerCustomRootsForWipe', () {
+    // The registry is process-global, so leave it empty for whatever
+    // runs next regardless of how a case ends.
+    tearDown(wipeRegisteredCustomRoots);
+
+    test('wipes every registered buffer', () {
+      final a = Uint8List.fromList([1, 2, 3]);
+      final b = Uint8List.fromList([4, 5]);
+      registerCustomRootsForWipe(a);
+      registerCustomRootsForWipe(b);
+      wipeRegisteredCustomRoots();
+      expect(a, everyElement(0));
+      expect(b, everyElement(0));
+    });
+
+    test('deregisters, so a later wipe cannot clear a reused buffer', () {
+      final roots = Uint8List.fromList([1, 2, 3]);
+      registerCustomRootsForWipe(roots);
+      wipeRegisteredCustomRoots();
+      roots.setAll(0, [7, 8, 9]);
+      wipeRegisteredCustomRoots();
+      expect(roots, [7, 8, 9]);
+    });
+
+    test('tolerates null and an empty registry', () {
+      expect(() => registerCustomRootsForWipe(null), returnsNormally);
+      expect(wipeRegisteredCustomRoots, returnsNormally);
+    });
+  });
+
   group('formatTrustMismatch', () {
     test('renders both backends through the success-line vocabulary', () {
       expect(

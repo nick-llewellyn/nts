@@ -222,6 +222,11 @@ Future<void> main(List<String> argv) async {
   // buffer once the constructor has copied it is the caller's job:
   // the package zeroises only its own FFI-side copy and documents the
   // caller's list as never touched.
+  //
+  // Registering makes the termination sites between this read and the
+  // wipe below — the pairing check, and every `initBridge` failure —
+  // able to clear the bytes: `exit` does not unwind, so a `finally`
+  // spanning them would be skipped.
   final customRootsPath = args['custom-roots'] as String?;
   List<int>? customRoots;
   if (customRootsPath != null) {
@@ -231,6 +236,7 @@ Future<void> main(List<String> argv) async {
       stderr.writeln('argument error: --custom-roots: ${e.message}');
       exit(64);
     }
+    registerCustomRootsForWipe(customRoots);
   }
 
   // Pair validation belongs here, not at client construction: the
@@ -242,6 +248,7 @@ Future<void> main(List<String> argv) async {
     customRoots: customRoots,
   );
   if (pairingError != null) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('argument error: $pairingError');
     exit(64);
   }
@@ -266,14 +273,15 @@ Future<void> main(List<String> argv) async {
       client = NtsClient(trustMode: trustMode, customRoots: customRoots);
     } on NtsError catch (err) {
       constructionError = err;
+    } finally {
+      // The constructor has copied the bytes by now, on every path; the
+      // local is the last live reference the run holds, so wipe it here
+      // rather than leaving it to process teardown. `finally` covers the
+      // success path and a non-[NtsError] escape; the usage exit below
+      // is deliberately outside it, because `exit` terminates the VM
+      // without unwinding.
+      wipeRegisteredCustomRoots();
     }
-    // The constructor has copied the bytes by now, on both the success
-    // and the throw path; the local is the last live reference the run
-    // holds, so wipe it here rather than leaving it to process
-    // teardown. It runs before the failure exit because `exit`
-    // terminates the VM without unwinding, so a `finally` here would be
-    // skipped on exactly the path that needs the wipe.
-    wipeCustomRoots(customRoots);
     if (constructionError != null) {
       stderr.writeln('argument error: ${describeError(constructionError)}');
       exit(64);

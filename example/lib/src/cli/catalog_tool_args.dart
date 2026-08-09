@@ -32,8 +32,9 @@ import '../state/nts_format.dart'
         kTrustModeFlagValues,
         parseTrustBackend,
         parseTrustMode,
+        registerCustomRootsForWipe,
         trustPolicyPairingError,
-        wipeCustomRoots;
+        wipeRegisteredCustomRoots;
 import 'bridge_loader.dart' show initBridge;
 
 const int kDefaultPort = 4460;
@@ -140,7 +141,12 @@ int? posInt(String? raw, {int min = 1}) {
 }
 
 /// Print [message] and [usage] to stderr, then exit [kExitUsage].
+///
+/// Wipes any registered `--custom-roots` buffer first: `exit` does not
+/// unwind, so this is the only chance a usage failure raised after the
+/// roots were read gets to clear them.
 Never usageError(String message, {required String usage}) {
+  wipeRegisteredCustomRoots();
   stderr.writeln('argument error: $message');
   stderr.writeln(usage);
   exit(kExitUsage);
@@ -242,6 +248,10 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
   // rather than a trust-policy one. `loadAndProbeCatalog` wipes the
   // buffer once the client has copied it; the package zeroises only its
   // own FFI-side copy and leaves the caller's list untouched.
+  //
+  // Registering makes every termination site between this read and that
+  // wipe — the checks below, `--per-region`, the catalog load, and
+  // `initBridge` — able to clear the bytes without holding a reference.
   final customRootsPath = args['custom-roots'] as String?;
   List<int>? customRoots;
   if (customRootsPath != null) {
@@ -250,6 +260,7 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
     } on FileSystemException catch (e) {
       usageError('--custom-roots: ${e.message}', usage: usage);
     }
+    registerCustomRootsForWipe(customRoots);
   }
 
   // Pair validation belongs here, not at client construction: the
@@ -297,8 +308,11 @@ class CatalogProbeOutcome {
 /// every host through the shared runner. Exits [kExitUsage] on a
 /// missing/empty/unparseable file (bridge failures exit via `initBridge`).
 Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
+  // Each of these exits precedes the client construction that consumes
+  // the roots, so each has to clear them itself: `exit` does not unwind.
   final file = File(common.path);
   if (!file.existsSync()) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('error: server list not found at ${common.path}');
     exit(kExitUsage);
   }
@@ -306,10 +320,12 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   try {
     entries = parseServerYaml(file.readAsStringSync());
   } catch (e) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('error: failed to parse ${common.path}: $e');
     exit(kExitUsage);
   }
   if (entries.isEmpty) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('error: ${common.path} parsed to zero servers');
     exit(kExitUsage);
   }
@@ -361,15 +377,16 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
       );
     } on NtsError catch (err) {
       constructionError = err;
+    } finally {
+      // The constructor has copied the bytes by now, on every path. The
+      // wipe is in place, so it also clears the view reachable through
+      // `common` and the `CatalogProbeOutcome.args` this function
+      // returns — those alias the same buffer rather than holding
+      // copies of it. `finally` covers the success path and a
+      // non-[NtsError] escape; the usage exit below is deliberately
+      // outside it, because `exit` terminates the VM without unwinding.
+      wipeRegisteredCustomRoots();
     }
-    // The constructor has copied the bytes by now, on both the success
-    // and the throw path. The wipe is in place, so it also clears the
-    // view reachable through `common` and the `CatalogProbeOutcome.args`
-    // this function returns — those alias the same buffer rather than
-    // holding copies of it. It runs before the failure exit because
-    // `exit` terminates the VM without unwinding, so a `finally` here
-    // would be skipped on exactly the path that needs the wipe.
-    wipeCustomRoots(common.customRoots);
     if (constructionError != null) {
       stderr.writeln('argument error: ${describeError(constructionError)}');
       exit(kExitUsage);
