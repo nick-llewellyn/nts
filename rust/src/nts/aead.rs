@@ -622,10 +622,10 @@ mod tests {
     #[test]
     fn aead_key_rejects_wrong_gcm_siv_nonce_len_on_open() {
         let key = AeadKey::from_keying_material(30, &[0u8; KEY_LEN_GCM_SIV]).unwrap();
-        let sealed = key
-            .seal_packet(b"ad", &[0u8; NONCE_LEN_GCM_SIV], b"x")
-            .unwrap();
-        match key.open_packet(b"ad", &[0u8; 16], &sealed) {
+        let nonce = [0u8; NONCE_LEN_GCM_SIV];
+        let oversized = [0u8; 16];
+        let sealed = key.seal_packet(b"ad", &nonce, b"x").unwrap();
+        match key.open_packet(b"ad", &oversized, &sealed) {
             Err(AeadError::InvalidNonceLength {
                 actual: 16,
                 expected: 12,
