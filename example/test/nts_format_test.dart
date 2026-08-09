@@ -143,6 +143,43 @@ void main() {
     });
   });
 
+  group('trustPolicyPairingError', () {
+    test('accepts every pairing the NtsClient constructor accepts', () {
+      for (final mode in TrustMode.values) {
+        expect(
+          trustPolicyPairingError(
+            trustMode: mode,
+            customRoots: mode == TrustMode.custom ? const [1, 2, 3] : null,
+          ),
+          isNull,
+          reason: '$mode',
+        );
+      }
+    });
+
+    test('rejects roots supplied against a non-custom mode', () {
+      for (final mode in TrustMode.values.where((m) => m != TrustMode.custom)) {
+        expect(
+          trustPolicyPairingError(trustMode: mode, customRoots: const [1]),
+          contains('--custom-roots can only be set'),
+          reason: '$mode',
+        );
+      }
+    });
+
+    test('rejects custom mode with absent or empty roots', () {
+      for (final roots in const [null, <int>[]]) {
+        expect(
+          trustPolicyPairingError(
+            trustMode: TrustMode.custom,
+            customRoots: roots,
+          ),
+          contains('requires a non-empty --custom-roots'),
+        );
+      }
+    });
+  });
+
   group('formatTrustMismatch', () {
     test('renders both backends through the success-line vocabulary', () {
       expect(

@@ -125,6 +125,29 @@ TrustBackend? parseTrustBackend(String value) => switch (value) {
   _ => null,
 };
 
+/// Diagnostic for a `--trust-mode` / `--custom-roots` combination the
+/// `NtsClient` constructor would reject, or `null` when the pair
+/// describes a constructible policy.
+///
+/// Mirrors the package's own pair validation in pure Dart so a CLI can
+/// fail an invalid invocation as a usage error before loading the
+/// bridge — the constructor runs the same check, but only after
+/// `initBridge`, which would report a missing dylib first and mask the
+/// argument mistake behind a bridge-load exit code.
+String? trustPolicyPairingError({
+  required TrustMode trustMode,
+  required List<int>? customRoots,
+}) {
+  if (customRoots != null && trustMode != TrustMode.custom) {
+    return '--custom-roots can only be set when --trust-mode is custom';
+  }
+  if (trustMode == TrustMode.custom &&
+      (customRoots == null || customRoots.isEmpty)) {
+    return '--trust-mode custom requires a non-empty --custom-roots';
+  }
+  return null;
+}
+
 /// Human rendering of a `--require-trust-backend` assertion failure:
 /// the handshake succeeded, but negotiated a backend other than the
 /// one the run demanded.

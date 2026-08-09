@@ -437,7 +437,7 @@ meaning.
 | ---- | ------------------------------------------------------------------------ |
 | `0`  | Bridge initialised; every host completed (success or failure)            |
 | `1`  | `--exit-on-error` was passed and at least one host produced warn / error, including a `--require-trust-backend` mismatch |
-| `64` | Argument error (bad `--port`, `--timeout`, missing hosts, unreadable `--custom-roots`, or a `--trust-mode` / `--custom-roots` pairing the `NtsClient` constructor rejects) |
+| `64` | Argument error (bad `--port`, `--timeout`, missing hosts, unreadable `--custom-roots`, or an invalid `--trust-mode` / `--custom-roots` pairing — checked before the bridge loads, so it wins over `70`) |
 | `70` | Bridge load failure (no dylib found, `NtsRustLib.init` threw)               |
 
 By default the exit code does **not** reflect per-host failures — a
@@ -687,7 +687,7 @@ Suggested removals (2):
 | ---- | ----------------------------------------------------------------------------- |
 | `0`  | Report produced (default — per-host verdicts do not affect the code)          |
 | `1`  | `--fail-on-drops` was passed and at least one host is a drop candidate        |
-| `64` | Usage error (bad option, file not found, parse failure, zero servers, unreadable `--custom-roots`, or a `--trust-mode` / `--custom-roots` pairing the `NtsClient` constructor rejects) |
+| `64` | Usage error (bad option, file not found, parse failure, zero servers, unreadable `--custom-roots`, or an invalid `--trust-mode` / `--custom-roots` pairing — checked before the bridge loads, so it wins over `70`) |
 | `70` | Bridge-load failure (no dylib found, `--library` path missing, or Rust init threw) — non-`--mock` runs only, before any probing |
 
 Unlike `nts_cli`, the exit code never reflects individual host outcomes

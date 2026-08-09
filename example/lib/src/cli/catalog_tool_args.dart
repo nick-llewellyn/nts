@@ -31,7 +31,8 @@ import '../state/nts_format.dart'
         kTrustBackendFlagValues,
         kTrustModeFlagValues,
         parseTrustBackend,
-        parseTrustMode;
+        parseTrustMode,
+        trustPolicyPairingError;
 import 'bridge_loader.dart' show initBridge;
 
 const int kDefaultPort = 4460;
@@ -246,6 +247,18 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
     }
   }
 
+  // Pair validation belongs here, not at client construction: the
+  // constructor runs the same check, but only after `initBridge`, so on
+  // a machine with no loadable dylib an invalid pairing would exit with
+  // the bridge-load code instead of the usage code the README documents.
+  final pairingError = trustPolicyPairingError(
+    trustMode: trustMode,
+    customRoots: customRoots,
+  );
+  if (pairingError != null) {
+    usageError(pairingError, usage: usage);
+  }
+
   return CommonProbeArgs(
     port: port,
     timeoutMs: timeoutMs,
@@ -327,10 +340,11 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   // Default policy keeps routing through the top-level functions and
   // the process-wide default client they share, so the path every
   // pre-existing invocation takes gains no client lifecycle and no new
-  // failure surface. Anything else — including a `--custom-roots`
-  // passed against a non-custom mode, which the client constructor
-  // rejects — mints exactly one client for the whole catalog, which the
-  // package documents as safe to share across concurrent calls.
+  // failure surface. Anything else mints exactly one client for the
+  // whole catalog, which the package documents as safe to share across
+  // concurrent calls. The catch is a backstop: `parseCommonProbeArgs`
+  // already rejects every combination the constructor validates, so it
+  // only fires if the two ever drift.
   NtsClient? client;
   if (common.trustMode != TrustMode.platformWithFallback ||
       common.customRoots != null) {

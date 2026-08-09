@@ -71,6 +71,13 @@ tarball.
   `TrustBackendMismatch` KE-stage failure, which makes the host
   `nonConforming` and therefore a drop candidate for
   `--fail-on-drops` and an exclusion from the generated manifest.
+
+  All three CLIs validate the `--trust-mode` / `--custom-roots`
+  pairing during argument parsing rather than leaving it to the
+  `NtsClient` constructor. The constructor runs after `initBridge`, so
+  on a machine with no loadable dylib an invalid pairing previously
+  exited with the bridge-load code instead of the usage code both
+  README exit-code tables document.
   Example app only; no package API change. (NTS-147)
 
 - RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example
