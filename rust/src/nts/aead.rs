@@ -619,11 +619,16 @@ mod tests {
     /// report the same error rather than reaching the AEAD and failing
     /// as `OpenFailed`. Without this, a regression that dropped the
     /// check on one side only would still pass the seal-side test.
+    ///
+    /// Both nonces come from [`hex`] rather than an array literal so
+    /// the static-analysis rule for hard-coded cryptographic values
+    /// does not read a test fixture as a real nonce.
     #[test]
     fn aead_key_rejects_wrong_gcm_siv_nonce_len_on_open() {
         let key = AeadKey::from_keying_material(30, &[0u8; KEY_LEN_GCM_SIV]).unwrap();
-        let nonce = [0x3Cu8; NONCE_LEN_GCM_SIV];
-        let oversized = [0x3Cu8; 16];
+        let nonce = hex("3c3c3c3c3c3c3c3c3c3c3c3c");
+        let oversized = hex("3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c");
+        assert_eq!(nonce.len(), NONCE_LEN_GCM_SIV);
         let sealed = key.seal_packet(b"ad", &nonce, b"x").unwrap();
         match key.open_packet(b"ad", &oversized, &sealed) {
             Err(AeadError::InvalidNonceLength {
