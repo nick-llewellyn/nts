@@ -64,8 +64,10 @@ tarball.
   catalog and disposes it after the probe wave; the default path
   constructs no client and keeps routing through the top-level
   functions, so a flagless run is unchanged. `--require-trust-backend`
-  is asserted on each host's single NTS-KE warm — the sample burst
-  reuses that session — and a mismatch is classified as a severe
+  is asserted on the NTS-KE warm *and* on every sample's own
+  attribution, since a query re-handshakes once the warmed cookie pool
+  is spent or its session was evicted; the first mismatch abandons the
+  rest of the host's run and is classified as a severe
   `TrustBackendMismatch` KE-stage failure, which makes the host
   `nonConforming` and therefore a drop candidate for
   `--fail-on-drops` and an exclusion from the generated manifest.

@@ -104,12 +104,15 @@ Future<List<ServerHealth>> probeAll(
 ///
 /// [client] routes both stages through a caller-owned [NtsClient]
 /// instead of the top-level functions' process-wide default client.
-/// When [requiredBackend] is non-null the warm's negotiated
-/// [TrustBackend] must match it: a mismatch short-circuits the burst as
-/// a severe `TrustBackendMismatch` [ProbeStage.ke] failure, so the host
-/// classifies as [HealthVerdict.nonConforming] and becomes a drop
-/// candidate. The assertion is made on the warm alone — the burst
-/// reuses that same session, so its handshake is the only one to check.
+/// When [requiredBackend] is non-null every handshake this host
+/// performs must have negotiated that [TrustBackend]: the warm's
+/// outcome is checked, and so is each sample's own attribution, since
+/// a query re-handshakes when the warmed cookie pool is spent or its
+/// session was evicted. The first mismatch, whichever stage observes
+/// it, abandons the rest of the run and reports a severe
+/// `TrustBackendMismatch` [ProbeStage.ke] failure on its own, so the
+/// host classifies as [HealthVerdict.nonConforming] and becomes a drop
+/// candidate.
 Future<ServerHealth> probeHost(
   NtsServerEntry entry, {
   required int port,
@@ -140,17 +143,7 @@ Future<ServerHealth> probeHost(
             bridgeConcurrencyCap: bridgeConcurrencyCap,
           );
     if (requiredBackend != null && warm.trustBackend != requiredBackend) {
-      return summarizeServer(
-        hostname: entry.hostname,
-        results: const [
-          ProbeFailure(
-            errorType: 'TrustBackendMismatch',
-            errorSeverity: true,
-            stage: ProbeStage.ke,
-          ),
-        ],
-        thresholds: thresholds,
-      );
+      return _trustMismatch(entry.hostname, thresholds);
     }
     if (warm.freshCookies < 1) {
       // KE completed but issued no cookies: the burst cannot run as a
@@ -195,8 +188,10 @@ Future<ServerHealth> probeHost(
   }
 
   // Stage 2: burst [samples] NTPv4 queries against the warmed pool. The
-  // cached session means these reuse the AEAD keys and spend a stored
-  // cookie apiece rather than re-handshaking; failures here are NTP-stage.
+  // cached session usually means these reuse the AEAD keys and spend a
+  // stored cookie apiece, but an exhausted pool or an evicted session
+  // makes a query re-handshake, so each sample carries its own trust
+  // attribution; failures here are NTP-stage.
   final results = <ProbeResult>[];
   for (var i = 0; i < samples; i++) {
     try {
@@ -213,6 +208,9 @@ Future<ServerHealth> probeHost(
               dnsConcurrencyCap: dnsConcurrencyCap,
               bridgeConcurrencyCap: bridgeConcurrencyCap,
             );
+      if (requiredBackend != null && s.trustBackend != requiredBackend) {
+        return _trustMismatch(entry.hostname, thresholds);
+      }
       final localMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
       final serverEstimate = s.utcUnixMicros + s.roundTripMicros ~/ 2;
       results.add(
@@ -243,3 +241,19 @@ Future<ServerHealth> probeHost(
     thresholds: thresholds,
   );
 }
+
+/// Reduce a host to the single severe KE-stage `TrustBackendMismatch`
+/// failure a `--require-trust-backend` violation earns, whichever
+/// handshake — the warm or a later sample's — observed it.
+ServerHealth _trustMismatch(String hostname, HealthThresholds thresholds) =>
+    summarizeServer(
+      hostname: hostname,
+      results: const [
+        ProbeFailure(
+          errorType: 'TrustBackendMismatch',
+          errorSeverity: true,
+          stage: ProbeStage.ke,
+        ),
+      ],
+      thresholds: thresholds,
+    );
