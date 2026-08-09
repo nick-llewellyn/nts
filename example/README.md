@@ -536,11 +536,14 @@ Usage: nts_health [options] <path-to-server-list.yml>
                             --concurrency can surface dnsSaturation
                             fast-fails.
     --trust-mode            TLS trust-anchor policy for every handshake
-                            this run initiates. Any value other than
-                            platform-with-fallback mints one call-scoped
+                            this run initiates. Left at
+                            platform-with-fallback, whether by omission
+                            or passed explicitly, the run goes through
+                            the package's process-wide default client;
+                            any stricter value mints one call-scoped
                             NtsClient for the whole catalog.
-                            [platform-with-fallback (default),
-                            platform-only, bundled-only, custom]
+                            [platform-with-fallback, platform-only,
+                            bundled-only, custom]
     --custom-roots          Path to a PEM certificate bundle or a single
                             DER-encoded certificate. Required by
                             --trust-mode=custom, and rejected with every

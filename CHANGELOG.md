@@ -91,7 +91,9 @@ tarball.
   terminates the VM without unwinding, so a `finally` cannot cover them;
   the buffer is instead registered on read and cleared at each of those
   sites, with the client construction keeping a `finally` for the
-  success and non-`NtsError` paths.
+  success and non-`NtsError` paths. `loadAndProbeCatalog` re-registers
+  on entry, since its argument object is publicly constructible and can
+  therefore carry roots the parser never saw.
   Example app only; no package API change. (NTS-147)
 
 - RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example

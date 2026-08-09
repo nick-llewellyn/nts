@@ -184,10 +184,19 @@ final List<List<int>> _registeredCustomRoots = [];
 /// bridge init — and `exit` terminates the VM without unwinding, so a
 /// `finally` cannot cover them. Registering once lets each of those
 /// sites wipe without threading the buffer down to it.
+///
+/// Registering the same buffer twice is a no-op, so an entry point that
+/// re-registers defensively cannot grow the list without bound.
 void registerCustomRootsForWipe(List<int>? customRoots) {
   if (customRoots == null) return;
+  if (_registeredCustomRoots.any((r) => identical(r, customRoots))) return;
   _registeredCustomRoots.add(customRoots);
 }
+
+/// How many distinct buffers are currently registered. Exposed so a
+/// test can pin the de-duplication in [registerCustomRootsForWipe]
+/// without reaching into private state; not part of the CLI surface.
+int get registeredCustomRootsCountForTesting => _registeredCustomRoots.length;
 
 /// Wipe every buffer passed to [registerCustomRootsForWipe] and forget
 /// it. Idempotent: a second call has nothing left to wipe.

@@ -48,7 +48,21 @@ Future<void> initBridge({
   required String? libraryPath,
 }) async {
   if (useMock) {
-    NtsRustLib.initMock(api: MockNtsApi());
+    // The bridge rejects a second initialisation with a `StateError`.
+    // A CLI run reaches this once, but a caller that already installed
+    // a bridge (a test driving this function) would otherwise get an
+    // unhandled throw, so treat an initialised bridge as satisfying the
+    // request. Anything else that escapes still has to wipe: the roots
+    // are live from here until client construction.
+    // ignore: invalid_use_of_internal_member
+    if (NtsRustLib.instance.initialized) return;
+    try {
+      NtsRustLib.initMock(api: MockNtsApi());
+    } catch (e) {
+      wipeRegisteredCustomRoots();
+      stderr.writeln('error: failed to initialize mock bridge: $e');
+      exit(kExitBridgeFailure);
+    }
     return;
   }
   final resolved = libraryPath ?? autoLocateDylib();

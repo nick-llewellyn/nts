@@ -248,6 +248,18 @@ void main() {
       expect(() => registerCustomRootsForWipe(null), returnsNormally);
       expect(wipeRegisteredCustomRoots, returnsNormally);
     });
+
+    test('re-registering the same buffer does not double-track it', () {
+      // `loadAndProbeCatalog` registers defensively, since its args are
+      // publicly constructible, so a CLI run registers the same buffer
+      // twice. That must not grow the registry per call.
+      final roots = Uint8List.fromList([1, 2, 3]);
+      registerCustomRootsForWipe(roots);
+      registerCustomRootsForWipe(roots);
+      expect(registeredCustomRootsCountForTesting, 1);
+      wipeRegisteredCustomRoots();
+      expect(roots, everyElement(0));
+    });
   });
 
   group('formatTrustMismatch', () {

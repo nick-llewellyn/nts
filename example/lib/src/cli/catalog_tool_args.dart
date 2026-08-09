@@ -308,6 +308,12 @@ class CatalogProbeOutcome {
 /// every host through the shared runner. Exits [kExitUsage] on a
 /// missing/empty/unparseable file (bridge failures exit via `initBridge`).
 Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
+  // `parseCommonProbeArgs` registers what it reads, but [common] is
+  // publicly constructible, so a caller can arrive here with roots this
+  // process has never seen. Registering again covers that path and is a
+  // no-op when the buffer is already tracked.
+  registerCustomRootsForWipe(common.customRoots);
+
   // Each of these exits precedes the client construction that consumes
   // the roots, so each has to clear them itself: `exit` does not unwind.
   final file = File(common.path);
