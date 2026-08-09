@@ -113,9 +113,10 @@ void addCommonProbeOptions(ArgParser parser) {
           'Assert that every call resolves this trust-anchor backend. '
           'A host whose call resolved a different one is classified as '
           'a severe KE-stage TrustBackendMismatch failure, making it a '
-          'drop candidate. Checked whether the call succeeded or '
-          'failed, since the backend is resolved before any network '
-          'I/O and so is reported on both.',
+          'drop candidate. Checked on a success and on any failure '
+          'that reports a backend, since resolution precedes the '
+          'network I/O; a failure that fired before resolution reports '
+          'none and keeps its own error type.',
     );
 }
 

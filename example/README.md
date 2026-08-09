@@ -292,8 +292,11 @@ Usage: nts_cli [options] <host> [<host>...]
                               trust-anchor backend. A host whose call
                               resolved a different one reports
                               TrustBackendMismatch instead of its success
-                              or its failure, which counts as a failure
-                              for --exit-on-error.
+                              or of the failure that reported the
+                              backend, which counts as a failure for
+                              --exit-on-error. A failure that fired
+                              before resolution reports no backend and
+                              keeps its own error type.
                               [platform, platform-with-hybrid-fallback,
                               webpki-roots, custom]
 -w, --warm                    Run ntsWarmCookies instead of ntsQuery.
@@ -373,7 +376,7 @@ fvm dart run bin/nts_cli.dart --json --exit-on-error \
 ```
 
 Probe under a non-default trust-anchor policy and assert the backend
-that actually authenticated. A non-default `--trust-mode` mints one
+each call resolved. A non-default `--trust-mode` mints one
 call-scoped `NtsClient` for the batch instead of routing through the
 package's default client:
 
@@ -558,10 +561,12 @@ Usage: nts_health [options] <path-to-server-list.yml>
                             trust-anchor backend. A host whose call
                             resolved a different one is a severe
                             KE-stage TrustBackendMismatch failure,
-                            making it a drop candidate. Checked whether
-                            the call succeeded or failed, since the
-                            backend is resolved before any network I/O
-                            and so is reported on both. [platform,
+                            making it a drop candidate. Checked on a
+                            success and on any failure that reports a
+                            backend, since resolution precedes the
+                            network I/O; a failure that fired before
+                            resolution reports none and keeps its own
+                            error type. [platform,
                             platform-with-hybrid-fallback, webpki-roots,
                             custom]
 -f, --format                Output format. [text (default), json, csv]
@@ -635,7 +640,7 @@ fvm dart run bin/nts_health.dart --fail-on-drops assets/nts-sources.yml
 ```
 
 Vet the whole catalog under a stricter trust policy, condemning any
-host that did not authenticate against the bundled `webpki-roots`:
+host whose calls did not resolve the bundled `webpki-roots` backend:
 
 ```bash
 fvm dart run bin/nts_health.dart --fail-on-drops \

@@ -136,8 +136,10 @@ ArgParser _buildParser() => ArgParser()
     help:
         'Assert that every call resolves this trust-anchor backend. A '
         'host whose call resolved a different one reports '
-        'TrustBackendMismatch instead of its success or its failure, '
-        'which counts as a failure for --exit-on-error.',
+        'TrustBackendMismatch instead of its success or of the failure '
+        'that reported the backend, which counts as a failure for '
+        '--exit-on-error. A failure that fired before resolution '
+        'reports no backend and keeps its own error type.',
   )
   ..addFlag(
     'warm',

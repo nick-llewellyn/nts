@@ -594,48 +594,30 @@ void main() {
   });
 
   group('errorTrustBackend', () {
-    test('returns the attribution every carrying variant holds', () {
+    test('reads back the attribution exactly where the shape holds one', () {
+      // Driven off `_NtsErrorKind.values` rather than a hand-listed
+      // set of carrying variants, so a variant added to the sealed
+      // type cannot be omitted from both halves of the property and
+      // leave this reading stronger than it is: `_withBackend` and
+      // `_carriesAttribution` are each exhaustive over the enum.
       const backend = TrustBackend.webpkiRoots;
-      const carrying = <NtsError>[
-        NtsError.network(message: 'x', trustBackend: backend),
-        NtsError.keProtocol(message: 'x', trustBackend: backend),
-        NtsError.ntpProtocol(message: 'x', trustBackend: backend),
-        NtsError.authentication(message: 'x', trustBackend: backend),
-        NtsError.timeout(phase: TimeoutPhase.ntp, trustBackend: backend),
-        NtsError.noCookies(trustBackend: backend),
-      ];
-      for (final err in carrying) {
-        expect(errorTrustBackend(err), backend, reason: errorTypeName(err));
+      for (final kind in _NtsErrorKind.values) {
+        final err = _withBackend(kind, backend);
+        expect(
+          errorTrustBackend(err),
+          _carriesAttribution(kind) ? backend : isNull,
+          reason: errorTypeName(err),
+        );
       }
     });
 
-    test('returns null for a carrying variant left unattributed', () {
-      // `null` on one of these means the failure fired before the
-      // backend was resolved, which is not evidence of a mismatch.
-      expect(errorTrustBackend(const NtsError.network(message: 'x')), isNull);
-      expect(errorTrustBackend(const NtsError.noCookies()), isNull);
-    });
-
-    test('returns null for every shape that carries no attribution', () {
-      // These either precede any handshake or describe the backend
-      // itself being unusable, so there is no field to read.
-      const bare = <NtsError>[
-        NtsError.invalidSpec(message: 'x'),
-        NtsError.trustBackendUnavailable(message: 'x'),
-        NtsError.internal(message: 'x'),
-        NtsError.abiMismatch(message: 'x'),
-      ];
-      for (final err in bare) {
-        expect(errorTrustBackend(err), isNull, reason: errorTypeName(err));
-      }
-    });
-
-    test('accepts every NtsError shape', () {
-      // The switch is exhaustive over the sealed hierarchy, so a new
-      // variant is a compile error rather than a silent null here;
-      // this pins that no existing shape throws.
+    test('returns null for every shape left unattributed', () {
+      // `_allNtsErrors` constructs each variant bare. On a carrying
+      // one that means the failure fired before the backend was
+      // resolved, which is not evidence of a mismatch; on the rest
+      // there is no field to read at all.
       for (final err in _allNtsErrors) {
-        expect(() => errorTrustBackend(err), returnsNormally);
+        expect(errorTrustBackend(err), isNull, reason: errorTypeName(err));
       }
     });
   });
@@ -997,6 +979,62 @@ String _expectedTag(_NtsErrorKind kind) => switch (kind) {
   _NtsErrorKind.internal => 'Internal',
   _NtsErrorKind.abiMismatch => 'AbiMismatch',
 };
+
+/// Whether [kind] holds a `trustBackend` field at all.
+///
+/// Exhaustive over [_NtsErrorKind] with no default arm, so a new
+/// variant forces an explicit decision here rather than defaulting to
+/// "carries nothing" and silently narrowing the attribution property.
+bool _carriesAttribution(_NtsErrorKind kind) => switch (kind) {
+  _NtsErrorKind.network ||
+  _NtsErrorKind.keProtocol ||
+  _NtsErrorKind.ntpProtocol ||
+  _NtsErrorKind.authentication ||
+  _NtsErrorKind.timeout ||
+  _NtsErrorKind.noCookies => true,
+  // These either precede any handshake or describe the backend itself
+  // being unusable, so Rust has nothing to attribute.
+  _NtsErrorKind.invalidSpec ||
+  _NtsErrorKind.trustBackendUnavailable ||
+  _NtsErrorKind.internal ||
+  _NtsErrorKind.abiMismatch => false,
+};
+
+/// Sample of [kind] with [backend] attached where the variant accepts
+/// one, and bare where it does not.
+///
+/// Exhaustive over [_NtsErrorKind], so the attribution property can be
+/// driven off the enum instead of a hand-listed set of carrying
+/// variants that a new variant would not be added to.
+NtsError _withBackend(_NtsErrorKind kind, TrustBackend backend) =>
+    switch (kind) {
+      _NtsErrorKind.network => NtsError.network(
+        message: 'x',
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.keProtocol => NtsError.keProtocol(
+        message: 'x',
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.ntpProtocol => NtsError.ntpProtocol(
+        message: 'x',
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.authentication => NtsError.authentication(
+        message: 'x',
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.timeout => NtsError.timeout(
+        phase: TimeoutPhase.ntp,
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.noCookies => NtsError.noCookies(trustBackend: backend),
+      _NtsErrorKind.invalidSpec => const NtsError.invalidSpec(message: 'x'),
+      _NtsErrorKind.trustBackendUnavailable =>
+        const NtsError.trustBackendUnavailable(message: 'x'),
+      _NtsErrorKind.internal => const NtsError.internal(message: 'x'),
+      _NtsErrorKind.abiMismatch => const NtsError.abiMismatch(message: 'x'),
+    };
 
 /// Whether [kind] is error-severity rather than warn-severity.
 ///
