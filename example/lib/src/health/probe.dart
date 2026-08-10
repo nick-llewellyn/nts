@@ -242,7 +242,7 @@ Future<ServerHealth> probeHost(
           rttMicros: s.roundTripMicros,
           stratum: s.serverStratum,
           aeadId: s.aeadId,
-          offsetMicros: _plausibleOffsetMicros(s),
+          offsetMicros: _plausibleOffsetMicros(s, thresholds),
         ),
       );
     } on NtsError catch (err) {
@@ -284,8 +284,8 @@ Future<ServerHealth> probeHost(
 /// trusted.
 ///
 /// θ is computed from four timestamps, two of which are local
-/// system-clock readings, so a clock step between the UDP send and
-/// recv corrupts it — and unlike `ntsGetTime`, which surfaces θ as a
+/// system-clock readings, so a clock step anywhere between T1 and T4
+/// corrupts it — and unlike `ntsGetTime`, which surfaces θ as a
 /// statistic, this module feeds it into a verdict that decides whether
 /// a host stays in the catalog. A corrupted θ would eject a healthy
 /// server, so it is screened out here.
@@ -308,21 +308,25 @@ Future<ServerHealth> probeHost(
 /// send, so δ legitimately carries a pre-send interval the round trip
 /// excludes — measured against the catalog it exceeds the round trip by
 /// 1–9% on every healthy server, so that bound would suppress every
-/// real sample. [_kMaxDelayRttRatio] widens it to leave roughly an
-/// order of magnitude of headroom over the worst observed excess while
-/// still rejecting the multi-second steps that matter. It can tighten
-/// back to the strict bound once the native capture points are
-/// aligned.
-int? _plausibleOffsetMicros(NtsTimeSample s) =>
+/// real sample.
+///
+/// The allowance over the round trip is additive rather than a multiple
+/// of it, because the pre-send interval includes the NTPv4-host DNS
+/// lookup, whose latency is unrelated to the round trip: a slow lookup
+/// in front of a LAN-local server would blow any ratio-derived ceiling
+/// on a perfectly healthy sample. Its size is
+/// [HealthThresholds.offsetThresholdMicros], the same limit the verdict
+/// uses, since a step of S inflates δ by S and corrupts θ by S/2 — so
+/// every step large enough to push |θ| past the threshold on its own is
+/// rejected, while a setup cost measured in milliseconds is not. The
+/// bound can tighten to the strict one once the native capture points
+/// are aligned.
+int? _plausibleOffsetMicros(NtsTimeSample s, HealthThresholds thresholds) =>
     s.peerDelayMicros > 0 &&
-        s.peerDelayMicros <= s.roundTripMicros * _kMaxDelayRttRatio
+        s.peerDelayMicros <=
+            s.roundTripMicros + thresholds.offsetThresholdMicros
     ? s.offsetMicros
     : null;
-
-/// Multiple of `roundTripMicros` above which a peer delay is read as a
-/// forward local clock step rather than as pre-send setup cost. See
-/// [_plausibleOffsetMicros].
-const _kMaxDelayRttRatio = 2;
 
 /// Reduce a host to the single severe KE-stage `TrustBackendMismatch`
 /// failure a `--require-trust-backend` violation earns, whichever

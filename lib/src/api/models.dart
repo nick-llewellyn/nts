@@ -196,8 +196,17 @@ class NtsTimeSample {
   /// processing time.
   ///
   /// T1 and T4 are local system-clock readings, so θ is only
-  /// meaningful if the system clock was not stepped between the UDP
-  /// send and recv of this exchange. New in 7.1.
+  /// meaningful if the system clock was not stepped between them.
+  /// That window opens *before* the UDP send: T1 is stamped ahead of
+  /// the packet build and the socket bind (see [peerDelayMicros]), so
+  /// a step during that setup corrupts θ as well.
+  ///
+  /// The same early T1 biases θ upward by half the setup interval
+  /// even when the clock is steady, since T1 is earlier than the
+  /// instant the request actually left. Measured against the bundled
+  /// server catalog that interval runs 1–9% of [roundTripMicros], so
+  /// the bias is sub-millisecond to a few milliseconds. Aligning the
+  /// capture points is tracked as NTS-153. New in 7.1.
   final int offsetMicros;
 
   /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905 §8):
@@ -215,9 +224,13 @@ class NtsTimeSample {
   /// window applied by `ntsGetTime` is therefore conservative rather
   /// than diagnostic: it selects the [roundTripMicros] fallback on
   /// healthy samples too. Consumers screening only for clock steps
-  /// should pair the lower bound with a tolerant upper bound (say
-  /// `2 × roundTripMicros`) instead of the strict window. Aligning
-  /// the two capture points is tracked as NTS-153.
+  /// should pair the lower bound with a tolerant upper bound instead
+  /// of the strict window. Make that allowance *additive* over
+  /// [roundTripMicros] rather than a multiple of it: the pre-send
+  /// interval includes the NTPv4-host DNS lookup, whose latency bears
+  /// no relation to the round trip, so a ratio-derived ceiling can
+  /// reject a healthy sample from a nearby server behind a slow
+  /// resolver. Aligning the two capture points is tracked as NTS-153.
   ///
   /// New in 7.1.
   final int peerDelayMicros;

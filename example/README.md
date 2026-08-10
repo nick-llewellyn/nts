@@ -682,9 +682,12 @@ was not stepped mid-exchange, so a sample whose peer delay falls
 outside a plausible range is excluded from the median rather than
 counted as a zero offset. A backwards step drives the delay to a
 non-positive value, which no real delay can be; a forward step inflates
-it, so delays beyond twice the measured round trip are rejected too —
-the bound is deliberately loose because the delay legitimately runs a
-few percent above the round trip on healthy servers. A host with no
+it, so delays beyond the round trip plus the offset threshold are
+rejected too — the allowance is additive because the delay legitimately
+carries pre-send setup cost, including a DNS lookup whose latency is
+unrelated to the round trip, and it is sized from the verdict threshold
+so any step big enough to flip a verdict on its own is caught. A host
+with no
 usable sample left is not judged on an offset it never produced: the
 offset column is blank and the host carries a `clock offset
 unavailable (implausible peer delay)` note, which is also emitted in

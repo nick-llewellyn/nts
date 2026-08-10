@@ -311,7 +311,10 @@ void main() {
     setUpAll(() => NtsRustLib.initMock(api: api));
     setUp(api.reset);
 
-    Future<ServerHealth> probe({int samples = 3}) async {
+    Future<ServerHealth> probe({
+      int samples = 3,
+      HealthThresholds thresholds = const HealthThresholds(),
+    }) async {
       final client = nts.NtsClient();
       try {
         return await probeHost(
@@ -325,7 +328,7 @@ void main() {
           samples: samples,
           dnsConcurrencyCap: 1,
           bridgeConcurrencyCap: 1,
-          thresholds: const HealthThresholds(),
+          thresholds: thresholds,
           client: client,
           requiredBackend: nts.TrustBackend.platform,
         );
@@ -410,6 +413,49 @@ void main() {
       expect(h.verdict, HealthVerdict.healthy);
       expect(h.offsetMicros, isNull);
       expect(h.note, contains('clock offset unavailable'));
+    });
+
+    test('θ survives a peer delay exactly at the allowance', () async {
+      // The bound is `roundTripMicros + offsetThresholdMicros`: 1 ms +
+      // 1 s against this fixture. It is inclusive, so the boundary
+      // value is the largest excess the gate still reads as setup cost.
+      api.peerDelayMicros = 1001000;
+      api.offsetMicros = 1200;
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.offsetMicros, 1200);
+      expect(h.note, isNull);
+    });
+
+    test('θ is suppressed one microsecond past the allowance', () async {
+      // Pins the cutoff from the other side, so widening or narrowing
+      // the allowance cannot pass silently.
+      api.peerDelayMicros = 1001001;
+      api.offsetMicros = 1200;
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.offsetMicros, isNull);
+      expect(h.note, contains('clock offset unavailable'));
+    });
+
+    test('the allowance tracks the configured offset threshold', () async {
+      // The allowance is derived from the verdict threshold rather than
+      // from a constant of its own, so tightening the threshold
+      // tightens the gate. δ = 3001 µs clears the default bound but not
+      // a 2 ms one; δ = 3000 µs sits exactly on the tightened bound.
+      const tight = HealthThresholds(offsetThresholdMicros: 2000);
+      api.peerDelayMicros = 3001;
+      api.offsetMicros = 1200;
+      final h = await probe(thresholds: tight);
+      expect(h.offsetMicros, isNull);
+      expect(h.note, contains('clock offset unavailable'));
+
+      api.reset();
+      api.peerDelayMicros = 3000;
+      api.offsetMicros = 1200;
+      final ok = await probe(thresholds: tight);
+      expect(ok.offsetMicros, 1200);
+      expect(ok.note, isNull);
     });
 
     test('a plausible θ beyond the threshold still flags the host', () async {

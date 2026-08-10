@@ -152,7 +152,7 @@ tarball.
   predated it.
 
   θ is only meaningful if the local clock was not stepped between the
-  UDP send and recv, and unlike `ntsGetTime` — which reports θ as a
+  T1 and T4, and unlike `ntsGetTime` — which reports θ as a
   statistic — this module feeds it into a verdict that decides whether
   a host stays in the catalog. Samples are therefore screened on the
   peer delay: a value that is not a positive duration cannot be a real
@@ -174,10 +174,27 @@ tarball.
   legitimately includes a pre-send interval the round trip excludes.
   Measured across the bundled catalog it exceeds the round trip by
   1–9% on every healthy server, so asserting that bound would suppress
-  every real sample; the prober admits up to `2 × roundTripMicros`
-  instead, which leaves an order of magnitude of headroom over the
-  worst observed excess while still rejecting multi-second steps.
+  every real sample; the prober admits up to
+  `roundTripMicros + HealthThresholds.offsetThresholdMicros` instead.
+  That allowance is additive rather than a multiple of the round trip
+  because the pre-send interval includes the NTPv4-host DNS lookup,
+  whose latency is unrelated to the round trip — a ratio-derived
+  ceiling would reject a healthy sample from a nearby server behind a
+  slow resolver. Sizing it from the verdict threshold means every step
+  large enough to flip a verdict on its own is rejected (a step of S
+  inflates δ by S and corrupts θ by S/2), while a setup cost measured
+  in milliseconds is not.
   Example app only; no package change. (NTS-152)
+
+- **Docs:** `NtsTimeSample.offsetMicros` described θ's vulnerable
+  window as spanning the UDP send and recv. It actually opens at T1,
+  which precedes the packet build and the socket bind, so a step
+  during that setup corrupts θ too — and the same early T1 biases θ
+  upward by half the setup interval even on a steady clock
+  (sub-millisecond to a few milliseconds, from the 1–9% measurement
+  above). The rustdoc, generated bindings, and wrapper dartdoc now
+  say so and point at NTS-153. Documentation only; no behaviour
+  change.
 
 - **Docs:** `NtsTimeSample.peerDelayMicros` documented δ as always
   `<= roundTripMicros` on a steadily-running clock, and a value
