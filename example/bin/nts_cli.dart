@@ -120,8 +120,8 @@ ArgParser _buildParser() => ArgParser()
         'TLS trust-anchor policy for every handshake this run '
         'initiates. Left at platform-with-fallback, whether by '
         'omission or passed explicitly, the run goes through the '
-        'package\'s process-wide default client; any stricter value '
-        'mints one call-scoped NtsClient for the batch.',
+        'package\'s process-wide default client; any non-default '
+        'value mints one call-scoped NtsClient for the batch.',
   )
   ..addOption(
     'custom-roots',
@@ -134,10 +134,12 @@ ArgParser _buildParser() => ArgParser()
     'require-trust-backend',
     allowed: kTrustBackendFlagValues,
     help:
-        'Assert that each handshake negotiated this backend. A host '
-        'that authenticated under a different one reports '
-        'TrustBackendMismatch instead of success, which counts as a '
-        'failure for --exit-on-error.',
+        'Assert that every call resolves this trust-anchor backend. A '
+        'host whose call resolved a different one reports '
+        'TrustBackendMismatch instead of its success or of the failure '
+        'that reported the backend, which counts as a failure for '
+        '--exit-on-error. A failure that fired before resolution '
+        'reports no backend and keeps its own error type.',
   )
   ..addFlag(
     'warm',
@@ -218,9 +220,15 @@ Future<void> main(List<String> argv) async {
       : parseTrustBackend(requiredBackendRaw);
 
   // Read the roots ahead of client construction so an unreadable path
-  // is an argument error rather than a trust-policy one. No wipe of
-  // this buffer: the package copies the bytes at the FFI boundary and
-  // zeroises its own copy, and the process is short-lived.
+  // is an argument error rather than a trust-policy one. Wiping this
+  // buffer once the constructor has copied it is the caller's job:
+  // the package zeroises only its own FFI-side copy and documents the
+  // caller's list as never touched.
+  //
+  // Registering makes the termination sites between this read and the
+  // wipe below — the pairing check, and every `initBridge` failure —
+  // able to clear the bytes: `exit` does not unwind, so a `finally`
+  // spanning them would be skipped.
   final customRootsPath = args['custom-roots'] as String?;
   List<int>? customRoots;
   if (customRootsPath != null) {
@@ -230,6 +238,21 @@ Future<void> main(List<String> argv) async {
       stderr.writeln('argument error: --custom-roots: ${e.message}');
       exit(64);
     }
+    registerCustomRootsForWipe(customRoots);
+  }
+
+  // Pair validation belongs here, not at client construction: the
+  // constructor runs the same check, but only after `initBridge`, so on
+  // a machine with no loadable dylib an invalid pairing would exit with
+  // the bridge-load code instead of the usage code the README documents.
+  final pairingError = trustPolicyPairingError(
+    trustMode: trustMode,
+    customRoots: customRoots,
+  );
+  if (pairingError != null) {
+    wipeRegisteredCustomRoots();
+    stderr.writeln('argument error: $pairingError');
+    exit(64);
   }
 
   await initBridge(
@@ -240,16 +263,34 @@ Future<void> main(List<String> argv) async {
   // Default policy keeps routing through the top-level functions and
   // the process-wide default client they share, so the path every
   // pre-existing invocation takes gains no client lifecycle and no new
-  // failure surface. Anything else — including a `--custom-roots`
-  // passed against a non-custom mode, which the client constructor
-  // rejects — mints exactly one client for the whole fan-out, which
-  // the package documents as safe to share across concurrent calls.
+  // failure surface. Anything else mints exactly one client for the
+  // whole fan-out, which the package documents as safe to share across
+  // concurrent calls. The catch is a backstop: the pairing check above
+  // already rejects every combination the constructor validates, so it
+  // only fires if the two ever drift.
   NtsClient? client;
   if (trustMode != TrustMode.platformWithFallback || customRoots != null) {
+    NtsError? constructionError;
     try {
       client = NtsClient(trustMode: trustMode, customRoots: customRoots);
     } on NtsError catch (err) {
-      stderr.writeln('argument error: ${describeError(err)}');
+      constructionError = err;
+    } finally {
+      // The constructor has copied the bytes by now, on every path; the
+      // local is the last live reference the run holds, so wipe it here
+      // rather than leaving it to process teardown. `finally` covers the
+      // success path and a non-[NtsError] escape; the usage exit below
+      // is deliberately outside it, because `exit` terminates the VM
+      // without unwinding.
+      //
+      // Scoped to this run's buffer rather than the whole registry, so
+      // the wipe cannot reach a buffer some other registrant is still
+      // waiting to hand to its own constructor. The exits keep the
+      // blanket form: they end the process.
+      wipeAndDeregisterCustomRoots(customRoots);
+    }
+    if (constructionError != null) {
+      stderr.writeln('argument error: ${describeError(constructionError)}');
       exit(64);
     }
   }
@@ -382,6 +423,16 @@ Future<void> _runQuery(
       jsonPayload: jsonQuerySuccess(sample),
     );
   } on NtsError catch (err) {
+    final attributed = errorTrustBackend(err);
+    if (requiredBackend != null &&
+        attributed != null &&
+        attributed != requiredBackend) {
+      // The handshake resolved a backend, so the assertion applies to
+      // this failure as much as to a success: report the violation
+      // rather than the symptom it surfaced as.
+      ctx.trustMismatch('nts_query', spec.host, requiredBackend, attributed);
+      return;
+    }
     ctx.failure('nts_query', spec.host, err);
   } catch (err) {
     ctx.unhandled('nts_query', spec.host, err);
@@ -430,6 +481,18 @@ Future<void> _runWarm(
       jsonPayload: jsonWarmSuccess(outcome),
     );
   } on NtsError catch (err) {
+    final attributed = errorTrustBackend(err);
+    if (requiredBackend != null &&
+        attributed != null &&
+        attributed != requiredBackend) {
+      ctx.trustMismatch(
+        'nts_warm_cookies',
+        spec.host,
+        requiredBackend,
+        attributed,
+      );
+      return;
+    }
     ctx.failure('nts_warm_cookies', spec.host, err);
   } catch (err) {
     ctx.unhandled('nts_warm_cookies', spec.host, err);

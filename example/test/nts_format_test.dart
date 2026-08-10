@@ -2,10 +2,12 @@
 // the on-screen log (`NtsController`) and the CLI (`bin/nts_cli.dart`).
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show
+        NtsClient,
         NtsDnsPoolStats,
         NtsError,
         NtsErrorAbiMismatch,
@@ -140,6 +142,172 @@ void main() {
     test('unrecognised values return null', () {
       expect(parseTrustBackend('webpkiRoots'), isNull);
       expect(parseTrustBackend(''), isNull);
+    });
+  });
+
+  group('trustPolicyPairingError', () {
+    // The helper duplicates the package's own pair validation so the
+    // CLIs can reject a bad pairing before `initBridge`, which the
+    // constructor runs after. Duplication means drift, so every case
+    // below asserts the helper's verdict *and* the constructor's on
+    // the same pairing rather than trusting the helper alone.
+    for (final mode in TrustMode.values) {
+      for (final roots in const [
+        null,
+        <int>[],
+        <int>[1, 2, 3],
+      ]) {
+        final label = '$mode + ${roots == null ? 'null' : '${roots.length}B'}';
+        test('agrees with the NtsClient constructor for $label', () {
+          final helperError = trustPolicyPairingError(
+            trustMode: mode,
+            customRoots: roots,
+          );
+          NtsClient? client;
+          Object? constructorError;
+          try {
+            client = NtsClient(trustMode: mode, customRoots: roots);
+          } catch (e) {
+            constructorError = e;
+          } finally {
+            client?.dispose();
+          }
+          expect(
+            helperError == null,
+            constructorError == null,
+            reason: 'helper=$helperError constructor=$constructorError',
+          );
+        });
+      }
+    }
+
+    test('rejects roots supplied against a non-custom mode', () {
+      for (final mode in TrustMode.values.where((m) => m != TrustMode.custom)) {
+        expect(
+          trustPolicyPairingError(trustMode: mode, customRoots: const [1]),
+          contains('--custom-roots can only be set'),
+          reason: '$mode',
+        );
+      }
+    });
+
+    test('rejects custom mode with absent or empty roots', () {
+      for (final roots in const [null, <int>[]]) {
+        expect(
+          trustPolicyPairingError(
+            trustMode: TrustMode.custom,
+            customRoots: roots,
+          ),
+          contains('requires a non-empty --custom-roots'),
+        );
+      }
+    });
+  });
+
+  group('wipeCustomRoots', () {
+    test('zeroes a mutable buffer in place, so aliases see the wipe', () {
+      final roots = Uint8List.fromList([1, 2, 3, 4]);
+      final alias = roots;
+      wipeCustomRoots(roots);
+      expect(roots, everyElement(0));
+      expect(alias, everyElement(0));
+      expect(roots, hasLength(4));
+    });
+
+    test('tolerates null and an unmodifiable list', () {
+      expect(() => wipeCustomRoots(null), returnsNormally);
+      expect(() => wipeCustomRoots(const [1, 2, 3]), returnsNormally);
+    });
+  });
+
+  group('registerCustomRootsForWipe', () {
+    // The registry is process-global, so leave it empty for whatever
+    // runs next regardless of how a case ends.
+    tearDown(wipeRegisteredCustomRoots);
+
+    test('wipes every registered buffer', () {
+      final a = Uint8List.fromList([1, 2, 3]);
+      final b = Uint8List.fromList([4, 5]);
+      registerCustomRootsForWipe(a);
+      registerCustomRootsForWipe(b);
+      wipeRegisteredCustomRoots();
+      expect(a, everyElement(0));
+      expect(b, everyElement(0));
+    });
+
+    test('deregisters, so a later wipe cannot clear a reused buffer', () {
+      final roots = Uint8List.fromList([1, 2, 3]);
+      registerCustomRootsForWipe(roots);
+      wipeRegisteredCustomRoots();
+      roots.setAll(0, [7, 8, 9]);
+      wipeRegisteredCustomRoots();
+      expect(roots, [7, 8, 9]);
+    });
+
+    test('tolerates null and an empty registry', () {
+      expect(() => registerCustomRootsForWipe(null), returnsNormally);
+      expect(wipeRegisteredCustomRoots, returnsNormally);
+    });
+
+    test('re-registering the same buffer does not double-track it', () {
+      // `loadAndProbeCatalog` registers defensively, since its args are
+      // publicly constructible, so a CLI run registers the same buffer
+      // twice. That must not grow the registry per call.
+      final roots = Uint8List.fromList([1, 2, 3]);
+      registerCustomRootsForWipe(roots);
+      registerCustomRootsForWipe(roots);
+      expect(registeredCustomRootsCountForTesting, 1);
+      wipeRegisteredCustomRoots();
+      expect(roots, everyElement(0));
+    });
+  });
+
+  group('wipeAndDeregisterCustomRoots', () {
+    tearDown(wipeRegisteredCustomRoots);
+
+    test('wipes the named buffer and leaves every other one intact', () {
+      // The property the concurrent case needs: the entry points
+      // suspend at `await initBridge`, so one call's success-path wipe
+      // must not reach roots another call has registered but not yet
+      // handed to its own NtsClient constructor.
+      final mine = Uint8List.fromList([1, 2, 3]);
+      final theirs = Uint8List.fromList([4, 5, 6]);
+      registerCustomRootsForWipe(mine);
+      registerCustomRootsForWipe(theirs);
+      wipeAndDeregisterCustomRoots(mine);
+      expect(mine, everyElement(0));
+      expect(theirs, [4, 5, 6]);
+      expect(registeredCustomRootsCountForTesting, 1);
+    });
+
+    test('deregisters, so a later blanket wipe cannot clear it again', () {
+      final roots = Uint8List.fromList([1, 2, 3]);
+      registerCustomRootsForWipe(roots);
+      wipeAndDeregisterCustomRoots(roots);
+      roots.setAll(0, [7, 8, 9]);
+      wipeRegisteredCustomRoots();
+      expect(roots, [7, 8, 9]);
+    });
+
+    test('wipes an unregistered buffer without disturbing the registry', () {
+      // nts_cli holds its roots in a local and registers them, but the
+      // helper is not allowed to assume registration.
+      final tracked = Uint8List.fromList([1, 2]);
+      final loose = Uint8List.fromList([3, 4]);
+      registerCustomRootsForWipe(tracked);
+      wipeAndDeregisterCustomRoots(loose);
+      expect(loose, everyElement(0));
+      expect(tracked, [1, 2]);
+      expect(registeredCustomRootsCountForTesting, 1);
+    });
+
+    test('tolerates null and a repeat call', () {
+      final roots = Uint8List.fromList([1, 2, 3]);
+      registerCustomRootsForWipe(roots);
+      expect(() => wipeAndDeregisterCustomRoots(null), returnsNormally);
+      wipeAndDeregisterCustomRoots(roots);
+      expect(() => wipeAndDeregisterCustomRoots(roots), returnsNormally);
+      expect(registeredCustomRootsCountForTesting, 0);
     });
   });
 
@@ -421,6 +589,35 @@ void main() {
     test('returns null for every non-Timeout shape', () {
       for (final err in _nonTimeoutErrors) {
         expect(timeoutPhaseName(err), isNull, reason: errorTypeName(err));
+      }
+    });
+  });
+
+  group('errorTrustBackend', () {
+    test('reads back the attribution exactly where the shape holds one', () {
+      // Driven off `_NtsErrorKind.values` rather than a hand-listed
+      // set of carrying variants, so a variant added to the sealed
+      // type cannot be omitted from both halves of the property and
+      // leave this reading stronger than it is: `_withBackend` and
+      // `_carriesAttribution` are each exhaustive over the enum.
+      const backend = TrustBackend.webpkiRoots;
+      for (final kind in _NtsErrorKind.values) {
+        final err = _withBackend(kind, backend);
+        expect(
+          errorTrustBackend(err),
+          _carriesAttribution(kind) ? backend : isNull,
+          reason: errorTypeName(err),
+        );
+      }
+    });
+
+    test('returns null for every shape left unattributed', () {
+      // `_allNtsErrors` constructs each variant bare. On a carrying
+      // one that means the failure fired before the backend was
+      // resolved, which is not evidence of a mismatch; on the rest
+      // there is no field to read at all.
+      for (final err in _allNtsErrors) {
+        expect(errorTrustBackend(err), isNull, reason: errorTypeName(err));
       }
     });
   });
@@ -782,6 +979,63 @@ String _expectedTag(_NtsErrorKind kind) => switch (kind) {
   _NtsErrorKind.internal => 'Internal',
   _NtsErrorKind.abiMismatch => 'AbiMismatch',
 };
+
+/// Whether [kind] holds a `trustBackend` field at all.
+///
+/// Exhaustive over [_NtsErrorKind] with no default arm, so a new
+/// variant forces an explicit decision here rather than defaulting to
+/// "carries nothing" and silently narrowing the attribution property.
+bool _carriesAttribution(_NtsErrorKind kind) => switch (kind) {
+  _NtsErrorKind.network ||
+  _NtsErrorKind.keProtocol ||
+  _NtsErrorKind.ntpProtocol ||
+  _NtsErrorKind.authentication ||
+  _NtsErrorKind.timeout ||
+  _NtsErrorKind.noCookies => true,
+  // These four have no attribution field at all, so their `null` says
+  // nothing about when they fired — `internal` and `abiMismatch` can
+  // both be raised downstream of a resolved backend.
+  _NtsErrorKind.invalidSpec ||
+  _NtsErrorKind.trustBackendUnavailable ||
+  _NtsErrorKind.internal ||
+  _NtsErrorKind.abiMismatch => false,
+};
+
+/// Sample of [kind] with [backend] attached where the variant accepts
+/// one, and bare where it does not.
+///
+/// Exhaustive over [_NtsErrorKind], so the attribution property can be
+/// driven off the enum instead of a hand-listed set of carrying
+/// variants that a new variant would not be added to.
+NtsError _withBackend(_NtsErrorKind kind, TrustBackend backend) =>
+    switch (kind) {
+      _NtsErrorKind.network => NtsError.network(
+        message: 'x',
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.keProtocol => NtsError.keProtocol(
+        message: 'x',
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.ntpProtocol => NtsError.ntpProtocol(
+        message: 'x',
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.authentication => NtsError.authentication(
+        message: 'x',
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.timeout => NtsError.timeout(
+        phase: TimeoutPhase.ntp,
+        trustBackend: backend,
+      ),
+      _NtsErrorKind.noCookies => NtsError.noCookies(trustBackend: backend),
+      _NtsErrorKind.invalidSpec => const NtsError.invalidSpec(message: 'x'),
+      _NtsErrorKind.trustBackendUnavailable =>
+        const NtsError.trustBackendUnavailable(message: 'x'),
+      _NtsErrorKind.internal => const NtsError.internal(message: 'x'),
+      _NtsErrorKind.abiMismatch => const NtsError.abiMismatch(message: 'x'),
+    };
 
 /// Whether [kind] is error-severity rather than warn-severity.
 ///

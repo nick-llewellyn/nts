@@ -280,19 +280,23 @@ Usage: nts_cli [options] <host> [<host>...]
                               run initiates. Left at platform-with-fallback,
                               whether by omission or passed explicitly, the
                               run goes through the package's process-wide
-                              default client; any stricter value mints one
-                              call-scoped NtsClient for the batch.
+                              default client; any non-default value mints
+                              one call-scoped NtsClient for the batch.
                               [platform-with-fallback, platform-only,
                               bundled-only, custom]
     --custom-roots            Path to a PEM certificate bundle or a single
                               DER-encoded certificate. Required by
                               --trust-mode=custom, and rejected with every
                               other mode.
-    --require-trust-backend   Assert that each handshake negotiated this
-                              backend. A host that authenticated under a
-                              different one reports TrustBackendMismatch
-                              instead of success, which counts as a failure
-                              for --exit-on-error.
+    --require-trust-backend   Assert that every call resolves this
+                              trust-anchor backend. A host whose call
+                              resolved a different one reports
+                              TrustBackendMismatch instead of its success
+                              or of the failure that reported the
+                              backend, which counts as a failure for
+                              --exit-on-error. A failure that fired
+                              before resolution reports no backend and
+                              keeps its own error type.
                               [platform, platform-with-hybrid-fallback,
                               webpki-roots, custom]
 -w, --warm                    Run ntsWarmCookies instead of ntsQuery.
@@ -372,7 +376,7 @@ fvm dart run bin/nts_cli.dart --json --exit-on-error \
 ```
 
 Probe under a non-default trust-anchor policy and assert the backend
-that actually authenticated. A non-default `--trust-mode` mints one
+each call resolved. A non-default `--trust-mode` mints one
 call-scoped `NtsClient` for the batch instead of routing through the
 package's default client:
 
@@ -437,7 +441,7 @@ meaning.
 | ---- | ------------------------------------------------------------------------ |
 | `0`  | Bridge initialised; every host completed (success or failure)            |
 | `1`  | `--exit-on-error` was passed and at least one host produced warn / error, including a `--require-trust-backend` mismatch |
-| `64` | Argument error (bad `--port`, `--timeout`, missing hosts, unreadable `--custom-roots`, or a `--trust-mode` / `--custom-roots` pairing the `NtsClient` constructor rejects) |
+| `64` | Argument error (bad `--port`, `--timeout`, missing hosts, unreadable `--custom-roots`, or an invalid `--trust-mode` / `--custom-roots` pairing — checked before the bridge loads, so it wins over `70`) |
 | `70` | Bridge load failure (no dylib found, `NtsRustLib.init` threw)               |
 
 By default the exit code does **not** reflect per-host failures — a
@@ -473,8 +477,16 @@ records it always has. When present they ride every record in the
 stream, `dns_pool_stats` included. A `--require-trust-backend`
 mismatch arrives as an `error` event whose `error_type` is
 `TrustBackendMismatch` — distinct from every `NtsError` tag — carrying
-the negotiated `trust_backend` alongside the demanded
-`required_trust_backend`.
+the resolved `trust_backend` alongside the demanded
+`required_trust_backend`. A call that resolved the wrong backend and
+*then* failed reports the mismatch rather than the `NtsError` it
+surfaced as, since the attribution rides on the error too. The initial
+backend is resolved before any DNS, connect, or TLS I/O, so this
+asserts which anchor set the call was configured with, not that a chain
+was verified against it — an unreachable host can mismatch. Android's
+`platform-with-hybrid-fallback` is the one value resolved later, when
+the fallback verifier accepts a chain during TLS, so that one does
+evidence a verified chain.
 
 The trailing DNS pool report cannot be a human-readable block in this
 mode without corrupting the one-object-per-line stream, so it is
@@ -535,6 +547,36 @@ Usage: nts_health [options] <path-to-server-list.yml>
                             cannot self-saturate the pool; values below
                             --concurrency can surface dnsSaturation
                             fast-fails.
+    --trust-mode            TLS trust-anchor policy for every handshake
+                            this run initiates. Left at
+                            platform-with-fallback, whether by omission
+                            or passed explicitly, the run goes through
+                            the package's process-wide default client;
+                            any non-default value mints one call-scoped
+                            NtsClient for the whole catalog.
+                            [platform-with-fallback, platform-only,
+                            bundled-only, custom]
+    --custom-roots          Path to a PEM certificate bundle or a single
+                            DER-encoded certificate. Required by
+                            --trust-mode=custom, and rejected with every
+                            other mode.
+    --require-trust-backend Assert that every call resolves this
+                            trust-anchor backend. A host whose call
+                            resolved a different one is a severe
+                            KE-stage TrustBackendMismatch failure,
+                            making it a drop candidate. Checked on a
+                            success and on any failure that reports a
+                            backend; a failure that fired before the
+                            backend was resolved reports none and keeps
+                            its own error type. The initial backend is
+                            resolved before any network I/O, so an
+                            unreachable host can mismatch; on Android
+                            platform-with-hybrid-fallback is the one
+                            value observed later, once the fallback
+                            verifier accepts a chain during TLS.
+                            [platform,
+                            platform-with-hybrid-fallback, webpki-roots,
+                            custom]
 -f, --format                Output format. [text (default), json, csv]
 -l, --library               Path to a prebuilt nts_rust dylib file. If
                             omitted, auto-locates one under
@@ -605,6 +647,15 @@ CI gate — non-zero exit if any server is a drop candidate:
 fvm dart run bin/nts_health.dart --fail-on-drops assets/nts-sources.yml
 ```
 
+Vet the whole catalog under a stricter trust policy, condemning any
+host whose calls did not resolve the bundled `webpki-roots` backend:
+
+```bash
+fvm dart run bin/nts_health.dart --fail-on-drops \
+    --trust-mode bundled-only --require-trust-backend webpki-roots \
+    assets/nts-sources.yml
+```
+
 ### Verdict buckets
 
 Each host is reduced to one verdict across all its probes:
@@ -614,7 +665,7 @@ Each host is reduced to one verdict across all its probes:
 | `healthy`        | ✅    | Replied and every parameter is in range.                                                |
 | `nonStandard`    | ❌    | Replied, but non-baseline AEAD, unusable stratum, or median clock offset over threshold. |
 | `notReplying`    | ❌    | No successful sample; only timeouts / no-reply (no protocol-level error).                |
-| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, or trust-backend-unavailable. |
+| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, ABI-mismatch, or trust-backend-unavailable — or a `--require-trust-backend` mismatch on any call the host was probed with — any call that reported a differing resolved backend, whether it went on to succeed or to fail, including one that failed before reaching TLS. A failure that reports no backend — because it fired before resolution, or because its shape carries no attribution field at all — keeps its own error type. |
 | `dnsExhausted`   | ✅    | Every probe fast-failed on the *local* DNS resolver cap — a probe-side artifact, so the server was never contacted and is **not** condemned. |
 
 The default thresholds are ±1 s clock offset, the two RFC 8915 AEADs
@@ -661,7 +712,7 @@ Suggested removals (2):
 | ---- | ----------------------------------------------------------------------------- |
 | `0`  | Report produced (default — per-host verdicts do not affect the code)          |
 | `1`  | `--fail-on-drops` was passed and at least one host is a drop candidate        |
-| `64` | Usage error (bad option, file not found, parse failure, or zero servers)      |
+| `64` | Usage error (bad option, file not found, parse failure, zero servers, unreadable `--custom-roots`, or an invalid `--trust-mode` / `--custom-roots` pairing — checked before the bridge loads, so it wins over `70`) |
 | `70` | Bridge-load failure (no dylib found, `--library` path missing, or Rust init threw) — non-`--mock` runs only, before any probing |
 
 Unlike `nts_cli`, the exit code never reflects individual host outcomes

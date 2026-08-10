@@ -32,14 +32,33 @@ tarball.
   tooling only; no package or example change. (NTS-149)
 
 - The example CLI (`example/bin/nts_cli.dart`) can now select a
-  trust-anchor policy and assert the backend that actually
-  authenticated. `--trust-mode` takes `platform-with-fallback`
+  trust-anchor policy and assert the backend the call resolved.
+  `--trust-mode` takes `platform-with-fallback`
   (default), `platform-only`, `bundled-only`, or `custom`;
   `--custom-roots <path>` supplies the PEM bundle or DER certificate
   the `custom` mode requires; `--require-trust-backend` asserts that
-  each handshake negotiated a named `TrustBackend`, reporting
+  every call resolved a named `TrustBackend`, reporting
   `TrustBackendMismatch` instead of success when it did not and
-  counting that as a failure for `--exit-on-error`.
+  counting that as a failure for `--exit-on-error`. The assertion
+  reads the attribution off failures too, so a mismatch replaces
+  either a success or an attributed failure: a call that resolved the
+  wrong anchor set and only then lost the NTP leg reports the mismatch
+  rather than the timeout it surfaced as.
+
+  This is a backend-*resolution* assertion, not evidence that a chain
+  was verified. Rust attaches the initial backend once
+  `build_tls_config` returns, which is before any DNS, connect, or TLS
+  I/O, so a DNS or connect failure on an attributed variant carries
+  one too and an unreachable host can be reported as mismatching. That
+  is the intended scope — the policy under test is which anchor set
+  the call was configured to trust. The one value not fixed at
+  config-build time is Android's `platformWithHybridFallback`, which
+  replaces the initial `platform` only after the webpki-roots fallback
+  verifier accepted a chain during TLS verification, so that
+  attribution does evidence a verified chain. Four variants
+  (`invalidSpec`, `trustBackendUnavailable`, `internal`,
+  `abiMismatch`) have no attribution field, so they keep their own
+  error type even when raised downstream of config-build.
 
   Previously every run went through the top-level `ntsQuery` /
   `ntsWarmCookies` and therefore the process-wide default client, whose
@@ -52,6 +71,51 @@ tarball.
   `required_trust_backend` are emitted only when their flag was passed,
   so a flagless run's records are unchanged. Example app only; no
   package API change. (NTS-146)
+
+- The two catalog tools (`example/bin/nts_health.dart`,
+  `example/bin/nts_manifest.dart`) accept the same `--trust-mode`,
+  `--custom-roots`, and `--require-trust-backend` flags, so a whole
+  server list can be vetted under a stricter trust policy rather than
+  only the hostnames passed to `nts_cli`. The flags live on the shared
+  `addCommonProbeOptions` block, so both tools gain them together.
+
+  A non-default policy mints one call-scoped `NtsClient` for the whole
+  catalog and disposes it after the probe wave; the default path
+  constructs no client and keeps routing through the top-level
+  functions, so a flagless run is unchanged. `--require-trust-backend`
+  is asserted on the NTS-KE warm *and* on every sample's own
+  attribution, since a query re-handshakes once the warmed cookie pool
+  is spent or its session was evicted, and on the attribution carried
+  by a *failed* call, which is what a wrong-backend re-handshake that
+  then fails looks like; the first mismatch abandons the
+  rest of the host's run and is classified as a severe
+  `TrustBackendMismatch` KE-stage failure, which makes the host
+  `nonConforming` and therefore a drop candidate for
+  `--fail-on-drops` and an exclusion from the generated manifest.
+
+  All three CLIs validate the `--trust-mode` / `--custom-roots`
+  pairing during argument parsing rather than leaving it to the
+  `NtsClient` constructor. The constructor runs after `initBridge`, so
+  on a machine with no loadable dylib an invalid pairing previously
+  exited with the bridge-load code instead of the usage code both
+  README exit-code tables document.
+
+  The `--custom-roots` buffer is wiped in place once the client has
+  copied it. The package zeroises only the copy it makes at the FFI
+  boundary and documents the caller's list as read-but-never-retained,
+  so wiping the caller-side bytes is the caller's job — and the buffer
+  was otherwise reachable for the rest of the run. Because the roots are
+  read early (so an unreadable path is an argument error rather than a
+  trust-policy one), several terminations sit between that read and the
+  wipe: the remaining flag validation, `nts_manifest`'s `--per-region`
+  check, the catalog load, and every `initBridge` failure. `exit`
+  terminates the VM without unwinding, so a `finally` cannot cover them;
+  the buffer is instead registered on read and cleared at each of those
+  sites, with the client construction keeping a `finally` for the
+  success and non-`NtsError` paths. `loadAndProbeCatalog` re-registers
+  on entry, since its argument object is publicly constructible and can
+  therefore carry roots the parser never saw.
+  Example app only; no package API change. (NTS-147)
 
 - RFC 8452 known-answer vectors for AEAD ID 30 (the §8 worked example
   and a §C.1 case with a multi-block AAD), driven through

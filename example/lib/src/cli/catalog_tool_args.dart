@@ -13,12 +13,29 @@ import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:nts/nts.dart'
-    show kDefaultBridgeConcurrencyCap, kDefaultDnsConcurrencyCap;
+    show
+        NtsClient,
+        NtsError,
+        TrustBackend,
+        TrustMode,
+        kDefaultBridgeConcurrencyCap,
+        kDefaultDnsConcurrencyCap;
 
 import '../data/server_catalog.dart' show parseServerYaml;
 import '../data/server_entry.dart' show NtsServerEntry;
 import '../health/probe.dart' show probeAll;
 import '../health/server_health.dart' show HealthThresholds, ServerHealth;
+import '../state/nts_format.dart'
+    show
+        describeError,
+        kTrustBackendFlagValues,
+        kTrustModeFlagValues,
+        parseTrustBackend,
+        parseTrustMode,
+        registerCustomRootsForWipe,
+        trustPolicyPairingError,
+        wipeAndDeregisterCustomRoots,
+        wipeRegisteredCustomRoots;
 import 'bridge_loader.dart' show initBridge;
 
 const int kDefaultPort = 4460;
@@ -71,6 +88,40 @@ void addCommonProbeOptions(ArgParser parser) {
           'sized up to --concurrency so a probe wave cannot '
           'self-saturate the pool; values below --concurrency can '
           'surface dnsSaturation fast-fails.',
+    )
+    ..addOption(
+      'trust-mode',
+      allowed: kTrustModeFlagValues,
+      help:
+          'TLS trust-anchor policy for every handshake this run '
+          'initiates. Left at platform-with-fallback, whether by '
+          'omission or passed explicitly, the run goes through the '
+          'package\'s process-wide default client; any non-default '
+          'value mints one call-scoped NtsClient for the whole '
+          'catalog.',
+    )
+    ..addOption(
+      'custom-roots',
+      help:
+          'Path to a PEM certificate bundle or a single DER-encoded '
+          'certificate. Required by --trust-mode=custom, and rejected '
+          'with every other mode.',
+    )
+    ..addOption(
+      'require-trust-backend',
+      allowed: kTrustBackendFlagValues,
+      help:
+          'Assert that every call resolves this trust-anchor backend. '
+          'A host whose call resolved a different one is classified as '
+          'a severe KE-stage TrustBackendMismatch failure, making it a '
+          'drop candidate. Checked on a success and on any failure '
+          'that reports a backend; a failure that fired before the '
+          'backend was resolved reports none and keeps its own error '
+          'type. The initial backend is resolved before any network '
+          'I/O, so an unreachable host can mismatch; on Android '
+          'platform-with-hybrid-fallback is the one value observed '
+          'later, once the fallback verifier accepts a chain during '
+          'TLS.',
     );
 }
 
@@ -99,7 +150,12 @@ int? posInt(String? raw, {int min = 1}) {
 }
 
 /// Print [message] and [usage] to stderr, then exit [kExitUsage].
+///
+/// Wipes any registered `--custom-roots` buffer first: `exit` does not
+/// unwind, so this is the only chance a usage failure raised after the
+/// roots were read gets to clear them.
 Never usageError(String message, {required String usage}) {
+  wipeRegisteredCustomRoots();
   stderr.writeln('argument error: $message');
   stderr.writeln(usage);
   exit(kExitUsage);
@@ -119,6 +175,27 @@ class CommonProbeArgs {
   final bool useMock;
   final String? libraryPath;
   final String path;
+
+  /// Resolved `--trust-mode`, defaulting to
+  /// [TrustMode.platformWithFallback] when the flag is omitted.
+  final TrustMode trustMode;
+
+  /// Bytes read from `--custom-roots`, or null when the flag is omitted.
+  ///
+  /// Wiped in place by [loadAndProbeCatalog] once the client has copied
+  /// them, so this field reads as zeros for the rest of the run. Do not
+  /// treat it as a live copy of the anchor set.
+  ///
+  /// The wipe needs a list that accepts element assignment. That holds
+  /// for what `parseCommonProbeArgs` reads (`readAsBytesSync` returns a
+  /// `Uint8List`), but this constructor is public: a caller passing a
+  /// `const` list, a `List.unmodifiable`, or an unmodifiable view keeps
+  /// its own bytes resident, because [wipeCustomRoots] cannot clear
+  /// them.
+  final List<int>? customRoots;
+
+  /// Resolved `--require-trust-backend`, or null for no assertion.
+  final TrustBackend? requiredBackend;
   const CommonProbeArgs({
     required this.port,
     required this.timeoutMs,
@@ -129,6 +206,9 @@ class CommonProbeArgs {
     required this.useMock,
     required this.libraryPath,
     required this.path,
+    this.trustMode = TrustMode.platformWithFallback,
+    this.customRoots,
+    this.requiredBackend,
   });
 }
 
@@ -166,6 +246,51 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
       usageError('--dns-cap must be >= 1', usage: usage);
     }
   }
+
+  // `allowed:` on both trust options means the parser has already
+  // rejected anything outside the two value sets, so the parse helpers
+  // cannot return null here; the `??` arm exists only to keep the local
+  // non-nullable.
+  final trustModeRaw = args['trust-mode'] as String?;
+  final trustMode = trustModeRaw == null
+      ? TrustMode.platformWithFallback
+      : parseTrustMode(trustModeRaw) ?? TrustMode.platformWithFallback;
+  final requiredBackendRaw = args['require-trust-backend'] as String?;
+  final requiredBackend = requiredBackendRaw == null
+      ? null
+      : parseTrustBackend(requiredBackendRaw);
+
+  // Read the roots here so an unreadable path is an argument error
+  // rather than a trust-policy one. `loadAndProbeCatalog` wipes the
+  // buffer once the client has copied it; the package zeroises only its
+  // own FFI-side copy and leaves the caller's list untouched.
+  //
+  // Registering makes every termination site between this read and that
+  // wipe — the checks below, `--per-region`, the catalog load, and
+  // `initBridge` — able to clear the bytes without holding a reference.
+  final customRootsPath = args['custom-roots'] as String?;
+  List<int>? customRoots;
+  if (customRootsPath != null) {
+    try {
+      customRoots = File(customRootsPath).readAsBytesSync();
+    } on FileSystemException catch (e) {
+      usageError('--custom-roots: ${e.message}', usage: usage);
+    }
+    registerCustomRootsForWipe(customRoots);
+  }
+
+  // Pair validation belongs here, not at client construction: the
+  // constructor runs the same check, but only after `initBridge`, so on
+  // a machine with no loadable dylib an invalid pairing would exit with
+  // the bridge-load code instead of the usage code the README documents.
+  final pairingError = trustPolicyPairingError(
+    trustMode: trustMode,
+    customRoots: customRoots,
+  );
+  if (pairingError != null) {
+    usageError(pairingError, usage: usage);
+  }
+
   return CommonProbeArgs(
     port: port,
     timeoutMs: timeoutMs,
@@ -176,6 +301,9 @@ CommonProbeArgs parseCommonProbeArgs(ArgResults args, {required String usage}) {
     useMock: args['mock'] as bool,
     libraryPath: args['library'] as String?,
     path: args.rest.single,
+    trustMode: trustMode,
+    customRoots: customRoots,
+    requiredBackend: requiredBackend,
   );
 }
 
@@ -196,8 +324,17 @@ class CatalogProbeOutcome {
 /// every host through the shared runner. Exits [kExitUsage] on a
 /// missing/empty/unparseable file (bridge failures exit via `initBridge`).
 Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
+  // `parseCommonProbeArgs` registers what it reads, but [common] is
+  // publicly constructible, so a caller can arrive here with roots this
+  // process has never seen. Registering again covers that path and is a
+  // no-op when the buffer is already tracked.
+  registerCustomRootsForWipe(common.customRoots);
+
+  // Each of these exits precedes the client construction that consumes
+  // the roots, so each has to clear them itself: `exit` does not unwind.
   final file = File(common.path);
   if (!file.existsSync()) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('error: server list not found at ${common.path}');
     exit(kExitUsage);
   }
@@ -205,10 +342,12 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   try {
     entries = parseServerYaml(file.readAsStringSync());
   } catch (e) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('error: failed to parse ${common.path}: $e');
     exit(kExitUsage);
   }
   if (entries.isEmpty) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('error: ${common.path} parsed to zero servers');
     exit(kExitUsage);
   }
@@ -240,21 +379,77 @@ Future<CatalogProbeOutcome> loadAndProbeCatalog(CommonProbeArgs common) async {
   final bridgeCap = common.concurrency > kDefaultBridgeConcurrencyCap
       ? common.concurrency
       : kDefaultBridgeConcurrencyCap;
-  final report = await probeAll(
-    entries,
-    port: common.port,
-    // Single conversion point: the CLI surface stays milliseconds.
-    timeout: Duration(milliseconds: common.timeoutMs),
-    samples: common.samples,
-    concurrency: common.concurrency,
-    dnsConcurrencyCap: dnsCap,
-    bridgeConcurrencyCap: bridgeCap,
-    thresholds: HealthThresholds(
-      offsetThresholdMicros: common.offsetThresholdMs * 1000,
-    ),
-    onProgress: (done, total, health) => stderr.writeln(
-      '[$done/$total] ${health.hostname}: ${health.verdict.name}',
-    ),
-  );
+
+  // Default policy keeps routing through the top-level functions and
+  // the process-wide default client they share, so the path every
+  // pre-existing invocation takes gains no client lifecycle and no new
+  // failure surface. Anything else mints exactly one client for the
+  // whole catalog, which the package documents as safe to share across
+  // concurrent calls. The catch is a backstop: `parseCommonProbeArgs`
+  // already rejects every combination the constructor validates, so it
+  // only fires if the two ever drift.
+  NtsClient? client;
+  if (common.trustMode != TrustMode.platformWithFallback ||
+      common.customRoots != null) {
+    NtsError? constructionError;
+    try {
+      client = NtsClient(
+        trustMode: common.trustMode,
+        customRoots: common.customRoots,
+      );
+    } on NtsError catch (err) {
+      constructionError = err;
+    } finally {
+      // The constructor has either consumed the bytes or rejected the
+      // arguments by now — its pair validation throws before the copy —
+      // so nothing downstream still needs them either way. The wipe is
+      // in place, so it also clears the view reachable through `common`
+      // and the `CatalogProbeOutcome.args` this function returns —
+      // those alias the same buffer rather than holding copies of it.
+      // `finally` covers the success path and a non-[NtsError] escape;
+      // the usage exit below is deliberately outside it, because `exit`
+      // terminates the VM without unwinding.
+      //
+      // Scoped to this call's buffer, not the whole registry: this
+      // function suspends at `await initBridge`, so a second concurrent
+      // custom-policy call can be registered by the time we resume, and
+      // a blanket wipe would zero its bytes before its own constructor
+      // reads them. The exits above keep the blanket form — they end
+      // the process, so there is nothing left to starve.
+      wipeAndDeregisterCustomRoots(common.customRoots);
+    }
+    if (constructionError != null) {
+      stderr.writeln('argument error: ${describeError(constructionError)}');
+      exit(kExitUsage);
+    }
+  }
+
+  final List<ServerHealth> report;
+  try {
+    report = await probeAll(
+      entries,
+      port: common.port,
+      // Single conversion point: the CLI surface stays milliseconds.
+      timeout: Duration(milliseconds: common.timeoutMs),
+      samples: common.samples,
+      concurrency: common.concurrency,
+      dnsConcurrencyCap: dnsCap,
+      bridgeConcurrencyCap: bridgeCap,
+      thresholds: HealthThresholds(
+        offsetThresholdMicros: common.offsetThresholdMs * 1000,
+      ),
+      client: client,
+      requiredBackend: common.requiredBackend,
+      onProgress: (done, total, health) => stderr.writeln(
+        '[$done/$total] ${health.hostname}: ${health.verdict.name}',
+      ),
+    );
+  } finally {
+    // probeHost swallows every per-host failure, so the only way out
+    // here is a defect in the fan-out itself — but the session table
+    // this client owns holds cookies and derived keys, so release it on
+    // that path too rather than leaving it to process teardown.
+    client?.dispose();
+  }
   return CatalogProbeOutcome(entries: entries, report: report, args: common);
 }

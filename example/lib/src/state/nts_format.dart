@@ -125,9 +125,126 @@ TrustBackend? parseTrustBackend(String value) => switch (value) {
   _ => null,
 };
 
+/// Diagnostic for a `--trust-mode` / `--custom-roots` combination the
+/// `NtsClient` constructor would reject, or `null` when the pair
+/// describes a constructible policy.
+///
+/// Mirrors the package's own pair validation in pure Dart so a CLI can
+/// fail an invalid invocation as a usage error before loading the
+/// bridge — the constructor runs the same check, but only after
+/// `initBridge`, which would report a missing dylib first and mask the
+/// argument mistake behind a bridge-load exit code.
+String? trustPolicyPairingError({
+  required TrustMode trustMode,
+  required List<int>? customRoots,
+}) {
+  if (customRoots != null && trustMode != TrustMode.custom) {
+    return '--custom-roots can only be set when --trust-mode is custom';
+  }
+  if (trustMode == TrustMode.custom &&
+      (customRoots == null || customRoots.isEmpty)) {
+    return '--trust-mode custom requires a non-empty --custom-roots';
+  }
+  return null;
+}
+
+/// Overwrite a `--custom-roots` buffer in place once the `NtsClient`
+/// constructor has copied it.
+///
+/// The package zeroises only the copy it makes at the FFI boundary and
+/// documents the caller's list as read-but-never-retained, so wiping
+/// the caller-side buffer is the caller's job. `--custom-roots` exists
+/// to select a private or otherwise non-platform CA; wiping matters for
+/// the subset of those deployments where the anchor set is itself
+/// confidential, since trust anchors are public certificates in the
+/// common case.
+///
+/// A no-op on a null or unmodifiable list. Fixed length is not the
+/// obstacle — `Uint8List` is fixed-length and wipes fine, which is what
+/// the CLIs get from `readAsBytesSync`; only a list that rejects element
+/// assignment (a `const` list, `List.unmodifiable`, an unmodifiable
+/// view) cannot be cleared.
+void wipeCustomRoots(List<int>? customRoots) {
+  if (customRoots == null) return;
+  try {
+    customRoots.fillRange(0, customRoots.length, 0);
+  } on UnsupportedError {
+    // An unmodifiable list cannot be wiped; nothing this helper can do,
+    // and no reason to fail the run over it.
+  }
+}
+
+/// Buffers registered with [registerCustomRootsForWipe] and not yet
+/// wiped.
+final List<List<int>> _registeredCustomRoots = [];
+
+/// Track [customRoots] so any termination path can clear it through
+/// [wipeRegisteredCustomRoots] without the buffer being in scope.
+///
+/// The CLIs read their roots early, so an unreadable path is an
+/// argument error rather than a trust-policy one. That leaves several
+/// `exit` sites between the read and the client construction that
+/// consumes the bytes — remaining argument validation, catalog load,
+/// bridge init — and `exit` terminates the VM without unwinding, so a
+/// `finally` cannot cover them. Registering once lets each of those
+/// sites wipe without threading the buffer down to it.
+///
+/// Registering the same buffer twice is a no-op, so an entry point that
+/// re-registers defensively cannot grow the list without bound.
+void registerCustomRootsForWipe(List<int>? customRoots) {
+  if (customRoots == null) return;
+  if (_registeredCustomRoots.any((r) => identical(r, customRoots))) return;
+  _registeredCustomRoots.add(customRoots);
+}
+
+/// How many distinct buffers are currently registered. Exposed so a
+/// test can pin the de-duplication in [registerCustomRootsForWipe]
+/// without reaching into private state; not part of the CLI surface.
+int get registeredCustomRootsCountForTesting => _registeredCustomRoots.length;
+
+/// Wipe every buffer passed to [registerCustomRootsForWipe] and forget
+/// it. Idempotent: a second call has nothing left to wipe.
+///
+/// Reserved for the termination paths, which are about to end the
+/// process and so cannot strand another caller's bytes. A caller
+/// disposing of its *own* roots after a normal client construction
+/// must use [wipeAndDeregisterCustomRoots] instead: this one would
+/// also clear a concurrently-registered buffer whose constructor has
+/// not run yet, handing that call an all-zero bundle.
+void wipeRegisteredCustomRoots() {
+  for (final roots in _registeredCustomRoots) {
+    wipeCustomRoots(roots);
+  }
+  _registeredCustomRoots.clear();
+}
+
+/// Wipe [customRoots] and drop it from the registry, leaving every
+/// other registered buffer intact.
+///
+/// The registry is process-global and its entry points suspend
+/// (`await initBridge`), so two concurrent custom-policy calls can both
+/// be registered at once. A blanket [wipeRegisteredCustomRoots] on the
+/// first call's success path would zero the second call's bytes before
+/// its `NtsClient` constructor reads them. Scoping the wipe to the
+/// buffer the caller owns removes that window; the exit paths keep the
+/// blanket form, since nothing survives them to be starved.
+///
+/// A no-op on null, on an unregistered buffer, and on a second call
+/// for the same buffer.
+void wipeAndDeregisterCustomRoots(List<int>? customRoots) {
+  if (customRoots == null) return;
+  _registeredCustomRoots.removeWhere((r) => identical(r, customRoots));
+  wipeCustomRoots(customRoots);
+}
+
 /// Human rendering of a `--require-trust-backend` assertion failure:
-/// the handshake succeeded, but negotiated a backend other than the
-/// one the run demanded.
+/// the call resolved a trust-anchor backend other than the one the run
+/// demanded.
+///
+/// "Resolved", not "authenticated": the attribution is attached once
+/// the TLS config is built, so a call that never completed a chain —
+/// one that timed out in DNS or connect, say — still names the backend
+/// it would have used, and still violates the assertion.
 ///
 /// Both backends render through [formatTrustBackend] so the line reads
 /// in the same vocabulary as the `trust=` segment on the success lines
@@ -148,7 +265,7 @@ String formatTrustMismatch(
 /// [NtsError] tags so a consumer switching on the field can tell a
 /// policy-assertion failure from a protocol error without a second
 /// branch. `trust_backend` reuses the key [jsonQuerySuccess] /
-/// [jsonWarmSuccess] already use for the negotiated backend.
+/// [jsonWarmSuccess] already use for the resolved backend.
 Map<String, Object?> jsonTrustMismatch(
   TrustBackend requiredBackend,
   TrustBackend actualBackend,
@@ -339,6 +456,59 @@ String describeError(NtsError err) => switch (err) {
 /// from [errorTypeName].
 String? timeoutPhaseName(NtsError err) =>
     err is NtsErrorTimeout ? err.phase.name : null;
+
+/// Per-handshake trust-anchor attribution carried by [err], or `null`
+/// when the shape carries none.
+///
+/// Six variants carry an optional field, so they report the backend
+/// resolved for the handshake when the failure fired downstream of
+/// config-build and `null` when it fired before. Carrying the field is
+/// not a promise that it is populated: an [NtsErrorTimeout] whose
+/// phase is `bridgeSaturation` never reached FFI dispatch at all, so
+/// its backend is always `null`. The remaining variants
+/// ([NtsErrorInvalidSpec], [NtsErrorTrustBackendUnavailable],
+/// [NtsErrorInternal], [NtsErrorAbiMismatch]) have no field to read at
+/// all, so their `null` says nothing about when they fired: an
+/// `NtsErrorInternal` can be raised after a successful handshake while
+/// deriving the AEAD keys, and an [NtsErrorAbiMismatch] after native
+/// dispatch. A caller enforcing a required backend therefore cannot
+/// attribute those shapes, and must let them keep their own error
+/// type.
+///
+/// Lets a caller enforcing a required backend attribute a *failed*
+/// call, not just a successful one — a re-handshake can resolve the
+/// wrong anchor set and then fail, which would otherwise be recorded
+/// as an ordinary timeout.
+///
+/// What a non-null result generally establishes is *resolution*, not
+/// authentication: `build_tls_config` runs before any DNS, connect, or
+/// TLS I/O, and the Rust side attaches the resolved backend to every
+/// failure site downstream of it — `dnsSaturation`, `dnsTimeout`,
+/// `connect` and `tls` included (see the `NtsError.timeout` dartdoc).
+/// So an unreachable host can carry an attribution without ever having
+/// presented a chain. That is still the right thing to assert on: the
+/// policy under test is which anchor set the call was configured to
+/// trust, and a call configured wrongly violated it whether or not it
+/// got far enough to use it.
+///
+/// [TrustBackend.platformWithHybridFallback] is the exception, and
+/// only arises on Android: it replaces the initial `platform` value
+/// only after the webpki-roots fallback verifier has *accepted* a
+/// chain during TLS verification — a failed fallback leaves the
+/// initial value in place. A call attributed to it therefore did
+/// verify a chain, unlike the three config-build values.
+TrustBackend? errorTrustBackend(NtsError err) => switch (err) {
+  NtsErrorNetwork(:final trustBackend) => trustBackend,
+  NtsErrorKeProtocol(:final trustBackend) => trustBackend,
+  NtsErrorNtpProtocol(:final trustBackend) => trustBackend,
+  NtsErrorAuthentication(:final trustBackend) => trustBackend,
+  NtsErrorTimeout(:final trustBackend) => trustBackend,
+  NtsErrorNoCookies(:final trustBackend) => trustBackend,
+  NtsErrorInvalidSpec() ||
+  NtsErrorTrustBackendUnavailable() ||
+  NtsErrorInternal() ||
+  NtsErrorAbiMismatch() => null,
+};
 
 /// Stable variant tag for an [NtsError], used as the `error_type`
 /// field in machine-readable output. Mirrors the Rust enum names so

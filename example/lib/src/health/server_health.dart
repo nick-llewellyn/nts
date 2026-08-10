@@ -69,11 +69,16 @@ class ProbeOk extends ProbeResult {
 /// Which protocol stage a [ProbeFailure] originated in. Each host is
 /// probed the way a client uses one: a single NTS-KE handshake
 /// (`ntsWarmCookies`) to harvest a cookie pool, then a burst of NTPv4
-/// queries (`ntsQuery`) spent against it. [ke] marks a failure in that
-/// handshake (TLS, KE records, zero cookies); [ntp] marks a failure in
-/// one of the post-warm UDP queries. Separating the two keeps a broken
+/// queries (`ntsQuery`) spent against it. [ke] marks any
+/// handshake-stage fault — TLS, KE records, zero cookies, or a
+/// `--require-trust-backend` violation — wherever it arises, which
+/// includes a query that re-handshaked because the warmed pool was
+/// spent or its session evicted; [ntp] marks a failure in the UDP
+/// exchange of a post-warm query. Separating the two keeps a broken
 /// handshake from reading as a flaky NTP server (and vice-versa) in the
-/// dominant-error column.
+/// dominant-error column. See [ProbeFailure.stage] for why a [ke]
+/// failure is not necessarily the warm's, and need not be a failed
+/// call at all.
 enum ProbeStage { ke, ntp }
 
 /// A failed probe, carrying the `errorTypeName` tag and whether it is
@@ -88,8 +93,16 @@ enum ProbeStage { ke, ntp }
 /// server-side no-reply rather than collapsing both onto `Timeout`.
 ///
 /// [stage] attributes the failure to the KE handshake or the NTP burst;
-/// it defaults to [ProbeStage.ntp] (the post-warm queries) since the
-/// single per-host warm is the only [ProbeStage.ke] source.
+/// it defaults to [ProbeStage.ntp] (the post-warm queries). A
+/// [ProbeStage.ke] failure is not necessarily the warm's: a
+/// `--require-trust-backend` violation is attributed to the call that
+/// resolved the wrong backend, and a query re-handshakes once the
+/// warmed cookie pool is spent or its session was evicted, so a sample
+/// can raise one too. Treat [ProbeStage.ke] as "a handshake-stage
+/// fault", not "the warm failed" — the violating call need not have
+/// failed at all (a warm or a sample that succeeded on the wrong
+/// backend raises one), and need not have completed a TLS chain
+/// either, since the check is on trust-backend *resolution*.
 class ProbeFailure extends ProbeResult {
   final String errorType;
   final bool errorSeverity;

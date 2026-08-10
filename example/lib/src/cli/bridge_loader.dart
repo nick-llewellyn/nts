@@ -25,10 +25,49 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:nts/nts.dart' show NtsRustLib;
 
 import '../mock_api.dart';
+import '../state/nts_format.dart' show wipeRegisteredCustomRoots;
 
 /// Exit code used when the native engine itself fails to start. Mirrors
 /// the value documented in `CLI_GUIDE.md`.
 const int kExitBridgeFailure = 70;
+
+/// What a `--mock` request should do about the bridge state it finds.
+enum MockBridgeDisposition {
+  /// Nothing installed: install the mock.
+  fresh,
+
+  /// A mock is already installed and satisfies the request.
+  reuse,
+
+  /// A native bridge is installed; `--mock` cannot be honoured.
+  conflict,
+}
+
+/// Classify the bridge state a `--mock` run encounters.
+///
+/// The bridge rejects a second initialisation with a `StateError`. A
+/// CLI run reaches [initBridge] once, but a caller that already
+/// installed a mock (a test driving this function) would otherwise get
+/// an unhandled throw, so an installed mock satisfies the request.
+///
+/// An installed *native* bridge does not: reusing it would let a run
+/// that asked for `--mock` issue real network work against real
+/// servers. That is a caller error, reported rather than silently
+/// downgraded, since `NtsRustLib` has no de-init. [initialized] alone
+/// cannot tell the two apart, hence [api] — the installed
+/// implementation, or `null` when nothing is installed.
+///
+/// Split out from [initBridge] because the conflict arm there ends in
+/// `exit`, which no in-process test can observe.
+MockBridgeDisposition mockBridgeDisposition({
+  required bool initialized,
+  required Object? api,
+}) {
+  if (!initialized) return MockBridgeDisposition.fresh;
+  return api is MockNtsApi
+      ? MockBridgeDisposition.reuse
+      : MockBridgeDisposition.conflict;
+}
 
 /// Initialise the FRB bridge for a CLI invocation.
 ///
@@ -37,16 +76,50 @@ const int kExitBridgeFailure = 70;
 /// [libraryPath] if given, falling back to [autoLocateDylib]. On any
 /// unrecoverable failure (no dylib found, file missing, init threw) it
 /// writes a diagnostic to stderr and exits with [kExitBridgeFailure].
+///
+/// Every one of those exits runs before the caller can construct the
+/// `NtsClient` that consumes a `--custom-roots` buffer, so each clears
+/// any registered buffer via [wipeRegisteredCustomRoots] first — `exit`
+/// terminates the VM without unwinding, leaving no later opportunity.
 Future<void> initBridge({
   required bool useMock,
   required String? libraryPath,
 }) async {
   if (useMock) {
-    NtsRustLib.initMock(api: MockNtsApi());
+    // ignore: invalid_use_of_internal_member
+    final installed = NtsRustLib.instance.initialized;
+    switch (mockBridgeDisposition(
+      initialized: installed,
+      // Reading `api` before anything is installed throws, so the
+      // classifier is handed one only once `initialized` confirms one
+      // is installed.
+      // ignore: invalid_use_of_internal_member
+      api: installed ? NtsRustLib.instance.api : null,
+    )) {
+      case MockBridgeDisposition.reuse:
+        return;
+      case MockBridgeDisposition.conflict:
+        wipeRegisteredCustomRoots();
+        stderr.writeln(
+          'error: --mock requested but a native bridge is already '
+          'initialized; the two cannot coexist in one process.',
+        );
+        exit(kExitBridgeFailure);
+      case MockBridgeDisposition.fresh:
+        break;
+    }
+    try {
+      NtsRustLib.initMock(api: MockNtsApi());
+    } catch (e) {
+      wipeRegisteredCustomRoots();
+      stderr.writeln('error: failed to initialize mock bridge: $e');
+      exit(kExitBridgeFailure);
+    }
     return;
   }
   final resolved = libraryPath ?? autoLocateDylib();
   if (resolved == null) {
+    wipeRegisteredCustomRoots();
     stderr.writeln(
       'error: no nts_rust dylib found.\n'
       '       Build it with `cargo build --release` from the rust/\n'
@@ -55,6 +128,7 @@ Future<void> initBridge({
     exit(kExitBridgeFailure);
   }
   if (!File(resolved).existsSync()) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('error: dylib not found at $resolved');
     exit(kExitBridgeFailure);
   }
@@ -65,6 +139,7 @@ Future<void> initBridge({
   try {
     await NtsRustLib.init(externalLibrary: ExternalLibrary.open(resolved));
   } catch (e) {
+    wipeRegisteredCustomRoots();
     stderr.writeln('error: failed to initialize Rust bridge: $e');
     exit(kExitBridgeFailure);
   }

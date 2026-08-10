@@ -14,11 +14,17 @@
 import 'dart:math' show min;
 
 import 'package:nts/nts.dart'
-    show NtsError, NtsServerSpec, ntsQuery, ntsWarmCookies;
+    show
+        NtsClient,
+        NtsError,
+        NtsServerSpec,
+        TrustBackend,
+        ntsQuery,
+        ntsWarmCookies;
 
 import '../data/server_entry.dart' show NtsServerEntry;
 import '../state/nts_format.dart'
-    show errorTypeName, isErrorSeverity, timeoutPhaseName;
+    show errorTrustBackend, errorTypeName, isErrorSeverity, timeoutPhaseName;
 import 'server_health.dart';
 
 /// Invoked after each host finishes, carrying the running [done]/[total]
@@ -33,6 +39,12 @@ typedef ProbeProgress = void Function(int done, int total, ServerHealth health);
 ///
 /// [onProgress] is called once per completed host so a long run can show
 /// liveness; pass `null` for a silent run.
+///
+/// [client] routes every handshake through a caller-owned
+/// [NtsClient] — used when the run selected a non-default trust
+/// policy — and `null` keeps the probes on the top-level functions and
+/// the package's process-wide default client. [requiredBackend] asserts
+/// the resolved trust backend; see [probeHost].
 Future<List<ServerHealth>> probeAll(
   List<NtsServerEntry> entries, {
   required int port,
@@ -42,6 +54,8 @@ Future<List<ServerHealth>> probeAll(
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
   required HealthThresholds thresholds,
+  NtsClient? client,
+  TrustBackend? requiredBackend,
   ProbeProgress? onProgress,
 }) async {
   final pending = List<NtsServerEntry>.of(entries);
@@ -60,6 +74,8 @@ Future<List<ServerHealth>> probeAll(
         dnsConcurrencyCap: dnsConcurrencyCap,
         bridgeConcurrencyCap: bridgeConcurrencyCap,
         thresholds: thresholds,
+        client: client,
+        requiredBackend: requiredBackend,
       );
       out.add(health);
       done++;
@@ -85,6 +101,32 @@ Future<List<ServerHealth>> probeAll(
 /// a signed server-minus-local clock offset estimated at reply receipt);
 /// an [NtsError] becomes a typed [ProbeStage.ntp] [ProbeFailure]; any
 /// other throwable is bucketed as a severe `Unhandled` failure.
+///
+/// [client] routes both stages through a caller-owned [NtsClient]
+/// instead of the top-level functions' process-wide default client.
+/// When [requiredBackend] is non-null every call this host makes must
+/// have resolved that [TrustBackend]: the warm's outcome is checked,
+/// and so is each sample's own attribution, since a query re-handshakes
+/// when the warmed cookie pool is spent or its session was evicted.
+/// Failures are checked too — an [NtsError] carrying a backend (see
+/// `errorTrustBackend`) names the anchor set its call was configured
+/// with, so a call configured wrongly that then lost the NTP leg is
+/// attributed to the policy violation rather than to the timeout it
+/// surfaced as.
+///
+/// This is a backend-*resolution* assertion, not a proof that a chain
+/// was verified: the initial backend is resolved before any DNS,
+/// connect, or TLS I/O, so a host that was never reached can still be
+/// reported as mismatching. That is intended — the policy is about
+/// which anchor set the call would have trusted. The one exception is
+/// Android's [TrustBackend.platformWithHybridFallback], which is only
+/// resolved once the fallback verifier has accepted a chain during
+/// TLS, so a call attributed to it did verify one.
+///
+/// The first mismatch, whichever stage observes it, abandons the rest
+/// of the run and reports a severe `TrustBackendMismatch`
+/// [ProbeStage.ke] failure on its own, so the host classifies as
+/// [HealthVerdict.nonConforming] and becomes a drop candidate.
 Future<ServerHealth> probeHost(
   NtsServerEntry entry, {
   required int port,
@@ -93,18 +135,30 @@ Future<ServerHealth> probeHost(
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
   required HealthThresholds thresholds,
+  NtsClient? client,
+  TrustBackend? requiredBackend,
 }) async {
   final spec = NtsServerSpec(host: entry.hostname, port: port);
 
   // Stage 1: one NTS-KE handshake to establish the session and harvest
   // the cookie pool the burst will spend. Failures here are KE-stage.
   try {
-    final warm = await ntsWarmCookies(
-      spec: spec,
-      timeout: timeout,
-      dnsConcurrencyCap: dnsConcurrencyCap,
-      bridgeConcurrencyCap: bridgeConcurrencyCap,
-    );
+    final warm = client == null
+        ? await ntsWarmCookies(
+            spec: spec,
+            timeout: timeout,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            bridgeConcurrencyCap: bridgeConcurrencyCap,
+          )
+        : await client.warmCookies(
+            spec: spec,
+            timeout: timeout,
+            dnsConcurrencyCap: dnsConcurrencyCap,
+            bridgeConcurrencyCap: bridgeConcurrencyCap,
+          );
+    if (requiredBackend != null && warm.trustBackend != requiredBackend) {
+      return _trustMismatch(entry.hostname, thresholds);
+    }
     if (warm.freshCookies < 1) {
       // KE completed but issued no cookies: the burst cannot run as a
       // client would, so treat it as a severe (non-conforming) fault.
@@ -121,6 +175,15 @@ Future<ServerHealth> probeHost(
       );
     }
   } on NtsError catch (err) {
+    // Same attribution rule as the burst below: a warm that resolved a
+    // backend and then failed still violated the policy, so report the
+    // violation rather than the downstream symptom.
+    final attributed = errorTrustBackend(err);
+    if (requiredBackend != null &&
+        attributed != null &&
+        attributed != requiredBackend) {
+      return _trustMismatch(entry.hostname, thresholds);
+    }
     return summarizeServer(
       hostname: entry.hostname,
       results: [
@@ -148,17 +211,29 @@ Future<ServerHealth> probeHost(
   }
 
   // Stage 2: burst [samples] NTPv4 queries against the warmed pool. The
-  // cached session means these reuse the AEAD keys and spend a stored
-  // cookie apiece rather than re-handshaking; failures here are NTP-stage.
+  // cached session usually means these reuse the AEAD keys and spend a
+  // stored cookie apiece, but an exhausted pool or an evicted session
+  // makes a query re-handshake, so each sample carries its own trust
+  // attribution; failures here are NTP-stage.
   final results = <ProbeResult>[];
   for (var i = 0; i < samples; i++) {
     try {
-      final s = await ntsQuery(
-        spec: spec,
-        timeout: timeout,
-        dnsConcurrencyCap: dnsConcurrencyCap,
-        bridgeConcurrencyCap: bridgeConcurrencyCap,
-      );
+      final s = client == null
+          ? await ntsQuery(
+              spec: spec,
+              timeout: timeout,
+              dnsConcurrencyCap: dnsConcurrencyCap,
+              bridgeConcurrencyCap: bridgeConcurrencyCap,
+            )
+          : await client.query(
+              spec: spec,
+              timeout: timeout,
+              dnsConcurrencyCap: dnsConcurrencyCap,
+              bridgeConcurrencyCap: bridgeConcurrencyCap,
+            );
+      if (requiredBackend != null && s.trustBackend != requiredBackend) {
+        return _trustMismatch(entry.hostname, thresholds);
+      }
       final localMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
       final serverEstimate = s.utcUnixMicros + s.roundTripMicros ~/ 2;
       results.add(
@@ -170,6 +245,20 @@ Future<ServerHealth> probeHost(
         ),
       );
     } on NtsError catch (err) {
+      // A failure that carries backend attribution proves its
+      // handshake reached config-build time, so the assertion applies
+      // to it exactly as it does to a success: a re-handshake
+      // configured with the wrong anchor set that then lost the NTP
+      // leg is a policy violation, not the ordinary timeout the shape
+      // would otherwise be recorded as. The attribution says which
+      // anchor set the call was configured to trust, so this arm also
+      // catches a DNS or connect failure that never reached TLS.
+      final attributed = errorTrustBackend(err);
+      if (requiredBackend != null &&
+          attributed != null &&
+          attributed != requiredBackend) {
+        return _trustMismatch(entry.hostname, thresholds);
+      }
       results.add(
         ProbeFailure(
           errorType: errorTypeName(err),
@@ -189,3 +278,19 @@ Future<ServerHealth> probeHost(
     thresholds: thresholds,
   );
 }
+
+/// Reduce a host to the single severe KE-stage `TrustBackendMismatch`
+/// failure a `--require-trust-backend` violation earns, whichever
+/// handshake — the warm or a later sample's — observed it.
+ServerHealth _trustMismatch(String hostname, HealthThresholds thresholds) =>
+    summarizeServer(
+      hostname: hostname,
+      results: const [
+        ProbeFailure(
+          errorType: 'TrustBackendMismatch',
+          errorSeverity: true,
+          stage: ProbeStage.ke,
+        ),
+      ],
+      thresholds: thresholds,
+    );
