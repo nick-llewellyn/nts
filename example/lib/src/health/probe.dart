@@ -311,7 +311,7 @@ const _kSetupSlackMicros = 5000;
 /// since it is derived from the same four stamps and is a duration: a
 /// sufficiently large step in either direction drives it out of the
 /// range a delay can occupy. A backwards step subtracts from δ, a
-/// forwards step adds to it, and θ is corrupted by half the step in the
+/// forward step adds to it, and θ is corrupted by half the step in the
 /// opposite sense either way.
 ///
 /// A δ at or below zero cannot be a real delay and needs no tolerance,
@@ -345,13 +345,26 @@ const _kSetupSlackMicros = 5000;
 /// a query can make, and the KE-host one precedes T1.
 ///
 /// The burst test then requires corroboration: a surviving θ is kept
-/// only if another surviving sample agrees with it to within the
-/// smallest *round trip* the burst observed. Samples taken seconds apart
-/// over one path cannot honestly disagree by more than the delay scale
-/// that path exhibits, and a step of S displaces one sample's θ by S/2,
-/// which the window admits only while S is within twice that scale. The
-/// scale is taken from `roundTripMicros` rather than δ for two reasons:
-/// δ carries the pre-send interval this file has just finished
+/// only if some other surviving sample agrees with it to within what
+/// the two of them could honestly disagree by. Asymmetry is the honest
+/// source of that disagreement, and it displaces a sample's θ by at
+/// most half that sample's own round trip — the extreme being the whole
+/// round trip falling on one leg — so a *pair* can honestly differ by
+/// half the sum of their round trips, and a step of S, which displaces
+/// one sample's θ by S/2, escapes that window once S exceeds the sum.
+///
+/// The window is per pair rather than one figure for the burst, because
+/// round trips within a burst are not interchangeable: a retransmit or
+/// a queued reply makes one sample far slower than its neighbours, and
+/// a single window drawn from the burst's smallest round trip would be
+/// tighter than such a pair's honest disagreement, suppressing both
+/// samples over jitter neither is at fault for. Suppressing is not the
+/// safe default here — a host left with no surviving θ is judged
+/// without the clock check at all — so too tight a window fails open on
+/// exactly the skewed server the check exists to catch.
+///
+/// The scale is taken from `roundTripMicros` rather than δ for two
+/// reasons: δ carries the pre-send interval this file has just finished
 /// documenting, so a slow lookup would widen the window by an amount
 /// that has nothing to do with the path, and δ is computed from the
 /// stepped clock itself, whereas `roundTripMicros` is a monotonic
@@ -369,17 +382,22 @@ List<int?> _corroborateOffsets(List<NtsTimeSample> samples) {
       if (offset != null) i,
   ];
   if (witnesses.length < 2) return gated;
-  final window = witnesses.map((i) => samples[i].roundTripMicros).reduce(min);
   return [
     for (final (i, offset) in gated.indexed)
       offset != null &&
-              witnesses.any(
-                (j) => j != i && (offset - gated[j]!).abs() <= window,
-              )
+              witnesses.any((j) => j != i && _agree(samples, gated, i, j))
           ? offset
           : null,
   ];
 }
+
+/// Whether samples [i] and [j] agree to within the disagreement two
+/// honest readings over their respective paths can produce: half the
+/// sum of their round trips. Compared doubled, so an odd sum is not
+/// rounded into a window tighter than the pair has earned.
+bool _agree(List<NtsTimeSample> samples, List<int?> gated, int i, int j) =>
+    2 * (gated[i]! - gated[j]!).abs() <=
+    samples[i].roundTripMicros + samples[j].roundTripMicros;
 
 /// Whether [s]'s query ran an NTS-KE handshake of its own, which a burst
 /// sample does only when the warmed pool was exhausted or its session
@@ -395,6 +413,15 @@ List<int?> _corroborateOffsets(List<NtsTimeSample> samples) {
 /// disjunction is the discriminator; on a re-handshaked sample the
 /// NTPv4-host lookup goes unclaimed and the bound is merely stricter
 /// than it could be.
+///
+/// The contract guarantees zero on a cache hit but not the converse, so
+/// this infers presence from durations that are truncated to whole
+/// microseconds. Reading a handshake as a cache hit would need a TCP
+/// connect, a TLS 1.3 exchange and a record read to each round to zero
+/// on the same query, which no remote peer produces; a mock or a fixture
+/// can, and gets a wider bound than it should. An explicit indicator
+/// would remove the inference, and belongs with the capture-point work
+/// tracked as NTS-153 rather than in the prober.
 bool _rehandshaked(NtsTimeSample s) =>
     s.phaseTimings.connectMicros != 0 ||
     s.phaseTimings.tlsHandshakeMicros != 0 ||

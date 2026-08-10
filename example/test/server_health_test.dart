@@ -493,6 +493,43 @@ void main() {
       expect(h.note, isNull);
     });
 
+    test('a slow sample can still corroborate a fast one', () async {
+      // The window is half the *pair's* summed round trips, not the
+      // burst's smallest. A reply queued mostly one way on a 100 ms
+      // path can legitimately read 50 ms off a 1 ms sample, and a
+      // burst-wide minimum would call that disagreement and suppress
+      // both. That is the dangerous direction: with no surviving θ the
+      // host is judged without the clock check, so this 2 s skew would
+      // have been reported as healthy.
+      api.roundTripScript = [1000, 100000];
+      api.offsetScript = [2000000, 2050000];
+      final h = await probe(samples: 2);
+      expect(h.verdict, HealthVerdict.nonStandard);
+      expect(h.reasons, contains(contains('clock offset')));
+      expect(h.offsetMicros, 2025000);
+      expect(h.note, isNull);
+    });
+
+    test('the pairwise window is inclusive at half the summed round '
+        'trips', () async {
+      // 1 ms and 100 ms round trips admit exactly 50.5 ms of honest
+      // disagreement.
+      api.roundTripScript = [1000, 100000];
+      api.offsetScript = [0, 50500];
+      final h = await probe(samples: 2);
+      expect(h.offsetMicros, 25250);
+      expect(h.note, isNull);
+
+      // One microsecond past it, neither sample has a witness, which
+      // pins the window from the other side.
+      api.reset();
+      api.roundTripScript = [1000, 100000];
+      api.offsetScript = [0, 50501];
+      final past = await probe(samples: 2);
+      expect(past.offsetMicros, isNull);
+      expect(past.note, contains('clock offset unavailable'));
+    });
+
     test('a backwards step that leaves δ positive fails corroboration', () {
       // The per-sample bound only catches a backwards step large enough
       // to drive δ non-positive; a smaller one passes it with θ
@@ -525,10 +562,10 @@ void main() {
     });
 
     test('a burst where no two samples agree suppresses every θ', () async {
-      // With every sample disagreeing with every other by more than the
-      // smallest δ, there is no corroborated reading to judge on, so the
-      // host is reported without an offset rather than on an arbitrary
-      // median of three mutually inconsistent values.
+      // With every sample disagreeing with every other by more than
+      // half their summed round trips, there is no corroborated reading
+      // to judge on, so the host is reported without an offset rather
+      // than on an arbitrary median of three inconsistent values.
       api.offsetScript = [0, 400000, 800000];
       final h = await probe();
       expect(h.verdict, HealthVerdict.healthy);
@@ -759,6 +796,16 @@ class _ScriptedApi extends MockNtsApi {
   /// it far past that round trip.
   int peerDelayMicros = 800;
 
+  /// Round trip for each query in dispatch order, overriding
+  /// [roundTripMicros] for as many samples as it has entries. Lets a
+  /// test drive a burst whose samples took materially different paths,
+  /// which is what the pairwise corroboration window is sized for.
+  List<int> roundTripScript = const [];
+
+  /// Round trip reported by every scripted sample not covered by
+  /// [roundTripScript].
+  int roundTripMicros = 1000;
+
   /// `phaseTimings.dnsMicros` reported by every scripted sample. Zero
   /// by default, which is the cache-hit case; a test raises it to widen
   /// the per-sample plausibility bound by a measured lookup cost.
@@ -782,6 +829,8 @@ class _ScriptedApi extends MockNtsApi {
     offsetMicros = 0;
     offsetScript = const [];
     peerDelayMicros = 800;
+    roundTripScript = const [];
+    roundTripMicros = 1000;
     dnsMicros = 0;
     keRecordIoMicros = 0;
     queryCalls = 0;
@@ -846,13 +895,16 @@ class _ScriptedApi extends MockNtsApi {
     final offset = queryCalls < offsetScript.length
         ? offsetScript[queryCalls]
         : offsetMicros;
+    final rtt = queryCalls < roundTripScript.length
+        ? roundTripScript[queryCalls]
+        : roundTripMicros;
     queryCalls++;
     if (err != null) throw err;
     return ffi.NtsTimeSample(
       utcUnixMicros: PlatformInt64Util.from(
         DateTime.now().toUtc().microsecondsSinceEpoch,
       ),
-      roundTripMicros: PlatformInt64Util.from(1000),
+      roundTripMicros: PlatformInt64Util.from(rtt),
       serverStratum: 1,
       aeadId: 15,
       freshCookies: 1,

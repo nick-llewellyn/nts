@@ -194,19 +194,25 @@ tarball.
   allowed the flat 5 ms only.
 
   A second screen corroborates θ across the burst: a surviving sample's
-  θ is kept only if another surviving sample agrees with it to within
-  the smallest round trip the burst observed. Samples over one path
-  cannot honestly disagree by more than that path's delay scale, and a
-  step of S displaces one sample's θ by S/2, so the disagreement it
-  produces escapes the window once S exceeds twice that scale. The
-  window is drawn from `roundTripMicros` rather than the peer delay
-  because the round trip is measured on a monotonic clock, so no step
-  can widen the window in either direction, and because it excludes the
-  pre-send interval, which is not a property of the path. This is what
-  rejects a step small enough to pass the per-sample bound but large
-  enough to move the median across the threshold. Neither screen proves
-  the clock was steady: a step that disturbs neither the peer delay
-  beyond the setup cost nor the burst's agreement is not detected.
+  θ is kept only if some other surviving sample agrees with it to
+  within half the sum of the two samples' round trips. Asymmetry is the
+  honest source of disagreement and displaces a sample's θ by at most
+  half its own round trip, so that sum bounds what an honest pair can
+  differ by, while a step of S displaces one sample's θ by S/2 and so
+  escapes the window once S exceeds the sum. The window is per pair
+  rather than one figure for the burst: a retransmit or a queued reply
+  makes one sample far slower than its neighbours, and a burst-wide
+  minimum would suppress such a pair over jitter neither is at fault
+  for — which is not the safe direction to err, since a host left with
+  no surviving θ is judged without the clock check at all. The scale is
+  drawn from `roundTripMicros` rather than the peer delay because the
+  round trip is measured on a monotonic clock, so no step can widen the
+  window in either direction, and because it excludes the pre-send
+  interval, which is not a property of the path. This is what rejects a
+  step small enough to pass the per-sample bound but large enough to
+  move the median across the threshold. Neither screen proves the clock
+  was steady: a step that disturbs neither the peer delay beyond the
+  setup cost nor the burst's agreement is not detected.
   Example app only; no package change. (NTS-152)
 
 - **Docs:** `NtsTimeSample.offsetMicros` described θ's vulnerable

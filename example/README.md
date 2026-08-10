@@ -698,16 +698,23 @@ lookup completes before T1, so it cannot account for any part of the
 delay.
 
 The second screen is corroboration across the burst: a surviving θ is
-kept only if another surviving sample agrees with it to within the
-smallest round trip the burst observed. Samples over one path cannot
-honestly disagree by more than that path's delay scale, and a step
-displaces one sample's θ by half its size, so a step too small for the
-first screen still fails the second once it exceeds twice that scale.
-The window comes from the round trip rather than the peer delay because
-the round trip is measured on a monotonic clock — no step of either
-direction can widen it — and it excludes the setup cost, which is not a
-property of the path. Neither screen is a proof of a steady clock: a
-step small enough to disturb neither is not detected.
+kept only if some other surviving sample agrees with it to within half
+the sum of the two samples' round trips. Asymmetry is the honest source
+of disagreement, and it can displace a sample's θ by at most half that
+sample's own round trip, so that sum is what a pair of honest readings
+can differ by; a step displaces one sample's θ by half its size, so a
+step too small for the first screen still fails the second once it
+exceeds the pair's summed round trips. The window is per pair rather
+than one figure for the burst, because a retransmit or a queued reply
+makes one sample far slower than its neighbours and a burst-wide
+minimum would then suppress a pair for jitter neither is at fault for —
+and suppressing everything is not the safe default, since a host left
+with no θ is judged without the clock check at all. The scale comes
+from the round trip rather than the peer delay because the round trip
+is measured on a monotonic clock — no step of either direction can
+widen it — and it excludes the setup cost, which is not a property of
+the path. Neither screen is a proof of a steady clock: a step small
+enough to disturb neither is not detected.
 
 A host with no usable sample left is not judged on an offset it never
 produced: the offset column is blank and the host carries a `clock
