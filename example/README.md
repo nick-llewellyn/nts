@@ -662,7 +662,7 @@ Each host is reduced to one verdict across all its probes:
 
 | Verdict          | Kept? | Meaning                                                                                 |
 | ---------------- | ----- | --------------------------------------------------------------------------------------- |
-| `healthy`        | ✅    | Replied and every parameter is in range.                                                |
+| `healthy`        | ✅    | Replied, and no parameter that could be assessed is out of range. Not the same as "every parameter passed": a host whose samples all failed the plausibility screens below is `healthy` with the clock offset never judged, and says so in its `note`. |
 | `nonStandard`    | ❌    | Replied, but non-baseline AEAD, unusable stratum, or median clock offset over threshold. |
 | `notReplying`    | ❌    | No successful sample; only timeouts / no-reply (no protocol-level error).                |
 | `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, ABI-mismatch, or trust-backend-unavailable — or a `--require-trust-backend` mismatch on any call the host was probed with — any call that reported a differing resolved backend, whether it went on to succeed or to fail, including one that failed before reaching TLS. A failure that reports no backend — because it fired before resolution, or because its shape carries no attribution field at all — keeps its own error type. |
@@ -725,7 +725,9 @@ A host with no usable sample left is not judged on an offset it never
 produced: the offset column is blank and the host carries a `clock
 offset unavailable (no corroborated sample)` note, which is also
 emitted in the `note` column of `--format csv` and the `note` field of
-`--format json`.
+`--format json`. The suppression is independent of the other checks, so
+the note appears on a `nonStandard` host too — flagged on its AEAD or
+stratum, with the offset still unjudged.
 
 ### Sample output
 

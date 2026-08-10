@@ -162,8 +162,10 @@ tarball.
   offset that would mask a real skew, and a host with no usable sample
   is not flagged on an offset it never observed — it reports a
   `clock offset unavailable (no corroborated sample)` note. The CSV
-  report gains a trailing `note` column so that explanation reaches
-  every output format rather than only text and JSON.
+  report gains a trailing `note` column, and the text report renders
+  the note in the non-standard section as well as the healthy one, so
+  that explanation reaches every output format and every bucket a host
+  with a suppressed offset can land in.
 
   The upper bound is tolerant rather than strict, since a forward step
   adds to the peer delay instead of subtracting and would otherwise

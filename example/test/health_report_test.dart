@@ -262,6 +262,27 @@ void main() {
       );
     });
 
+    test('a non-standard host renders its reasons and its note', () {
+      // The offset suppression is orthogonal to the AEAD and stratum
+      // checks, so a flagged host can also have had no θ to judge. Its
+      // blank offset must not read as "in range".
+      final out = renderTextReport([
+        _h(
+          'odd.example',
+          HealthVerdict.nonStandard,
+          reasons: const ['unusable stratum 16'],
+          note: 'clock offset unavailable (no corroborated sample)',
+        ),
+      ]);
+      expect(
+        out,
+        contains(
+          'odd.example  unusable stratum 16  '
+          '(clock offset unavailable (no corroborated sample))',
+        ),
+      );
+    });
+
     test('summary line tallies every bucket', () {
       expect(
         renderTextReport(mixed()),

@@ -124,7 +124,19 @@ String renderTextReport(
   }
   b.writeln();
 
-  _writeIssueSection(b, 'Non-standard', nonStd, (h) => h.reasons.join('; '));
+  // A non-standard host can also carry a note: the offset suppression
+  // is orthogonal to the AEAD and stratum checks, so a host flagged on
+  // one of those may still have had no θ to judge. Without the note
+  // here the blank offset column reads as "in range" rather than
+  // "never assessed".
+  _writeIssueSection(
+    b,
+    'Non-standard',
+    nonStd,
+    (h) => h.note == null
+        ? h.reasons.join('; ')
+        : '${h.reasons.join('; ')}  (${h.note})',
+  );
   _writeIssueSection(
     b,
     'Not replying',
