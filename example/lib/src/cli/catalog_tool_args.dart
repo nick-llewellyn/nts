@@ -115,9 +115,13 @@ void addCommonProbeOptions(ArgParser parser) {
           'A host whose call resolved a different one is classified as '
           'a severe KE-stage TrustBackendMismatch failure, making it a '
           'drop candidate. Checked on a success and on any failure '
-          'that reports a backend, since resolution precedes the '
-          'network I/O; a failure that fired before resolution reports '
-          'none and keeps its own error type.',
+          'that reports a backend; a failure that fired before the '
+          'backend was resolved reports none and keeps its own error '
+          'type. The initial backend is resolved before any network '
+          'I/O, so an unreachable host can mismatch; on Android '
+          'platform-with-hybrid-fallback is the one value observed '
+          'later, once the fallback verifier accepts a chain during '
+          'TLS.',
     );
 }
 

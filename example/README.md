@@ -480,10 +480,13 @@ mismatch arrives as an `error` event whose `error_type` is
 the resolved `trust_backend` alongside the demanded
 `required_trust_backend`. A call that resolved the wrong backend and
 *then* failed reports the mismatch rather than the `NtsError` it
-surfaced as, since the attribution rides on the error too. The backend
-is resolved before any DNS, connect, or TLS I/O, so this asserts which
-anchor set the call was configured with, not that a chain was verified
-against it — an unreachable host can mismatch.
+surfaced as, since the attribution rides on the error too. The initial
+backend is resolved before any DNS, connect, or TLS I/O, so this
+asserts which anchor set the call was configured with, not that a chain
+was verified against it — an unreachable host can mismatch. Android's
+`platform-with-hybrid-fallback` is the one value resolved later, when
+the fallback verifier accepts a chain during TLS, so that one does
+evidence a verified chain.
 
 The trailing DNS pool report cannot be a human-readable block in this
 mode without corrupting the one-object-per-line stream, so it is
@@ -563,10 +566,15 @@ Usage: nts_health [options] <path-to-server-list.yml>
                             KE-stage TrustBackendMismatch failure,
                             making it a drop candidate. Checked on a
                             success and on any failure that reports a
-                            backend, since resolution precedes the
-                            network I/O; a failure that fired before
-                            resolution reports none and keeps its own
-                            error type. [platform,
+                            backend; a failure that fired before the
+                            backend was resolved reports none and keeps
+                            its own error type. The initial backend is
+                            resolved before any network I/O, so an
+                            unreachable host can mismatch; on Android
+                            platform-with-hybrid-fallback is the one
+                            value observed later, once the fallback
+                            verifier accepts a chain during TLS.
+                            [platform,
                             platform-with-hybrid-fallback, webpki-roots,
                             custom]
 -f, --format                Output format. [text (default), json, csv]

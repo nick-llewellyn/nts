@@ -115,10 +115,13 @@ Future<List<ServerHealth>> probeAll(
 /// surfaced as.
 ///
 /// This is a backend-*resolution* assertion, not a proof that a chain
-/// was verified: the attribution is attached before any DNS, connect,
-/// or TLS I/O, so a host that was never reached can still be reported
-/// as mismatching. That is intended — the policy is about which anchor
-/// set the call would have trusted.
+/// was verified: the initial backend is resolved before any DNS,
+/// connect, or TLS I/O, so a host that was never reached can still be
+/// reported as mismatching. That is intended — the policy is about
+/// which anchor set the call would have trusted. The one exception is
+/// Android's [TrustBackend.platformWithHybridFallback], which is only
+/// resolved once the fallback verifier has accepted a chain during
+/// TLS, so a call attributed to it did verify one.
 ///
 /// The first mismatch, whichever stage observes it, abandons the rest
 /// of the run and reports a severe `TrustBackendMismatch`

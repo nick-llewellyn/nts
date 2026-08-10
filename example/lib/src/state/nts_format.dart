@@ -480,7 +480,7 @@ String? timeoutPhaseName(NtsError err) =>
 /// wrong anchor set and then fail, which would otherwise be recorded
 /// as an ordinary timeout.
 ///
-/// What a non-null result establishes is *resolution*, not
+/// What a non-null result generally establishes is *resolution*, not
 /// authentication: `build_tls_config` runs before any DNS, connect, or
 /// TLS I/O, and the Rust side attaches the resolved backend to every
 /// failure site downstream of it — `dnsSaturation`, `dnsTimeout`,
@@ -490,6 +490,13 @@ String? timeoutPhaseName(NtsError err) =>
 /// policy under test is which anchor set the call was configured to
 /// trust, and a call configured wrongly violated it whether or not it
 /// got far enough to use it.
+///
+/// [TrustBackend.platformWithHybridFallback] is the exception, and
+/// only arises on Android: it replaces the initial `platform` value
+/// only after the webpki-roots fallback verifier has *accepted* a
+/// chain during TLS verification — a failed fallback leaves the
+/// initial value in place. A call attributed to it therefore did
+/// verify a chain, unlike the three config-build values.
 TrustBackend? errorTrustBackend(NtsError err) => switch (err) {
   NtsErrorNetwork(:final trustBackend) => trustBackend,
   NtsErrorKeProtocol(:final trustBackend) => trustBackend,
