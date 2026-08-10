@@ -246,8 +246,10 @@ tarball.
   outside `(0, roundTripMicros]` as a clock-step signal. The upper
   half of that is false on this client for the capture-point reason
   above — δ exceeds the round trip on every healthy sample — so the
-  `ntsGetTime` plausibility window selects the `roundTripMicros`
-  fallback in practice rather than distinguishing stepped samples.
+  `(0, roundTripMicros]` window `ntsGetTime` applies is a selection
+  policy rather than a verdict on the sample: it takes the
+  `roundTripMicros` branch in practice rather than distinguishing
+  stepped samples, and only its lower bound is diagnostic.
   A non-positive δ is also no longer attributed to a *local* step
   specifically: it witnesses an implausible timestamp exchange, which
   a server clock stepped between T2 and T3, or inconsistent server
@@ -258,9 +260,9 @@ tarball.
   point at NTS-153 for aligning the capture points. `README.md`,
   `ARCHITECTURE.md`, and `example/GUI_GUIDE.md` carried the same
   superseded claim — each described `ntsGetTime` as selecting the peer
-  delay, without noting that the window picks the round-trip fallback
-  in practice — and now match. Documentation only; no behaviour
-  change.
+  delay — and now all three lead with the round-trip branch taken in
+  practice, citing the window as the condition rather than as a
+  plausibility judgement. Documentation only; no behaviour change.
 
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits
