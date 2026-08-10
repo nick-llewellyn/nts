@@ -18,6 +18,7 @@ import 'package:nts/nts.dart'
         NtsClient,
         NtsError,
         NtsServerSpec,
+        NtsTimeSample,
         TrustBackend,
         ntsQuery,
         ntsWarmCookies;
@@ -97,10 +98,13 @@ Future<List<ServerHealth>> probeAll(
 /// handshake is attributed as a [ProbeStage.ke] failure — distinct from
 /// a flaky NTP query. A KE that fails, or completes but delivers zero
 /// cookies, short-circuits the burst and classifies from the handshake
-/// alone. Otherwise each successful `ntsQuery` becomes a [ProbeOk] (with
-/// a signed server-minus-local clock offset estimated at reply receipt);
-/// an [NtsError] becomes a typed [ProbeStage.ntp] [ProbeFailure]; any
-/// other throwable is bucketed as a severe `Unhandled` failure.
+/// alone. Otherwise each successful `ntsQuery` becomes a [ProbeOk]
+/// carrying the sample's RFC 5905 clock offset θ, or a `null` offset
+/// when the sample's own peer delay (see [_plausibleOffsetMicros]) or
+/// the rest of the burst (see [_corroborateOffsets]) leaves θ
+/// untrustworthy; an [NtsError] becomes a typed [ProbeStage.ntp]
+/// [ProbeFailure]; any other throwable is bucketed as a severe
+/// `Unhandled` failure.
 ///
 /// [client] routes both stages through a caller-owned [NtsClient]
 /// instead of the top-level functions' process-wide default client.
@@ -215,7 +219,14 @@ Future<ServerHealth> probeHost(
   // stored cookie apiece, but an exhausted pool or an evicted session
   // makes a query re-handshake, so each sample carries its own trust
   // attribution; failures here are NTP-stage.
+  //
+  // Successes are held as raw samples until the burst finishes, because
+  // whether a sample's θ is trustworthy depends on the samples around
+  // it (see [_corroborateOffsets]); failures are recorded as they occur.
+  // The two lists are concatenated at the end, and `summarizeServer`
+  // reduces by mode and median, so the interleaving is not observable.
   final results = <ProbeResult>[];
+  final ok = <NtsTimeSample>[];
   for (var i = 0; i < samples; i++) {
     try {
       final s = client == null
@@ -234,16 +245,7 @@ Future<ServerHealth> probeHost(
       if (requiredBackend != null && s.trustBackend != requiredBackend) {
         return _trustMismatch(entry.hostname, thresholds);
       }
-      final localMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
-      final serverEstimate = s.utcUnixMicros + s.roundTripMicros ~/ 2;
-      results.add(
-        ProbeOk(
-          rttMicros: s.roundTripMicros,
-          stratum: s.serverStratum,
-          aeadId: s.aeadId,
-          offsetMicros: serverEstimate - localMicros,
-        ),
-      );
+      ok.add(s);
     } on NtsError catch (err) {
       // A failure that carries backend attribution proves its
       // handshake reached config-build time, so the assertion applies
@@ -274,9 +276,178 @@ Future<ServerHealth> probeHost(
   }
   return summarizeServer(
     hostname: entry.hostname,
-    results: results,
+    results: [
+      ...results,
+      for (final (i, offset) in _corroborateOffsets(ok).indexed)
+        ProbeOk(
+          rttMicros: ok[i].roundTripMicros,
+          stratum: ok[i].serverStratum,
+          aeadId: ok[i].aeadId,
+          offsetMicros: offset,
+        ),
+    ],
     thresholds: thresholds,
   );
+}
+
+/// Everything in the pre-send interval that is not the NTPv4-host DNS
+/// lookup: building and signing the request packet, and binding and
+/// connecting the UDP socket. The work itself is syscall- and
+/// memcpy-scale with no I/O wait, so the ceiling is sized for it
+/// rather than measured.
+///
+/// What it cannot cover is scheduling. The worker can be preempted
+/// anywhere between T1 and the send, and a loaded probe host can lose
+/// more than this to the run queue; δ carries that loss where the
+/// round trip does not, so a preempted sample fails the bound and
+/// gives up a θ that was never corrupt. A burst where every sample
+/// does leaves the host judged without the clock check at all, which
+/// is the direction that fails open — hence the note the summary
+/// carries when no offset survives. Measuring the interval natively
+/// is what removes the guess, and is tracked as NTS-153.
+const _kSetupSlackMicros = 5000;
+
+/// θ for each of [samples] in order, `null` where it cannot be trusted.
+///
+/// θ is computed from four timestamps, two of which are local
+/// system-clock readings, so a clock step anywhere between T1 and T4
+/// corrupts it — and unlike `ntsGetTime`, which surfaces θ as a
+/// statistic, this module feeds it into a verdict that decides whether
+/// a host stays in the catalog. A corrupted θ would eject a healthy
+/// server, so it is screened out here, by two independent tests: each
+/// sample's own peer delay, then the burst's agreement.
+///
+/// The per-sample test uses the peer delay δ, the available witness,
+/// since it is derived from the same four stamps and is a duration: a
+/// sufficiently large step in either direction drives it out of the
+/// range a delay can occupy. A backwards step subtracts from δ, a
+/// forward step adds to it, and θ is corrupted by half the step in the
+/// opposite sense either way.
+///
+/// A δ at or below zero cannot be a real delay and needs no tolerance,
+/// so it is an unambiguous witness to an implausible exchange; a zero
+/// also marks a pre-7.1 or hand-built sample, which carries no θ worth
+/// reporting either.
+///
+/// The upper bound catches forward steps, but it cannot be the
+/// `δ <= roundTripMicros` one `ntsGetTime` applies (see
+/// `_effectiveDelayMicros`). T1 is captured before the packet is built
+/// and the UDP socket bound, while `roundTripMicros` starts at the
+/// send, so δ legitimately carries a pre-send interval the round trip
+/// excludes — measured against the catalog it exceeds the round trip by
+/// 1–9% on every healthy server, so that bound would suppress every
+/// real sample.
+///
+/// The allowance over the round trip is therefore that interval,
+/// measured rather than assumed: `phaseTimings.dnsMicros` where it is
+/// the NTPv4-host lookup alone, plus [_kSetupSlackMicros] for the build
+/// and the bind. Sizing it from the sample bounds the step that can slip
+/// through at the setup cost itself — single-digit milliseconds, so
+/// single-digit milliseconds of corruption in θ — rather than at
+/// whatever the verdict threshold happens to be. It has to be additive
+/// rather than a multiple of the round trip, since a slow lookup in
+/// front of a LAN-local server would blow any ratio-derived ceiling on a
+/// perfectly healthy sample. The bound can tighten to the strict one
+/// once the native capture points are aligned.
+///
+/// The lookup term is only claimable on a sample that ran no handshake,
+/// which is why [_rehandshaked] gates it: `dnsMicros` sums both lookups
+/// a query can make, and the KE-host one precedes T1.
+///
+/// The burst test then requires corroboration: a surviving θ is kept
+/// only if some other surviving sample agrees with it to within what
+/// the two of them could honestly disagree by. Asymmetry is the honest
+/// source of that disagreement, and it displaces a sample's θ by at
+/// most half that sample's own round trip — the extreme being the whole
+/// round trip falling on one leg — so a *pair* can honestly differ by
+/// half the sum of their round trips, and a step of S, which displaces
+/// one sample's θ by S/2, escapes that window once S exceeds the sum.
+///
+/// The window is per pair rather than one figure for the burst, because
+/// round trips within a burst are not interchangeable: a retransmit or
+/// a queued reply makes one sample far slower than its neighbours, and
+/// a single window drawn from the burst's smallest round trip would be
+/// tighter than such a pair's honest disagreement, suppressing both
+/// samples over jitter neither is at fault for. Suppressing is not the
+/// safe default here — a host left with no surviving θ is judged
+/// without the clock check at all — so too tight a window fails open on
+/// exactly the skewed server the check exists to catch.
+///
+/// The scale is taken from `roundTripMicros` rather than δ for two
+/// reasons: δ carries the pre-send interval this file has just finished
+/// documenting, so a slow lookup would widen the window by an amount
+/// that has nothing to do with the path, and δ is computed from the
+/// stepped clock itself, whereas `roundTripMicros` is a monotonic
+/// measurement no step can move. That immunity is what makes the
+/// residual symmetric: a backwards step deflates δ where a forward step
+/// inflates it, but neither touches the window. This is what stops a
+/// step small enough to pass the per-sample bound from moving a host's
+/// median across the verdict threshold. A burst with fewer than two
+/// surviving samples has nothing to corroborate against and is left to
+/// the per-sample bound alone.
+List<int?> _corroborateOffsets(List<NtsTimeSample> samples) {
+  final gated = [for (final s in samples) _plausibleOffsetMicros(s)];
+  final witnesses = [
+    for (final (i, offset) in gated.indexed)
+      if (offset != null) i,
+  ];
+  if (witnesses.length < 2) return gated;
+  return [
+    for (final (i, offset) in gated.indexed)
+      offset != null &&
+              witnesses.any((j) => j != i && _agree(samples, gated, i, j))
+          ? offset
+          : null,
+  ];
+}
+
+/// Whether samples [i] and [j] agree to within the disagreement two
+/// honest readings over their respective paths can produce: half the
+/// sum of their round trips. Compared doubled, so an odd sum is not
+/// rounded into a window tighter than the pair has earned.
+bool _agree(List<NtsTimeSample> samples, List<int?> gated, int i, int j) =>
+    2 * (gated[i]! - gated[j]!).abs() <=
+    samples[i].roundTripMicros + samples[j].roundTripMicros;
+
+/// Whether [s]'s query ran an NTS-KE handshake of its own, which a burst
+/// sample does only when the warmed pool was exhausted or its session
+/// evicted.
+///
+/// It matters because `phaseTimings.dnsMicros` is the *sum* of the
+/// KE-host and NTPv4-host lookups, while T1 is stamped after the
+/// handshake completes. On a re-handshaked sample the field therefore
+/// over-counts the pre-send interval by a lookup that finished before
+/// T1 and so cannot excuse any part of δ — enough, behind a slow
+/// resolver, to widen the bound past a step it exists to catch. The
+/// three KE-only phases are the available signal — any one of them
+/// non-zero proves a handshake ran — so their disjunction is the
+/// discriminator; on a re-handshaked sample the NTPv4-host lookup goes
+/// unclaimed and the bound is merely stricter than it could be.
+///
+/// The contract guarantees zero on a cache hit but not the converse, so
+/// this infers presence from durations that are truncated to whole
+/// microseconds. Reading a handshake as a cache hit would need a TCP
+/// connect, a TLS 1.3 exchange and a record read to each round to zero
+/// on the same query, which no remote peer produces; a mock or a fixture
+/// can, and gets a wider bound than it should. An explicit indicator
+/// would remove the inference, and belongs with the capture-point work
+/// tracked as NTS-153 rather than in the prober.
+bool _rehandshaked(NtsTimeSample s) =>
+    s.phaseTimings.connectMicros != 0 ||
+    s.phaseTimings.tlsHandshakeMicros != 0 ||
+    s.phaseTimings.keRecordIoMicros != 0;
+
+/// [s]'s θ when its own peer delay is a plausible duration for the
+/// exchange that produced it, else `null`. See [_corroborateOffsets]
+/// for the derivation and for the burst-level test layered on top.
+int? _plausibleOffsetMicros(NtsTimeSample s) {
+  final allowance = _rehandshaked(s)
+      ? _kSetupSlackMicros
+      : s.phaseTimings.dnsMicros + _kSetupSlackMicros;
+  return s.peerDelayMicros > 0 &&
+          s.peerDelayMicros <= s.roundTripMicros + allowance
+      ? s.offsetMicros
+      : null;
 }
 
 /// Reduce a host to the single severe KE-stage `TrustBackendMismatch`

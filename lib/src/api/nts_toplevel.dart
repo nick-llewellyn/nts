@@ -96,10 +96,11 @@ part of 'nts.dart';
 /// symmetric path). The best delay estimate is `peerDelayMicros` (the
 /// RFC 5905 peer delay δ, which excludes server processing time) when
 /// it is plausible — inside `(0, roundTripMicros]` — falling back to
-/// `roundTripMicros` otherwise. For high-precision synchronization,
-/// take a burst of samples and pick the one with the smallest such
-/// delay before applying that adjustment; this is exactly what the
-/// one-call [ntsGetTime] convenience does.
+/// `roundTripMicros` otherwise; see [NtsTimeSample.peerDelayMicros]
+/// for why that fallback is what fires today. For high-precision
+/// synchronization, take a burst of samples and pick the one with the
+/// smallest such delay before applying that adjustment; this is
+/// exactly what the one-call [ntsGetTime] convenience does.
 ///
 /// All arguments (`spec.port`, `timeout`, `dnsConcurrencyCap`,
 /// `bridgeConcurrencyCap`) are validated against the FFI encoding range

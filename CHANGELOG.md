@@ -135,6 +135,115 @@ tarball.
 
 ### Changed
 
+- The example health prober (`example/lib/src/health/probe.dart`) now
+  reports each sample's clock offset from `NtsTimeSample.offsetMicros`
+  — the RFC 5905 §8 offset θ computed natively from the four NTP
+  exchange timestamps — instead of deriving one as
+  `utcUnixMicros + roundTripMicros / 2 − DateTime.now()`. That
+  derivation carried two error terms θ does not, pulling in opposite
+  directions: half the round trip includes the server's own processing
+  time between recv and send, which overstates the offset, while the
+  local reading was taken on the Dart event loop — after the FFI
+  return and worker-thread handoff — and is subtracted, so scheduling
+  lag understates it. Neither cancels the other, and their sum is a
+  function of load rather than of the remote clock. Against a machine
+  measured at +83 ms by `sntp`, the catalog tools were reporting
+  +90–100 ms. θ has been on `NtsTimeSample` since 7.1; the prober
+  predated it.
+
+  θ is only meaningful if the local clock was not stepped between the
+  T1 and T4, and unlike `ntsGetTime` — which reports θ as a
+  statistic — this module feeds it into a verdict that decides whether
+  a host stays in the catalog. Samples are therefore screened on the
+  peer delay: a value that is not a positive duration cannot be a real
+  delay, so θ is suppressed rather than trusted.
+  `ProbeOk.offsetMicros` is now nullable to carry that, suppressed
+  samples are excluded from the median instead of counting as a zero
+  offset that would mask a real skew, and a host with no usable sample
+  is not flagged on an offset it never observed — it reports a
+  `clock offset unavailable (no corroborated sample)` note. The CSV
+  report gains a trailing `note` column, and the text report renders
+  the note in the non-standard section as well as the healthy one, so
+  that explanation reaches every output format and every bucket a host
+  with a suppressed offset can land in.
+
+  The upper bound is tolerant rather than strict, since a forward step
+  adds to the peer delay instead of subtracting and would otherwise
+  slip past a lower bound alone. The bound `ntsGetTime` applies
+  (`peerDelayMicros <= roundTripMicros`) does not hold on this client:
+  T1 is captured before the request packet is built and the UDP socket
+  bound, while `roundTripMicros` starts at the send, so the peer delay
+  legitimately includes a pre-send interval the round trip excludes.
+  Measured across the bundled catalog it exceeds the round trip by
+  1–9% on every healthy server, so asserting that bound would suppress
+  every real sample; the prober admits up to
+  `roundTripMicros + phaseTimings.dnsMicros + 5 ms` instead. That
+  allowance is additive rather than a multiple of the round trip
+  because the pre-send interval includes the NTPv4-host DNS lookup,
+  whose latency is unrelated to the round trip — a ratio-derived
+  ceiling would reject a healthy sample from a nearby server behind a
+  slow resolver. It is measured from the sample rather than derived
+  from the verdict threshold: on a sample that ran no handshake
+  `dnsMicros` is that lookup alone, and the remaining 5 ms covers the
+  packet build and the bind, which do no I/O. A threshold-derived
+  allowance would have bounded the undetected step at the threshold and
+  so the undetected corruption of θ at half of it, which is enough to
+  move a host whose true offset is non-zero across the verdict line.
+  The lookup term is claimed only where it is attributable: the burst
+  runs against a pre-warmed pool, but an exhausted pool or an evicted
+  session makes a sample re-handshake, and `dnsMicros` then also
+  carries a KE-host lookup that completed before T1. Such a sample is
+  allowed the flat 5 ms only.
+
+  A second screen corroborates θ across the burst: a surviving sample's
+  θ is kept only if some other surviving sample agrees with it to
+  within half the sum of the two samples' round trips. Asymmetry is the
+  honest source of disagreement and displaces a sample's θ by at most
+  half its own round trip, so that sum bounds what an honest pair can
+  differ by, while a step of S displaces one sample's θ by S/2 and so
+  escapes the window once S exceeds the sum. The window is per pair
+  rather than one figure for the burst: a retransmit or a queued reply
+  makes one sample far slower than its neighbours, and a burst-wide
+  minimum would suppress such a pair over jitter neither is at fault
+  for — which is not the safe direction to err, since a host left with
+  no surviving θ is judged without the clock check at all. The scale is
+  drawn from `roundTripMicros` rather than the peer delay because the
+  round trip is measured on a monotonic clock, so no step can widen the
+  window in either direction, and because it excludes the pre-send
+  interval, which is not a property of the path. This is what rejects a
+  step small enough to pass the per-sample bound but large enough to
+  move the median across the threshold. Neither screen proves the clock
+  was steady: a step that disturbs neither the peer delay beyond the
+  setup cost nor the burst's agreement is not detected.
+  Example app only; no package change. (NTS-152)
+
+- **Docs:** `NtsTimeSample.offsetMicros` described θ's vulnerable
+  window as spanning the UDP send and recv. It actually opens at T1,
+  which precedes the packet build and the socket bind, so a step
+  during that setup corrupts θ too — and the same early T1 biases θ
+  upward by half the setup interval even on a steady clock
+  (sub-millisecond to a few milliseconds, from the 1–9% measurement
+  above). The rustdoc, generated bindings, and wrapper dartdoc now
+  say so and point at NTS-153. Documentation only; no behaviour
+  change.
+
+- **Docs:** `NtsTimeSample.peerDelayMicros` documented δ as always
+  `<= roundTripMicros` on a steadily-running clock, and a value
+  outside `(0, roundTripMicros]` as a clock-step signal. The upper
+  half of that is false on this client for the capture-point reason
+  above — δ exceeds the round trip on every healthy sample — so the
+  `ntsGetTime` plausibility window selects the `roundTripMicros`
+  fallback in practice rather than distinguishing stepped samples.
+  A non-positive δ is also no longer attributed to a *local* step
+  specifically: it witnesses an implausible timestamp exchange, which
+  a server clock stepped between T2 and T3, or inconsistent server
+  stamps, produce just as well. The tolerant upper bound the field
+  recommends to consumers now points at `phaseTimings.dnsMicros` as
+  the measurable part of the pre-send interval. The field's rustdoc,
+  the generated bindings, and the wrapper dartdoc now say so, and
+  point at NTS-153 for aligning the capture points. Documentation
+  only; no behaviour change.
+
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits
   line, so `KeyInit` now comes from `aes_gcm_siv` rather than

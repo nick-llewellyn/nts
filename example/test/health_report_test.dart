@@ -146,7 +146,29 @@ void main() {
       expect(
         csvReport(const []).trim(),
         'host,verdict,probes,successes,median_rtt_micros,stratum,'
-        'aead_id,offset_micros,error_type,reasons',
+        'aead_id,offset_micros,error_type,reasons,note',
+      );
+    });
+
+    test('a host that replied with no usable offset explains the blank', () {
+      // The offset cell alone cannot distinguish "unavailable" from
+      // "no successful sample"; the note column is what carries it.
+      final lines = csvReport([
+        _h(
+          'a.example',
+          HealthVerdict.healthy,
+          probes: 2,
+          successes: 2,
+          medianRttMicros: 1500,
+          stratum: 1,
+          aeadId: 15,
+          note: 'clock offset unavailable (no corroborated sample)',
+        ),
+      ]).trimRight().split('\n');
+      expect(
+        lines[1],
+        'a.example,healthy,2,2,1500,1,15,,,,'
+        'clock offset unavailable (no corroborated sample)',
       );
     });
 
@@ -171,8 +193,8 @@ void main() {
           dominantErrorType: 'Network',
         ),
       ]).trimRight().split('\n');
-      expect(lines[1], 'a.example,healthy,3,3,1500,1,15,1200,,');
-      expect(lines[2], 'z.example,notReplying,2,0,,,,,Network,Network');
+      expect(lines[1], 'a.example,healthy,3,3,1500,1,15,1200,,,');
+      expect(lines[2], 'z.example,notReplying,2,0,,,,,Network,Network,');
     });
 
     test('a comma-bearing reason is quoted; embedded quotes are doubled', () {
@@ -237,6 +259,27 @@ void main() {
       expect(
         out,
         contains('DNS-exhausted (local cap; not a server fault) (1):'),
+      );
+    });
+
+    test('a non-standard host renders its reasons and its note', () {
+      // The offset suppression is orthogonal to the AEAD and stratum
+      // checks, so a flagged host can also have had no θ to judge. Its
+      // blank offset must not read as "in range".
+      final out = renderTextReport([
+        _h(
+          'odd.example',
+          HealthVerdict.nonStandard,
+          reasons: const ['unusable stratum 16'],
+          note: 'clock offset unavailable (no corroborated sample)',
+        ),
+      ]);
+      expect(
+        out,
+        contains(
+          'odd.example  unusable stratum 16  '
+          '(clock offset unavailable (no corroborated sample))',
+        ),
       );
     });
 

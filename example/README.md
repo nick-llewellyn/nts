@@ -662,7 +662,7 @@ Each host is reduced to one verdict across all its probes:
 
 | Verdict          | Kept? | Meaning                                                                                 |
 | ---------------- | ----- | --------------------------------------------------------------------------------------- |
-| `healthy`        | ✅    | Replied and every parameter is in range.                                                |
+| `healthy`        | ✅    | Replied, and no parameter that could be assessed is out of range. Not the same as "every parameter passed": a host whose samples all failed the plausibility screens below is `healthy` with the clock offset never judged, and says so in its `note`. |
 | `nonStandard`    | ❌    | Replied, but non-baseline AEAD, unusable stratum, or median clock offset over threshold. |
 | `notReplying`    | ❌    | No successful sample; only timeouts / no-reply (no protocol-level error).                |
 | `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, ABI-mismatch, or trust-backend-unavailable — or a `--require-trust-backend` mismatch on any call the host was probed with — any call that reported a differing resolved backend, whether it went on to succeed or to fail, including one that failed before reaching TLS. A failure that reports no backend — because it fired before resolution, or because its shape carries no attribution field at all — keeps its own error type. |
@@ -675,6 +675,59 @@ the **median** RTT and offset and the **mode** stratum / AEAD, so a
 single outlier sample does not flip a verdict. **Suggested removals** is
 every drop candidate (`❌` above) — i.e. all verdicts except `healthy`
 and `dnsExhausted`.
+
+The offset reported is the sample's RFC 5905 §8 clock offset θ, taken
+from the four NTP exchange timestamps — T1 and T4 are read from the
+local clock, and only T2 and T3 are the server's. (T1 does travel: the
+client sends it as the request's transmit timestamp and the server
+echoes it back as the originate timestamp, but θ is computed from the
+locally captured copy.) That is what the screens below exist for. θ is
+only meaningful if the *local* clock
+was not stepped between T1 and T4 — a window that opens before the UDP
+send, since T1 precedes the packet build and the socket bind — so a
+sample that fails either of two plausibility screens is excluded from
+the median rather than counted as a zero offset.
+
+The first screen is the sample's own peer delay. A sufficiently large
+backwards step drives it to a non-positive value, which no real delay
+can be; a sufficiently large forward step inflates it, so delays beyond
+the round trip plus the sample's own `dnsMicros` plus a few
+milliseconds for the build and the bind are rejected too. The allowance
+is additive rather than a multiple of the round trip because a DNS
+lookup's latency is unrelated to it, and it is measured from the sample
+rather than derived from the verdict threshold so that the undetectable
+step stays at the scale of the setup cost. The `dnsMicros` term is
+claimed only on a sample that ran no handshake of its own: the field
+sums both lookups a query can make, and on a re-handshake the KE-host
+lookup completes before T1, so it cannot account for any part of the
+delay.
+
+The second screen is corroboration across the burst: a surviving θ is
+kept only if some other surviving sample agrees with it to within half
+the sum of the two samples' round trips. Asymmetry is the honest source
+of disagreement, and it can displace a sample's θ by at most half that
+sample's own round trip, so that sum is what a pair of honest readings
+can differ by; a step displaces one sample's θ by half its size, so a
+step too small for the first screen still fails the second once it
+exceeds the pair's summed round trips. The window is per pair rather
+than one figure for the burst, because a retransmit or a queued reply
+makes one sample far slower than its neighbours and a burst-wide
+minimum would then suppress a pair for jitter neither is at fault for —
+and suppressing everything is not the safe default, since a host left
+with no θ is judged without the clock check at all. The scale comes
+from the round trip rather than the peer delay because the round trip
+is measured on a monotonic clock — no step of either direction can
+widen it — and it excludes the setup cost, which is not a property of
+the path. Neither screen is a proof of a steady clock: a step small
+enough to disturb neither is not detected.
+
+A host with no usable sample left is not judged on an offset it never
+produced: the offset column is blank and the host carries a `clock
+offset unavailable (no corroborated sample)` note, which is also
+emitted in the `note` column of `--format csv` and the `note` field of
+`--format json`. The suppression is independent of the other checks, so
+the note appears on a `nonStandard` host too — flagged on its AEAD or
+stratum, with the offset still unjudged.
 
 ### Sample output
 

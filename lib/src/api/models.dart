@@ -140,7 +140,8 @@ class NtsTimeSample {
   /// half the network delay — `peerDelayMicros / 2` when the peer
   /// delay is plausible (inside `(0, roundTripMicros]`), else
   /// `roundTripMicros / 2` — to estimate the server's clock at the
-  /// moment the reply arrived.
+  /// moment the reply arrived. See [peerDelayMicros] for why that
+  /// window selects [roundTripMicros] on healthy samples today.
   final int utcUnixMicros;
 
   /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP send
@@ -195,17 +196,59 @@ class NtsTimeSample {
   /// processing time.
   ///
   /// T1 and T4 are local system-clock readings, so θ is only
-  /// meaningful if the system clock was not stepped between the UDP
-  /// send and recv of this exchange. New in 7.1.
+  /// meaningful if the system clock was not stepped between them.
+  /// That window opens *before* the UDP send: T1 is stamped ahead of
+  /// the packet build and the socket bind (see [peerDelayMicros]), so
+  /// a step during that setup corrupts θ as well.
+  ///
+  /// The same early T1 biases θ upward by half the setup interval
+  /// even when the clock is steady, since T1 is earlier than the
+  /// instant the request actually left. Measured against the bundled
+  /// server catalog that interval runs 1–9% of [roundTripMicros], so
+  /// the bias is sub-millisecond to a few milliseconds. Aligning the
+  /// capture points is tracked as NTS-153. New in 7.1.
   final int offsetMicros;
 
   /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905 §8):
   /// the network round trip excluding the server's processing time
-  /// between receive and transmit. Always ≤ [roundTripMicros] when
-  /// the local clock ran steadily across the exchange; a value
-  /// outside `(0, roundTripMicros]` signals a local clock step
-  /// mid-exchange and consumers should fall back to
-  /// [roundTripMicros]. New in 7.1.
+  /// between receive and transmit. A non-positive δ cannot be a real
+  /// duration and so witnesses an implausible timestamp exchange — a
+  /// local clock step between T1 and T4 is one cause, but so is a
+  /// server clock stepped between T2 and T3, or server stamps that
+  /// are simply inconsistent — and consumers should fall back to
+  /// [roundTripMicros].
+  ///
+  /// δ is **not** bounded above by [roundTripMicros] on this client.
+  /// T1 is stamped before the UDP socket is bound and connected,
+  /// while [roundTripMicros] is measured from the send that follows
+  /// the bind, so δ carries setup cost the round trip does not —
+  /// measured 1–9% above [roundTripMicros] across the bundled server
+  /// catalog, on every healthy sample. The `(0, roundTripMicros]`
+  /// window applied by `ntsGetTime` is therefore conservative rather
+  /// than diagnostic: it selects the [roundTripMicros] fallback on
+  /// healthy samples too. Consumers screening only for clock steps
+  /// should pair the lower bound with a tolerant upper bound instead
+  /// of the strict window. Make that allowance *additive* over
+  /// [roundTripMicros] rather than a multiple of it: the pre-send
+  /// interval includes the NTPv4-host DNS lookup, whose latency bears
+  /// no relation to the round trip, so a ratio-derived ceiling can
+  /// reject a healthy sample from a nearby server behind a slow
+  /// resolver. That lookup is reported per sample as
+  /// [PhaseTimings.dnsMicros], so the allowance can be measured rather
+  /// than guessed: on a query that ran no handshake the field is the
+  /// NTPv4-host lookup alone, and the rest of the interval is the
+  /// packet build and the bind, which do no I/O. Claim it only on such
+  /// a query. On one that did handshake, the field also carries the
+  /// KE-host lookup, which completed before T1 was stamped and so
+  /// accounts for none of δ; the KE-only phases
+  /// ([PhaseTimings.connectMicros], [PhaseTimings.tlsHandshakeMicros],
+  /// [PhaseTimings.keRecordIoMicros]) are a one-way signal for that:
+  /// any non-zero value proves a handshake ran, while all three
+  /// reading zero only fails to prove it, since each is truncated to
+  /// whole microseconds. Aligning the two capture points is tracked
+  /// as NTS-153.
+  ///
+  /// New in 7.1.
   final int peerDelayMicros;
 
   /// Server-reported root delay in microseconds: total round-trip

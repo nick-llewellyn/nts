@@ -272,18 +272,23 @@ Future<NtsSyncedTime> _getTime({
 }
 
 // The network delay used for burst selection, one-way compensation,
-// and the error bound: the RFC 5905 peer delay δ when plausible
-// (excludes server processing time), else the locally measured round
-// trip. δ is implausible when outside `(0, roundTripMicros]` — a `0`
-// marks a pre-7.1 fixture, and a value above the measured round trip
-// (or negative) marks a local clock step mid-exchange.
+// and the error bound: the RFC 5905 peer delay δ when it falls in
+// `(0, roundTripMicros]` (δ excludes server processing time), else
+// the locally measured round trip.
 //
-// Wall-clock quantisation can also push δ marginally past the
-// monotonic round trip (the Rust live probe tolerates ~10 ms of it).
-// The strict upper bound is kept anyway: in that regime server
-// processing time is ≈0, so δ ≈ roundTrip and the fallback differs
-// from δ by at most the quantisation noise — whereas accepting a
-// δ above the measured round trip would overstate the one-way delay.
+// `(0, roundTripMicros]` is a delay-selection policy, not a
+// plausibility verdict on the sample. Only the lower bound is
+// diagnostic: a `0` marks a pre-7.1 fixture, and a non-positive δ is
+// evidence of an implausible timestamp exchange — a local clock step
+// mid-exchange, a server clock stepped between T2 and T3, or server
+// stamps that are simply inconsistent. The upper bound rejects
+// healthy samples by construction: T1 is stamped before the UDP bind
+// while `roundTripMicros` starts at the send that follows it, so δ
+// runs 1–9% above the round trip on healthy samples and this window
+// selects `roundTripMicros` in practice (NTS-153 aligns the capture
+// points). It is kept regardless: accepting a δ that carries
+// pre-bind setup cost would overstate the one-way delay, whereas the
+// fallback is the quantity actually measured across the exchange.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros
