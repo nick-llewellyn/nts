@@ -165,15 +165,30 @@ tarball.
   report gains a trailing `note` column so that explanation reaches
   every output format rather than only text and JSON.
 
-  Only the lower bound is asserted. The upper bound `ntsGetTime`
-  applies (`peerDelayMicros <= roundTripMicros`) does not hold on this
-  client: T1 is captured before the request packet is built and the
-  UDP socket bound, while `roundTripMicros` starts at the send, so the
-  peer delay legitimately includes a pre-send interval the round trip
-  excludes. Measured across the bundled catalog it exceeds the round
-  trip by 1–9% on every healthy server, so asserting that bound would
-  suppress every real sample. Example app only; no package change.
-  (NTS-152)
+  The upper bound is tolerant rather than strict, since a forward step
+  adds to the peer delay instead of subtracting and would otherwise
+  slip past a lower bound alone. The bound `ntsGetTime` applies
+  (`peerDelayMicros <= roundTripMicros`) does not hold on this client:
+  T1 is captured before the request packet is built and the UDP socket
+  bound, while `roundTripMicros` starts at the send, so the peer delay
+  legitimately includes a pre-send interval the round trip excludes.
+  Measured across the bundled catalog it exceeds the round trip by
+  1–9% on every healthy server, so asserting that bound would suppress
+  every real sample; the prober admits up to `2 × roundTripMicros`
+  instead, which leaves an order of magnitude of headroom over the
+  worst observed excess while still rejecting multi-second steps.
+  Example app only; no package change. (NTS-152)
+
+- **Docs:** `NtsTimeSample.peerDelayMicros` documented δ as always
+  `<= roundTripMicros` on a steadily-running clock, and a value
+  outside `(0, roundTripMicros]` as a clock-step signal. The upper
+  half of that is false on this client for the capture-point reason
+  above — δ exceeds the round trip on every healthy sample — so the
+  `ntsGetTime` plausibility window selects the `roundTripMicros`
+  fallback in practice rather than distinguishing stepped samples.
+  The field's rustdoc, the generated bindings, and the wrapper
+  dartdoc now say so, and point at NTS-153 for aligning the capture
+  points. Documentation only; no behaviour change.
 
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits

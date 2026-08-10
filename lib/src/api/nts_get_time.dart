@@ -275,15 +275,17 @@ Future<NtsSyncedTime> _getTime({
 // and the error bound: the RFC 5905 peer delay δ when plausible
 // (excludes server processing time), else the locally measured round
 // trip. δ is implausible when outside `(0, roundTripMicros]` — a `0`
-// marks a pre-7.1 fixture, and a value above the measured round trip
-// (or negative) marks a local clock step mid-exchange.
+// marks a pre-7.1 fixture and a negative value marks a local clock
+// step mid-exchange.
 //
-// Wall-clock quantisation can also push δ marginally past the
-// monotonic round trip (the Rust live probe tolerates ~10 ms of it).
-// The strict upper bound is kept anyway: in that regime server
-// processing time is ≈0, so δ ≈ roundTrip and the fallback differs
-// from δ by at most the quantisation noise — whereas accepting a
-// δ above the measured round trip would overstate the one-way delay.
+// The upper bound is conservative rather than diagnostic. T1 is
+// stamped before the UDP bind while `roundTripMicros` starts at the
+// send that follows it, so δ runs 1–9% above the round trip on
+// healthy samples and this window selects `roundTripMicros` in
+// practice (NTS-153 aligns the capture points). The strict bound is
+// kept regardless: accepting a δ that carries pre-bind setup cost
+// would overstate the one-way delay, whereas the fallback is the
+// quantity actually measured across the exchange.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros

@@ -140,7 +140,8 @@ class NtsTimeSample {
   /// half the network delay — `peerDelayMicros / 2` when the peer
   /// delay is plausible (inside `(0, roundTripMicros]`), else
   /// `roundTripMicros / 2` — to estimate the server's clock at the
-  /// moment the reply arrived.
+  /// moment the reply arrived. See [peerDelayMicros] for why that
+  /// window selects [roundTripMicros] on healthy samples today.
   final int utcUnixMicros;
 
   /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP send
@@ -201,11 +202,24 @@ class NtsTimeSample {
 
   /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905 §8):
   /// the network round trip excluding the server's processing time
-  /// between receive and transmit. Always ≤ [roundTripMicros] when
-  /// the local clock ran steadily across the exchange; a value
-  /// outside `(0, roundTripMicros]` signals a local clock step
-  /// mid-exchange and consumers should fall back to
-  /// [roundTripMicros]. New in 7.1.
+  /// between receive and transmit. A non-positive δ cannot be a real
+  /// duration and witnesses a local clock step mid-exchange;
+  /// consumers should fall back to [roundTripMicros].
+  ///
+  /// δ is **not** bounded above by [roundTripMicros] on this client.
+  /// T1 is stamped before the UDP socket is bound and connected,
+  /// while [roundTripMicros] is measured from the send that follows
+  /// the bind, so δ carries setup cost the round trip does not —
+  /// measured 1–9% above [roundTripMicros] across the bundled server
+  /// catalog, on every healthy sample. The `(0, roundTripMicros]`
+  /// window applied by `ntsGetTime` is therefore conservative rather
+  /// than diagnostic: it selects the [roundTripMicros] fallback on
+  /// healthy samples too. Consumers screening only for clock steps
+  /// should pair the lower bound with a tolerant upper bound (say
+  /// `2 × roundTripMicros`) instead of the strict window. Aligning
+  /// the two capture points is tracked as NTS-153.
+  ///
+  /// New in 7.1.
   final int peerDelayMicros;
 
   /// Server-reported root delay in microseconds: total round-trip

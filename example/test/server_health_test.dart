@@ -383,18 +383,33 @@ void main() {
       expect(h.note, contains('clock offset unavailable'));
     });
 
-    test('a peer delay above the round trip is not treated as a step', () {
+    test('a peer delay modestly above the round trip is not treated as '
+        'a step', () {
       // T1 is captured before the UDP bind while `roundTripMicros`
       // starts at the send, so δ legitimately exceeds the round trip on
       // healthy servers (1–9% across the bundled catalog). Suppressing
       // on that would discard every real sample.
-      api.peerDelayMicros = 5000;
+      api.peerDelayMicros = 1090;
       api.offsetMicros = 1200;
       return probe().then((h) {
         expect(h.verdict, HealthVerdict.healthy);
         expect(h.offsetMicros, 1200);
         expect(h.note, isNull);
       });
+    });
+
+    test('a peer delay far above the round trip suppresses θ', () async {
+      // A forward local step adds to δ instead of subtracting, so the
+      // lower bound alone would pass it through while θ is corrupted by
+      // half the step in the opposite direction. The scripted δ is 3 s
+      // against a 1 ms round trip, well past the pre-bind excess the
+      // gate tolerates.
+      api.peerDelayMicros = 3000000;
+      api.offsetMicros = -1500000;
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.offsetMicros, isNull);
+      expect(h.note, contains('clock offset unavailable'));
     });
 
     test('a plausible θ beyond the threshold still flags the host', () async {
@@ -598,8 +613,9 @@ class _ScriptedApi extends MockNtsApi {
   int offsetMicros = 0;
 
   /// Peer delay δ reported by every scripted sample. The default is a
-  /// plausible positive duration; a test drives θ's clock-step gate by
-  /// making it non-positive.
+  /// plausible positive duration below the scripted round trip; tests
+  /// drive θ's clock-step gate by making it non-positive or by pushing
+  /// it far past that round trip.
   int peerDelayMicros = 800;
 
   int queryCalls = 0;
