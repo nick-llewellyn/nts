@@ -651,8 +651,10 @@ class NtsTimeSample {
   /// completed before T1 was stamped and so accounts for none of δ;
   /// the KE-only phases (`connect_micros`, `tls_handshake_micros`,
   /// `ke_record_io_micros`; Dart: `connectMicros`,
-  /// `tlsHandshakeMicros`, `keRecordIoMicros`) are non-zero exactly
-  /// on those queries.
+  /// `tlsHandshakeMicros`, `keRecordIoMicros`) are a one-way signal
+  /// for that: any non-zero value proves a handshake ran, while all
+  /// three reading zero only fails to prove it, since each is
+  /// truncated to whole microseconds.
   /// Aligning the two capture points is tracked as
   /// NTS-153.
   ///

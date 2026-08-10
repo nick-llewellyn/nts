@@ -478,12 +478,13 @@ void main() {
     });
 
     test('the corroboration window ignores a sample\'s DNS cost', () async {
-      // The window is the smallest `roundTripMicros`, not the smallest
-      // δ. A 400 ms lookup inflates every δ well past the offsets'
-      // spread, so a δ-derived window would have admitted the outlier
-      // at +400 ms as a corroborating witness of its neighbours. The
-      // round trip is 1 ms and unmoved by the lookup, so the outlier is
-      // still dropped and the agreeing pair still carries the median.
+      // The window is built from `roundTripMicros`, not from δ. A
+      // 400 ms lookup inflates every δ well past the offsets' spread,
+      // so a δ-derived window would have admitted the outlier at
+      // +400 ms as a corroborating witness of its neighbours. The
+      // round trips are 1 ms and unmoved by the lookup, so every pair
+      // is scored against a 1 ms window: the outlier is dropped and
+      // the agreeing pair still carries the median.
       api.dnsMicros = 400000;
       api.peerDelayMicros = 400500;
       api.offsetScript = [1200, 1200, 400000];

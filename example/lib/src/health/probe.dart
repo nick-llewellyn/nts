@@ -292,9 +292,19 @@ Future<ServerHealth> probeHost(
 
 /// Everything in the pre-send interval that is not the NTPv4-host DNS
 /// lookup: building and signing the request packet, and binding and
-/// connecting the UDP socket. All of it is syscall- and memcpy-scale
-/// work with no I/O wait, so a single flat ceiling covers it on any
-/// machine the catalog tools run on.
+/// connecting the UDP socket. The work itself is syscall- and
+/// memcpy-scale with no I/O wait, so the ceiling is sized for it
+/// rather than measured.
+///
+/// What it cannot cover is scheduling. The worker can be preempted
+/// anywhere between T1 and the send, and a loaded probe host can lose
+/// more than this to the run queue; δ carries that loss where the
+/// round trip does not, so a preempted sample fails the bound and
+/// gives up a θ that was never corrupt. A burst where every sample
+/// does leaves the host judged without the clock check at all, which
+/// is the direction that fails open — hence the note the summary
+/// carries when no offset survives. Measuring the interval natively
+/// is what removes the guess, and is tracked as NTS-153.
 const _kSetupSlackMicros = 5000;
 
 /// θ for each of [samples] in order, `null` where it cannot be trusted.
@@ -409,10 +419,10 @@ bool _agree(List<NtsTimeSample> samples, List<int?> gated, int i, int j) =>
 /// over-counts the pre-send interval by a lookup that finished before
 /// T1 and so cannot excuse any part of δ — enough, behind a slow
 /// resolver, to widen the bound past a step it exists to catch. The
-/// three KE-only phases are zero exactly when no handshake ran, so their
-/// disjunction is the discriminator; on a re-handshaked sample the
-/// NTPv4-host lookup goes unclaimed and the bound is merely stricter
-/// than it could be.
+/// three KE-only phases are the available signal — any one of them
+/// non-zero proves a handshake ran — so their disjunction is the
+/// discriminator; on a re-handshaked sample the NTPv4-host lookup goes
+/// unclaimed and the bound is merely stricter than it could be.
 ///
 /// The contract guarantees zero on a cache hit but not the converse, so
 /// this infers presence from durations that are truncated to whole

@@ -677,7 +677,9 @@ every drop candidate (`❌` above) — i.e. all verdicts except `healthy`
 and `dnsExhausted`.
 
 The offset reported is the sample's RFC 5905 §8 clock offset θ, taken
-from the wire timestamps. θ is only meaningful if the *local* clock
+from the four NTP exchange timestamps — T1 and T4 are read from the
+local clock rather than carried on the wire, which is what the screens
+below exist for. θ is only meaningful if the *local* clock
 was not stepped between T1 and T4 — a window that opens before the UDP
 send, since T1 precedes the packet build and the socket bind — so a
 sample that fails either of two plausibility screens is excluded from

@@ -242,8 +242,11 @@ class NtsTimeSample {
   /// KE-host lookup, which completed before T1 was stamped and so
   /// accounts for none of δ; the KE-only phases
   /// ([PhaseTimings.connectMicros], [PhaseTimings.tlsHandshakeMicros],
-  /// [PhaseTimings.keRecordIoMicros]) are non-zero exactly on those
-  /// queries. Aligning the two capture points is tracked as NTS-153.
+  /// [PhaseTimings.keRecordIoMicros]) are a one-way signal for that:
+  /// any non-zero value proves a handshake ran, while all three
+  /// reading zero only fails to prove it, since each is truncated to
+  /// whole microseconds. Aligning the two capture points is tracked
+  /// as NTS-153.
   ///
   /// New in 7.1.
   final int peerDelayMicros;

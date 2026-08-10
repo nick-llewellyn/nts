@@ -137,8 +137,8 @@ tarball.
 
 - The example health prober (`example/lib/src/health/probe.dart`) now
   reports each sample's clock offset from `NtsTimeSample.offsetMicros`
-  — the RFC 5905 §8 offset θ computed natively from the four on-wire
-  timestamps — instead of deriving one as
+  — the RFC 5905 §8 offset θ computed natively from the four NTP
+  exchange timestamps — instead of deriving one as
   `utcUnixMicros + roundTripMicros / 2 − DateTime.now()`. That
   derivation carried two error terms θ does not, pulling in opposite
   directions: half the round trip includes the server's own processing
