@@ -161,7 +161,7 @@ tarball.
   samples are excluded from the median instead of counting as a zero
   offset that would mask a real skew, and a host with no usable sample
   is not flagged on an offset it never observed — it reports a
-  `clock offset unavailable (implausible peer delay)` note. The CSV
+  `clock offset unavailable (no corroborated sample)` note. The CSV
   report gains a trailing `note` column so that explanation reaches
   every output format rather than only text and JSON.
 
@@ -175,15 +175,32 @@ tarball.
   Measured across the bundled catalog it exceeds the round trip by
   1–9% on every healthy server, so asserting that bound would suppress
   every real sample; the prober admits up to
-  `roundTripMicros + HealthThresholds.offsetThresholdMicros` instead.
-  That allowance is additive rather than a multiple of the round trip
+  `roundTripMicros + phaseTimings.dnsMicros + 5 ms` instead. That
+  allowance is additive rather than a multiple of the round trip
   because the pre-send interval includes the NTPv4-host DNS lookup,
   whose latency is unrelated to the round trip — a ratio-derived
   ceiling would reject a healthy sample from a nearby server behind a
-  slow resolver. Sizing it from the verdict threshold means every step
-  large enough to flip a verdict on its own is rejected (a step of S
-  inflates δ by S and corrupts θ by S/2), while a setup cost measured
-  in milliseconds is not.
+  slow resolver. It is measured from the sample rather than derived
+  from the verdict threshold: the burst runs against a pre-warmed
+  cookie pool, so `dnsMicros` is that lookup alone, and the remaining
+  5 ms covers the packet build and the bind, which do no I/O. A
+  threshold-derived allowance would have bounded the undetected step
+  at the threshold and so the undetected corruption of θ at half of
+  it, which is enough to move a host whose true offset is non-zero
+  across the verdict line.
+
+  A second screen corroborates θ across the burst: a surviving sample's
+  θ is kept only if another surviving sample agrees with it to within
+  the smallest peer delay the burst observed. Samples over one path
+  cannot honestly disagree by more than that path's delay scale, while
+  a step of S displaces one sample's θ by S/2 and inflates that same
+  sample's peer delay by S — so the window, drawn from the least
+  inflated sample, does not widen to admit the displacement it is
+  meant to catch. This is what rejects a step small enough to pass the
+  per-sample bound but large enough to move the median across the
+  threshold. Neither screen proves the clock was steady: a step that
+  disturbs neither the peer delay beyond the setup cost nor the burst's
+  agreement is not detected.
   Example app only; no package change. (NTS-152)
 
 - **Docs:** `NtsTimeSample.offsetMicros` described θ's vulnerable
@@ -203,9 +220,15 @@ tarball.
   above — δ exceeds the round trip on every healthy sample — so the
   `ntsGetTime` plausibility window selects the `roundTripMicros`
   fallback in practice rather than distinguishing stepped samples.
-  The field's rustdoc, the generated bindings, and the wrapper
-  dartdoc now say so, and point at NTS-153 for aligning the capture
-  points. Documentation only; no behaviour change.
+  A non-positive δ is also no longer attributed to a *local* step
+  specifically: it witnesses an implausible timestamp exchange, which
+  a server clock stepped between T2 and T3, or inconsistent server
+  stamps, produce just as well. The tolerant upper bound the field
+  recommends to consumers now points at `phaseTimings.dnsMicros` as
+  the measurable part of the pre-send interval. The field's rustdoc,
+  the generated bindings, and the wrapper dartdoc now say so, and
+  point at NTS-153 for aligning the capture points. Documentation
+  only; no behaviour change.
 
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits

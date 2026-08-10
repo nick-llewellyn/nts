@@ -315,8 +315,11 @@ pub struct NtsTimeSample {
     /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905
     /// §8): the network round trip excluding the server's processing
     /// time between receive and transmit. A non-positive δ cannot be
-    /// a real duration and witnesses a local clock step mid-exchange;
-    /// consumers should fall back to `round_trip_micros`.
+    /// a real duration and so witnesses an implausible timestamp
+    /// exchange — a local clock step between T1 and T4 is one cause,
+    /// but so is a server clock stepped between T2 and T3, or server
+    /// stamps that are simply inconsistent — and consumers should
+    /// fall back to `round_trip_micros`.
     ///
     /// δ is **not** bounded above by `round_trip_micros` on this
     /// client. T1 is stamped before the UDP socket is bound and
@@ -334,7 +337,12 @@ pub struct NtsTimeSample {
     /// pre-send interval includes the NTPv4-host DNS lookup, whose
     /// latency bears no relation to the round trip, so a ratio-derived
     /// ceiling can reject a healthy sample from a nearby server behind
-    /// a slow resolver. Aligning the two capture points is tracked as
+    /// a slow resolver. That lookup is reported per sample as
+    /// `phase_timings.dns_micros` (Dart: `phaseTimings.dnsMicros`), so
+    /// the allowance can be measured rather than guessed: on a query
+    /// that ran no handshake the field is the NTPv4-host lookup alone,
+    /// and the rest of the interval is the packet build and the bind,
+    /// which do no I/O. Aligning the two capture points is tracked as
     /// NTS-153.
     ///
     /// New in 7.1.

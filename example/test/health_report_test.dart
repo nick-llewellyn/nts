@@ -162,13 +162,13 @@ void main() {
           medianRttMicros: 1500,
           stratum: 1,
           aeadId: 15,
-          note: 'clock offset unavailable (implausible peer delay)',
+          note: 'clock offset unavailable (no corroborated sample)',
         ),
       ]).trimRight().split('\n');
       expect(
         lines[1],
         'a.example,healthy,2,2,1500,1,15,,,,'
-        'clock offset unavailable (implausible peer delay)',
+        'clock offset unavailable (no corroborated sample)',
       );
     });
 

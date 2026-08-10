@@ -374,9 +374,9 @@ void main() {
     test('an implausible peer delay suppresses θ instead of judging on '
         'it', () async {
       // A non-positive peer delay cannot be a real duration, so it
-      // witnesses a backwards clock step, which corrupts θ. The
-      // scripted θ is far outside the ±1s threshold, so propagating it
-      // would eject a server whose own clock was never observed to be
+      // witnesses an implausible exchange, which leaves θ untrustworthy.
+      // The scripted θ is far outside the ±1s threshold, so propagating
+      // it would eject a server whose own clock was never observed to be
       // wrong.
       api.peerDelayMicros = -400;
       api.offsetMicros = 30000000;
@@ -405,7 +405,7 @@ void main() {
       // A forward local step adds to δ instead of subtracting, so the
       // lower bound alone would pass it through while θ is corrupted by
       // half the step in the opposite direction. The scripted δ is 3 s
-      // against a 1 ms round trip, well past the pre-bind excess the
+      // against a 1 ms round trip, well past the pre-send interval the
       // gate tolerates.
       api.peerDelayMicros = 3000000;
       api.offsetMicros = -1500000;
@@ -416,10 +416,10 @@ void main() {
     });
 
     test('θ survives a peer delay exactly at the allowance', () async {
-      // The bound is `roundTripMicros + offsetThresholdMicros`: 1 ms +
-      // 1 s against this fixture. It is inclusive, so the boundary
+      // The bound is `roundTripMicros + dnsMicros + 5 ms`: 1 ms + 0 +
+      // 5 ms against this fixture. It is inclusive, so the boundary
       // value is the largest excess the gate still reads as setup cost.
-      api.peerDelayMicros = 1001000;
+      api.peerDelayMicros = 6000;
       api.offsetMicros = 1200;
       final h = await probe();
       expect(h.verdict, HealthVerdict.healthy);
@@ -430,7 +430,7 @@ void main() {
     test('θ is suppressed one microsecond past the allowance', () async {
       // Pins the cutoff from the other side, so widening or narrowing
       // the allowance cannot pass silently.
-      api.peerDelayMicros = 1001001;
+      api.peerDelayMicros = 6001;
       api.offsetMicros = 1200;
       final h = await probe();
       expect(h.verdict, HealthVerdict.healthy);
@@ -438,24 +438,64 @@ void main() {
       expect(h.note, contains('clock offset unavailable'));
     });
 
-    test('the allowance tracks the configured offset threshold', () async {
-      // The allowance is derived from the verdict threshold rather than
-      // from a constant of its own, so tightening the threshold
-      // tightens the gate. δ = 3001 µs clears the default bound but not
-      // a 2 ms one; δ = 3000 µs sits exactly on the tightened bound.
-      const tight = HealthThresholds(offsetThresholdMicros: 2000);
-      api.peerDelayMicros = 3001;
+    test('the allowance tracks the sample\'s own DNS cost', () async {
+      // The allowance is measured from the sample rather than taken
+      // from a constant or from the verdict threshold, so a lookup that
+      // actually cost 20 ms widens the bound by exactly that much. The
+      // same δ that was suppressed one test above now sits well inside
+      // it, and the new boundary is 20 ms further out.
+      api.dnsMicros = 20000;
+      api.peerDelayMicros = 6001;
       api.offsetMicros = 1200;
-      final h = await probe(thresholds: tight);
-      expect(h.offsetMicros, isNull);
-      expect(h.note, contains('clock offset unavailable'));
+      final h = await probe();
+      expect(h.offsetMicros, 1200);
+      expect(h.note, isNull);
 
       api.reset();
-      api.peerDelayMicros = 3000;
+      api.dnsMicros = 20000;
+      api.peerDelayMicros = 26001;
       api.offsetMicros = 1200;
-      final ok = await probe(thresholds: tight);
-      expect(ok.offsetMicros, 1200);
-      expect(ok.note, isNull);
+      final past = await probe();
+      expect(past.offsetMicros, isNull);
+      expect(past.note, contains('clock offset unavailable'));
+    });
+
+    test('a θ no other sample corroborates is suppressed', () async {
+      // A step too small to push δ past the per-sample bound still
+      // displaces that sample's θ, and the displacement is visible as
+      // disagreement with the rest of the burst. Two samples agree at
+      // +1200 µs; the third is 400 ms out with a δ the first screen
+      // accepts, so only the outlier is dropped and the median comes
+      // from the pair that corroborate each other.
+      api.offsetScript = [1200, 1200, 400000];
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.offsetMicros, 1200);
+      expect(h.successes, 3);
+      expect(h.note, isNull);
+    });
+
+    test('a burst where no two samples agree suppresses every θ', () async {
+      // With every sample disagreeing with every other by more than the
+      // smallest δ, there is no corroborated reading to judge on, so the
+      // host is reported without an offset rather than on an arbitrary
+      // median of three mutually inconsistent values.
+      api.offsetScript = [0, 400000, 800000];
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.offsetMicros, isNull);
+      expect(h.note, contains('clock offset unavailable'));
+    });
+
+    test('a lone surviving sample is judged on the per-sample bound '
+        'alone', () async {
+      // A one-sample burst has nothing to corroborate against.
+      // Requiring agreement would suppress every θ on `--samples 1`, so
+      // the burst screen stands down rather than rejecting by default.
+      api.offsetMicros = 30000000;
+      final h = await probe(samples: 1);
+      expect(h.verdict, HealthVerdict.nonStandard);
+      expect(h.offsetMicros, 30000000);
     });
 
     test('a plausible θ beyond the threshold still flags the host', () async {
@@ -658,11 +698,22 @@ class _ScriptedApi extends MockNtsApi {
   /// derived locally from `utcUnixMicros` and `roundTripMicros`.
   int offsetMicros = 0;
 
+  /// θ for each query in dispatch order, overriding [offsetMicros] for
+  /// as many samples as it has entries. Lets a test drive the
+  /// burst-corroboration screen, which is the only thing in the
+  /// pipeline that reads one sample's θ against another's.
+  List<int> offsetScript = const [];
+
   /// Peer delay δ reported by every scripted sample. The default is a
   /// plausible positive duration below the scripted round trip; tests
   /// drive θ's clock-step gate by making it non-positive or by pushing
   /// it far past that round trip.
   int peerDelayMicros = 800;
+
+  /// `phaseTimings.dnsMicros` reported by every scripted sample. Zero
+  /// by default, which is the cache-hit case; a test raises it to widen
+  /// the per-sample plausibility bound by a measured lookup cost.
+  int dnsMicros = 0;
 
   int queryCalls = 0;
 
@@ -674,7 +725,9 @@ class _ScriptedApi extends MockNtsApi {
     queryBackends = const [];
     queryErrors = const [];
     offsetMicros = 0;
+    offsetScript = const [];
     peerDelayMicros = 800;
+    dnsMicros = 0;
     queryCalls = 0;
   }
 
@@ -734,6 +787,9 @@ class _ScriptedApi extends MockNtsApi {
     final err = queryCalls < queryErrors.length
         ? queryErrors[queryCalls]
         : null;
+    final offset = queryCalls < offsetScript.length
+        ? offsetScript[queryCalls]
+        : offsetMicros;
     queryCalls++;
     if (err != null) throw err;
     return ffi.NtsTimeSample(
@@ -744,10 +800,10 @@ class _ScriptedApi extends MockNtsApi {
       serverStratum: 1,
       aeadId: 15,
       freshCookies: 1,
-      phaseTimings: _zeroTimings(),
+      phaseTimings: _timings(dnsMicros),
       trustBackend: backend,
       recvBoottimeMicros: PlatformInt64Util.from(0),
-      offsetMicros: PlatformInt64Util.from(offsetMicros),
+      offsetMicros: PlatformInt64Util.from(offset),
       peerDelayMicros: PlatformInt64Util.from(peerDelayMicros),
       rootDelayMicros: PlatformInt64Util.from(0),
       rootDispersionMicros: PlatformInt64Util.from(0),
@@ -757,8 +813,10 @@ class _ScriptedApi extends MockNtsApi {
   }
 }
 
-ffi.PhaseTimings _zeroTimings() => ffi.PhaseTimings(
-  dnsMicros: PlatformInt64Util.from(0),
+ffi.PhaseTimings _zeroTimings() => _timings(0);
+
+ffi.PhaseTimings _timings(int dnsMicros) => ffi.PhaseTimings(
+  dnsMicros: PlatformInt64Util.from(dnsMicros),
   connectMicros: PlatformInt64Util.from(0),
   tlsHandshakeMicros: PlatformInt64Util.from(0),
   keRecordIoMicros: PlatformInt64Util.from(0),

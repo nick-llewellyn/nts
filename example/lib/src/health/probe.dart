@@ -100,10 +100,11 @@ Future<List<ServerHealth>> probeAll(
 /// cookies, short-circuits the burst and classifies from the handshake
 /// alone. Otherwise each successful `ntsQuery` becomes a [ProbeOk]
 /// carrying the sample's RFC 5905 clock offset θ, or a `null` offset
-/// when a local clock step left θ untrustworthy (see
-/// [_plausibleOffsetMicros]); an [NtsError] becomes a typed
-/// [ProbeStage.ntp] [ProbeFailure]; any other throwable is bucketed as
-/// a severe `Unhandled` failure.
+/// when the sample's own peer delay (see [_plausibleOffsetMicros]) or
+/// the rest of the burst (see [_corroborateOffsets]) leaves θ
+/// untrustworthy; an [NtsError] becomes a typed [ProbeStage.ntp]
+/// [ProbeFailure]; any other throwable is bucketed as a severe
+/// `Unhandled` failure.
 ///
 /// [client] routes both stages through a caller-owned [NtsClient]
 /// instead of the top-level functions' process-wide default client.
@@ -218,7 +219,14 @@ Future<ServerHealth> probeHost(
   // stored cookie apiece, but an exhausted pool or an evicted session
   // makes a query re-handshake, so each sample carries its own trust
   // attribution; failures here are NTP-stage.
+  //
+  // Successes are held as raw samples until the burst finishes, because
+  // whether a sample's θ is trustworthy depends on the samples around
+  // it (see [_corroborateOffsets]); failures are recorded as they occur.
+  // The two lists are concatenated at the end, and `summarizeServer`
+  // reduces by mode and median, so the interleaving is not observable.
   final results = <ProbeResult>[];
+  final ok = <NtsTimeSample>[];
   for (var i = 0; i < samples; i++) {
     try {
       final s = client == null
@@ -237,14 +245,7 @@ Future<ServerHealth> probeHost(
       if (requiredBackend != null && s.trustBackend != requiredBackend) {
         return _trustMismatch(entry.hostname, thresholds);
       }
-      results.add(
-        ProbeOk(
-          rttMicros: s.roundTripMicros,
-          stratum: s.serverStratum,
-          aeadId: s.aeadId,
-          offsetMicros: _plausibleOffsetMicros(s, thresholds),
-        ),
-      );
+      ok.add(s);
     } on NtsError catch (err) {
       // A failure that carries backend attribution proves its
       // handshake reached config-build time, so the assertion applies
@@ -275,30 +276,47 @@ Future<ServerHealth> probeHost(
   }
   return summarizeServer(
     hostname: entry.hostname,
-    results: results,
+    results: [
+      ...results,
+      for (final (i, offset) in _corroborateOffsets(ok).indexed)
+        ProbeOk(
+          rttMicros: ok[i].roundTripMicros,
+          stratum: ok[i].serverStratum,
+          aeadId: ok[i].aeadId,
+          offsetMicros: offset,
+        ),
+    ],
     thresholds: thresholds,
   );
 }
 
-/// The sample's RFC 5905 offset θ, or `null` when it cannot be
-/// trusted.
+/// Everything in the pre-send interval that is not the NTPv4-host DNS
+/// lookup: building and signing the request packet, and binding and
+/// connecting the UDP socket. All of it is syscall- and memcpy-scale
+/// work with no I/O wait, so a single flat ceiling covers it on any
+/// machine the catalog tools run on.
+const _kSetupSlackMicros = 5000;
+
+/// θ for each of [samples] in order, `null` where it cannot be trusted.
 ///
 /// θ is computed from four timestamps, two of which are local
 /// system-clock readings, so a clock step anywhere between T1 and T4
 /// corrupts it — and unlike `ntsGetTime`, which surfaces θ as a
 /// statistic, this module feeds it into a verdict that decides whether
 /// a host stays in the catalog. A corrupted θ would eject a healthy
-/// server, so it is screened out here.
+/// server, so it is screened out here, by two independent tests: each
+/// sample's own peer delay, then the burst's agreement.
 ///
-/// The peer delay δ is the available witness, since it is derived from
-/// the same four stamps and is a duration: a step in either direction
-/// drives it out of the range a delay can occupy. A backwards step
-/// subtracts from δ, a forwards step adds to it, and θ is corrupted by
-/// half the step in the opposite sense either way.
+/// The per-sample test uses the peer delay δ, the available witness,
+/// since it is derived from the same four stamps and is a duration: a
+/// sufficiently large step in either direction drives it out of the
+/// range a delay can occupy. A backwards step subtracts from δ, a
+/// forwards step adds to it, and θ is corrupted by half the step in the
+/// opposite sense either way.
 ///
 /// A δ at or below zero cannot be a real delay and needs no tolerance,
-/// so it is an unambiguous witness to a backwards step; a zero also
-/// marks a pre-7.1 or hand-built sample, which carries no θ worth
+/// so it is an unambiguous witness to an implausible exchange; a zero
+/// also marks a pre-7.1 or hand-built sample, which carries no θ worth
 /// reporting either.
 ///
 /// The upper bound catches forward steps, but it cannot be the
@@ -310,21 +328,57 @@ Future<ServerHealth> probeHost(
 /// 1–9% on every healthy server, so that bound would suppress every
 /// real sample.
 ///
-/// The allowance over the round trip is additive rather than a multiple
-/// of it, because the pre-send interval includes the NTPv4-host DNS
-/// lookup, whose latency is unrelated to the round trip: a slow lookup
-/// in front of a LAN-local server would blow any ratio-derived ceiling
-/// on a perfectly healthy sample. Its size is
-/// [HealthThresholds.offsetThresholdMicros], the same limit the verdict
-/// uses, since a step of S inflates δ by S and corrupts θ by S/2 — so
-/// every step large enough to push |θ| past the threshold on its own is
-/// rejected, while a setup cost measured in milliseconds is not. The
-/// bound can tighten to the strict one once the native capture points
-/// are aligned.
-int? _plausibleOffsetMicros(NtsTimeSample s, HealthThresholds thresholds) =>
+/// The allowance over the round trip is therefore that interval,
+/// measured rather than assumed: `phaseTimings.dnsMicros`, which on
+/// this burst is the NTPv4-host lookup alone because the pool was
+/// warmed by a handshake of its own, plus [_kSetupSlackMicros] for the
+/// build and the bind. Sizing it from the sample bounds the step that
+/// can slip through at the setup cost itself — single-digit
+/// milliseconds, so single-digit milliseconds of corruption in θ —
+/// rather than at whatever the verdict threshold happens to be. It has
+/// to be additive rather than a multiple of the round trip, since a
+/// slow lookup in front of a LAN-local server would blow any
+/// ratio-derived ceiling on a perfectly healthy sample. The bound can
+/// tighten to the strict one once the native capture points are
+/// aligned.
+///
+/// The burst test then requires corroboration: a surviving θ is kept
+/// only if another surviving sample agrees with it to within the
+/// smallest δ the burst observed. Samples taken seconds apart over one
+/// path cannot honestly disagree by more than the delay scale that path
+/// exhibits, while a step of S displaces one sample's θ by S/2 and
+/// inflates that same sample's δ by S — so the window, drawn from the
+/// *least* inflated sample, does not widen to admit the displacement it
+/// is meant to catch. This is what stops a step small enough to pass
+/// the per-sample bound from moving a host's median across the verdict
+/// threshold. A burst with fewer than two surviving samples has nothing
+/// to corroborate against and is left to the per-sample bound alone.
+List<int?> _corroborateOffsets(List<NtsTimeSample> samples) {
+  final gated = [for (final s in samples) _plausibleOffsetMicros(s)];
+  final witnesses = [
+    for (final (i, offset) in gated.indexed)
+      if (offset != null) i,
+  ];
+  if (witnesses.length < 2) return gated;
+  final window = witnesses.map((i) => samples[i].peerDelayMicros).reduce(min);
+  return [
+    for (final (i, offset) in gated.indexed)
+      offset != null &&
+              witnesses.any(
+                (j) => j != i && (offset - gated[j]!).abs() <= window,
+              )
+          ? offset
+          : null,
+  ];
+}
+
+/// [s]'s θ when its own peer delay is a plausible duration for the
+/// exchange that produced it, else `null`. See [_corroborateOffsets]
+/// for the derivation and for the burst-level test layered on top.
+int? _plausibleOffsetMicros(NtsTimeSample s) =>
     s.peerDelayMicros > 0 &&
         s.peerDelayMicros <=
-            s.roundTripMicros + thresholds.offsetThresholdMicros
+            s.roundTripMicros + s.phaseTimings.dnsMicros + _kSetupSlackMicros
     ? s.offsetMicros
     : null;
 

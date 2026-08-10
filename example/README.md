@@ -678,20 +678,34 @@ and `dnsExhausted`.
 
 The offset reported is the sample's RFC 5905 §8 clock offset θ, taken
 from the wire timestamps. θ is only meaningful if the *local* clock
-was not stepped mid-exchange, so a sample whose peer delay falls
-outside a plausible range is excluded from the median rather than
-counted as a zero offset. A backwards step drives the delay to a
-non-positive value, which no real delay can be; a forward step inflates
-it, so delays beyond the round trip plus the offset threshold are
-rejected too — the allowance is additive because the delay legitimately
-carries pre-send setup cost, including a DNS lookup whose latency is
-unrelated to the round trip, and it is sized from the verdict threshold
-so any step big enough to flip a verdict on its own is caught. A host
-with no
-usable sample left is not judged on an offset it never produced: the
-offset column is blank and the host carries a `clock offset
-unavailable (implausible peer delay)` note, which is also emitted in
-the `note` column of `--format csv` and the `note` field of
+was not stepped between T1 and T4 — a window that opens before the UDP
+send, since T1 precedes the packet build and the socket bind — so a
+sample that fails either of two plausibility screens is excluded from
+the median rather than counted as a zero offset.
+
+The first screen is the sample's own peer delay. A sufficiently large
+backwards step drives it to a non-positive value, which no real delay
+can be; a sufficiently large forward step inflates it, so delays beyond
+the round trip plus the sample's own `dnsMicros` plus a few
+milliseconds for the build and the bind are rejected too. The allowance
+is additive rather than a multiple of the round trip because a DNS
+lookup's latency is unrelated to it, and it is measured from the sample
+rather than derived from the verdict threshold so that the undetectable
+step stays at the scale of the setup cost.
+
+The second screen is corroboration across the burst: a surviving θ is
+kept only if another surviving sample agrees with it to within the
+smallest peer delay the burst observed. Samples over one path cannot
+honestly disagree by more than that path's delay scale, while a step
+displaces one sample's θ and inflates that same sample's delay — so a
+step too small for the first screen still fails the second. Neither
+screen is a proof of a steady clock: a step small enough to disturb
+neither is not detected.
+
+A host with no usable sample left is not judged on an offset it never
+produced: the offset column is blank and the host carries a `clock
+offset unavailable (no corroborated sample)` note, which is also
+emitted in the `note` column of `--format csv` and the `note` field of
 `--format json`.
 
 ### Sample output
