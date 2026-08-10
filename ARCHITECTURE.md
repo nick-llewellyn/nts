@@ -535,7 +535,10 @@ The cross-sample quantities live in Dart (`_getTime` in
 `lib/src/api/nts.dart`), because only the burst orchestrator sees
 all samples. It selects the winning sample by lowest network delay
 (δ when plausible — inside `(0, roundTripMicros]` — else the
-measured round trip), computes the burst RMS jitter ψ from the
+measured round trip; the upper bound does not hold on this client,
+since T1 is stamped before the socket bind the round trip is
+measured from, so the fallback is the branch taken on healthy
+samples), computes the burst RMS jitter ψ from the
 per-sample θ values, derives the worst-case `errorBoundMicros`
 via the RFC 5905 root-distance recipe (delay/2 + rootDelay/2 +
 rootDispersion + ψ), and applies the `delay / 2` symmetric-path
