@@ -370,11 +370,12 @@ void main() {
 
     test('an implausible peer delay suppresses θ instead of judging on '
         'it', () async {
-      // δ above the measured round trip witnesses a local clock step
-      // mid-exchange, which corrupts θ. The scripted θ is far outside
-      // the ±1s threshold, so propagating it would eject a server whose
-      // own clock was never observed to be wrong.
-      api.peerDelayMicros = 5000;
+      // A non-positive peer delay cannot be a real duration, so it
+      // witnesses a backwards clock step, which corrupts θ. The
+      // scripted θ is far outside the ±1s threshold, so propagating it
+      // would eject a server whose own clock was never observed to be
+      // wrong.
+      api.peerDelayMicros = -400;
       api.offsetMicros = 30000000;
       final h = await probe();
       expect(h.verdict, HealthVerdict.healthy);
@@ -382,9 +383,23 @@ void main() {
       expect(h.note, contains('clock offset unavailable'));
     });
 
+    test('a peer delay above the round trip is not treated as a step', () {
+      // T1 is captured before the UDP bind while `roundTripMicros`
+      // starts at the send, so δ legitimately exceeds the round trip on
+      // healthy servers (1–9% across the bundled catalog). Suppressing
+      // on that would discard every real sample.
+      api.peerDelayMicros = 5000;
+      api.offsetMicros = 1200;
+      return probe().then((h) {
+        expect(h.verdict, HealthVerdict.healthy);
+        expect(h.offsetMicros, 1200);
+        expect(h.note, isNull);
+      });
+    });
+
     test('a plausible θ beyond the threshold still flags the host', () async {
-      // The converse of the case above: the gate must not swallow a
-      // genuine skew reported by a sample with a sound δ.
+      // The converse of the suppression case: the gate must not swallow
+      // a genuine skew reported by a sample with a sound δ.
       api.offsetMicros = 30000000;
       final h = await probe();
       expect(h.verdict, HealthVerdict.nonStandard);
@@ -582,10 +597,9 @@ class _ScriptedApi extends MockNtsApi {
   /// derived locally from `utcUnixMicros` and `roundTripMicros`.
   int offsetMicros = 0;
 
-  /// Peer delay δ reported by every scripted sample. The default sits
-  /// inside the `(0, roundTripMicros]` plausibility window, as if the
-  /// server spent 200 µs processing; a test drives θ's clock-step gate
-  /// by moving it outside that window.
+  /// Peer delay δ reported by every scripted sample. The default is a
+  /// plausible positive duration; a test drives θ's clock-step gate by
+  /// making it non-positive.
   int peerDelayMicros = 800;
 
   int queryCalls = 0;

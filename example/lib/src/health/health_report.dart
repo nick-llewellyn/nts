@@ -14,7 +14,10 @@ List<String> dropList(List<ServerHealth> all) =>
     all.where((h) => h.isDropCandidate).map((h) => h.hostname).toList()..sort();
 
 /// One JSON object per host, stable field set. `null` numeric fields
-/// mean "no successful sample" (the host is in an error bucket).
+/// mean "no successful sample" (the host is in an error bucket), with
+/// one exception: `offset_micros` is also null when the host replied
+/// but no sample carried a trustworthy clock offset, in which case
+/// `note` says so and the other numeric fields are populated.
 List<Map<String, Object?>> jsonReport(List<ServerHealth> all) => [
   for (final h in all)
     {
@@ -35,11 +38,16 @@ List<Map<String, Object?>> jsonReport(List<ServerHealth> all) => [
 
 /// RFC 4180-ish CSV with a fixed header row. `reasons` are joined with
 /// `|` so the column stays single-valued.
+///
+/// `note` carries the same text as the text and JSON reports. It is
+/// not decorative: an empty `offset_micros` on a host that replied
+/// means the offset was unavailable rather than absent, and the note
+/// is the only place that distinction is stated.
 String csvReport(List<ServerHealth> all) {
   final b = StringBuffer()
     ..writeln(
       'host,verdict,probes,successes,median_rtt_micros,stratum,'
-      'aead_id,offset_micros,error_type,reasons',
+      'aead_id,offset_micros,error_type,reasons,note',
     );
   for (final h in all) {
     b.writeln(
@@ -54,6 +62,7 @@ String csvReport(List<ServerHealth> all) {
         '${h.offsetMicros ?? ''}',
         h.dominantErrorType ?? '',
         _csv(h.reasons.join('|')),
+        _csv(h.note ?? ''),
       ].join(','),
     );
   }

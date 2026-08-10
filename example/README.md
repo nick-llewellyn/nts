@@ -677,13 +677,15 @@ every drop candidate (`❌` above) — i.e. all verdicts except `healthy`
 and `dnsExhausted`.
 
 The offset reported is the sample's RFC 5905 §8 clock offset θ, taken
-from the wire timestamps. θ is invalid if the *local* clock was
-stepped mid-exchange, so a sample whose peer delay falls outside
-`(0, round trip]` — the signature of such a step — is excluded from
-the median rather than counted as a zero offset. A host with no usable
-sample left is not judged on an offset it never produced: the offset
-column is blank and the host carries a `clock offset unavailable
-(local clock stepped)` note.
+from the wire timestamps. θ is only meaningful if the *local* clock
+was not stepped mid-exchange, so a sample whose peer delay is not a
+positive duration — which no real delay can be, and which a backwards
+step produces — is excluded from the median rather than counted as a
+zero offset. A host with no usable sample left is not judged on an
+offset it never produced: the offset column is blank and the host
+carries a `clock offset unavailable (implausible peer delay)` note,
+which is also emitted in the `note` column of `--format csv` and the
+`note` field of `--format json`.
 
 ### Sample output
 

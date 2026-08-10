@@ -290,18 +290,24 @@ Future<ServerHealth> probeHost(
 /// a host stays in the catalog. A corrupted θ would eject a healthy
 /// server, so it is screened out here.
 ///
-/// `peerDelayMicros` δ is the available witness: it is computed from
-/// the same four stamps and is a duration, so a step large enough to
-/// distort θ pushes δ outside `(0, roundTripMicros]` — negative or
-/// past the locally measured round trip. That is the plausibility
-/// window `ntsGetTime` already applies (see `_effectiveDelayMicros`),
-/// reused here as a gate on θ rather than as a fallback for δ. A zero
-/// δ additionally marks a pre-7.1 or hand-built sample, which carries
-/// no θ to report either.
+/// The peer delay δ is the available witness, since it is derived from
+/// the same four stamps and is a duration: a step drives it out of the
+/// range a delay can occupy. Only the lower bound is asserted. A δ at
+/// or below zero cannot be a real delay and needs no tolerance, so it
+/// is an unambiguous witness to a backwards step; a zero also marks a
+/// pre-7.1 or hand-built sample, which carries no θ worth reporting
+/// either.
+///
+/// The upper bound `ntsGetTime` uses (`δ <= roundTripMicros`, see
+/// `_effectiveDelayMicros`) is deliberately **not** applied. T1 is
+/// captured before the packet is built and the UDP socket bound, while
+/// `roundTripMicros` starts at the send, so δ legitimately carries a
+/// pre-send interval the round trip excludes. Measured against the
+/// catalog it exceeds the round trip by 1–9% on every healthy server,
+/// so asserting that bound here suppresses every real sample. It
+/// becomes usable once the native capture points are aligned.
 int? _plausibleOffsetMicros(NtsTimeSample s) =>
-    (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
-    ? s.offsetMicros
-    : null;
+    s.peerDelayMicros > 0 ? s.offsetMicros : null;
 
 /// Reduce a host to the single severe KE-stage `TrustBackendMismatch`
 /// failure a `--require-trust-backend` violation earns, whichever

@@ -242,7 +242,7 @@ ServerHealth summarizeServer({
 
   final notes = [
     if (successes < probes) 'intermittent ($successes/$probes ok)',
-    if (offset == null) 'clock offset unavailable (local clock stepped)',
+    if (offset == null) 'clock offset unavailable (implausible peer delay)',
   ];
 
   return ServerHealth(

@@ -155,14 +155,25 @@ tarball.
   UDP send and recv, and unlike `ntsGetTime` — which reports θ as a
   statistic — this module feeds it into a verdict that decides whether
   a host stays in the catalog. Samples are therefore screened on the
-  peer delay δ: outside the `(0, roundTripMicros]` window that
-  `ntsGetTime` already applies, θ is suppressed rather than trusted.
+  peer delay: a value that is not a positive duration cannot be a real
+  delay, so θ is suppressed rather than trusted.
   `ProbeOk.offsetMicros` is now nullable to carry that, suppressed
   samples are excluded from the median instead of counting as a zero
   offset that would mask a real skew, and a host with no usable sample
   is not flagged on an offset it never observed — it reports a
-  `clock offset unavailable (local clock stepped)` note. Example app
-  only; no package change. (NTS-152)
+  `clock offset unavailable (implausible peer delay)` note. The CSV
+  report gains a trailing `note` column so that explanation reaches
+  every output format rather than only text and JSON.
+
+  Only the lower bound is asserted. The upper bound `ntsGetTime`
+  applies (`peerDelayMicros <= roundTripMicros`) does not hold on this
+  client: T1 is captured before the request packet is built and the
+  UDP socket bound, while `roundTripMicros` starts at the send, so the
+  peer delay legitimately includes a pre-send interval the round trip
+  excludes. Measured across the bundled catalog it exceeds the round
+  trip by 1–9% on every healthy server, so asserting that bound would
+  suppress every real sample. Example app only; no package change.
+  (NTS-152)
 
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits

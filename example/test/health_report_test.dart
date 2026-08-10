@@ -146,7 +146,29 @@ void main() {
       expect(
         csvReport(const []).trim(),
         'host,verdict,probes,successes,median_rtt_micros,stratum,'
-        'aead_id,offset_micros,error_type,reasons',
+        'aead_id,offset_micros,error_type,reasons,note',
+      );
+    });
+
+    test('a host that replied with no usable offset explains the blank', () {
+      // The offset cell alone cannot distinguish "unavailable" from
+      // "no successful sample"; the note column is what carries it.
+      final lines = csvReport([
+        _h(
+          'a.example',
+          HealthVerdict.healthy,
+          probes: 2,
+          successes: 2,
+          medianRttMicros: 1500,
+          stratum: 1,
+          aeadId: 15,
+          note: 'clock offset unavailable (implausible peer delay)',
+        ),
+      ]).trimRight().split('\n');
+      expect(
+        lines[1],
+        'a.example,healthy,2,2,1500,1,15,,,,'
+        'clock offset unavailable (implausible peer delay)',
       );
     });
 
@@ -171,8 +193,8 @@ void main() {
           dominantErrorType: 'Network',
         ),
       ]).trimRight().split('\n');
-      expect(lines[1], 'a.example,healthy,3,3,1500,1,15,1200,,');
-      expect(lines[2], 'z.example,notReplying,2,0,,,,,Network,Network');
+      expect(lines[1], 'a.example,healthy,3,3,1500,1,15,1200,,,');
+      expect(lines[2], 'z.example,notReplying,2,0,,,,,Network,Network,');
     });
 
     test('a comma-bearing reason is quoted; embedded quotes are doubled', () {
