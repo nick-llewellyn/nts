@@ -139,15 +139,30 @@ tarball.
   reports each sample's clock offset from `NtsTimeSample.offsetMicros`
   — the RFC 5905 §8 offset θ computed natively from the four on-wire
   timestamps — instead of deriving one as
-  `utcUnixMicros + roundTripMicros / 2 − DateTime.now()`. The derived
-  estimate carried two positive-bias terms the field does not: half
-  the round trip includes the server's own processing time, and the
-  local reading was taken on the Dart event loop, after the FFI return
-  and worker-thread handoff, so scheduling lag was charged to the
-  server. Against a machine measured at +83 ms by `sntp`, the catalog
-  tools were reporting +90–100 ms. θ has been on `NtsTimeSample` since
-  7.1; the prober predated it. Example app only; no package change.
-  (NTS-152)
+  `utcUnixMicros + roundTripMicros / 2 − DateTime.now()`. That
+  derivation carried two error terms θ does not, pulling in opposite
+  directions: half the round trip includes the server's own processing
+  time between recv and send, which overstates the offset, while the
+  local reading was taken on the Dart event loop — after the FFI
+  return and worker-thread handoff — and is subtracted, so scheduling
+  lag understates it. Neither cancels the other, and their sum is a
+  function of load rather than of the remote clock. Against a machine
+  measured at +83 ms by `sntp`, the catalog tools were reporting
+  +90–100 ms. θ has been on `NtsTimeSample` since 7.1; the prober
+  predated it.
+
+  θ is only meaningful if the local clock was not stepped between the
+  UDP send and recv, and unlike `ntsGetTime` — which reports θ as a
+  statistic — this module feeds it into a verdict that decides whether
+  a host stays in the catalog. Samples are therefore screened on the
+  peer delay δ: outside the `(0, roundTripMicros]` window that
+  `ntsGetTime` already applies, θ is suppressed rather than trusted.
+  `ProbeOk.offsetMicros` is now nullable to carry that, suppressed
+  samples are excluded from the median instead of counting as a zero
+  offset that would mask a real skew, and a host with no usable sample
+  is not flagged on an offset it never observed — it reports a
+  `clock offset unavailable (local clock stepped)` note. Example app
+  only; no package change. (NTS-152)
 
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits

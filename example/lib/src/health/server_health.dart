@@ -51,13 +51,18 @@ sealed class ProbeResult {
 }
 
 /// A successful `ntsQuery` sample reduced to the classification inputs.
+///
 /// [offsetMicros] is the sample's RFC 5905 §8 clock offset θ, signed so
-/// that positive means the server's clock is ahead of the local one.
+/// that positive means the server's clock is ahead of the local one, or
+/// `null` when the sample carried no usable θ. θ is derived from two
+/// local system-clock readings, so it is meaningless if the local clock
+/// was stepped between the UDP send and recv; [probeHost] screens for
+/// that and passes `null` rather than a value it cannot trust.
 class ProbeOk extends ProbeResult {
   final int rttMicros;
   final int stratum;
   final int aeadId;
-  final int offsetMicros;
+  final int? offsetMicros;
   const ProbeOk({
     required this.rttMicros,
     required this.stratum,
@@ -213,10 +218,16 @@ ServerHealth summarizeServer({
   }
 
   final rtts = oks.map((o) => o.rttMicros).toList()..sort();
-  final offsets = oks.map((o) => o.offsetMicros).toList()..sort();
+  // Samples with no usable θ are dropped rather than counted as a zero
+  // offset, which would drag the median toward "in spec" and mask a
+  // genuinely skewed server. If that leaves nothing, there is no offset
+  // to judge and the threshold check is skipped: a local clock step is
+  // probe-side evidence, so flagging on it would put a healthy host on
+  // the suggested-removal list. The gap is reported as a note instead.
+  final offsets = oks.map((o) => o.offsetMicros).nonNulls.toList()..sort();
   final stratum = _mode(oks.map((o) => o.stratum))!;
   final aeadId = _mode(oks.map((o) => o.aeadId))!;
-  final offset = _median(offsets);
+  final offset = offsets.isEmpty ? null : _median(offsets);
 
   final reasons = <String>[];
   if (!thresholds.baselineAeadIds.contains(aeadId)) {
@@ -225,9 +236,14 @@ ServerHealth summarizeServer({
   if (stratum < thresholds.minStratum || stratum > thresholds.maxStratum) {
     reasons.add('unusable stratum $stratum');
   }
-  if (offset.abs() > thresholds.offsetThresholdMicros) {
+  if (offset != null && offset.abs() > thresholds.offsetThresholdMicros) {
     reasons.add('clock offset ${offsetLabel(offset)}');
   }
+
+  final notes = [
+    if (successes < probes) 'intermittent ($successes/$probes ok)',
+    if (offset == null) 'clock offset unavailable (local clock stepped)',
+  ];
 
   return ServerHealth(
     hostname: hostname,
@@ -235,7 +251,7 @@ ServerHealth summarizeServer({
         ? HealthVerdict.healthy
         : HealthVerdict.nonStandard,
     reasons: reasons,
-    note: successes < probes ? 'intermittent ($successes/$probes ok)' : null,
+    note: notes.isEmpty ? null : notes.join('; '),
     probes: probes,
     successes: successes,
     medianRttMicros: _median(rtts),

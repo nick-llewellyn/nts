@@ -18,6 +18,7 @@ import 'package:nts/nts.dart'
         NtsClient,
         NtsError,
         NtsServerSpec,
+        NtsTimeSample,
         TrustBackend,
         ntsQuery,
         ntsWarmCookies;
@@ -98,9 +99,11 @@ Future<List<ServerHealth>> probeAll(
 /// a flaky NTP query. A KE that fails, or completes but delivers zero
 /// cookies, short-circuits the burst and classifies from the handshake
 /// alone. Otherwise each successful `ntsQuery` becomes a [ProbeOk]
-/// carrying the sample's RFC 5905 clock offset θ; an [NtsError] becomes
-/// a typed [ProbeStage.ntp] [ProbeFailure]; any other throwable is
-/// bucketed as a severe `Unhandled` failure.
+/// carrying the sample's RFC 5905 clock offset θ, or a `null` offset
+/// when a local clock step left θ untrustworthy (see
+/// [_plausibleOffsetMicros]); an [NtsError] becomes a typed
+/// [ProbeStage.ntp] [ProbeFailure]; any other throwable is bucketed as
+/// a severe `Unhandled` failure.
 ///
 /// [client] routes both stages through a caller-owned [NtsClient]
 /// instead of the top-level functions' process-wide default client.
@@ -239,7 +242,7 @@ Future<ServerHealth> probeHost(
           rttMicros: s.roundTripMicros,
           stratum: s.serverStratum,
           aeadId: s.aeadId,
-          offsetMicros: s.offsetMicros,
+          offsetMicros: _plausibleOffsetMicros(s),
         ),
       );
     } on NtsError catch (err) {
@@ -276,6 +279,29 @@ Future<ServerHealth> probeHost(
     thresholds: thresholds,
   );
 }
+
+/// The sample's RFC 5905 offset θ, or `null` when it cannot be
+/// trusted.
+///
+/// θ is computed from four timestamps, two of which are local
+/// system-clock readings, so a clock step between the UDP send and
+/// recv corrupts it — and unlike `ntsGetTime`, which surfaces θ as a
+/// statistic, this module feeds it into a verdict that decides whether
+/// a host stays in the catalog. A corrupted θ would eject a healthy
+/// server, so it is screened out here.
+///
+/// `peerDelayMicros` δ is the available witness: it is computed from
+/// the same four stamps and is a duration, so a step large enough to
+/// distort θ pushes δ outside `(0, roundTripMicros]` — negative or
+/// past the locally measured round trip. That is the plausibility
+/// window `ntsGetTime` already applies (see `_effectiveDelayMicros`),
+/// reused here as a gate on θ rather than as a fallback for δ. A zero
+/// δ additionally marks a pre-7.1 or hand-built sample, which carries
+/// no θ to report either.
+int? _plausibleOffsetMicros(NtsTimeSample s) =>
+    (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
+    ? s.offsetMicros
+    : null;
 
 /// Reduce a host to the single severe KE-stage `TrustBackendMismatch`
 /// failure a `--require-trust-backend` violation earns, whichever

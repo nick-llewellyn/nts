@@ -232,13 +232,44 @@ void main() {
       int rtt = 1000,
       int stratum = 1,
       int aeadId = 15,
-      int offset = 0,
+      int? offset = 0,
     }) => ProbeOk(
       rttMicros: rtt,
       stratum: stratum,
       aeadId: aeadId,
       offsetMicros: offset,
     );
+
+    test('samples with no usable θ are dropped from the median', () {
+      // A suppressed sample must not be read as a zero offset: doing so
+      // would pull the median of a genuinely skewed host back toward
+      // zero and hide the skew.
+      final h = _summarize([
+        ok(offset: null),
+        ok(offset: 2000000),
+        ok(offset: 2000000),
+      ]);
+      expect(h.offsetMicros, 2000000);
+      expect(h.verdict, HealthVerdict.nonStandard);
+      expect(h.note, isNull);
+    });
+
+    test('every θ suppressed leaves no offset and no offset reason', () {
+      final h = _summarize([ok(offset: null), ok(offset: null)]);
+      expect(h.offsetMicros, isNull);
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.reasons, isEmpty);
+      expect(h.note, contains('clock offset unavailable'));
+    });
+
+    test('an intermittent run with θ suppressed reports both notes', () {
+      final h = _summarize([
+        ok(offset: null),
+        const ProbeFailure(errorType: 'Timeout', errorSeverity: false),
+      ]);
+      expect(h.note, contains('intermittent (1/2 ok)'));
+      expect(h.note, contains('clock offset unavailable'));
+    });
 
     test('clock offset beyond the threshold -> nonStandard', () {
       final h = _summarize([ok(offset: 2000000)]);
@@ -317,12 +348,16 @@ void main() {
     });
 
     test('the sample offset reported is the wire θ, not rtt/2', () async {
-      // θ is negative here while the scripted `utcUnixMicros` tracks
-      // the local clock, so the pre-θ estimate (server time + half the
-      // round trip − `DateTime.now()`) could only produce a small
-      // positive value. Reading the exact negative back proves the
-      // probe propagates the sample's own offset.
-      api.offsetMicros = -7500;
+      // The scripted `utcUnixMicros` is read from the local clock as
+      // the mock builds the sample, so the pre-θ derivation
+      // (server time + half the 1 ms round trip − a `DateTime.now()`
+      // taken once the await has returned) evaluates to
+      // `500µs − handoff`. That is bounded above by +500µs and
+      // unbounded below, so only a value well *above* +500µs is
+      // unreachable by it — a negative fixture would still pass
+      // against the old code on a slow enough handoff. θ is set to
+      // +250 ms, comfortably inside the ±1 s verdict threshold.
+      api.offsetMicros = 250000;
       api.queryBackends = [
         ffi.TrustBackend.platform,
         ffi.TrustBackend.platform,
@@ -330,7 +365,31 @@ void main() {
       ];
       final h = await probe();
       expect(h.verdict, HealthVerdict.healthy);
-      expect(h.offsetMicros, -7500);
+      expect(h.offsetMicros, 250000);
+    });
+
+    test('an implausible peer delay suppresses θ instead of judging on '
+        'it', () async {
+      // δ above the measured round trip witnesses a local clock step
+      // mid-exchange, which corrupts θ. The scripted θ is far outside
+      // the ±1s threshold, so propagating it would eject a server whose
+      // own clock was never observed to be wrong.
+      api.peerDelayMicros = 5000;
+      api.offsetMicros = 30000000;
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.offsetMicros, isNull);
+      expect(h.note, contains('clock offset unavailable'));
+    });
+
+    test('a plausible θ beyond the threshold still flags the host', () async {
+      // The converse of the case above: the gate must not swallow a
+      // genuine skew reported by a sample with a sound δ.
+      api.offsetMicros = 30000000;
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.nonStandard);
+      expect(h.reasons, contains(contains('clock offset')));
+      expect(h.offsetMicros, 30000000);
     });
 
     test('warm on the wrong backend -> nonConforming, no samples', () async {
@@ -523,6 +582,12 @@ class _ScriptedApi extends MockNtsApi {
   /// derived locally from `utcUnixMicros` and `roundTripMicros`.
   int offsetMicros = 0;
 
+  /// Peer delay δ reported by every scripted sample. The default sits
+  /// inside the `(0, roundTripMicros]` plausibility window, as if the
+  /// server spent 200 µs processing; a test drives θ's clock-step gate
+  /// by moving it outside that window.
+  int peerDelayMicros = 800;
+
   int queryCalls = 0;
 
   /// Return to the group's defaults between tests, since the bridge
@@ -533,6 +598,7 @@ class _ScriptedApi extends MockNtsApi {
     queryBackends = const [];
     queryErrors = const [];
     offsetMicros = 0;
+    peerDelayMicros = 800;
     queryCalls = 0;
   }
 
@@ -606,7 +672,7 @@ class _ScriptedApi extends MockNtsApi {
       trustBackend: backend,
       recvBoottimeMicros: PlatformInt64Util.from(0),
       offsetMicros: PlatformInt64Util.from(offsetMicros),
-      peerDelayMicros: PlatformInt64Util.from(0),
+      peerDelayMicros: PlatformInt64Util.from(peerDelayMicros),
       rootDelayMicros: PlatformInt64Util.from(0),
       rootDispersionMicros: PlatformInt64Util.from(0),
       serverPrecision: -20,
