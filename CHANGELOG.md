@@ -135,6 +135,20 @@ tarball.
 
 ### Changed
 
+- The example health prober (`example/lib/src/health/probe.dart`) now
+  reports each sample's clock offset from `NtsTimeSample.offsetMicros`
+  — the RFC 5905 §8 offset θ computed natively from the four on-wire
+  timestamps — instead of deriving one as
+  `utcUnixMicros + roundTripMicros / 2 − DateTime.now()`. The derived
+  estimate carried two positive-bias terms the field does not: half
+  the round trip includes the server's own processing time, and the
+  local reading was taken on the Dart event loop, after the FFI return
+  and worker-thread handoff, so scheduling lag was charged to the
+  server. Against a machine measured at +83 ms by `sntp`, the catalog
+  tools were reporting +90–100 ms. θ has been on `NtsTimeSample` since
+  7.1; the prober predated it. Example app only; no package change.
+  (NTS-152)
+
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits
   line, so `KeyInit` now comes from `aes_gcm_siv` rather than

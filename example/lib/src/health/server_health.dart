@@ -51,8 +51,8 @@ sealed class ProbeResult {
 }
 
 /// A successful `ntsQuery` sample reduced to the classification inputs.
-/// [offsetMicros] is the signed estimate of (server clock − local
-/// clock) at reply receipt.
+/// [offsetMicros] is the sample's RFC 5905 §8 clock offset θ, signed so
+/// that positive means the server's clock is ahead of the local one.
 class ProbeOk extends ProbeResult {
   final int rttMicros;
   final int stratum;

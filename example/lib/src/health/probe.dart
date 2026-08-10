@@ -97,10 +97,10 @@ Future<List<ServerHealth>> probeAll(
 /// handshake is attributed as a [ProbeStage.ke] failure — distinct from
 /// a flaky NTP query. A KE that fails, or completes but delivers zero
 /// cookies, short-circuits the burst and classifies from the handshake
-/// alone. Otherwise each successful `ntsQuery` becomes a [ProbeOk] (with
-/// a signed server-minus-local clock offset estimated at reply receipt);
-/// an [NtsError] becomes a typed [ProbeStage.ntp] [ProbeFailure]; any
-/// other throwable is bucketed as a severe `Unhandled` failure.
+/// alone. Otherwise each successful `ntsQuery` becomes a [ProbeOk]
+/// carrying the sample's RFC 5905 clock offset θ; an [NtsError] becomes
+/// a typed [ProbeStage.ntp] [ProbeFailure]; any other throwable is
+/// bucketed as a severe `Unhandled` failure.
 ///
 /// [client] routes both stages through a caller-owned [NtsClient]
 /// instead of the top-level functions' process-wide default client.
@@ -234,14 +234,12 @@ Future<ServerHealth> probeHost(
       if (requiredBackend != null && s.trustBackend != requiredBackend) {
         return _trustMismatch(entry.hostname, thresholds);
       }
-      final localMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
-      final serverEstimate = s.utcUnixMicros + s.roundTripMicros ~/ 2;
       results.add(
         ProbeOk(
           rttMicros: s.roundTripMicros,
           stratum: s.serverStratum,
           aeadId: s.aeadId,
-          offsetMicros: serverEstimate - localMicros,
+          offsetMicros: s.offsetMicros,
         ),
       );
     } on NtsError catch (err) {

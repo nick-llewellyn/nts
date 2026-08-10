@@ -316,6 +316,23 @@ void main() {
       expect(api.queryCalls, 3);
     });
 
+    test('the sample offset reported is the wire θ, not rtt/2', () async {
+      // θ is negative here while the scripted `utcUnixMicros` tracks
+      // the local clock, so the pre-θ estimate (server time + half the
+      // round trip − `DateTime.now()`) could only produce a small
+      // positive value. Reading the exact negative back proves the
+      // probe propagates the sample's own offset.
+      api.offsetMicros = -7500;
+      api.queryBackends = [
+        ffi.TrustBackend.platform,
+        ffi.TrustBackend.platform,
+        ffi.TrustBackend.platform,
+      ];
+      final h = await probe();
+      expect(h.verdict, HealthVerdict.healthy);
+      expect(h.offsetMicros, -7500);
+    });
+
     test('warm on the wrong backend -> nonConforming, no samples', () async {
       api.warmBackend = ffi.TrustBackend.webpkiRoots;
       final h = await probe();
@@ -501,6 +518,11 @@ class _ScriptedApi extends MockNtsApi {
   /// success. A shorter list leaves the remaining queries succeeding.
   List<ffi.NtsError?> queryErrors = const [];
 
+  /// θ reported by every scripted sample. Distinct from the round trip
+  /// so a test can tell the propagated offset apart from anything
+  /// derived locally from `utcUnixMicros` and `roundTripMicros`.
+  int offsetMicros = 0;
+
   int queryCalls = 0;
 
   /// Return to the group's defaults between tests, since the bridge
@@ -510,6 +532,7 @@ class _ScriptedApi extends MockNtsApi {
     warmError = null;
     queryBackends = const [];
     queryErrors = const [];
+    offsetMicros = 0;
     queryCalls = 0;
   }
 
@@ -582,7 +605,7 @@ class _ScriptedApi extends MockNtsApi {
       phaseTimings: _zeroTimings(),
       trustBackend: backend,
       recvBoottimeMicros: PlatformInt64Util.from(0),
-      offsetMicros: PlatformInt64Util.from(0),
+      offsetMicros: PlatformInt64Util.from(offsetMicros),
       peerDelayMicros: PlatformInt64Util.from(0),
       rootDelayMicros: PlatformInt64Util.from(0),
       rootDispersionMicros: PlatformInt64Util.from(0),
