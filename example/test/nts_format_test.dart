@@ -992,8 +992,9 @@ bool _carriesAttribution(_NtsErrorKind kind) => switch (kind) {
   _NtsErrorKind.authentication ||
   _NtsErrorKind.timeout ||
   _NtsErrorKind.noCookies => true,
-  // These either precede any handshake or describe the backend itself
-  // being unusable, so Rust has nothing to attribute.
+  // These four have no attribution field at all, so their `null` says
+  // nothing about when they fired — `internal` and `abiMismatch` can
+  // both be raised downstream of a resolved backend.
   _NtsErrorKind.invalidSpec ||
   _NtsErrorKind.trustBackendUnavailable ||
   _NtsErrorKind.internal ||

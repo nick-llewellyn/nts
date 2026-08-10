@@ -48,9 +48,13 @@ tarball.
   This is a backend-*resolution* assertion, not evidence that a chain
   was verified. Rust attaches the backend once `build_tls_config`
   returns, which is before any DNS, connect, or TLS I/O, so a DNS or
-  connect failure carries one too and an unreachable host can be
-  reported as mismatching. That is the intended scope — the policy
-  under test is which anchor set the call was configured to trust.
+  connect failure on an attributed variant carries one too and an
+  unreachable host can be reported as mismatching. That is the
+  intended scope — the policy under test is which anchor set the call
+  was configured to trust. Four variants (`invalidSpec`,
+  `trustBackendUnavailable`, `internal`, `abiMismatch`) have no
+  attribution field, so they keep their own error type even when
+  raised downstream of config-build.
 
   Previously every run went through the top-level `ntsQuery` /
   `ntsWarmCookies` and therefore the process-wide default client, whose

@@ -460,10 +460,12 @@ String? timeoutPhaseName(NtsError err) =>
 /// Per-handshake trust-anchor attribution carried by [err], or `null`
 /// when the shape carries none.
 ///
-/// The six variants whose precondition is "the TLS handshake had at
-/// least reached config-build time" carry the backend resolved for
-/// that handshake; a `null` on one of them means the failure fired
-/// before the backend was resolved. The remaining variants
+/// Six variants carry an optional field, so they report the backend
+/// resolved for the handshake when the failure fired downstream of
+/// config-build and `null` when it fired before. Carrying the field is
+/// not a promise that it is populated: an [NtsErrorTimeout] whose
+/// phase is `bridgeSaturation` never reached FFI dispatch at all, so
+/// its backend is always `null`. The remaining variants
 /// ([NtsErrorInvalidSpec], [NtsErrorTrustBackendUnavailable],
 /// [NtsErrorInternal], [NtsErrorAbiMismatch]) have no field to read at
 /// all, so their `null` says nothing about when they fired: an
