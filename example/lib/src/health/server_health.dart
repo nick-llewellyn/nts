@@ -93,10 +93,11 @@ enum ProbeStage { ke, ntp }
 /// `--require-trust-backend` violation is attributed to the call that
 /// resolved the wrong backend, and a query re-handshakes once the
 /// warmed cookie pool is spent or its session was evicted, so a sample
-/// can raise one too. Treat the stage as "a handshake failed", not
-/// "the warm failed" — and note that a mismatch is a trust-backend
-/// *resolution* mismatch, so it can be raised by a call that never
-/// completed a TLS chain at all.
+/// can raise one too. Treat [ProbeStage.ke] as "a handshake-stage
+/// fault", not "the warm failed" — the violating call need not have
+/// failed at all (a warm or a sample that succeeded on the wrong
+/// backend raises one), and need not have completed a TLS chain
+/// either, since the check is on trust-backend *resolution*.
 class ProbeFailure extends ProbeResult {
   final String errorType;
   final bool errorSeverity;

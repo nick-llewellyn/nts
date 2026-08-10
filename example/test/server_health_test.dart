@@ -408,6 +408,47 @@ void main() {
       });
     });
 
+    test('the assertion holds on the default-client path too', () async {
+      // Every other case in this group supplies an `NtsClient`, but
+      // `probeHost` also accepts `client: null` and routes through the
+      // top-level functions — the path the catalog tools take whenever
+      // `--trust-mode` was left at its default. Both mismatch sites
+      // are separate call sites on that path, so both are driven here.
+      Future<ServerHealth> singletonProbe({int samples = 1}) => probeHost(
+        const NtsServerEntry(
+          hostname: 'h.example',
+          location: 'Test',
+          owner: 'Test',
+        ),
+        port: 4460,
+        timeout: const Duration(seconds: 1),
+        samples: samples,
+        dnsConcurrencyCap: 1,
+        bridgeConcurrencyCap: 1,
+        thresholds: const HealthThresholds(),
+        requiredBackend: nts.TrustBackend.platform,
+      );
+
+      api.warmBackend = ffi.TrustBackend.webpkiRoots;
+      final badWarm = await singletonProbe();
+      expect(badWarm.verdict, HealthVerdict.nonConforming);
+      expect(badWarm.dominantErrorType, 'ke:TrustBackendMismatch');
+      expect(api.queryCalls, 0);
+
+      api.reset();
+      api.warmBackend = ffi.TrustBackend.platform;
+      api.queryBackends = [ffi.TrustBackend.webpkiRoots];
+      final badSample = await singletonProbe();
+      expect(badSample.verdict, HealthVerdict.nonConforming);
+      expect(badSample.dominantErrorType, 'ke:TrustBackendMismatch');
+      expect(api.queryCalls, 1);
+
+      api.reset();
+      final good = await singletonProbe();
+      expect(good.verdict, HealthVerdict.healthy);
+      expect(good.successes, 1);
+    });
+
     test('null requiredBackend accepts a mixed-backend run', () async {
       // The assertion is opt-in: without it, a re-handshake onto a
       // different backend is not a fault.
@@ -479,7 +520,21 @@ class _ScriptedApi extends MockNtsApi {
     required int timeoutMs,
     required int dnsConcurrencyCap,
     int? verificationTimeMs,
-  }) async {
+  }) => _warm();
+
+  /// Top-level counterpart, so a `client: null` probe reads the same
+  /// script as a per-client one. Both dispatch paths matter: the
+  /// catalog tools take the singleton path whenever the run left
+  /// `--trust-mode` at its default.
+  @override
+  Future<ffi.NtsWarmCookiesOutcome> crateApiNtsNtsWarmCookies({
+    required ffi.NtsServerSpec spec,
+    required int timeoutMs,
+    required int dnsConcurrencyCap,
+    int? verificationTimeMs,
+  }) => _warm();
+
+  Future<ffi.NtsWarmCookiesOutcome> _warm() async {
     final err = warmError;
     if (err != null) throw err;
     return ffi.NtsWarmCookiesOutcome(
@@ -497,7 +552,17 @@ class _ScriptedApi extends MockNtsApi {
     required int timeoutMs,
     required int dnsConcurrencyCap,
     int? verificationTimeMs,
-  }) async {
+  }) => _query();
+
+  @override
+  Future<ffi.NtsTimeSample> crateApiNtsNtsQuery({
+    required ffi.NtsServerSpec spec,
+    required int timeoutMs,
+    required int dnsConcurrencyCap,
+    int? verificationTimeMs,
+  }) => _query();
+
+  Future<ffi.NtsTimeSample> _query() async {
     final backend = queryCalls < queryBackends.length
         ? queryBackends[queryCalls]
         : warmBackend;

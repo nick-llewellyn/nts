@@ -120,8 +120,8 @@ ArgParser _buildParser() => ArgParser()
         'TLS trust-anchor policy for every handshake this run '
         'initiates. Left at platform-with-fallback, whether by '
         'omission or passed explicitly, the run goes through the '
-        'package\'s process-wide default client; any stricter value '
-        'mints one call-scoped NtsClient for the batch.',
+        'package\'s process-wide default client; any non-default '
+        'value mints one call-scoped NtsClient for the batch.',
   )
   ..addOption(
     'custom-roots',

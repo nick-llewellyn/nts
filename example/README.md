@@ -280,8 +280,8 @@ Usage: nts_cli [options] <host> [<host>...]
                               run initiates. Left at platform-with-fallback,
                               whether by omission or passed explicitly, the
                               run goes through the package's process-wide
-                              default client; any stricter value mints one
-                              call-scoped NtsClient for the batch.
+                              default client; any non-default value mints
+                              one call-scoped NtsClient for the batch.
                               [platform-with-fallback, platform-only,
                               bundled-only, custom]
     --custom-roots            Path to a PEM certificate bundle or a single
@@ -549,7 +549,7 @@ Usage: nts_health [options] <path-to-server-list.yml>
                             platform-with-fallback, whether by omission
                             or passed explicitly, the run goes through
                             the package's process-wide default client;
-                            any stricter value mints one call-scoped
+                            any non-default value mints one call-scoped
                             NtsClient for the whole catalog.
                             [platform-with-fallback, platform-only,
                             bundled-only, custom]
@@ -657,7 +657,7 @@ Each host is reduced to one verdict across all its probes:
 | `healthy`        | ✅    | Replied and every parameter is in range.                                                |
 | `nonStandard`    | ❌    | Replied, but non-baseline AEAD, unusable stratum, or median clock offset over threshold. |
 | `notReplying`    | ❌    | No successful sample; only timeouts / no-reply (no protocol-level error).                |
-| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, or trust-backend-unavailable — or a `--require-trust-backend` mismatch on any call the host was probed with — any call whose resolved backend differed, whether it went on to succeed or to fail, and including one that failed before reaching TLS. |
+| `nonConforming`  | ❌    | No successful sample, with at least one error-severity (`isErrorSeverity`) failure — authentication, KE-protocol, NTP-protocol, internal, ABI-mismatch, or trust-backend-unavailable — or a `--require-trust-backend` mismatch on any call the host was probed with — any call that reported a differing resolved backend, whether it went on to succeed or to fail, including one that failed before reaching TLS. A failure that reports no backend — because it fired before resolution, or because its shape carries no attribution field at all — keeps its own error type. |
 | `dnsExhausted`   | ✅    | Every probe fast-failed on the *local* DNS resolver cap — a probe-side artifact, so the server was never contacted and is **not** condemned. |
 
 The default thresholds are ±1 s clock offset, the two RFC 8915 AEADs

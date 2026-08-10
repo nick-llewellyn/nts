@@ -269,5 +269,43 @@ void main() {
       // The mismatch is caught on the warm, so no sample is dispatched.
       expect(api.clientQueries, 0);
     });
+
+    test('--require-trust-backend reaches the probe from the parser', () async {
+      // The case above injects `requiredBackend` into `CommonProbeArgs`
+      // directly, so it would still pass if the flag were dropped in
+      // `parseCommonProbeArgs`. This one starts at the parser and
+      // drives both outcomes, so neither a dropped flag (both healthy)
+      // nor a hardcoded assertion (both mismatching) survives.
+      Future<ServerHealth> run(String backend) async {
+        final parser = ArgParser();
+        addCommonProbeOptions(parser);
+        addBridgeAndHelpFlags(parser);
+        final outcome = await loadAndProbeCatalog(
+          parseCommonProbeArgs(
+            parser.parse([
+              '--mock',
+              '--trust-mode',
+              'bundled-only',
+              '--require-trust-backend',
+              backend,
+              '-c',
+              '1',
+              '-n',
+              '1',
+              path,
+            ]),
+            usage: parser.usage,
+          ),
+        );
+        return outcome.report.single;
+      }
+
+      // A bundled-only client resolves webpki-roots under the mock.
+      expect((await run('webpki-roots')).verdict, HealthVerdict.healthy);
+
+      final mismatched = await run('platform');
+      expect(mismatched.verdict, HealthVerdict.nonConforming);
+      expect(mismatched.dominantErrorType, 'ke:TrustBackendMismatch');
+    });
   });
 }

@@ -44,7 +44,7 @@ typedef ProbeProgress = void Function(int done, int total, ServerHealth health);
 /// [NtsClient] — used when the run selected a non-default trust
 /// policy — and `null` keeps the probes on the top-level functions and
 /// the package's process-wide default client. [requiredBackend] asserts
-/// the negotiated trust backend; see [probeHost].
+/// the resolved trust backend; see [probeHost].
 Future<List<ServerHealth>> probeAll(
   List<NtsServerEntry> entries, {
   required int port,
@@ -244,10 +244,12 @@ Future<ServerHealth> probeHost(
     } on NtsError catch (err) {
       // A failure that carries backend attribution proves its
       // handshake reached config-build time, so the assertion applies
-      // to it exactly as it does to a success: a re-handshake that
-      // authenticated against the wrong anchor set and then lost the
-      // NTP leg is a policy violation, not the ordinary timeout the
-      // shape would otherwise be recorded as.
+      // to it exactly as it does to a success: a re-handshake
+      // configured with the wrong anchor set that then lost the NTP
+      // leg is a policy violation, not the ordinary timeout the shape
+      // would otherwise be recorded as. The attribution says which
+      // anchor set the call was configured to trust, so this arm also
+      // catches a DNS or connect failure that never reached TLS.
       final attributed = errorTrustBackend(err);
       if (requiredBackend != null &&
           attributed != null &&

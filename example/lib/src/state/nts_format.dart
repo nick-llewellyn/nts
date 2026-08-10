@@ -265,7 +265,7 @@ String formatTrustMismatch(
 /// [NtsError] tags so a consumer switching on the field can tell a
 /// policy-assertion failure from a protocol error without a second
 /// branch. `trust_backend` reuses the key [jsonQuerySuccess] /
-/// [jsonWarmSuccess] already use for the negotiated backend.
+/// [jsonWarmSuccess] already use for the resolved backend.
 Map<String, Object?> jsonTrustMismatch(
   TrustBackend requiredBackend,
   TrustBackend actualBackend,
@@ -465,9 +465,13 @@ String? timeoutPhaseName(NtsError err) =>
 /// that handshake; a `null` on one of them means the failure fired
 /// before the backend was resolved. The remaining variants
 /// ([NtsErrorInvalidSpec], [NtsErrorTrustBackendUnavailable],
-/// [NtsErrorInternal], [NtsErrorAbiMismatch]) have no field to read:
-/// they either precede any handshake or describe the backend itself
-/// being unusable.
+/// [NtsErrorInternal], [NtsErrorAbiMismatch]) have no field to read at
+/// all, so their `null` says nothing about when they fired: an
+/// `NtsErrorInternal` can be raised after a successful handshake while
+/// deriving the AEAD keys, and an [NtsErrorAbiMismatch] after native
+/// dispatch. A caller enforcing a required backend therefore cannot
+/// attribute those shapes, and must let them keep their own error
+/// type.
 ///
 /// Lets a caller enforcing a required backend attribute a *failed*
 /// call, not just a successful one — a re-handshake can resolve the
