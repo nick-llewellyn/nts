@@ -181,26 +181,32 @@ tarball.
   whose latency is unrelated to the round trip — a ratio-derived
   ceiling would reject a healthy sample from a nearby server behind a
   slow resolver. It is measured from the sample rather than derived
-  from the verdict threshold: the burst runs against a pre-warmed
-  cookie pool, so `dnsMicros` is that lookup alone, and the remaining
-  5 ms covers the packet build and the bind, which do no I/O. A
-  threshold-derived allowance would have bounded the undetected step
-  at the threshold and so the undetected corruption of θ at half of
-  it, which is enough to move a host whose true offset is non-zero
-  across the verdict line.
+  from the verdict threshold: on a sample that ran no handshake
+  `dnsMicros` is that lookup alone, and the remaining 5 ms covers the
+  packet build and the bind, which do no I/O. A threshold-derived
+  allowance would have bounded the undetected step at the threshold and
+  so the undetected corruption of θ at half of it, which is enough to
+  move a host whose true offset is non-zero across the verdict line.
+  The lookup term is claimed only where it is attributable: the burst
+  runs against a pre-warmed pool, but an exhausted pool or an evicted
+  session makes a sample re-handshake, and `dnsMicros` then also
+  carries a KE-host lookup that completed before T1. Such a sample is
+  allowed the flat 5 ms only.
 
   A second screen corroborates θ across the burst: a surviving sample's
   θ is kept only if another surviving sample agrees with it to within
-  the smallest peer delay the burst observed. Samples over one path
-  cannot honestly disagree by more than that path's delay scale, while
-  a step of S displaces one sample's θ by S/2 and inflates that same
-  sample's peer delay by S — so the window, drawn from the least
-  inflated sample, does not widen to admit the displacement it is
-  meant to catch. This is what rejects a step small enough to pass the
-  per-sample bound but large enough to move the median across the
-  threshold. Neither screen proves the clock was steady: a step that
-  disturbs neither the peer delay beyond the setup cost nor the burst's
-  agreement is not detected.
+  the smallest round trip the burst observed. Samples over one path
+  cannot honestly disagree by more than that path's delay scale, and a
+  step of S displaces one sample's θ by S/2, so the disagreement it
+  produces escapes the window once S exceeds twice that scale. The
+  window is drawn from `roundTripMicros` rather than the peer delay
+  because the round trip is measured on a monotonic clock, so no step
+  can widen the window in either direction, and because it excludes the
+  pre-send interval, which is not a property of the path. This is what
+  rejects a step small enough to pass the per-sample bound but large
+  enough to move the median across the threshold. Neither screen proves
+  the clock was steady: a step that disturbs neither the peer delay
+  beyond the setup cost nor the burst's agreement is not detected.
   Example app only; no package change. (NTS-152)
 
 - **Docs:** `NtsTimeSample.offsetMicros` described θ's vulnerable

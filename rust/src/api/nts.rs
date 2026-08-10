@@ -342,7 +342,14 @@ pub struct NtsTimeSample {
     /// the allowance can be measured rather than guessed: on a query
     /// that ran no handshake the field is the NTPv4-host lookup alone,
     /// and the rest of the interval is the packet build and the bind,
-    /// which do no I/O. Aligning the two capture points is tracked as
+    /// which do no I/O. Claim it only on such a query. On one that did
+    /// handshake, the field also carries the KE-host lookup, which
+    /// completed before T1 was stamped and so accounts for none of δ;
+    /// the KE-only phases (`connect_micros`, `tls_handshake_micros`,
+    /// `ke_record_io_micros`; Dart: `connectMicros`,
+    /// `tlsHandshakeMicros`, `keRecordIoMicros`) are non-zero exactly
+    /// on those queries.
+    /// Aligning the two capture points is tracked as
     /// NTS-153.
     ///
     /// New in 7.1.

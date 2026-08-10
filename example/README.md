@@ -691,16 +691,23 @@ milliseconds for the build and the bind are rejected too. The allowance
 is additive rather than a multiple of the round trip because a DNS
 lookup's latency is unrelated to it, and it is measured from the sample
 rather than derived from the verdict threshold so that the undetectable
-step stays at the scale of the setup cost.
+step stays at the scale of the setup cost. The `dnsMicros` term is
+claimed only on a sample that ran no handshake of its own: the field
+sums both lookups a query can make, and on a re-handshake the KE-host
+lookup completes before T1, so it cannot account for any part of the
+delay.
 
 The second screen is corroboration across the burst: a surviving θ is
 kept only if another surviving sample agrees with it to within the
-smallest peer delay the burst observed. Samples over one path cannot
-honestly disagree by more than that path's delay scale, while a step
-displaces one sample's θ and inflates that same sample's delay — so a
-step too small for the first screen still fails the second. Neither
-screen is a proof of a steady clock: a step small enough to disturb
-neither is not detected.
+smallest round trip the burst observed. Samples over one path cannot
+honestly disagree by more than that path's delay scale, and a step
+displaces one sample's θ by half its size, so a step too small for the
+first screen still fails the second once it exceeds twice that scale.
+The window comes from the round trip rather than the peer delay because
+the round trip is measured on a monotonic clock — no step of either
+direction can widen it — and it excludes the setup cost, which is not a
+property of the path. Neither screen is a proof of a steady clock: a
+step small enough to disturb neither is not detected.
 
 A host with no usable sample left is not judged on an offset it never
 produced: the offset column is blank and the host carries a `clock

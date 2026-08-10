@@ -329,30 +329,39 @@ const _kSetupSlackMicros = 5000;
 /// real sample.
 ///
 /// The allowance over the round trip is therefore that interval,
-/// measured rather than assumed: `phaseTimings.dnsMicros`, which on
-/// this burst is the NTPv4-host lookup alone because the pool was
-/// warmed by a handshake of its own, plus [_kSetupSlackMicros] for the
-/// build and the bind. Sizing it from the sample bounds the step that
-/// can slip through at the setup cost itself — single-digit
-/// milliseconds, so single-digit milliseconds of corruption in θ —
-/// rather than at whatever the verdict threshold happens to be. It has
-/// to be additive rather than a multiple of the round trip, since a
-/// slow lookup in front of a LAN-local server would blow any
-/// ratio-derived ceiling on a perfectly healthy sample. The bound can
-/// tighten to the strict one once the native capture points are
-/// aligned.
+/// measured rather than assumed: `phaseTimings.dnsMicros` where it is
+/// the NTPv4-host lookup alone, plus [_kSetupSlackMicros] for the build
+/// and the bind. Sizing it from the sample bounds the step that can slip
+/// through at the setup cost itself — single-digit milliseconds, so
+/// single-digit milliseconds of corruption in θ — rather than at
+/// whatever the verdict threshold happens to be. It has to be additive
+/// rather than a multiple of the round trip, since a slow lookup in
+/// front of a LAN-local server would blow any ratio-derived ceiling on a
+/// perfectly healthy sample. The bound can tighten to the strict one
+/// once the native capture points are aligned.
+///
+/// The lookup term is only claimable on a sample that ran no handshake,
+/// which is why [_rehandshaked] gates it: `dnsMicros` sums both lookups
+/// a query can make, and the KE-host one precedes T1.
 ///
 /// The burst test then requires corroboration: a surviving θ is kept
 /// only if another surviving sample agrees with it to within the
-/// smallest δ the burst observed. Samples taken seconds apart over one
-/// path cannot honestly disagree by more than the delay scale that path
-/// exhibits, while a step of S displaces one sample's θ by S/2 and
-/// inflates that same sample's δ by S — so the window, drawn from the
-/// *least* inflated sample, does not widen to admit the displacement it
-/// is meant to catch. This is what stops a step small enough to pass
-/// the per-sample bound from moving a host's median across the verdict
-/// threshold. A burst with fewer than two surviving samples has nothing
-/// to corroborate against and is left to the per-sample bound alone.
+/// smallest *round trip* the burst observed. Samples taken seconds apart
+/// over one path cannot honestly disagree by more than the delay scale
+/// that path exhibits, and a step of S displaces one sample's θ by S/2,
+/// which the window admits only while S is within twice that scale. The
+/// scale is taken from `roundTripMicros` rather than δ for two reasons:
+/// δ carries the pre-send interval this file has just finished
+/// documenting, so a slow lookup would widen the window by an amount
+/// that has nothing to do with the path, and δ is computed from the
+/// stepped clock itself, whereas `roundTripMicros` is a monotonic
+/// measurement no step can move. That immunity is what makes the
+/// residual symmetric: a backwards step deflates δ where a forward step
+/// inflates it, but neither touches the window. This is what stops a
+/// step small enough to pass the per-sample bound from moving a host's
+/// median across the verdict threshold. A burst with fewer than two
+/// surviving samples has nothing to corroborate against and is left to
+/// the per-sample bound alone.
 List<int?> _corroborateOffsets(List<NtsTimeSample> samples) {
   final gated = [for (final s in samples) _plausibleOffsetMicros(s)];
   final witnesses = [
@@ -360,7 +369,7 @@ List<int?> _corroborateOffsets(List<NtsTimeSample> samples) {
       if (offset != null) i,
   ];
   if (witnesses.length < 2) return gated;
-  final window = witnesses.map((i) => samples[i].peerDelayMicros).reduce(min);
+  final window = witnesses.map((i) => samples[i].roundTripMicros).reduce(min);
   return [
     for (final (i, offset) in gated.indexed)
       offset != null &&
@@ -372,15 +381,37 @@ List<int?> _corroborateOffsets(List<NtsTimeSample> samples) {
   ];
 }
 
+/// Whether [s]'s query ran an NTS-KE handshake of its own, which a burst
+/// sample does only when the warmed pool was exhausted or its session
+/// evicted.
+///
+/// It matters because `phaseTimings.dnsMicros` is the *sum* of the
+/// KE-host and NTPv4-host lookups, while T1 is stamped after the
+/// handshake completes. On a re-handshaked sample the field therefore
+/// over-counts the pre-send interval by a lookup that finished before
+/// T1 and so cannot excuse any part of δ — enough, behind a slow
+/// resolver, to widen the bound past a step it exists to catch. The
+/// three KE-only phases are zero exactly when no handshake ran, so their
+/// disjunction is the discriminator; on a re-handshaked sample the
+/// NTPv4-host lookup goes unclaimed and the bound is merely stricter
+/// than it could be.
+bool _rehandshaked(NtsTimeSample s) =>
+    s.phaseTimings.connectMicros != 0 ||
+    s.phaseTimings.tlsHandshakeMicros != 0 ||
+    s.phaseTimings.keRecordIoMicros != 0;
+
 /// [s]'s θ when its own peer delay is a plausible duration for the
 /// exchange that produced it, else `null`. See [_corroborateOffsets]
 /// for the derivation and for the burst-level test layered on top.
-int? _plausibleOffsetMicros(NtsTimeSample s) =>
-    s.peerDelayMicros > 0 &&
-        s.peerDelayMicros <=
-            s.roundTripMicros + s.phaseTimings.dnsMicros + _kSetupSlackMicros
-    ? s.offsetMicros
-    : null;
+int? _plausibleOffsetMicros(NtsTimeSample s) {
+  final allowance = _rehandshaked(s)
+      ? _kSetupSlackMicros
+      : s.phaseTimings.dnsMicros + _kSetupSlackMicros;
+  return s.peerDelayMicros > 0 &&
+          s.peerDelayMicros <= s.roundTripMicros + allowance
+      ? s.offsetMicros
+      : null;
+}
 
 /// Reduce a host to the single severe KE-stage `TrustBackendMismatch`
 /// failure a `--require-trust-backend` violation earns, whichever

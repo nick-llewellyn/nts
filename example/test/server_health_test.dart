@@ -460,6 +460,55 @@ void main() {
       expect(past.note, contains('clock offset unavailable'));
     });
 
+    test('a sample that re-handshaked cannot claim its DNS cost', () async {
+      // `dnsMicros` sums the KE-host and NTPv4-host lookups, and the
+      // KE-host one completes before T1 is stamped, so on a
+      // re-handshaked sample it over-counts the pre-send interval. The
+      // same 20 ms lookup that widened the bound one test above buys
+      // nothing here: a δ inside the widened bound but outside the flat
+      // 5 ms one is rejected. Behind a slow resolver the difference is
+      // the whole gate.
+      api.dnsMicros = 20000;
+      api.keRecordIoMicros = 1;
+      api.peerDelayMicros = 6001;
+      api.offsetMicros = 1200;
+      final h = await probe();
+      expect(h.offsetMicros, isNull);
+      expect(h.note, contains('clock offset unavailable'));
+    });
+
+    test('the corroboration window ignores a sample\'s DNS cost', () async {
+      // The window is the smallest `roundTripMicros`, not the smallest
+      // δ. A 400 ms lookup inflates every δ well past the offsets'
+      // spread, so a δ-derived window would have admitted the outlier
+      // at +400 ms as a corroborating witness of its neighbours. The
+      // round trip is 1 ms and unmoved by the lookup, so the outlier is
+      // still dropped and the agreeing pair still carries the median.
+      api.dnsMicros = 400000;
+      api.peerDelayMicros = 400500;
+      api.offsetScript = [1200, 1200, 400000];
+      final h = await probe();
+      expect(h.offsetMicros, 1200);
+      expect(h.successes, 3);
+      expect(h.note, isNull);
+    });
+
+    test('a backwards step that leaves δ positive fails corroboration', () {
+      // The per-sample bound only catches a backwards step large enough
+      // to drive δ non-positive; a smaller one passes it with θ
+      // displaced by half the step. The corroboration window is
+      // measured on the monotonic round trip, which no step moves in
+      // either direction, so the displaced sample is dropped exactly as
+      // a forward step's would be.
+      api.peerDelayMicros = 300;
+      api.offsetScript = [1200, 1200, -400000];
+      return probe().then((h) {
+        expect(h.offsetMicros, 1200);
+        expect(h.successes, 3);
+        expect(h.note, isNull);
+      });
+    });
+
     test('a θ no other sample corroborates is suppressed', () async {
       // A step too small to push δ past the per-sample bound still
       // displaces that sample's θ, and the displacement is visible as
@@ -715,6 +764,12 @@ class _ScriptedApi extends MockNtsApi {
   /// the per-sample plausibility bound by a measured lookup cost.
   int dnsMicros = 0;
 
+  /// `phaseTimings.keRecordIoMicros` reported by every scripted sample.
+  /// Zero by default; a non-zero value marks the sample as having run a
+  /// handshake of its own, which is what the prober keys on to decide
+  /// whether [dnsMicros] is attributable to the pre-send interval.
+  int keRecordIoMicros = 0;
+
   int queryCalls = 0;
 
   /// Return to the group's defaults between tests, since the bridge
@@ -728,6 +783,7 @@ class _ScriptedApi extends MockNtsApi {
     offsetScript = const [];
     peerDelayMicros = 800;
     dnsMicros = 0;
+    keRecordIoMicros = 0;
     queryCalls = 0;
   }
 
@@ -800,7 +856,7 @@ class _ScriptedApi extends MockNtsApi {
       serverStratum: 1,
       aeadId: 15,
       freshCookies: 1,
-      phaseTimings: _timings(dnsMicros),
+      phaseTimings: _timings(dnsMicros, keRecordIoMicros: keRecordIoMicros),
       trustBackend: backend,
       recvBoottimeMicros: PlatformInt64Util.from(0),
       offsetMicros: PlatformInt64Util.from(offset),
@@ -815,9 +871,10 @@ class _ScriptedApi extends MockNtsApi {
 
 ffi.PhaseTimings _zeroTimings() => _timings(0);
 
-ffi.PhaseTimings _timings(int dnsMicros) => ffi.PhaseTimings(
-  dnsMicros: PlatformInt64Util.from(dnsMicros),
-  connectMicros: PlatformInt64Util.from(0),
-  tlsHandshakeMicros: PlatformInt64Util.from(0),
-  keRecordIoMicros: PlatformInt64Util.from(0),
-);
+ffi.PhaseTimings _timings(int dnsMicros, {int keRecordIoMicros = 0}) =>
+    ffi.PhaseTimings(
+      dnsMicros: PlatformInt64Util.from(dnsMicros),
+      connectMicros: PlatformInt64Util.from(0),
+      tlsHandshakeMicros: PlatformInt64Util.from(0),
+      keRecordIoMicros: PlatformInt64Util.from(keRecordIoMicros),
+    );
