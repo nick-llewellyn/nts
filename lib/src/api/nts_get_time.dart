@@ -272,20 +272,23 @@ Future<NtsSyncedTime> _getTime({
 }
 
 // The network delay used for burst selection, one-way compensation,
-// and the error bound: the RFC 5905 peer delay δ when plausible
-// (excludes server processing time), else the locally measured round
-// trip. δ is implausible when outside `(0, roundTripMicros]` — a `0`
-// marks a pre-7.1 fixture and a negative value marks a local clock
-// step mid-exchange.
+// and the error bound: the RFC 5905 peer delay δ when it falls in
+// `(0, roundTripMicros]` (δ excludes server processing time), else
+// the locally measured round trip.
 //
-// The upper bound is conservative rather than diagnostic. T1 is
-// stamped before the UDP bind while `roundTripMicros` starts at the
-// send that follows it, so δ runs 1–9% above the round trip on
-// healthy samples and this window selects `roundTripMicros` in
-// practice (NTS-153 aligns the capture points). The strict bound is
-// kept regardless: accepting a δ that carries pre-bind setup cost
-// would overstate the one-way delay, whereas the fallback is the
-// quantity actually measured across the exchange.
+// `(0, roundTripMicros]` is a delay-selection policy, not a
+// plausibility verdict on the sample. Only the lower bound is
+// diagnostic: a `0` marks a pre-7.1 fixture, and a non-positive δ is
+// evidence of an implausible timestamp exchange — a local clock step
+// mid-exchange, a server clock stepped between T2 and T3, or server
+// stamps that are simply inconsistent. The upper bound rejects
+// healthy samples by construction: T1 is stamped before the UDP bind
+// while `roundTripMicros` starts at the send that follows it, so δ
+// runs 1–9% above the round trip on healthy samples and this window
+// selects `roundTripMicros` in practice (NTS-153 aligns the capture
+// points). It is kept regardless: accepting a δ that carries
+// pre-bind setup cost would overstate the one-way delay, whereas the
+// fallback is the quantity actually measured across the exchange.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros
