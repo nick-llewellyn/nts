@@ -69,11 +69,16 @@ class ProbeOk extends ProbeResult {
 /// Which protocol stage a [ProbeFailure] originated in. Each host is
 /// probed the way a client uses one: a single NTS-KE handshake
 /// (`ntsWarmCookies`) to harvest a cookie pool, then a burst of NTPv4
-/// queries (`ntsQuery`) spent against it. [ke] marks a failure in that
-/// handshake (TLS, KE records, zero cookies); [ntp] marks a failure in
-/// one of the post-warm UDP queries. Separating the two keeps a broken
+/// queries (`ntsQuery`) spent against it. [ke] marks any
+/// handshake-stage fault — TLS, KE records, zero cookies, or a
+/// `--require-trust-backend` violation — wherever it arises, which
+/// includes a query that re-handshaked because the warmed pool was
+/// spent or its session evicted; [ntp] marks a failure in the UDP
+/// exchange of a post-warm query. Separating the two keeps a broken
 /// handshake from reading as a flaky NTP server (and vice-versa) in the
-/// dominant-error column.
+/// dominant-error column. See [ProbeFailure.stage] for why a [ke]
+/// failure is not necessarily the warm's, and need not be a failed
+/// call at all.
 enum ProbeStage { ke, ntp }
 
 /// A failed probe, carrying the `errorTypeName` tag and whether it is
