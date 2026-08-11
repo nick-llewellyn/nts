@@ -67,11 +67,12 @@ coverage/
 AGENTS.md
 CLAUDE.md
 
-# Contributor documentation. All three files explicitly state at the
-# top that they are for contributors / integrators and that day-to-day
-# API users only need the README. CONTRIBUTING.md additionally
-# describes a workflow — branch protection, git hooks, CI gates — that
-# only exists in the source repository. Keeping them in git for the
+# Contributor documentation. ARCHITECTURE.md and DEVELOPMENT.md
+# explicitly state at the top that they are for contributors /
+# integrators and that day-to-day API users only need the README.
+# CONTRIBUTING.md is addressed to contributors throughout and describes
+# a workflow — branch protection, git hooks, CI gates — that only
+# exists in the source repository. Keeping all three in git for the
 # repo audience but excluded from the published surface.
 ARCHITECTURE.md
 CONTRIBUTING.md

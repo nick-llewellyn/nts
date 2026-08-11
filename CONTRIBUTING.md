@@ -12,8 +12,10 @@ page is the short path; where the two disagree, `DEVELOPMENT.md` wins.
 
 ## Prerequisites
 
-- **Flutter ≥ 3.38.0** (Dart ≥ 3.10) on the `stable` channel. CI also
-  runs the declared SDK floor (3.38.10) as a second matrix leg.
+- **Flutter ≥ 3.38.0** (Dart ≥ 3.10) on the `stable` channel — that is
+  the constraint `pubspec.yaml` declares. CI runs the latest `stable`
+  plus 3.38.10, the oldest stable release satisfying that constraint,
+  as a second matrix leg.
 - **`rustup` on your `PATH`.** Do not install or select a Rust
   toolchain manually — `rust/rust-toolchain.toml` pins the version and
   rustup resolves it automatically on the first build. See the
@@ -21,14 +23,18 @@ page is the short path; where the two disagree, `DEVELOPMENT.md` wins.
   steps.
 - **`cargo-audit`** (`cargo install cargo-audit --locked`), only if
   your change touches `rust/Cargo.toml` or `rust/Cargo.lock`.
+- **The [GitHub CLI](https://cli.github.com) (`gh`)** is optional. The
+  commands below use it because it is the shorter path; every step it
+  performs can be done from the GitHub web UI instead.
 
-Nothing else is required. In particular, the issue-tracking and
-code-quality services the maintainer runs — Beads, Dolt, Linear, and
-SonarCloud — are **not** contributor prerequisites. `.beads/` is inert
-in a clone that has no `bd` installed, no git hook or CI job invokes
-any of them, and the SonarCloud scan is skipped automatically when
-`SONAR_TOKEN` is absent, which is always the case for pull requests
-from a fork. Sections of `AGENTS.md` and `CLAUDE.md` that describe
+Nothing else is required to build, test, or submit a change. In
+particular, the issue-tracking services the maintainer runs — Beads,
+Dolt, and Linear — are **not** contributor prerequisites: `.beads/` is
+inert in a clone that has no `bd` installed, and no git hook or CI job
+invokes any of the three. SonarCloud does run as a CI step, but it
+probes for `SONAR_TOKEN` and skips itself when the secret is absent,
+which is always the case for pull requests from a fork; it is not a
+required check. Sections of `AGENTS.md` and `CLAUDE.md` that describe
 those tools are maintainer workflow; ignore them.
 
 ## One-time setup per clone
@@ -55,7 +61,7 @@ by branching:
 git switch -c <type>/<short-slug>
 # ... make edits, run the gates below ...
 git push -u origin HEAD
-gh pr create --fill
+gh pr create --fill   # or open the PR from the GitHub web UI
 ```
 
 `<type>` is one of `feat`, `fix`, `refactor`, `chore`, `test`, or

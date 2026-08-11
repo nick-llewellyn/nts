@@ -15,13 +15,21 @@ tarball.
   `git config core.hooksPath tool/hooks` opt-in, the branch and pull
   request loop, the quality gates, the code conventions, and the
   changelog and release-only versioning policy. It also states
-  explicitly that the maintainer's issue-tracking and code-quality
-  services (Beads, Dolt, Linear, SonarCloud) are not contributor
-  prerequisites: `.beads/` is inert without `bd` installed, no hook or
-  CI job invokes any of them, and the SonarCloud scan already skips
-  itself when `SONAR_TOKEN` is absent, as it always is on fork pull
-  requests. `DEVELOPMENT.md` remains authoritative for the toolchain
-  and CI detail.
+  explicitly that the maintainer's issue-tracking services (Beads,
+  Dolt, Linear) are not contributor prerequisites: `.beads/` is inert
+  without `bd` installed, and no hook or CI job invokes any of the
+  three. SonarCloud does run as a CI step, but it skips itself when
+  `SONAR_TOKEN` is absent, as it always is on fork pull requests, and
+  it is not a required check. `DEVELOPMENT.md` remains authoritative
+  for the toolchain and CI detail.
+
+### Changed
+
+- The pull request template no longer asks every contributor to bump
+  `pubspec.yaml` `version:` following semver. That instruction
+  contradicted the release-only bumping policy, under which version
+  fields move only in a dedicated release commit; the checklist item
+  now asks for the field to be left untouched.
 
 
 ## 9.1.0
