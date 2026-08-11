@@ -28,8 +28,9 @@ tarball.
 - The pull request template no longer asks every contributor to bump
   `pubspec.yaml` `version:` following semver. That instruction
   contradicted the release-only bumping policy, under which version
-  fields move only in a dedicated release commit; the checklist item
-  now asks for the field to be left untouched.
+  fields move only in a dedicated release commit. The checklist item
+  now asks for the field to be left untouched, with an explicit
+  carve-out so a release PR can tick the same box truthfully.
 
 
 ## 9.1.0

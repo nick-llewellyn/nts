@@ -45,9 +45,10 @@ git config core.hooksPath tool/hooks
 
 Git deliberately does not version `.git/hooks/`, so this opt-in has to
 be re-run on every fresh clone. The hooks refuse commits and pushes on
-`main`/`master`; without them, the same violation is caught later by
-branch protection on the remote, which is a slower and messier
-recovery.
+`main` and `master`. Without them, a direct push to `main` is still
+refused by branch protection on the remote — a slower and messier
+recovery — but `master` carries no remote-side rule in this
+repository, so the hooks are its only guard.
 
 Verify with `git config --get core.hooksPath`, which must print
 `tool/hooks`.
