@@ -91,11 +91,17 @@ dart format --output=none --set-exit-if-changed .
 dart analyze .
 flutter test --coverage
 
+# Any Dart change touching the public surface
+(cd example && flutter pub get && flutter analyze && flutter test)
+
 # Any change to rust/**
 (cd rust && cargo build --locked && cargo test --lib --locked)
 (cd rust && cargo clippy --lib --tests --locked -- -D warnings)
 (cd rust && cargo tarpaulin --lib --locked --skip-clean \
             --out Lcov --output-dir coverage)
+
+# Any change to rust/Cargo.toml or rust/Cargo.lock
+(cd rust && cargo audit)
 
 # Any change to rust/src/api/** or lib/src/ffi/**
 dart run tool/check_bindings.dart
