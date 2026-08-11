@@ -6,6 +6,24 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 9.2
+
+### Added
+
+- `CONTRIBUTING.md` — the GitHub-surfaced entry point for third-party
+  contributors. Covers prerequisites, the one-time
+  `git config core.hooksPath tool/hooks` opt-in, the branch and pull
+  request loop, the quality gates, the code conventions, and the
+  changelog and release-only versioning policy. It also states
+  explicitly that the maintainer's issue-tracking and code-quality
+  services (Beads, Dolt, Linear, SonarCloud) are not contributor
+  prerequisites: `.beads/` is inert without `bd` installed, no hook or
+  CI job invokes any of them, and the SonarCloud scan already skips
+  itself when `SONAR_TOKEN` is absent, as it always is on fork pull
+  requests. `DEVELOPMENT.md` remains authoritative for the toolchain
+  and CI detail.
+
+
 ## 9.1.0
 
 ### Added

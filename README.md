@@ -641,6 +641,9 @@ the internal wiring.
 
 For internals, contribution workflow, and operational tuning:
 
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — prerequisites, the branch
+  and pull request loop, the quality gates a change must clear, and
+  the code conventions this repository enforces.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Dart ↔ FRB ↔ Rust layering,
   module-by-module breakdown of the Rust crate, and the repository
   layout.

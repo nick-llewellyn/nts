@@ -600,6 +600,10 @@ Two cheaper filters run before the workflow even queues:
 
 ## Contribution workflow
 
+[CONTRIBUTING.md](CONTRIBUTING.md) is the short-form entry point for
+third-party contributors; this section remains authoritative for the
+detail it summarises.
+
 Direct pushes to `main` are not permitted, and direct *commits* to
 local `main` are blocked by the repo-tracked git hooks under
 `tool/hooks/` once `core.hooksPath` has been activated for the
