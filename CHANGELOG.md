@@ -31,6 +31,10 @@ tarball.
   fields move only in a dedicated release commit. The checklist item
   now asks for the field to be left untouched, with an explicit
   carve-out so a release PR can tick the same box truthfully.
+- The pull request template illustrates the issue-reference
+  convention with a placeholder (`NTS-<num>`) rather than a real,
+  long-closed issue identifier, so the example cannot be pasted
+  through into a pull request that has nothing to do with it.
 
 
 ## 9.1.0
