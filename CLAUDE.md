@@ -2,7 +2,20 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## Who this file is for
+
+Every issue-tracking section below documents the **maintainer's** setup
+— Beads (`bd`), DoltHub, and Linear — which is not a prerequisite for
+contributing. Those sections carry a **`Maintainer-only`** note under
+their heading; skip them unless you have the tooling installed and
+credentialed. [`AGENTS.md`](AGENTS.md) uses the same marker and holds
+the contributor-relevant conventions (pull request workflow, branch
+protection, versioning, zeroization); third-party contributors should
+start from [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## DoltHub Session Completion (overrides the auto-generated block below)
+
+> **Maintainer-only.** Requires `bd` and a credentialed DoltHub remote.
 
 DoltHub (`nick-llewellyn/nts` on dolthub.com) is the **authoritative** store
 for Beads issues. The `bd dolt push` step in the auto-generated "Session
@@ -42,6 +55,11 @@ git status  # MUST show "up to date with origin"
 
 **CRITICAL:** `bd dolt push --remote origin` failing is a blocking error.
 Do not open the PR, do not stop the session — fix the push first.
+
+> **Maintainer-only.** The auto-generated block below — "Beads Issue
+> Tracker" and "Session Completion" — requires `bd`. The note sits
+> outside the generated markers so regenerating the block does not
+> drop it.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
@@ -108,6 +126,8 @@ _Add a brief overview of your project architecture_
 ## Conventions & Patterns
 
 ### Linear sync (authoritative reference: AGENTS.md)
+
+> **Maintainer-only.** Requires `bd` and a `LINEAR_API_KEY`.
 
 The full `bd ↔ Linear` sync workflow, flag reference, and gotchas live in
 `AGENTS.md` ("Linear Sync Configuration" onward). Do not duplicate that content
