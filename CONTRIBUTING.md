@@ -26,6 +26,17 @@ page is the short path; where the two disagree, `DEVELOPMENT.md` wins.
   version CI pins), only if your change touches `rust/**`.
 - **`cargo-audit`** (`cargo install cargo-audit --locked`), only if
   your change touches `rust/Cargo.toml` or `rust/Cargo.lock`.
+- **`flutter_rust_bridge_codegen`**, only if your change touches
+  `rust/src/api/**`. It must match the exact `flutter_rust_bridge`
+  pin in `pubspec.yaml` — `tool/check_bindings.dart` refuses to run
+  when the binary is missing or its version differs:
+
+  ```bash
+  cargo install flutter_rust_bridge_codegen --version "=2.12.0" --locked
+  ```
+
+  Never invoke it directly; the script wraps it and applies patch
+  passes that bare codegen reverts.
 - **The [GitHub CLI](https://cli.github.com) (`gh`)** is optional. The
   commands below use it because it is the shorter path; every step it
   performs can be done from the GitHub web UI instead.
