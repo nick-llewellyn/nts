@@ -245,11 +245,15 @@ tarball.
   `<= roundTripMicros` on a steadily-running clock, and a value
   outside `(0, roundTripMicros]` as a clock-step signal. The upper
   half of that is false on this client for the capture-point reason
-  above — δ exceeds the round trip on every healthy sample — so the
-  `(0, roundTripMicros]` window `ntsGetTime` applies is a selection
-  policy rather than a verdict on the sample: it takes the
-  `roundTripMicros` branch in practice rather than distinguishing
-  stepped samples, and only its lower bound is diagnostic.
+  above — δ measured above the round trip on every healthy sample
+  across the bundled catalog — so the `(0, roundTripMicros]` window
+  `ntsGetTime` applies is a selection policy rather than a verdict on
+  the sample: it takes the `roundTripMicros` branch in practice rather
+  than distinguishing stepped samples, and only its lower bound is
+  diagnostic. That the round trip wins is an empirical result, not an
+  identity: δ = setup + roundTrip − serverProcessing, so δ clears the
+  ceiling only while the pre-send setup cost outweighs the server's
+  T3−T2, which held across every catalog server measured.
   A non-positive δ is also no longer attributed to a *local* step
   specifically: it witnesses an implausible timestamp exchange, which
   a server clock stepped between T2 and T3, or inconsistent server
@@ -261,8 +265,14 @@ tarball.
   `ARCHITECTURE.md`, and `example/GUI_GUIDE.md` carried the same
   superseded claim — each described `ntsGetTime` as selecting the peer
   delay — and now all three lead with the round-trip branch taken in
-  practice, citing the window as the condition rather than as a
-  plausibility judgement. Documentation only; no behaviour change.
+  practice, scoped to the catalog measurement, citing the window as
+  the condition rather than as a plausibility judgement. The remaining
+  API-doc sites that still called an in-window δ "plausible"
+  (`nts_query` and `NtsTimeSample::utc_unix_micros` in the rustdoc and
+  their generated and wrapper counterparts, plus `NtsSyncedTime`) now
+  use the same selection-window framing, so the public API surface no
+  longer contradicts the prose. Documentation only; no behaviour
+  change.
 
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits

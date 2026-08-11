@@ -537,9 +537,12 @@ all samples. It selects the winning sample by lowest network delay
 (δ inside the strict selection window `(0, roundTripMicros]`, else
 the measured round trip; the upper bound is a selection policy, not
 a verdict on the sample, since T1 is stamped before the UDP bind
-while the round trip starts at the send that follows it, so healthy
-samples exceed it and the round trip is the branch taken in
-practice), computes the burst RMS jitter ψ from the
+while the round trip starts at the send that follows it, so δ
+carries setup cost the round trip does not while the round trip
+alone carries the server's T3−T2 — across the bundled catalog the
+setup cost dominated on every healthy sample, making the round trip
+the branch taken in practice), computes the burst RMS jitter ψ from
+the
 per-sample θ values, derives the worst-case `errorBoundMicros`
 via the RFC 5905 root-distance recipe (delay/2 + rootDelay/2 +
 rootDispersion + ψ), and applies the `delay / 2` symmetric-path

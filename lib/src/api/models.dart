@@ -138,8 +138,8 @@ class NtsTimeSample {
   /// directly from the NTPv4 reply. No correction for the one-way
   /// network delay between the server and this caller is applied; add
   /// half the network delay — `peerDelayMicros / 2` when the peer
-  /// delay is plausible (inside `(0, roundTripMicros]`), else
-  /// `roundTripMicros / 2` — to estimate the server's clock at the
+  /// delay falls inside the selection window `(0, roundTripMicros]`,
+  /// else `roundTripMicros / 2` — to estimate the server's clock at the
   /// moment the reply arrived. See [peerDelayMicros] for why that
   /// window selects [roundTripMicros] on healthy samples today.
   final int utcUnixMicros;
@@ -764,7 +764,8 @@ class NtsTrustStatus {
 ///
 /// Wraps the burst's lowest-delay sample — already compensated for the
 /// one-way network delay (`utc + delay / 2`, where the delay is the
-/// RFC 5905 peer delay δ when plausible, else the locally measured
+/// RFC 5905 peer delay δ when it falls inside the selection window
+/// `(0, roundTripMicros]`, else the locally measured
 /// round trip) — and anchors it to a process-local **sleep-aware
 /// monotonic clock** reading captured at construction
 /// (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on

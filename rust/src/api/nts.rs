@@ -244,10 +244,11 @@ pub struct NtsTimeSample {
     /// directly from the NTPv4 reply. No correction for the one-way
     /// network delay between the server and this caller is applied; add
     /// half the network delay — `peer_delay_micros / 2` when the peer
-    /// delay is plausible (inside `(0, round_trip_micros]`), else
-    /// `round_trip_micros / 2` — to estimate the server's clock at the
-    /// moment the reply arrived. See `peer_delay_micros` for why that
-    /// window selects `round_trip_micros` on healthy samples today.
+    /// delay falls inside the selection window
+    /// `(0, round_trip_micros]`, else `round_trip_micros / 2` — to
+    /// estimate the server's clock at the moment the reply arrived. See
+    /// `peer_delay_micros` for why that window selects
+    /// `round_trip_micros` on healthy samples today.
     pub utc_unix_micros: i64,
     /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
     /// `send` and the matching `recv`. This *is* the UDP-phase
@@ -3347,8 +3348,8 @@ where
 /// arrived, callers should add half the network delay to
 /// `utc_unix_micros` (the standard NTP assumption of a symmetric path).
 /// The best delay estimate is `peer_delay_micros` (the RFC 5905 peer
-/// delay δ, which excludes server processing time) when it is plausible
-/// — inside `(0, round_trip_micros]` — falling back to
+/// delay δ, which excludes server processing time) when it falls inside
+/// the selection window `(0, round_trip_micros]`, falling back to
 /// `round_trip_micros` otherwise; see [`NtsTimeSample::peer_delay_micros`]
 /// for why that fallback is what fires today. For high-precision
 /// synchronization, take a burst of samples and pick the one with the
