@@ -21,6 +21,9 @@ page is the short path; where the two disagree, `DEVELOPMENT.md` wins.
   rustup resolves it automatically on the first build. See the
   README's [Prerequisites](README.md#prerequisites) for the install
   steps.
+- **`cargo-tarpaulin`**
+  (`cargo install cargo-tarpaulin --locked --version 0.35.2`, the
+  version CI pins), only if your change touches `rust/**`.
 - **`cargo-audit`** (`cargo install cargo-audit --locked`), only if
   your change touches `rust/Cargo.toml` or `rust/Cargo.lock`.
 - **The [GitHub CLI](https://cli.github.com) (`gh`)** is optional. The
@@ -45,18 +48,21 @@ git config core.hooksPath tool/hooks
 
 Git deliberately does not version `.git/hooks/`, so this opt-in has to
 be re-run on every fresh clone. The hooks refuse commits and pushes on
-`main` and `master`. Without them, a direct push to `main` is still
-refused by branch protection on the remote — a slower and messier
-recovery — but `master` carries no remote-side rule in this
-repository, so the hooks are its only guard.
+`main` and `master`, and they are the only guard you can rely on: a
+fork does not inherit the canonical repository's branch-protection
+rule, so nothing remote-side stops a direct push to your fork's
+`main`. Even against the canonical repository the rule covers `main`
+only — `master` has no remote-side rule here.
 
 Verify with `git config --get core.hooksPath`, which must print
 `tool/hooks`.
 
 ## The change loop
 
-`main` is protected. Never commit to it directly — start every change
-by branching:
+Unless you have write access, fork the repository first and clone your
+fork, so that `origin` is a remote you can push to. `main` is
+protected; never commit to it directly — start every change by
+branching:
 
 ```bash
 git switch -c <type>/<short-slug>
@@ -85,12 +91,17 @@ dart format --output=none --set-exit-if-changed .
 dart analyze .
 flutter test --coverage
 
-# Rust-touching changes
+# Any change to rust/**
 (cd rust && cargo build --locked && cargo test --lib --locked)
 (cd rust && cargo clippy --lib --tests --locked -- -D warnings)
+(cd rust && cargo tarpaulin --lib --locked --skip-clean \
+            --out Lcov --output-dir coverage)
 
 # Any change to rust/src/api/** or lib/src/ffi/**
 dart run tool/check_bindings.dart
+
+# Any change to a Markdown file
+dart run tool/check_doc_snippets.dart
 
 # Any change to tool/hooks/**
 sh -n tool/hooks/pre-commit tool/hooks/pre-merge-commit tool/hooks/pre-push
