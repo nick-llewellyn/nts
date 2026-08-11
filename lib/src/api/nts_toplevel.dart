@@ -95,8 +95,9 @@ part of 'nts.dart';
 /// delay to `utcUnixMicros` (the standard NTP assumption of a
 /// symmetric path). The best delay estimate is `peerDelayMicros` (the
 /// RFC 5905 peer delay δ, which excludes server processing time) when
-/// it is plausible — inside `(0, roundTripMicros]` — falling back to
-/// `roundTripMicros` otherwise; see [NtsTimeSample.peerDelayMicros]
+/// it falls inside the selection window `(0, roundTripMicros]`,
+/// falling back to `roundTripMicros` otherwise;
+/// see [NtsTimeSample.peerDelayMicros]
 /// for why that fallback is what fires today. For high-precision
 /// synchronization, take a burst of samples and pick the one with the
 /// smallest such delay before applying that adjustment; this is
@@ -173,7 +174,8 @@ Future<NtsTimeSample> ntsQuery({
 /// `min(8, freshCookies)` serial authenticated NTPv4 samples, pick
 /// the one with the lowest network delay (the RFC 5905 peer delay δ,
 /// which excludes server processing time, falling back to the
-/// locally measured round trip when δ is implausible), and apply the
+/// locally measured round trip when δ falls outside the selection
+/// window `(0, roundTripMicros]`), and apply the
 /// standard symmetric-path compensation (`utc + delay / 2`). The
 /// winning instant is projected onto a monotonic anchor and returned
 /// as an [NtsSyncedTime] — which also carries the burst's RFC 5905

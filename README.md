@@ -111,10 +111,12 @@ which is reachable from a browser tab.
 For most applications, `ntsGetTime` is the whole integration: one
 call that performs the NTS-KE handshake, takes a burst of up to 8
 authenticated samples under a single 8-second total budget, picks
-the sample with the lowest network delay (RFC 5905 peer delay, which
-excludes server processing time), applies the standard `delay / 2`
-compensation, and returns a synchronized clock with offset, jitter,
-and worst-case error-bound statistics.
+the sample with the lowest network delay — the measured round trip in
+practice, since the RFC 5905 peer delay is taken only inside the strict
+selection window `(0, roundTripMicros]`, which every healthy sample
+across the bundled server catalog measured above — applies the standard
+`delay / 2` compensation, and returns a synchronized clock with offset,
+jitter, and worst-case error-bound statistics.
 
 ```dart
 import 'package:nts/nts.dart';
@@ -245,20 +247,31 @@ samples — the same two `ntsGetTime` automates:
    several times in quick succession — one query per delivered
    cookie — produces a small distribution you can reason about
    statistically. Pick the sample with the smallest network delay
-   (`peerDelayMicros`, or `roundTripMicros` when the peer delay is
-   implausible); on a low-delay path the symmetric-path assumption
+   (`peerDelayMicros` when it falls inside `(0, roundTripMicros]`, else
+   `roundTripMicros`); on a low-delay path the symmetric-path assumption
    below holds tightest, so that sample carries the smallest residual
-   offset error. More sophisticated callers can median-filter, score by
-   `serverStratum`, or run Marzullo's algorithm across multiple servers.
+   offset error. That window is a selection policy rather than a
+   verdict on the sample: T1 is stamped before the UDP bind while the
+   round trip starts at the send that follows it, so `peerDelayMicros`
+   carries setup cost `roundTripMicros` does not, while
+   `roundTripMicros` alone carries the server's processing interval.
+   Across the bundled server catalog the setup cost dominated on every
+   healthy sample, putting `peerDelayMicros` above the ceiling and
+   making `roundTripMicros` the branch selected in practice. See the
+   `peerDelayMicros` dartdoc for the measured figures and for the
+   tolerant upper bound to use when screening for clock steps
+   specifically. More sophisticated callers can median-filter,
+   score by `serverStratum`, or run Marzullo's algorithm across multiple
+   servers.
 
 2. **Symmetric-path delay compensation.** `utcUnixMicros` is the moment
    the server stamped the reply, not the moment it landed locally. The
    reply then spent roughly half the network delay travelling back to
    the client, so the server's clock at the moment of arrival is best
-   approximated as `utcUnixMicros + peerDelayMicros / 2`. This is the
-   standard NTP correction (RFC 5905 §8); it assumes the outbound and
-   return paths are symmetric, which is why filtering on the
-   lowest-delay sample matters — short paths are more likely to be
+   approximated as `utcUnixMicros` plus half the delay selected above.
+   This is the standard NTP correction (RFC 5905 §8); it assumes the
+   outbound and return paths are symmetric, which is why filtering on
+   the lowest-delay sample matters — short paths are more likely to be
    symmetric.
 
 Each sample also carries the fully computed RFC 5905 §8 statistics —
@@ -306,10 +319,12 @@ monotonic sources:
   fire neither prematurely nor late regardless of NTP slews, clock
   steps, or manual adjustments mid-call.
 - **Trustworthy RTT.** `roundTripMicros` is measured monotonically
-  around the UDP round-trip, which matters because it is the
-  plausibility ceiling for the peer delay that drives `ntsGetTime`'s
-  burst selection and `delay / 2` compensation — a contaminated
-  RTT would corrupt the synchronized time itself.
+  around the UDP round-trip, which matters because it is both the
+  selection ceiling for the peer delay and — since every healthy
+  sample across the bundled server catalog measured above that
+  ceiling — the delay that in practice drives `ntsGetTime`'s burst
+  selection and `delay / 2` compensation.
+  A contaminated RTT would corrupt the synchronized time itself.
 
 For the platform syscall mappings, epoch semantics, the
 bridge-initialization requirement, and how to synchronize your own
@@ -520,7 +535,7 @@ relative fallback can fire.
 | Symbol | Purpose |
 |--------|---------|
 | `NtsRustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
-| `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-delay selection (RFC 5905 peer delay, falling back to the measured round trip when implausible), `delay / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8-second **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. |
+| `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-delay selection (the measured round trip in practice; the RFC 5905 peer delay is taken only inside the strict selection window `(0, roundTripMicros]`, which every healthy sample across the bundled server catalog measured above), `delay / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8-second **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. |
 | `ntsQuery({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: one authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTime` (optional `DateTime`, interpreted as UTC, not before the epoch) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. |
 | `ntsWarmCookies({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTime` carries the same clock-skew-rescue semantics as on `ntsQuery`. |
 | `ntsDnsPoolStats()` | Synchronous snapshot of the bounded DNS resolver pool counters (`inFlight`, `highWaterMark`, `recovered`, `refused`). See ARCHITECTURE.md for the saturation signature. |

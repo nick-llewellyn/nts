@@ -89,8 +89,11 @@ Three buttons sit between the server list and the log:
   burst of subsequent queries and want to amortise the handshake cost.
 - **Get Time** — runs the high-level `getTime` flow: a warming handshake
   followed by a serial burst of authenticated queries, keeping the
-  lowest-delay sample (RFC 5905 peer delay, falling back to the
-  measured round trip when implausible) as a synchronized clock.
+  lowest-delay sample as a synchronized clock — the measured round
+  trip in practice, since the RFC 5905 peer delay is taken only
+  inside the strict selection window `(0, roundTripMicros]`, which
+  every healthy sample across the bundled server catalog measured
+  above.
   Tuning is fixed and internal on every platform: up to 8 samples
   (clamped to the fresh
   cookie count) under one total 8-second budget shared with the

@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "nts_rust"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "aes-gcm-siv",
  "aes-siv",

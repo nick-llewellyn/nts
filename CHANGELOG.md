@@ -6,7 +6,7 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 9.1
+## 9.1.0
 
 ### Added
 
@@ -122,6 +122,20 @@ tarball.
   `seal_packet` / `open_packet`, plus an open-path counterpart to the
   existing GCM-SIV nonce-length rejection test.
 
+- The example package's hand-built list of `NtsError` samples
+  (`example/test/nts_format_test.dart`) is now guarded by a
+  `_NtsErrorKind` enum and an exhaustive `_variantKind` switch. Dart
+  has no reflection over sealed subtypes, so the list is written out by
+  hand and had no way to notice a new variant; every property asserted
+  over "every `NtsError` shape" was therefore only as complete as that
+  list. Adding a variant to the sealed type is now a `dart analyze`
+  error in the switch, and omitting its sample from the list fails a
+  test. The tag, severity, `timeoutPhaseName`, and `errorTrustBackend`
+  assertions are driven off the same pivot rather than hand-enumerated
+  — two of those lists had already drifted, missing `abiMismatch` and
+  `trustBackendUnavailable`. Example tests only; no package or example
+  behaviour change. (NTS-148)
+
 ### Security
 
 - `aes-gcm-siv` is now pinned to 0.12 with its `zeroize` feature
@@ -231,9 +245,15 @@ tarball.
   `<= roundTripMicros` on a steadily-running clock, and a value
   outside `(0, roundTripMicros]` as a clock-step signal. The upper
   half of that is false on this client for the capture-point reason
-  above — δ exceeds the round trip on every healthy sample — so the
-  `ntsGetTime` plausibility window selects the `roundTripMicros`
-  fallback in practice rather than distinguishing stepped samples.
+  above — δ measured above the round trip on every healthy sample
+  across the bundled catalog — so the `(0, roundTripMicros]` window
+  `ntsGetTime` applies is a selection policy rather than a verdict on
+  the sample: it takes the `roundTripMicros` branch in practice rather
+  than distinguishing stepped samples, and only its lower bound is
+  diagnostic. That the round trip wins is an empirical result, not an
+  identity: δ = setup + roundTrip − serverProcessing, so δ clears the
+  ceiling only while the pre-send setup cost outweighs the server's
+  T3−T2, which held across every catalog server measured.
   A non-positive δ is also no longer attributed to a *local* step
   specifically: it witnesses an implausible timestamp exchange, which
   a server clock stepped between T2 and T3, or inconsistent server
@@ -241,8 +261,18 @@ tarball.
   recommends to consumers now points at `phaseTimings.dnsMicros` as
   the measurable part of the pre-send interval. The field's rustdoc,
   the generated bindings, and the wrapper dartdoc now say so, and
-  point at NTS-153 for aligning the capture points. Documentation
-  only; no behaviour change.
+  point at NTS-153 for aligning the capture points. `README.md`,
+  `ARCHITECTURE.md`, and `example/GUI_GUIDE.md` carried the same
+  superseded claim — each described `ntsGetTime` as selecting the peer
+  delay — and now all three lead with the round-trip branch taken in
+  practice, scoped to the catalog measurement, citing the window as
+  the condition rather than as a plausibility judgement. The remaining
+  API-doc sites that still called an in-window δ "plausible"
+  (`nts_query` and `NtsTimeSample::utc_unix_micros` in the rustdoc and
+  their generated and wrapper counterparts, plus `NtsSyncedTime`) now
+  use the same selection-window framing, so the public API surface no
+  longer contradicts the prose. Documentation only; no behaviour
+  change.
 
 - The AES-128-GCM-SIV path (AEAD ID 30) migrated to the `aes-gcm-siv`
   0.12 API. The crate moved to the RustCrypto `hybrid-array` traits
