@@ -65,8 +65,9 @@ leg fails only on the floor, that's a real signal, not a flake.
 - [ ] Public API additions / changes have dartdoc comments
       (`public_member_api_docs` is enforced by the analyzer)
 - [ ] `CHANGELOG.md` updated under the next-release section
-- [ ] `pubspec.yaml` `version:` bumped following semver
-      (patch for fixes, minor for features, major for breaking changes)
+- [ ] `pubspec.yaml` `version:` left untouched — or, if this *is* the
+      dedicated release PR, bumped following semver together with the
+      finalised `CHANGELOG.md` header and no functional change
 - [ ] If `rust/src/api/**` changed, `dart run tool/check_bindings.dart`
       was rerun and the regenerated `lib/src/ffi/**` and
       `rust/src/frb_generated.rs` are committed (no drift in CI)
