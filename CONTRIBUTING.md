@@ -136,10 +136,23 @@ tests + coverage`, `Hooks shell-syntax check`, and `Hooks behaviour
 check`. Doc-only diffs still run the workflow, but the heavy jobs skip
 and report as passing.
 
-Approvals are not required — green CI is the gate. Contributors
-holding write access self-merge their own pull requests once the
-checks pass; that is the expected default. A pull request from a fork
-carries no merge access, so a maintainer performs the merge.
+Approvals are not required — green CI is the gate. Two further
+conditions apply before the merge button unblocks, and both are on the
+author:
+
+- **The branch must be up to date with `main`.** If `main` advances
+  while your pull request is open, rebase onto it and force-push your
+  branch. This catches semantic conflicts that a green CI run against
+  a stale base would miss.
+- **Every review conversation must be resolved.** That includes
+  automated review comments. Reply to each one, then mark the thread
+  resolved.
+
+Contributors holding write access self-merge their own pull requests
+once those conditions hold; that is the expected default. A pull
+request from a fork carries no merge access, so a maintainer performs
+the merge — resolve your threads and rebase first, or the merge stays
+blocked for them too.
 
 ## Code conventions
 
