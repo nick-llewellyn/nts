@@ -119,8 +119,10 @@ tests + coverage`, `Hooks shell-syntax check`, and `Hooks behaviour
 check`. Doc-only diffs still run the workflow, but the heavy jobs skip
 and report as passing.
 
-Approvals are not required — green CI is the gate. Maintainers merge;
-please do not expect to self-merge on a first contribution.
+Approvals are not required — green CI is the gate. Contributors
+holding write access self-merge their own pull requests once the
+checks pass; that is the expected default. A pull request from a fork
+carries no merge access, so a maintainer performs the merge.
 
 ## Code conventions
 
