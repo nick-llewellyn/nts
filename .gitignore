@@ -46,6 +46,7 @@ coverage/
 .dolt/
 *.db
 .beads-credential-key
+.beads.gate.lock
 .beads/issues.jsonl
 .beads/last_pull
 .linear.toml
