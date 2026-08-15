@@ -49,7 +49,9 @@ invokes any of the three. SonarCloud does run as a CI step, but it
 probes for `SONAR_TOKEN` and skips itself when the secret is absent,
 which is always the case for pull requests from a fork; it is not a
 required check. Sections of `AGENTS.md` and `CLAUDE.md` that describe
-those tools are maintainer workflow; ignore them.
+those tools are maintainer workflow and carry a **`Maintainer-only`**
+note under their heading — or, for the generated Beads block, just
+above it; ignore them.
 
 ## One-time setup per clone
 

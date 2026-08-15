@@ -35,6 +35,14 @@ tarball.
   convention with a placeholder (`NTS-<num>`) rather than a real,
   long-closed issue identifier, so the example cannot be pasted
   through into a pull request that has nothing to do with it.
+- `AGENTS.md` and `CLAUDE.md` now say which of their sections are
+  maintainer workflow. Both open with a short note on who the file is
+  for, and every section covering the maintainer's issue tracking
+  (Beads, DoltHub, Linear, the assignee convention) carries a
+  `Maintainer-only` marker naming the tooling it presumes. The
+  contributor-relevant material — pull request workflow, branch
+  protection, shell conventions, the doc-snippet validator, versioning,
+  and the zeroization policy — is deliberately unmarked.
 
 
 ## 9.1.0

@@ -1,8 +1,31 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+## Who this file is for
+
+Most of this file applies to anyone changing the code, agent or human:
+the pull request workflow, branch protection, the non-interactive
+shell rules, the doc-snippet validator, the versioning policy, and the
+zeroization conventions. The one maintainer-specific detail inside
+that shared material is branch naming — the `NTS-` prefix in the
+standard agent loop below is a Linear identifier contributors do not
+have; they use `<type>/<short-slug>` instead, per
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+The rest documents the **maintainer's** issue-tracking setup — Beads
+(`bd`), DoltHub, and Linear — which is not a prerequisite for
+contributing. Those sections are marked with a
+**`Maintainer-only`** note directly under their heading — except for
+the generated Beads block, whose note sits just above it so
+regenerating the block cannot drop it. Skip them
+unless you have the tooling installed and credentialed. Third-party
+contributors should start from
+[`CONTRIBUTING.md`](CONTRIBUTING.md) instead.
 
 ## Quick Reference
+
+> **Maintainer-only.** Requires `bd` and a credentialed DoltHub remote.
+
+This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 ```bash
 bd ready              # Find available work
@@ -40,6 +63,7 @@ authoritative branch-protection table.
 Standard agent loop on a fresh task:
 
 ```bash
+# Maintainer form; contributors use `<type>/<short-slug>` (no Linear ID).
 git switch -c <type>/NTS-<num>-<short-slug>  # e.g. feat/NTS-24-coverage-upload
 # ... make edits, run local quality gates (see DEVELOPMENT.md) ...
 git push -u origin HEAD                # push the feature branch
@@ -340,6 +364,8 @@ a guarantee. `--help` lists all flags.
 
 ## DoltHub Session Completion (overrides the auto-generated block below)
 
+> **Maintainer-only.** Requires `bd` and a credentialed DoltHub remote.
+
 DoltHub (`nick-llewellyn/nts` on dolthub.com) is the **authoritative** store
 for Beads issues. The `bd dolt push` step in the auto-generated "Session
 Completion" block below is a no-op without a configured remote — this section
@@ -379,6 +405,11 @@ git status  # MUST show "up to date with origin"
 
 **CRITICAL:** `bd dolt push --remote origin` failing is a blocking error.
 Do not open the PR, do not stop the session — fix the push first.
+
+> **Maintainer-only.** The auto-generated block below — "Beads Issue
+> Tracker" and "Session Completion" — requires `bd` and a credentialed
+> DoltHub remote. The note sits outside the generated markers so
+> regenerating the block does not drop it.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
@@ -428,6 +459,9 @@ bd close <id>         # Complete work
 <!-- END BEADS INTEGRATION -->
 
 ## Linear Sync Configuration
+
+> **Maintainer-only.** Requires `bd` and a `LINEAR_API_KEY`. Applies
+> to every subsection through "Troubleshooting".
 
 This project syncs `bd` issues to **Linear** (workspace `nick-llewellyn`, team `nts`).
 
@@ -749,6 +783,9 @@ Then retry the sync.
 
 ## Assignee Convention
 
+> **Maintainer-only.** Requires `bd`. Contributors do not assign
+> issues; nothing on the pull request path reads this field.
+
 This is a single-developer repository. Every issue — whether created locally
 with `bd` or imported from Linear — must have its `assignee` set to
 `nllewelln@gmail.com`. That is the field Linear recognises for this workspace,
@@ -808,6 +845,10 @@ fragment the database. Stick to the canonical `nllewelln@gmail.com`.
 
 ## Communication & Reference Convention
 
+> **Maintainer-only.** Requires `bd` and Linear. Contributors have no
+> Linear identifier to cite; name the GitHub issue instead, and use
+> `<type>/<short-slug>` for the branch.
+
 To ensure the human developer can easily map local activity to the Linear project:
 1. **Use the Linear ID.** Every mention of an issue in chat or PR descriptions should use the Linear ID (e.g. `NTS-26`). The Beads ID is an internal detail of the local Dolt database and does not need to appear in branch names, PR titles, or PR bodies.
 2. **Retrieving Mappings.** The Beads issue and Linear issue are already
@@ -824,6 +865,10 @@ To ensure the human developer can easily map local activity to the Linear projec
    `bd search "NTS-26"`.
 
 ## Linear PR Linking
+
+> **Maintainer-only.** The Linear GitHub app acts on identifiers the
+> maintainer's issues carry; a contributor branch has none and is
+> unaffected.
 
 PR ↔ Linear-issue linkage and status tracking are handled automatically by
 the **Linear GitHub app**. The app watches for the Linear identifier (e.g.
@@ -843,6 +888,9 @@ the **Linear GitHub app**. The app watches for the Linear identifier (e.g.
    branches.
 
 ## Issue State Synchronization
+
+> **Maintainer-only.** Requires `bd`, a `LINEAR_API_KEY`, and a
+> credentialed DoltHub remote.
 
 Because of the automatic "Merged → Done" transition, agents should prefer
 a **pull-centric** synchronization flow:
