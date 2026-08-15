@@ -10,9 +10,10 @@ Title format: <type>: <imperative summary>
 <!--
 What changed and why. Lead with the user-visible effect (or the bug
 symptom this fixes), then the mechanism. Reference the Linear issue
-if this resolves one: `Closes NTS-26`. The Linear-GitHub app will
+if this resolves one: `Closes NTS-<num>`. The Linear-GitHub app will
 auto-link the PR and transition the issue. The Beads ID is internal
-and need not appear in the PR body — `bd search "NTS-26"` resolves it.
+and need not appear in the PR body — `bd search "NTS-<num>"` resolves
+it.
 -->
 
 ## Type of Change
