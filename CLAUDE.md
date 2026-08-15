@@ -59,9 +59,9 @@ git status  # MUST show "up to date with origin"
 Do not open the PR, do not stop the session — fix the push first.
 
 > **Maintainer-only.** The auto-generated block below — "Beads Issue
-> Tracker" and "Session Completion" — requires `bd`. The note sits
-> outside the generated markers so regenerating the block does not
-> drop it.
+> Tracker" and "Session Completion" — requires `bd` and a credentialed
+> DoltHub remote. The note sits outside the generated markers so
+> regenerating the block does not drop it.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
