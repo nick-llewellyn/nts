@@ -5,7 +5,11 @@
 Most of this file applies to anyone changing the code, agent or human:
 the pull request workflow, branch protection, the non-interactive
 shell rules, the doc-snippet validator, the versioning policy, and the
-zeroization conventions.
+zeroization conventions. The one maintainer-specific detail inside
+that shared material is branch naming — the `NTS-` prefix in the
+standard agent loop below is a Linear identifier contributors do not
+have; they use `<type>/<short-slug>` instead, per
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 The rest documents the **maintainer's** issue-tracking setup — Beads
 (`bd`), DoltHub, and Linear — which is not a prerequisite for
@@ -59,6 +63,7 @@ authoritative branch-protection table.
 Standard agent loop on a fresh task:
 
 ```bash
+# Maintainer form; contributors use `<type>/<short-slug>` (no Linear ID).
 git switch -c <type>/NTS-<num>-<short-slug>  # e.g. feat/NTS-24-coverage-upload
 # ... make edits, run local quality gates (see DEVELOPMENT.md) ...
 git push -u origin HEAD                # push the feature branch
