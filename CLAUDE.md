@@ -7,8 +7,10 @@ This file provides instructions and context for AI coding agents working on this
 Every issue-tracking section below documents the **maintainer's** setup
 — Beads (`bd`), DoltHub, and Linear — which is not a prerequisite for
 contributing. Those sections carry a **`Maintainer-only`** note under
-their heading; skip them unless you have the tooling installed and
-credentialed. [`AGENTS.md`](AGENTS.md) uses the same marker and holds
+their heading — except for the generated Beads block, whose note sits
+just above it so regenerating the block cannot drop it. Skip them
+unless you have the tooling installed and credentialed.
+[`AGENTS.md`](AGENTS.md) uses the same marker and holds
 the contributor-relevant conventions (pull request workflow, branch
 protection, versioning, zeroization); third-party contributors should
 start from [`CONTRIBUTING.md`](CONTRIBUTING.md).

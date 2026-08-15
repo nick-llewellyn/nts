@@ -10,7 +10,9 @@ zeroization conventions.
 The rest documents the **maintainer's** issue-tracking setup — Beads
 (`bd`), DoltHub, and Linear — which is not a prerequisite for
 contributing. Those sections are marked with a
-**`Maintainer-only`** note directly under their heading; skip them
+**`Maintainer-only`** note directly under their heading — except for
+the generated Beads block, whose note sits just above it so
+regenerating the block cannot drop it. Skip them
 unless you have the tooling installed and credentialed. Third-party
 contributors should start from
 [`CONTRIBUTING.md`](CONTRIBUTING.md) instead.
