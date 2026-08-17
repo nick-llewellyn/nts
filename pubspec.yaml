@@ -71,7 +71,11 @@ dependencies:
   # exports that library, and a `flutter/foundation.dart` import there
   # transitively pulls `dart:ui`, which breaks the `dart run` consumers
   # documented in the README.
-  meta: ^1.18.0
+  #
+  # Lower bound is set by the oldest Flutter this package supports: the
+  # SDK's `flutter_test` pins `meta` exactly, and 3.38.10 pins 1.17.0,
+  # so anything higher makes version solving fail on that gate.
+  meta: ^1.17.0
   # Build-hook dependencies (consumed only by `hook/build.dart`). The Dart
   # SDK resolves these out-of-band when running the Native Assets pipeline,
   # so they don't pull native_toolchain_rust into the app's runtime graph.
