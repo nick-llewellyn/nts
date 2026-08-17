@@ -640,6 +640,19 @@ class _CodecProbe extends NtsRustLibApiImpl {
 List<int> _sseI32(int value) =>
     (ByteData(4)..setInt32(0, value, Endian.host)).buffer.asUint8List();
 
+/// A library that loads but cannot satisfy the bridge, for driving the
+/// failure paths of `NtsBridge.ensureInitialized`.
+///
+/// The test process itself: opening it succeeds, so the failure lands
+/// where the tests need it — inside `initImpl`'s content-hash check,
+/// which looks up a Rust symbol this process does not export. Omitting
+/// `externalLibrary` would not do: a developer machine that has run
+/// `cargo build --release` has a real dylib at the default relative
+/// path, so the default loader succeeds and the case under test never
+/// arises.
+ExternalLibrary _failingLibrary() =>
+    ExternalLibrary.process(iKnowHowToUseIt: true);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -3107,13 +3120,16 @@ void main() {
     });
 
     test('MonotonicClock construction before bridge init throws '
-        'StateError naming NtsRustLib.init', () {
+        'StateError naming NtsBridge.ensureInitialized', () {
       // `initMock` ran in setUpAll, so temporarily reset the FRB
-      // entrypoint state to reproduce an uninitialized process. Only
-      // direct construction is exercised: the shared
-      // `MonotonicClock.instance` lazy static resolved earlier in
-      // this suite and is untouched by the reset.
+      // entrypoint state to reproduce an uninitialized process. The
+      // `NtsBridge` latch is reset alongside it: the two must be
+      // cleared together or the wrapper and the entrypoint disagree
+      // about what is installed. Only direct construction is
+      // exercised: the shared `MonotonicClock.instance` lazy static
+      // resolved earlier in this suite and is untouched by the reset.
       NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
       try {
         expect(
           MonotonicClock.new,
@@ -3121,7 +3137,7 @@ void main() {
             isA<StateError>().having(
               (e) => e.message,
               'message',
-              contains('NtsRustLib.init'),
+              contains('NtsBridge.ensureInitialized'),
             ),
           ),
         );
@@ -3159,8 +3175,12 @@ void main() {
         portManager: PortManager(binding, handler),
       );
       NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
       try {
         NtsRustLib.initMock(api: realApi);
+        // The generated implementation reads as native, which is the
+        // arm under test.
+        expect(NtsBridge.state, NtsBridgeState.native);
         final clock = MonotonicClock();
         // Direct dispatch resolved with no probe: the read reaches
         // the FFI dispatcher, whose symbol is absent from this test
@@ -3168,6 +3188,7 @@ void main() {
         expect(clock.nowMicros, throwsA(anything));
       } finally {
         NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
         NtsRustLib.initMock(api: api);
       }
     });
@@ -3196,6 +3217,97 @@ void main() {
       // extends nothing, which is the shape every hand-supplied mock
       // takes; it must land on the probe-and-fall-back arm.
       expect(api, isNot(isA<BaseApiImpl>()));
+    });
+
+    group('NtsBridge', () {
+      // Every case here resets the FRB entrypoint, so each restores
+      // the suite's shared mock afterwards. `debugReset` is paired
+      // with `resetState` throughout: the latch and the entrypoint
+      // must agree about what is installed.
+      tearDown(() {
+        if (NtsBridge.state == NtsBridgeState.uninitialized) {
+          NtsRustLib.initMock(api: api);
+        }
+      });
+
+      test('state reports the installed mock', () {
+        expect(NtsBridge.state, NtsBridgeState.mock);
+      });
+
+      test('state reports uninitialized before anything is installed', () {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+      });
+
+      test('ensureInitialized is a no-op over an installed mock', () async {
+        // The bridge is already initialized, so this must complete
+        // without reaching `NtsRustLib.init()` -- which would throw a
+        // StateError, and which has no dylib to load in this process.
+        await expectLater(NtsBridge.ensureInitialized(), completes);
+        expect(NtsBridge.state, NtsBridgeState.mock);
+      });
+
+      test('ensureInitialized latches, so concurrent callers share one '
+          'attempt', () async {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        // Both calls fail (see `_failingLibrary`) -- but the point is
+        // that they fail *identically*, from one shared attempt. A
+        // hand-written `if (!initialized)` guard races here instead:
+        // FRB assigns its state only after awaiting the library load,
+        // so both callers enter and the second throws 'Should not
+        // initialize flutter_rust_bridge twice'.
+        final first = NtsBridge.ensureInitialized(
+          externalLibrary: _failingLibrary(),
+        );
+        final second = NtsBridge.ensureInitialized(
+          externalLibrary: _failingLibrary(),
+        );
+        expect(second, same(first));
+        final firstError = await first.then<Object?>(
+          (_) => null,
+          onError: (Object e) => e,
+        );
+        final secondError = await second.then<Object?>(
+          (_) => null,
+          onError: (Object e) => e,
+        );
+        expect(firstError, isNotNull);
+        expect(secondError, same(firstError));
+      });
+
+      test('a failed attempt that installed nothing can be retried', () async {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        await expectLater(
+          NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
+          throwsA(anything),
+        );
+        // Nothing was installed, so the latch was dropped and a later
+        // caller gets a fresh attempt rather than a cached failure.
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+        await expectLater(
+          NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
+          throwsA(anything),
+        );
+      });
+
+      test('dispose is a no-op when the bridge was never initialized', () {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        // `NtsRustLib.dispose()` dereferences the entrypoint state
+        // unconditionally and throws here.
+        expect(NtsRustLib.dispose, throwsA(anything));
+        expect(NtsBridge.dispose, returnsNormally);
+      });
+
+      test('dispose over an installed mock leaves the state intact', () {
+        // Disposal is not de-initialization: the entrypoint keeps its
+        // state, so a later `ensureInitialized` must not try again.
+        expect(NtsBridge.dispose, returnsNormally);
+        expect(NtsBridge.state, NtsBridgeState.mock);
+      });
     });
 
     test('NtsSyncedTime toString carries the diagnostic fields', () {

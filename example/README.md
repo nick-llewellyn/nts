@@ -165,8 +165,8 @@ only setup is having `rustup` on your `PATH`, per the root README's
 [Prerequisites](../README.md#prerequisites). No manual `cargo build`
 is required when running through `flutter run`.
 
-Default boot is the **real bridge** — `NtsRustLib.init()` resolves
-`libnts_rust` through the bundled native asset and the
+Default boot is the **real bridge** — `NtsBridge.ensureInitialized()`
+resolves `libnts_rust` through the bundled native asset and the
 buttons drive the actual RFC 8915 client against the chosen NTS-KE
 server. Pass `-t lib/main.dart` so Flutter targets the GUI entry point
 rather than the top-level `main.dart` (the latter is the minimal
@@ -189,7 +189,7 @@ fake via the `NTS_BRIDGE` dart-define:
 fvm flutter run -d macos -t lib/main.dart --dart-define=NTS_BRIDGE=mock
 ```
 
-If `NtsRustLib.init()` throws at startup (typically because rustup is
+If bridge initialization throws at startup (typically because rustup is
 missing, the build hook was skipped — `dart run` instead of
 `flutter run` — or the host triple isn't pinned in
 `rust-toolchain.toml`), the app falls back to the mock so the rest of

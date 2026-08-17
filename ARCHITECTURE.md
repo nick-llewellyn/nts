@@ -53,10 +53,10 @@ Two mechanisms connect the halves:
   toolchain and cross-compile targets are pinned by
   `rust/rust-toolchain.toml` and resolved through rustup, so no
   manual `cargo` invocation is required from consumers.
-- **`flutter_rust_bridge` v2 (runtime).** `NtsRustLib.init()` loads
-  the dylib and wires the FRB v2 dispatch table on the calling
-  isolate; every subsequent call marshals through that table onto a
-  bounded FRB worker-thread pool.
+- **`flutter_rust_bridge` v2 (runtime).**
+  `NtsBridge.ensureInitialized()` loads the dylib and wires the FRB v2
+  dispatch table on the calling isolate; every subsequent call
+  marshals through that table onto a bounded FRB worker-thread pool.
 
 ```
 Dart  : ntsQuery() / ntsWarmCookies()
@@ -380,19 +380,16 @@ maps it to a plain `int` rather than `BigInt`; same rationale as
 `ntsDnsPoolStats`).
 
 The Dart-side consumer is `MonotonicClock` (`lib/src/api/clock.dart`),
-a small public wrapper exported from `lib/nts.dart`. Construction
-before `NtsRustLib.init()` / `NtsRustLib.initMock()` throws a `StateError`
-(fail-fast: a production process can never silently degrade to a
-suspend-frozen clock). After init, each instance resolves its source
-exactly once at construction, discriminating structurally on the
-installed API: a real bridge (`api is BaseApiImpl`, the FRB runtime
-base class every generated implementation extends — tested in
-preference to the codegen-named `NtsRustLibApiImpl`, whose
-identifier follows `dart_entrypoint_class_name`) dispatches
-directly with no probe and no catch, so any clock-read failure
-propagates; only a mock-mode API (from `NtsRustLib.initMock()`, or
-hand-supplied to `init()`) is probed, and a throw (no boottime stub)
-permanently selects a `Stopwatch` fallback. Locking
+a small public wrapper exported from `lib/nts.dart`. Construction while
+`NtsBridge.state` is `NtsBridgeState.uninitialized` throws a
+`StateError` (fail-fast: a production process can never silently
+degrade to a suspend-frozen clock). After init, each instance resolves
+its source exactly once at construction, switching on that same state:
+`NtsBridgeState.native` dispatches directly with no probe and no catch,
+so any clock-read failure propagates; `NtsBridgeState.mock` (from
+`NtsRustLib.initMock()`, or an API hand-supplied to `init()`) is
+probed, and a throw (no boottime stub) permanently selects a
+`Stopwatch` fallback. Locking
 the source per instance guarantees readings from one instance never
 mix epochs. The shared `MonotonicClock.instance` singleton is the
 timeline used by `NtsSyncedTime` (anchor + projection), the `getTime`
@@ -839,9 +836,9 @@ decisions; reads are wait-free.
 
 `lib/nts.dart` is the package's stable public contract. It is a thin,
 hand-written file that re-exports a wrapper layer in
-`lib/src/api/nts.dart` plus the bridge bootstrap (`NtsRustLib`). The
-underlying FRB-generated bindings in `lib/src/ffi/` are an internal
-implementation detail.
+`lib/src/api/nts.dart` plus the bridge lifecycle (`NtsBridge`, and the
+raw generated `NtsRustLib` beneath it). The underlying FRB-generated
+bindings in `lib/src/ffi/` are an internal implementation detail.
 
 The wrapper has three jobs:
 
@@ -930,7 +927,8 @@ release type.
 
 | Path | Role |
 |------|------|
-| `lib/nts.dart` | Public Dart API; explicit re-export of the stability-layer wrapper plus `NtsRustLib`. |
+| `lib/nts.dart` | Public Dart API; explicit re-export of the stability-layer wrapper plus `NtsBridge` and `NtsRustLib`. |
+| `lib/src/api/bridge.dart` | Hand-written bridge lifecycle: `NtsBridge.ensureInitialized()` (idempotent, concurrency-safe), the `NtsBridgeState` predicate, and a safe `dispose()`. Keeps FRB's `@internal` entrypoint members out of consumer code. |
 | `lib/src/api/nts.dart` | Hand-written wrapper functions plus the FFI↔public conversion layer. Carries the consumer-facing dartdoc on the entry points. |
 | `lib/src/api/models.dart` | Hand-written public DTOs (`NtsServerSpec`, `NtsTimeSample`, `NtsWarmCookiesOutcome`, `NtsDnsPoolStats`, `PhaseTimings`). |
 | `lib/src/api/errors.dart` | Hand-written public `NtsError` sealed class plus `TimeoutPhase`. |

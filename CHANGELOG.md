@@ -10,6 +10,33 @@ tarball.
 
 ### Added
 
+- `NtsBridge` (`lib/src/api/bridge.dart`, exported from
+  `lib/nts.dart`) — a safe, idempotent lifecycle wrapper over the
+  FRB-generated entrypoint, and the recommended bootstrap from now on:
+  - `NtsBridge.ensureInitialized({externalLibrary, handler,
+    forceSameCodegenVersion})` initialises the bridge if it is not
+    already initialised and completes once it is. Safe to call
+    repeatedly and from more than one code path, which
+    `NtsRustLib.init()` is not — that throws a `StateError` on every
+    call after the first, and there is no de-init. It is also safe
+    *concurrently*: FRB's `initImpl` assigns its state only after
+    awaiting the external library load, so the guard a consumer would
+    otherwise write by hand (`if (!initialized) await init()`) races —
+    two callers both observe `false`, both enter, and the second
+    throws. `NtsBridge` latches on the in-flight future instead. An
+    initialisation performed directly (including
+    `NtsRustLib.initMock()`) is recognised rather than fought.
+    Arguments configure the first initialisation only.
+  - `NtsBridge.state` reports `NtsBridgeState.uninitialized`, `.mock`,
+    or `.native`. This is the discrimination consumers previously had
+    to reach into FRB's `@internal` `instance` / `api` members to
+    obtain — `MonotonicClock` and the example CLI loader both did, each
+    with an `invalid_use_of_internal_member` ignore, and both now
+    switch on the enum instead.
+  - `NtsBridge.dispose()` releases the bridge's Dart-side resources, or
+    does nothing when it was never initialised. `NtsRustLib.dispose()`
+    throws in that case. Disposal is not de-initialisation: `state` is
+    unchanged afterwards.
 - `CONTRIBUTING.md` — the GitHub-surfaced entry point for third-party
   contributors. Covers prerequisites, the one-time
   `git config core.hooksPath tool/hooks` opt-in, the branch and pull
@@ -25,6 +52,20 @@ tarball.
 
 ### Changed
 
+- The documentation no longer claims that bridge initialisation is a
+  no-op after the first call. `NtsRustLib.init()` throws a `StateError`
+  instead, so the claim was wrong everywhere it appeared, and the
+  README went further and drew an operational conclusion from it
+  ("safe to call from a shared bootstrap path") that described
+  precisely the usage that throws. The library dartdoc in
+  `lib/nts.dart`, the README's two-layer initialisation section, quick
+  start, platform support, non-Flutter loader guidance and API summary,
+  `example/main.dart`, `example/example.md`, and `ARCHITECTURE.md` now
+  document `NtsBridge.ensureInitialized()` as the bootstrap and
+  describe `NtsRustLib.init()` accurately as the single-shot raw
+  entrypoint. (The `no-op` wording in
+  `android/.../PlatformInit.kt` is correct and unchanged — that
+  bootstrap really is idempotent.)
 - The pull request template no longer asks every contributor to bump
   `pubspec.yaml` `version:` following semver. That instruction
   contradicted the release-only bumping policy, under which version

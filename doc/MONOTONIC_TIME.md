@@ -87,21 +87,20 @@ construction — it never reads the wall clock at all.
 
 Each instance resolves its time source exactly once, at
 construction. Constructing an instance — or first accessing
-`MonotonicClock.instance` — before `NtsRustLib.init()` (or
-`NtsRustLib.initMock()`) has completed throws a `StateError` naming
-the missing init call; a production build can never silently degrade
-to a clock that freezes during device sleep. After init, the
-resolution discriminates structurally on the installed API: a real
-bridge (the generated FFI implementation that `NtsRustLib.init()`
-installs) gets a direct dispatch to `ntsBoottimeMicros()` with no
-probe and no catch, so any failure of the clock read propagates
-loudly rather than being masked. Only in mock mode — an API that is
-not the generated implementation, i.e. `NtsRustLib.initMock()` or a
-hand-supplied API passed to `init()` — does a single probe call run,
-and a throw (an API that does not stub the boottime call)
-permanently selects a plain `Stopwatch` fallback. Because the source
-never changes for the instance's lifetime, readings from one
-instance are always mutually comparable and never mix epochs.
+`MonotonicClock.instance` — while `NtsBridge.state` is
+`NtsBridgeState.uninitialized` throws a `StateError` naming the
+missing init call; a production build can never silently degrade to a
+clock that freezes during device sleep. After init, the resolution
+switches on that same state: `NtsBridgeState.native` (the generated
+FFI implementation, which ordinary initialization installs) gets a
+direct dispatch to `ntsBoottimeMicros()` with no probe and no catch,
+so any failure of the clock read propagates loudly rather than being
+masked. Only `NtsBridgeState.mock` — `NtsRustLib.initMock()`, or an
+API hand-supplied to `init()` — runs a single probe call, and a throw
+(an API that does not stub the boottime call) permanently selects a
+plain `Stopwatch` fallback. Because the source never changes for the
+instance's lifetime, readings from one instance are always mutually
+comparable and never mix epochs.
 
 The shared `MonotonicClock.instance` singleton is the same timeline
 the package uses internally, so consumer code reading it stays on
@@ -248,9 +247,9 @@ Rules to respect:
 
 - **Initialize the bridge first.** Constructing an instance — or
   first accessing `MonotonicClock.instance` — before
-  `NtsRustLib.init()` throws a `StateError`. (The lazy static is not
-  poisoned by the throw: the first access after init resolves
-  normally.)
+  `NtsBridge.ensureInitialized()` throws a `StateError`. (The lazy
+  static is not poisoned by the throw: the first access after init
+  resolves normally.)
 - **Compare readings from one instance only.** Epochs differ between
   instances, isolates, processes, and boots.
 - **Never persist raw readings.** They are meaningless after a
@@ -263,7 +262,7 @@ Rules to respect:
 bridge function returning the raw microsecond reading as an `int`.
 The FFI layer is an internal surface — it is not exported from
 `package:nts/nts.dart`, its signatures follow the Rust core, and it
-throws `StateError` when called before `NtsRustLib.init()`. Prefer
+throws `StateError` when called before the bridge is initialized. Prefer
 `MonotonicClock`, which locks the source once so readings never mix
 epochs; reach for the FFI call only if you are already importing the
 FFI layer for other reasons (e.g. a custom mock harness) and can

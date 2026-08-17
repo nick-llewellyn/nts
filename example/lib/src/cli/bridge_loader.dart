@@ -2,8 +2,8 @@
 //
 // Both `bin/nts_cli.dart` and `bin/nts_health.dart` run via plain
 // `dart run`, outside the Flutter engine and Native Assets pipeline, so
-// they cannot rely on `NtsRustLib.init()` auto-resolving the bundled
-// dylib the way the GUI does. This module centralises the pieces they
+// they cannot rely on bridge init auto-resolving the bundled dylib the
+// way the GUI does. This module centralises the pieces they
 // share: loading the host-arch dylib (or the in-memory mock), locating
 // it under the conventional `rust/target/release/` build path, and
 // warning when that dylib predates the Rust sources it was built from.
@@ -22,7 +22,7 @@ import 'dart:io';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show ExternalLibrary;
-import 'package:nts/nts.dart' show NtsRustLib;
+import 'package:nts/nts.dart' show NtsBridge, NtsBridgeState, NtsRustLib;
 
 import '../mock_api.dart';
 import '../state/nts_format.dart' show wipeRegisteredCustomRoots;
@@ -53,21 +53,17 @@ enum MockBridgeDisposition {
 /// An installed *native* bridge does not: reusing it would let a run
 /// that asked for `--mock` issue real network work against real
 /// servers. That is a caller error, reported rather than silently
-/// downgraded, since `NtsRustLib` has no de-init. [initialized] alone
-/// cannot tell the two apart, hence [api] — the installed
-/// implementation, or `null` when nothing is installed.
+/// downgraded, since the bridge has no de-init. A bare "is it
+/// initialised" bool cannot tell the two apart, hence [state].
 ///
 /// Split out from [initBridge] because the conflict arm there ends in
 /// `exit`, which no in-process test can observe.
-MockBridgeDisposition mockBridgeDisposition({
-  required bool initialized,
-  required Object? api,
-}) {
-  if (!initialized) return MockBridgeDisposition.fresh;
-  return api is MockNtsApi
-      ? MockBridgeDisposition.reuse
-      : MockBridgeDisposition.conflict;
-}
+MockBridgeDisposition mockBridgeDisposition(NtsBridgeState state) =>
+    switch (state) {
+      NtsBridgeState.uninitialized => MockBridgeDisposition.fresh,
+      NtsBridgeState.mock => MockBridgeDisposition.reuse,
+      NtsBridgeState.native => MockBridgeDisposition.conflict,
+    };
 
 /// Initialise the FRB bridge for a CLI invocation.
 ///
@@ -86,16 +82,7 @@ Future<void> initBridge({
   required String? libraryPath,
 }) async {
   if (useMock) {
-    // ignore: invalid_use_of_internal_member
-    final installed = NtsRustLib.instance.initialized;
-    switch (mockBridgeDisposition(
-      initialized: installed,
-      // Reading `api` before anything is installed throws, so the
-      // classifier is handed one only once `initialized` confirms one
-      // is installed.
-      // ignore: invalid_use_of_internal_member
-      api: installed ? NtsRustLib.instance.api : null,
-    )) {
+    switch (mockBridgeDisposition(NtsBridge.state)) {
       case MockBridgeDisposition.reuse:
         return;
       case MockBridgeDisposition.conflict:
@@ -137,7 +124,9 @@ Future<void> initBridge({
     stderr.writeln(staleness);
   }
   try {
-    await NtsRustLib.init(externalLibrary: ExternalLibrary.open(resolved));
+    await NtsBridge.ensureInitialized(
+      externalLibrary: ExternalLibrary.open(resolved),
+    );
   } catch (e) {
     wipeRegisteredCustomRoots();
     stderr.writeln('error: failed to initialize Rust bridge: $e');

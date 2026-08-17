@@ -17,7 +17,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
-import 'package:nts/nts.dart' show NtsRustLib;
+import 'package:nts/nts.dart' show NtsBridge, NtsRustLib;
 import 'package:signals/signals.dart' show SignalsObserver;
 
 import 'src/data/server_entry.dart';
@@ -54,15 +54,16 @@ Future<_Boot> _bootstrap() async {
   String? loadError;
   if (_bridgeMode == 'real') {
     try {
-      await NtsRustLib.init();
+      await NtsBridge.ensureInitialized();
       label = 'real bridge';
     } catch (e) {
       // Fall back to mock so the UI still renders; the banner will
-      // explain why we ended up here.
+      // explain why we ended up here. A load failure leaves nothing
+      // installed, so the `initMock` slot is still free.
       NtsRustLib.initMock(api: MockNtsApi());
       label = 'mock (load failed)';
       loadError =
-          'NtsRustLib.init() failed: $e\n'
+          'Bridge initialization failed: $e\n'
           'The Native Assets hook (hook/build.dart) should bundle '
           'libnts_rust automatically; check that the host '
           'triple is pinned in rust/rust-toolchain.toml and that '

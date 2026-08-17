@@ -10,11 +10,8 @@
 // monotonic timeline the package uses internally via
 // `MonotonicClock.instance`.
 
-import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show BaseApiImpl;
-
 import '../ffi/api/nts.dart' as ffi;
-import '../ffi/frb_generated.dart' show NtsRustLib;
+import 'bridge.dart';
 
 /// A sleep-aware monotonic time source.
 ///
@@ -38,26 +35,23 @@ import '../ffi/frb_generated.dart' show NtsRustLib;
 /// epochs. Never compare readings taken from two different instances.
 ///
 /// **Initialization is required:** constructing an instance (or first
-/// accessing [instance]) before `NtsRustLib.init()` (or
-/// `NtsRustLib.initMock()`) has completed throws a [StateError]. The
-/// silent suspend-frozen [Stopwatch] fallback that existed before
-/// v7.0.0 has been removed for uninitialized processes — a production
-/// build can no longer silently degrade to a clock that freezes
-/// during device sleep.
+/// accessing [instance]) while [NtsBridge.state] is
+/// [NtsBridgeState.uninitialized] throws a [StateError]. The silent
+/// suspend-frozen [Stopwatch] fallback that existed before v7.0.0 has
+/// been removed for uninitialized processes — a production build can
+/// no longer silently degrade to a clock that freezes during device
+/// sleep.
 ///
-/// **Mock-mode fallback (tests only):** the gate is structural, on
-/// the installed API's type — specifically on whether it extends
-/// flutter_rust_bridge's `BaseApiImpl`, the runtime base class every
-/// generated FFI dispatch implementation derives from. Whenever the
-/// bridge holds any other API — `NtsRustLib.initMock()`, or a
-/// hand-supplied API passed to `NtsRustLib.init(api: ...)` — the
-/// source is probed once; if the probe throws (the API does not stub
+/// **Mock-mode fallback (tests only):** the gate is
+/// [NtsBridge.state]. Under [NtsBridgeState.mock] — the bridge holds a
+/// caller-supplied API, from `NtsRustLib.initMock()` or an `api:`
+/// passed to `NtsRustLib.init()` — the source is probed once; if the
+/// probe throws (the API does not stub
 /// `crateApiNtsNtsBoottimeMicros`), the instance degrades to a
-/// standard, suspend-frozen [Stopwatch] source. A real bridge (the
-/// generated FFI implementation that `NtsRustLib.init()` installs by
-/// default) never takes this path: its clock read is dispatched
-/// directly, with no probe and no catch, so any failure propagates
-/// instead of being masked by a silent source switch.
+/// standard, suspend-frozen [Stopwatch] source. Under
+/// [NtsBridgeState.native] the clock read is dispatched directly, with
+/// no probe and no catch, so any failure propagates instead of being
+/// masked by a silent source switch.
 ///
 /// The epoch is arbitrary (per-boot for the native sources); only
 /// differences between readings from the same instance are
@@ -78,7 +72,7 @@ class MonotonicClock {
   /// initialized, but do not compare raw readings across isolates —
   /// a mock-fallback-sourced isolate uses a different epoch).
   ///
-  /// Accessing this before `NtsRustLib.init()` /
+  /// Accessing this before `NtsBridge.ensureInitialized()` /
   /// `NtsRustLib.initMock()` throws a [StateError]. Because Dart
   /// re-runs a throwing lazy-static
   /// initializer on the next access, the singleton is not poisoned:
@@ -94,46 +88,32 @@ class MonotonicClock {
   MonotonicClock() : _read = _resolveSource();
 
   static int Function() _resolveSource() {
-    if (!NtsRustLib.instance.initialized) {
-      throw StateError(
-        'MonotonicClock requires the nts bridge: call '
-        '`await NtsRustLib.init()` (or `NtsRustLib.initMock()` in '
-        'tests) before constructing a MonotonicClock or accessing '
-        'MonotonicClock.instance.',
-      );
-    }
-    // `api` is FRB-internal, but this package owns the generated
-    // bindings; the same access pattern is used throughout
-    // `lib/src/ffi/api/nts.dart`.
-    //
-    // The test is against `BaseApiImpl` rather than the generated
-    // `NtsRustLibApiImpl`, whose name is derived from
-    // `dart_entrypoint_class_name` in `flutter_rust_bridge.yaml` and
-    // so moves with configuration. `BaseApiImpl` is hand-written FRB
-    // runtime code that every generated implementation extends (via
-    // its `*ApiImplPlatform` layer), so the predicate survives both a
-    // rename and a regeneration. `test/api_smoke_test.dart` pins the
-    // relationship, so an FRB upgrade that reshaped the hierarchy
-    // would fail there rather than silently selecting this arm's
-    // opposite.
-    // ignore: invalid_use_of_internal_member
-    if (NtsRustLib.instance.api is BaseApiImpl) {
-      // Real bridge (`NtsRustLib.init()` installed the generated FFI
-      // dispatch implementation): no probe, no catch. Any failure of
-      // the synchronous clock read propagates instead of being masked
-      // by a silent switch to a suspend-frozen source.
-      return () => ffi.ntsBoottimeMicros().toInt();
-    }
-    try {
-      // Mock mode (`NtsRustLib.initMock()`, or a hand-supplied API
-      // passed to `init()`): probe once. A throw (e.g.
-      // UnsupportedError from a fake whose `noSuchMethod` rejects
-      // unstubbed calls) selects the suspend-frozen test fallback.
-      ffi.ntsBoottimeMicros();
-      return () => ffi.ntsBoottimeMicros().toInt();
-    } catch (_) {
-      final sw = Stopwatch()..start();
-      return () => sw.elapsedMicroseconds;
+    switch (NtsBridge.state) {
+      case NtsBridgeState.uninitialized:
+        throw StateError(
+          'MonotonicClock requires the nts bridge: call '
+          '`await NtsBridge.ensureInitialized()` (or '
+          '`NtsRustLib.initMock()` in tests) before constructing a '
+          'MonotonicClock or accessing MonotonicClock.instance.',
+        );
+      case NtsBridgeState.native:
+        // Real bridge (the generated FFI dispatch implementation is
+        // installed): no probe, no catch. Any failure of the
+        // synchronous clock read propagates instead of being masked by
+        // a silent switch to a suspend-frozen source.
+        return () => ffi.ntsBoottimeMicros().toInt();
+      case NtsBridgeState.mock:
+        try {
+          // Mock mode (`NtsRustLib.initMock()`, or a hand-supplied API
+          // passed to `init()`): probe once. A throw (e.g.
+          // UnsupportedError from a fake whose `noSuchMethod` rejects
+          // unstubbed calls) selects the suspend-frozen test fallback.
+          ffi.ntsBoottimeMicros();
+          return () => ffi.ntsBoottimeMicros().toInt();
+        } catch (_) {
+          final sw = Stopwatch()..start();
+          return () => sw.elapsedMicroseconds;
+        }
     }
   }
 

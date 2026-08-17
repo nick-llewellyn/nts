@@ -46,9 +46,9 @@ import 'package:nts/nts.dart';
 Future<void> main() async {
   // Bridge bootstrap. Resolves the bundled `libnts_rust.{dylib|so|dll}`
   // through the stable Native Assets API and wires the FRB dispatch
-  // table. Must be awaited exactly once before any nts* entry point;
-  // subsequent calls are no-ops.
-  await NtsRustLib.init();
+  // table. Must be awaited before any nts* entry point; repeated and
+  // concurrent calls converge on the first rather than re-initializing.
+  await NtsBridge.ensureInitialized();
 
   // RFC 8915 NTS-KE endpoint. Port 4460 is the IANA-assigned default;
   // any host listed at <https://github.com/jauderho/nts-servers> works.
