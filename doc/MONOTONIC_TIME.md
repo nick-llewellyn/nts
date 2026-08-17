@@ -95,10 +95,14 @@ switches on that same state: `NtsBridgeState.native` (the generated
 FFI implementation, which ordinary initialization installs) gets a
 direct dispatch to `ntsBoottimeMicros()` with no probe and no catch,
 so any failure of the clock read propagates loudly rather than being
-masked. Only `NtsBridgeState.mock` — `NtsRustLib.initMock()`, or an
-API hand-supplied to `init()` — runs a single probe call, and a throw
-(an API that does not stub the boottime call) permanently selects a
-plain `Stopwatch` fallback. Because the source never changes for the
+masked. Only `NtsBridgeState.mock` runs a single probe call, and a
+throw (an API that does not stub the boottime call) permanently selects
+a plain `Stopwatch` fallback. That state means an API that is not a
+generated FFI dispatch implementation — in practice a hand-written
+double supplied to `initMock()` or to `init()`. The split is
+structural, so handing the *generated* implementation to `initMock()`
+reads as `native` and takes the direct-dispatch arm above. Because the
+source never changes for the
 instance's lifetime, readings from one instance are always mutually
 comparable and never mix epochs.
 

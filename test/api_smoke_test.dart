@@ -3284,17 +3284,21 @@ void main() {
       test('a failed attempt that installed nothing can be retried', () async {
         NtsRustLib.instance.resetState();
         NtsBridge.debugReset();
-        await expectLater(
-          NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
-          throwsA(anything),
+        final first = NtsBridge.ensureInitialized(
+          externalLibrary: _failingLibrary(),
         );
+        await expectLater(first, throwsA(anything));
         // Nothing was installed, so the latch was dropped and a later
         // caller gets a fresh attempt rather than a cached failure.
         expect(NtsBridge.state, NtsBridgeState.uninitialized);
-        await expectLater(
-          NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
-          throwsA(anything),
+        final second = NtsBridge.ensureInitialized(
+          externalLibrary: _failingLibrary(),
         );
+        // Identity is the assertion that distinguishes a retry from a
+        // replay: awaiting a cached failed future would also satisfy
+        // `throwsA`, so it alone cannot tell the two apart.
+        expect(second, isNot(same(first)));
+        await expectLater(second, throwsA(anything));
       });
 
       test('a failed attempt that left the bridge initialized is replayed, '

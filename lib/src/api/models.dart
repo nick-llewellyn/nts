@@ -533,7 +533,8 @@ enum TrustBackend {
 ///
 /// ```dart
 /// Future<void> main() async {
-///   await NtsRustLib.init(); // must complete before using NtsClient
+///   // Must complete before using NtsClient.
+///   await NtsBridge.ensureInitialized();
 ///   final client = NtsClient(trustMode: TrustMode.bundledOnly);
 ///   final sample = await client.query(
 ///     spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),

@@ -43,15 +43,19 @@ import 'bridge.dart';
 /// sleep.
 ///
 /// **Mock-mode fallback (tests only):** the gate is
-/// [NtsBridge.state]. Under [NtsBridgeState.mock] — the bridge holds a
-/// caller-supplied API, from `NtsRustLib.initMock()` or an `api:`
-/// passed to `NtsRustLib.init()` — the source is probed once; if the
+/// [NtsBridge.state]. Under [NtsBridgeState.mock] — the bridge holds
+/// an API that is not a generated FFI dispatch implementation, in
+/// practice a hand-written double passed to `NtsRustLib.initMock()` or
+/// an `api:` passed to `NtsRustLib.init()` — the source is probed
+/// once; if the
 /// probe throws (the API does not stub
 /// `crateApiNtsNtsBoottimeMicros`), the instance degrades to a
 /// standard, suspend-frozen [Stopwatch] source. Under
 /// [NtsBridgeState.native] the clock read is dispatched directly, with
 /// no probe and no catch, so any failure propagates instead of being
-/// masked by a silent source switch.
+/// masked by a silent source switch. The distinction is structural, so
+/// a test that hands the *generated* implementation to `initMock()`
+/// lands on this arm rather than the probed one.
 ///
 /// The epoch is arbitrary (per-boot for the native sources); only
 /// differences between readings from the same instance are

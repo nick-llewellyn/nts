@@ -386,10 +386,12 @@ a small public wrapper exported from `lib/nts.dart`. Construction while
 degrade to a suspend-frozen clock). After init, each instance resolves
 its source exactly once at construction, switching on that same state:
 `NtsBridgeState.native` dispatches directly with no probe and no catch,
-so any clock-read failure propagates; `NtsBridgeState.mock` (from
-`NtsRustLib.initMock()`, or an API hand-supplied to `init()`) is
-probed, and a throw (no boottime stub) permanently selects a
-`Stopwatch` fallback. Locking
+so any clock-read failure propagates; `NtsBridgeState.mock` is probed,
+and a throw (no boottime stub) permanently selects a `Stopwatch`
+fallback. The split is structural, on `api is BaseApiImpl`, not on the
+initialization route: a hand-written double supplied to `initMock()` or
+to `init()` reads as `mock`, while the *generated* implementation reads
+as `native` however it was installed. Locking
 the source per instance guarantees readings from one instance never
 mix epochs. The shared `MonotonicClock.instance` singleton is the
 timeline used by `NtsSyncedTime` (anchor + projection), the `getTime`

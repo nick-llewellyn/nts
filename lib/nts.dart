@@ -45,7 +45,10 @@ library;
 // own `api:` (test mocks) or otherwise drive the generated entrypoint
 // directly. It is single-shot -- a second call throws a `StateError`,
 // and there is no de-init -- so ordinary consumers should use
-// `NtsBridge.ensureInitialized()` below instead.
+// `NtsBridge.ensureInitialized()` below instead. Member dartdocs on the
+// public API state that requirement as `NtsBridge.ensureInitialized()`
+// accordingly; where they name `NtsRustLib.init()` it is as the
+// underlying step, not as the recommended call.
 export 'src/ffi/frb_generated.dart' show NtsRustLib;
 
 // Safe, idempotent lifecycle wrapper over the generated entrypoint,

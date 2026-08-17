@@ -26,13 +26,25 @@ tarball.
     throws. `NtsBridge` latches on the in-flight future instead. An
     initialisation performed directly (including
     `NtsRustLib.initMock()`) is recognised rather than fought.
-    Arguments configure the first initialisation only.
+    Arguments configure the attempt a call actually starts; a call that
+    joins a latched attempt, or finds the bridge already initialised,
+    ignores them.
   - `NtsBridge.state` reports `NtsBridgeState.uninitialized`, `.mock`,
     or `.native`. This is the discrimination consumers previously had
     to reach into FRB's `@internal` `instance` / `api` members to
     obtain — `MonotonicClock` and the example CLI loader both did, each
     with an `invalid_use_of_internal_member` ignore, and both now
-    switch on the enum instead.
+    switch on the enum instead. The mock/native split is structural, on
+    `api is BaseApiImpl`, not on the initialisation route: a
+    hand-written double reads as `.mock` however it was installed, and
+    the generated implementation reads as `.native` even when supplied
+    to `initMock()`.
+  - Public member dartdocs that stated the initialisation requirement
+    as `NtsRustLib.init()` now name `NtsBridge.ensureInitialized()`
+    (`NtsClient` and its synchronous members, `ntsDnsPoolStats`,
+    `ntsTrustStats`, the `TrustMode` example). `NtsRustLib.init()` is
+    still exported and still described where the underlying step is the
+    point.
   - `NtsBridge.dispose()` releases the bridge's Dart-side resources, or
     does nothing when it was never initialised. `NtsRustLib.dispose()`
     throws in that case. Disposal is not de-initialisation: `state` is

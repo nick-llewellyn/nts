@@ -27,9 +27,15 @@ enum NtsBridgeState {
   /// `MonotonicClock`, throws until the bridge is initialized.
   uninitialized,
 
-  /// A caller-supplied API is installed — `NtsRustLib.initMock()`, or
-  /// an `api:` passed to `NtsRustLib.init()`. No native library is
-  /// necessarily loaded.
+  /// An API that is not a generated FFI dispatch implementation is
+  /// installed — in practice a hand-written double passed to
+  /// `NtsRustLib.initMock()`, or an `api:` passed to
+  /// `NtsRustLib.init()`. No native library is necessarily loaded.
+  ///
+  /// The split from [native] is structural, not by initialization
+  /// route: passing the *generated* implementation to `initMock()`
+  /// reads as [native], because that is what such an API dispatches
+  /// as.
   mock,
 
   /// The generated FFI dispatch implementation is installed: calls
@@ -79,8 +85,9 @@ abstract final class NtsBridge {
   /// directly (`NtsRustLib.init()`, or `NtsRustLib.initMock()` in
   /// tests) is recognised, so this completes without throwing.
   ///
-  /// The arguments configure the *first* attempt only. A later call
-  /// passing different arguments is a no-op — deliberately, since
+  /// The arguments configure the attempt a call actually starts. A
+  /// call that instead joins a latched attempt, or that finds the
+  /// bridge already initialized, ignores them — deliberately, since
   /// throwing on a mismatch would defeat the shared-bootstrap use case
   /// this method exists for. Callers that need specific arguments
   /// honoured must be the ones to initialize the bridge.
