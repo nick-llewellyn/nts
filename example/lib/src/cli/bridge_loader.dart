@@ -69,15 +69,18 @@ enum BridgeDisposition {
 BridgeDisposition bridgeDisposition(
   NtsBridgeState state, {
   required bool useMock,
-}) => switch (state) {
-  NtsBridgeState.uninitialized => BridgeDisposition.fresh,
-  NtsBridgeState.mock => useMock
-      ? BridgeDisposition.reuse
-      : BridgeDisposition.conflict,
-  NtsBridgeState.native => useMock
-      ? BridgeDisposition.conflict
-      : BridgeDisposition.reuse,
-};
+}) {
+  // Switched rather than compared against a `wanted` state so a new
+  // `NtsBridgeState` is a compile error here rather than silently
+  // classified.
+  final requested = switch (state) {
+    NtsBridgeState.uninitialized => null,
+    NtsBridgeState.mock => useMock,
+    NtsBridgeState.native => !useMock,
+  };
+  if (requested == null) return BridgeDisposition.fresh;
+  return requested ? BridgeDisposition.reuse : BridgeDisposition.conflict;
+}
 
 /// Initialise the FRB bridge for a CLI invocation.
 ///
@@ -101,14 +104,14 @@ Future<void> initBridge({
       return;
     case BridgeDisposition.conflict:
       wipeRegisteredCustomRoots();
-      stderr.writeln(
-        useMock
-            ? 'error: --mock requested but a native bridge is already '
-                  'initialized; the two cannot coexist in one process.'
-            : 'error: a mock bridge is already initialized; a native '
-                  'bridge cannot replace it in one process. Rerun with '
-                  '--mock, or in a fresh process.',
-      );
+      const mockWanted =
+          'error: --mock requested but a native bridge is already '
+          'initialized; the two cannot coexist in one process.';
+      const nativeWanted =
+          'error: a mock bridge is already initialized; a native bridge '
+          'cannot replace it in one process. Rerun with --mock, or in a '
+          'fresh process.';
+      stderr.writeln(useMock ? mockWanted : nativeWanted);
       exit(kExitBridgeFailure);
     case BridgeDisposition.fresh:
       break;
