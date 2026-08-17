@@ -14,6 +14,7 @@
 // mock-vs-native distinction consumers need as a plain enum so nothing
 // outside this package touches `instance` or `api`.
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show BaseApiImpl, BaseHandler, ExternalLibrary;
 
@@ -91,6 +92,16 @@ abstract final class NtsBridge {
   /// entrypoint took ownership — the same error is replayed to every
   /// later caller, because `NtsRustLib.init()` can never succeed again
   /// from that point.
+  ///
+  /// That replay only covers attempts this method made. Calling
+  /// `NtsRustLib.init()` directly *concurrently* with this method is
+  /// unsupported: FRB installs the entrypoint state before awaiting its
+  /// Rust initializers, so this method can observe [state] as
+  /// [NtsBridgeState.native] and complete successfully while the direct
+  /// call is still running, and a failure it then suffers is invisible
+  /// here. FRB exposes no way to await someone else's attempt. Either
+  /// route every initialization through this method, or await the
+  /// direct call before reaching any code path that uses this one.
   static Future<void> ensureInitialized({
     ExternalLibrary? externalLibrary,
     BaseHandler? handler,
@@ -139,7 +150,10 @@ abstract final class NtsBridge {
   /// For tests only, and only ones that also reset the underlying
   /// entrypoint (`NtsRustLib.instance.resetState()`); the two must be
   /// paired or the latch and the entrypoint disagree about what is
-  /// installed.
+  /// installed. Dropping the latch on its own after a failure that left
+  /// the entrypoint installed would let the next [ensureInitialized]
+  /// report success from state whose Rust-side initializers never ran.
+  @visibleForTesting
   static void debugReset() {
     _inFlight = null;
   }

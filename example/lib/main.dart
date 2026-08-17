@@ -17,7 +17,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
-import 'package:nts/nts.dart' show NtsBridge, NtsRustLib;
+import 'package:nts/nts.dart' show NtsBridge, NtsBridgeState, NtsRustLib;
 import 'package:signals/signals.dart' show SignalsObserver;
 
 import 'src/data/server_entry.dart';
@@ -58,10 +58,17 @@ Future<_Boot> _bootstrap() async {
       label = 'real bridge';
     } catch (e) {
       // Fall back to mock so the UI still renders; the banner will
-      // explain why we ended up here. A load failure leaves nothing
-      // installed, so the `initMock` slot is still free.
-      NtsRustLib.initMock(api: MockNtsApi());
-      label = 'mock (load failed)';
+      // explain why we ended up here. Only a failure that installed
+      // nothing leaves the `initMock` slot free: FRB installs its
+      // state before awaiting the Rust initializers, so one of those
+      // throwing leaves the bridge `native` but half-built, and a
+      // second init would throw over the top of the real error.
+      if (NtsBridge.state == NtsBridgeState.uninitialized) {
+        NtsRustLib.initMock(api: MockNtsApi());
+        label = 'mock (load failed)';
+      } else {
+        label = 'bridge init failed';
+      }
       loadError =
           'Bridge initialization failed: $e\n'
           'The Native Assets hook (hook/build.dart) should bundle '

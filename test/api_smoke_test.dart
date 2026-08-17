@@ -3228,6 +3228,10 @@ void main() {
         if (NtsBridge.state == NtsBridgeState.uninitialized) {
           NtsRustLib.initMock(api: api);
         }
+        // Cases that latch a retained failure must not leak it into the
+        // next one; the entrypoint is back to the shared mock, so the
+        // latch has to agree.
+        NtsBridge.debugReset();
       });
 
       test('state reports the installed mock', () {
@@ -3291,6 +3295,37 @@ void main() {
           NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
           throwsA(anything),
         );
+      });
+
+      test('a failed attempt that left the bridge initialized is replayed, '
+          'not retried', () async {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        // The real shape of this case is `executeRustInitializers()`
+        // throwing: `initImpl` assigns the entrypoint state before
+        // awaiting it, so the bridge is installed but half-built and
+        // `NtsRustLib.init()` can never succeed again. No hook reaches
+        // those initializers from here, so the same ordering is staged
+        // instead -- the attempt is started, and state is installed
+        // before its failure surfaces.
+        final attempt = NtsBridge.ensureInitialized(
+          externalLibrary: _failingLibrary(),
+        );
+        NtsRustLib.initMock(api: api);
+        final error = await attempt.then<Object?>(
+          (_) => null,
+          onError: (Object e) => e,
+        );
+        expect(error, isNotNull);
+        expect(NtsBridge.state, NtsBridgeState.mock);
+        // The latch was kept, so a later caller replays that error
+        // rather than reporting success off the installed state or
+        // starting a second attempt.
+        final replayed = NtsBridge.ensureInitialized().then<Object?>(
+          (_) => null,
+          onError: (Object e) => e,
+        );
+        expect(await replayed, same(error));
       });
 
       test('dispose is a no-op when the bridge was never initialized', () {

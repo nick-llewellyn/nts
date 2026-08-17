@@ -31,46 +31,61 @@ import '../state/nts_format.dart' show wipeRegisteredCustomRoots;
 /// the value documented in `CLI_GUIDE.md`.
 const int kExitBridgeFailure = 70;
 
-/// What a `--mock` request should do about the bridge state it finds.
-enum MockBridgeDisposition {
-  /// Nothing installed: install the mock.
+/// What a bridge request should do about the state it finds.
+enum BridgeDisposition {
+  /// Nothing installed: initialise as requested.
   fresh,
 
-  /// A mock is already installed and satisfies the request.
+  /// What is installed already satisfies the request.
   reuse,
 
-  /// A native bridge is installed; `--mock` cannot be honoured.
+  /// The other kind of bridge is installed; the request cannot be
+  /// honoured.
   conflict,
 }
 
-/// Classify the bridge state a `--mock` run encounters.
+/// Classify the bridge state a run encounters against what it asked
+/// for.
 ///
 /// The bridge rejects a second initialisation with a `StateError`. A
 /// CLI run reaches [initBridge] once, but a caller that already
-/// installed a mock (a test driving this function) would otherwise get
-/// an unhandled throw, so an installed mock satisfies the request.
+/// installed a bridge of the requested kind (a test driving this
+/// function) would otherwise get an unhandled throw, so that satisfies
+/// the request.
 ///
-/// An installed *native* bridge does not: reusing it would let a run
-/// that asked for `--mock` issue real network work against real
-/// servers. That is a caller error, reported rather than silently
-/// downgraded, since the bridge has no de-init. A bare "is it
-/// initialised" bool cannot tell the two apart, hence [state].
+/// The other kind does not, in either direction. Reusing a native
+/// bridge for a `--mock` run would issue real network work against
+/// real servers; reusing a mock for a native run would report success
+/// and then dispatch every call to `MockNtsApi`, which is the same
+/// defect with the reporting inverted —
+/// `NtsBridge.ensureInitialized()` completes for any installed state,
+/// so it cannot catch this itself. Both are caller errors, reported
+/// rather than silently downgraded, since the bridge has no de-init. A
+/// bare "is it initialised" bool cannot tell the two apart, hence
+/// [state].
 ///
 /// Split out from [initBridge] because the conflict arm there ends in
 /// `exit`, which no in-process test can observe.
-MockBridgeDisposition mockBridgeDisposition(NtsBridgeState state) =>
-    switch (state) {
-      NtsBridgeState.uninitialized => MockBridgeDisposition.fresh,
-      NtsBridgeState.mock => MockBridgeDisposition.reuse,
-      NtsBridgeState.native => MockBridgeDisposition.conflict,
-    };
+BridgeDisposition bridgeDisposition(
+  NtsBridgeState state, {
+  required bool useMock,
+}) => switch (state) {
+  NtsBridgeState.uninitialized => BridgeDisposition.fresh,
+  NtsBridgeState.mock => useMock
+      ? BridgeDisposition.reuse
+      : BridgeDisposition.conflict,
+  NtsBridgeState.native => useMock
+      ? BridgeDisposition.conflict
+      : BridgeDisposition.reuse,
+};
 
 /// Initialise the FRB bridge for a CLI invocation.
 ///
 /// When [useMock] is set, binds the in-memory [MockNtsApi] (no native
 /// dylib required). Otherwise loads the host-arch dylib from
 /// [libraryPath] if given, falling back to [autoLocateDylib]. On any
-/// unrecoverable failure (no dylib found, file missing, init threw) it
+/// unrecoverable failure (no dylib found, file missing, init threw,
+/// or a mock is installed and a native bridge was asked for) it
 /// writes a diagnostic to stderr and exits with [kExitBridgeFailure].
 ///
 /// Every one of those exits runs before the caller can construct the
@@ -81,20 +96,24 @@ Future<void> initBridge({
   required bool useMock,
   required String? libraryPath,
 }) async {
+  switch (bridgeDisposition(NtsBridge.state, useMock: useMock)) {
+    case BridgeDisposition.reuse:
+      return;
+    case BridgeDisposition.conflict:
+      wipeRegisteredCustomRoots();
+      stderr.writeln(
+        useMock
+            ? 'error: --mock requested but a native bridge is already '
+                  'initialized; the two cannot coexist in one process.'
+            : 'error: a mock bridge is already initialized; a native '
+                  'bridge cannot replace it in one process. Rerun with '
+                  '--mock, or in a fresh process.',
+      );
+      exit(kExitBridgeFailure);
+    case BridgeDisposition.fresh:
+      break;
+  }
   if (useMock) {
-    switch (mockBridgeDisposition(NtsBridge.state)) {
-      case MockBridgeDisposition.reuse:
-        return;
-      case MockBridgeDisposition.conflict:
-        wipeRegisteredCustomRoots();
-        stderr.writeln(
-          'error: --mock requested but a native bridge is already '
-          'initialized; the two cannot coexist in one process.',
-        );
-        exit(kExitBridgeFailure);
-      case MockBridgeDisposition.fresh:
-        break;
-    }
     try {
       NtsRustLib.initMock(api: MockNtsApi());
     } catch (e) {

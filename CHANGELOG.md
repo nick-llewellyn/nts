@@ -37,6 +37,13 @@ tarball.
     does nothing when it was never initialised. `NtsRustLib.dispose()`
     throws in that case. Disposal is not de-initialisation: `state` is
     unchanged afterwards.
+  - `ensureInitialized`'s dartdoc states that calling
+    `NtsRustLib.init()` directly *concurrently* with it is unsupported.
+    FRB installs the entrypoint state before awaiting its Rust
+    initializers, so the wrapper can see `.native` and complete while
+    the direct call is still running, and a failure it then suffers is
+    invisible to the wrapper. FRB exposes no way to await someone
+    else's attempt.
 - `CONTRIBUTING.md` — the GitHub-surfaced entry point for third-party
   contributors. Covers prerequisites, the one-time
   `git config core.hooksPath tool/hooks` opt-in, the branch and pull
@@ -76,6 +83,20 @@ tarball.
   convention with a placeholder (`NTS-<num>`) rather than a real,
   long-closed issue identifier, so the example cannot be pasted
   through into a pull request that has nothing to do with it.
+- The example CLI loader rejects a bridge of the wrong kind in both
+  directions rather than only one. `mockBridgeDisposition` becomes
+  `bridgeDisposition(state, useMock:)`, and a native run that finds an
+  installed mock now exits with the same diagnostic shape as a `--mock`
+  run that finds an installed native bridge. Previously that direction
+  fell through to `NtsBridge.ensureInitialized()`, which completes for
+  any installed state, so the run reported success and then dispatched
+  every call to `MockNtsApi`. Example app only; no package API change.
+- The example app's GUI bootstrap installs its fallback mock only when
+  the failed `ensureInitialized()` left the bridge uninitialized. A
+  Rust-initializer failure leaves it `native` but half-built, and the
+  unconditional `initMock` threw a second `StateError` over the top of
+  the real error, so the banner never rendered. Example app only; no
+  package API change.
 - The example app moves from `file_picker` `^12.0.0-beta.7` to the
   `^12.0.0` stable release. `FilePicker.pickFiles()` now returns
   `List<PlatformFile>` rather than a nullable result object, so
