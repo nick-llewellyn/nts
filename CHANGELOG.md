@@ -76,6 +76,15 @@ tarball.
   convention with a placeholder (`NTS-<num>`) rather than a real,
   long-closed issue identifier, so the example cannot be pasted
   through into a pull request that has nothing to do with it.
+- The example app moves from `file_picker` `^12.0.0-beta.7` to the
+  `^12.0.0` stable release. `FilePicker.pickFiles()` now returns
+  `List<PlatformFile>` rather than a nullable result object, so
+  `CustomRootsPanel._pickFile` calls the single-file
+  `FilePicker.pickFile()` instead, which returns `PlatformFile?` and
+  matches what the panel wants. The macOS generated plugin registrant
+  follows the plugin's split into federated packages
+  (`file_picker` → `file_picker_darwin`). Example app only; no package
+  API change.
 - `AGENTS.md` and `CLAUDE.md` now say which of their sections are
   maintainer workflow. Both open with a short note on who the file is
   for, and every section covering the maintainer's issue tracking
