@@ -49,6 +49,14 @@ tarball.
     does nothing when it was never initialised. `NtsRustLib.dispose()`
     throws in that case. Disposal is not de-initialisation: `state` is
     unchanged afterwards.
+  - A failed `ensureInitialized` attempt retains its latch — replaying
+    the error to every later caller — only when the attempt itself took
+    ownership of the entrypoint, which it can only ever do by
+    installing the generated API. A `.mock` observed after the failure
+    can only have come from an independent `NtsRustLib.initMock()`,
+    which is an initialisation that *succeeded*; the latch is dropped
+    in that case so a later caller completes over the usable mock
+    instead of failing on a stale native-load error.
   - `ensureInitialized`'s dartdoc states that calling
     `NtsRustLib.init()` directly *concurrently* with it is unsupported.
     FRB installs the entrypoint state before awaiting its Rust

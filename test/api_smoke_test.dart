@@ -3301,7 +3301,7 @@ void main() {
         await expectLater(second, throwsA(anything));
       });
 
-      test('a failed attempt that left the bridge initialized is replayed, '
+      test('a failed attempt that left the bridge native is replayed, '
           'not retried', () async {
         NtsRustLib.instance.resetState();
         NtsBridge.debugReset();
@@ -3311,25 +3311,63 @@ void main() {
         // `NtsRustLib.init()` can never succeed again. No hook reaches
         // those initializers from here, so the same ordering is staged
         // instead -- the attempt is started, and state is installed
-        // before its failure surfaces.
+        // before its failure surfaces. The staged API must be the
+        // *generated* one, since that is the only state an attempt of
+        // this method could have installed itself.
+        final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+        final binding = GeneralizedFrbRustBinding(lib);
+        final handler = BaseHandler();
+        final realApi = NtsRustLibApiImpl(
+          handler: handler,
+          wire: NtsRustLibWire.fromExternalLibrary(lib),
+          generalizedFrbRustBinding: binding,
+          portManager: PortManager(binding, handler),
+        );
+        try {
+          final attempt = NtsBridge.ensureInitialized(
+            externalLibrary: _failingLibrary(),
+          );
+          NtsRustLib.initMock(api: realApi);
+          final error = await attempt.then<Object?>(
+            (_) => null,
+            onError: (Object e) => e,
+          );
+          expect(error, isNotNull);
+          expect(NtsBridge.state, NtsBridgeState.native);
+          // The latch was kept, so a later caller replays that error
+          // rather than reporting success off the installed state or
+          // starting a second attempt.
+          final replayed = NtsBridge.ensureInitialized().then<Object?>(
+            (_) => null,
+            onError: (Object e) => e,
+          );
+          expect(await replayed, same(error));
+        } finally {
+          NtsRustLib.instance.resetState();
+          NtsBridge.debugReset();
+          NtsRustLib.initMock(api: api);
+        }
+      });
+
+      test('a failed attempt does not shadow a concurrent initMock', () async {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        // Same staging as the replay case, but the state installed
+        // mid-attempt is a hand-written double, which this method could
+        // never have installed itself: it forwards no `api:`. So the
+        // failure is this attempt's own, the mock is an independent
+        // initialization that succeeded, and retaining the error would
+        // make every later caller fail over a usable bridge.
         final attempt = NtsBridge.ensureInitialized(
           externalLibrary: _failingLibrary(),
         );
         NtsRustLib.initMock(api: api);
-        final error = await attempt.then<Object?>(
-          (_) => null,
-          onError: (Object e) => e,
-        );
-        expect(error, isNotNull);
+        await expectLater(attempt, throwsA(anything));
         expect(NtsBridge.state, NtsBridgeState.mock);
-        // The latch was kept, so a later caller replays that error
-        // rather than reporting success off the installed state or
-        // starting a second attempt.
-        final replayed = NtsBridge.ensureInitialized().then<Object?>(
-          (_) => null,
-          onError: (Object e) => e,
-        );
-        expect(await replayed, same(error));
+        // The latch was dropped, so a later caller sees the installed
+        // mock and completes rather than replaying the stale error.
+        await expectLater(NtsBridge.ensureInitialized(), completes);
+        expect(NtsBridge.state, NtsBridgeState.mock);
       });
 
       test('dispose is a no-op when the bridge was never initialized', () {

@@ -55,8 +55,8 @@ enum NtsBridgeState {
 /// bridge for itself.
 abstract final class NtsBridge {
   /// Latches the first initialization attempt so concurrent and
-  /// repeated callers converge on one outcome. Cleared again only when
-  /// an attempt fails without leaving the bridge initialized.
+  /// repeated callers converge on one outcome. Cleared again when an
+  /// attempt fails without having taken ownership of the entrypoint.
   static Future<void>? _inFlight;
 
   /// What the bridge currently holds on this isolate.
@@ -93,12 +93,15 @@ abstract final class NtsBridge {
   /// honoured must be the ones to initialize the bridge.
   ///
   /// On failure the error propagates to every caller awaiting the
-  /// attempt. If the bridge did not become initialized (a codegen
-  /// version mismatch, a library that failed to load), a later call
-  /// retries. If it did — the Rust-side initializers threw after the
-  /// entrypoint took ownership — the same error is replayed to every
-  /// later caller, because `NtsRustLib.init()` can never succeed again
-  /// from that point.
+  /// attempt. If the attempt took ownership of the entrypoint — the
+  /// Rust-side initializers threw after FRB installed its state — the
+  /// same error is replayed to every later caller, because
+  /// `NtsRustLib.init()` can never succeed again from that point.
+  /// Otherwise a later call retries: either nothing was installed (a
+  /// codegen version mismatch, a library that failed to load), or a
+  /// concurrent `NtsRustLib.initMock()` initialized the bridge
+  /// independently, in which case that success is not shadowed by this
+  /// attempt's error and the retry completes over it.
   ///
   /// That replay only covers attempts this method made. Calling
   /// `NtsRustLib.init()` directly *concurrently* with this method is
@@ -126,11 +129,19 @@ abstract final class NtsBridge {
           handler: handler,
           forceSameCodegenVersion: forceSameCodegenVersion,
         ).onError<Object>((error, stackTrace) {
-          // Only unlatch a failure that left nothing installed, and only
-          // while this attempt is still the latched one -- a `debugReset()`
-          // between the throw and this callback has already invalidated it.
-          if (identical(_inFlight, attempt) &&
-              state == NtsBridgeState.uninitialized) {
+          // Retain the latch only for a failure that took ownership of
+          // the entrypoint, so the error is replayed to later callers
+          // rather than a doomed second `NtsRustLib.init()` being run.
+          // This attempt can only ever install the generated API, so
+          // `native` is the sole state attributable to it: nothing
+          // installed leaves `uninitialized`, and `mock` can only come
+          // from an independent `initMock()`, which is an initialization
+          // that succeeded and must not be shadowed by this error.
+          //
+          // Either way, only while this attempt is still the latched
+          // one -- a `debugReset()` between the throw and this callback
+          // has already invalidated it.
+          if (identical(_inFlight, attempt) && state != NtsBridgeState.native) {
             _inFlight = null;
           }
           Error.throwWithStackTrace(error, stackTrace);
