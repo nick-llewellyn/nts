@@ -46,6 +46,7 @@ class AppState {
     required this.catalog,
     required this.favorites,
     required this.log,
+    this.mockFallback = false,
   }) : selected = signal<NtsServerEntry?>(
          catalog.isEmpty ? null : catalog.first,
        ),
@@ -64,9 +65,18 @@ class AppState {
   /// tell at a glance whether the bridge is real or mocked.
   final String bridgeMode;
 
-  /// Populated when bridge initialization failed and we fell back to mock.
-  /// Surfaced by the shell as a banner.
+  /// Bootstrap diagnostic, or null when bootstrap was clean. Populated
+  /// by a bridge-initialization failure or a catalog-load failure (both,
+  /// concatenated, if they coincide), so it does not on its own imply
+  /// that a mock was installed — see [mockFallback]. Surfaced by the
+  /// shell as a banner.
   final String? bridgeLoadError;
+
+  /// Whether the mock was installed because the real bridge failed to
+  /// load, as opposed to being asked for or not used at all. Drives the
+  /// shell's corner banner, which [bridgeLoadError] cannot: a catalog
+  /// error populates that field while leaving the bridge as requested.
+  final bool mockFallback;
 
   /// Immutable, sorted-by-hostname server catalog loaded from
   /// `assets/nts-sources.yml` during bootstrap.

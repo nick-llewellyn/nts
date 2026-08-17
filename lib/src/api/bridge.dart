@@ -93,25 +93,47 @@ abstract final class NtsBridge {
   /// honoured must be the ones to initialize the bridge.
   ///
   /// On failure the error propagates to every caller awaiting the
-  /// attempt. If the attempt took ownership of the entrypoint — the
+  /// attempt. If the entrypoint is left holding the generated API — the
   /// Rust-side initializers threw after FRB installed its state — the
   /// same error is replayed to every later caller, because
   /// `NtsRustLib.init()` can never succeed again from that point.
   /// Otherwise a later call retries: either nothing was installed (a
   /// codegen version mismatch, a library that failed to load), or a
-  /// concurrent `NtsRustLib.initMock()` initialized the bridge
+  /// concurrent `NtsRustLib.initMock()` installed a hand-written double
   /// independently, in which case that success is not shadowed by this
   /// attempt's error and the retry completes over it.
   ///
-  /// That replay only covers attempts this method made. Calling
-  /// `NtsRustLib.init()` directly *concurrently* with this method is
-  /// unsupported: FRB installs the entrypoint state before awaiting its
-  /// Rust initializers, so this method can observe [state] as
-  /// [NtsBridgeState.native] and complete successfully while the direct
-  /// call is still running, and a failure it then suffers is invisible
-  /// here. FRB exposes no way to await someone else's attempt. Either
-  /// route every initialization through this method, or await the
-  /// direct call before reaching any code path that uses this one.
+  /// Both of those rest on this method's own attempts being the only
+  /// initializations in flight. Driving the raw entrypoint
+  /// *concurrently* with this method is unsupported, in either
+  /// direction:
+  ///
+  /// * A concurrent `NtsRustLib.init()` installs the entrypoint state
+  ///   before awaiting its Rust initializers, so this method can
+  ///   observe [state] as [NtsBridgeState.native], complete
+  ///   successfully, and never see the failure that call then suffers.
+  /// * A concurrent `NtsRustLib.initMock()` that supplies the
+  ///   *generated* implementation also reads as
+  ///   [NtsBridgeState.native], which is indistinguishable from state
+  ///   this method installed itself. Should this method's own attempt
+  ///   then fail, its error is replayed to later callers over a bridge
+  ///   that is in fact usable. A hand-written double does not have this
+  ///   problem: it reads as [NtsBridgeState.mock], which is
+  ///   attributable to someone else and is not shadowed.
+  ///
+  /// FRB exposes neither a way to await someone else's attempt nor the
+  /// identity of the API an attempt installed, so neither case can be
+  /// detected from here. Either route every initialization through this
+  /// method, or complete the direct call before reaching any code path
+  /// that uses this one.
+  ///
+  /// One case survives even a completed direct call. A
+  /// `NtsRustLib.init()` that threw from its Rust initializers leaves
+  /// the entrypoint installed and permanently unusable, and this method
+  /// then reports success over it: the entrypoint records no failure,
+  /// and the attempt was never latched here. A caller that drives
+  /// `init()` directly owns that error and must keep it — awaiting this
+  /// method afterwards will not resurface it.
   static Future<void> ensureInitialized({
     ExternalLibrary? externalLibrary,
     BaseHandler? handler,
@@ -119,6 +141,11 @@ abstract final class NtsBridge {
   }) {
     final latched = _inFlight;
     if (latched != null) return latched;
+    // Something is installed and no attempt of ours is outstanding, so
+    // there is nothing left to do. This reports success even over an
+    // entrypoint a *direct* `NtsRustLib.init()` left installed and
+    // half-built: that failure was never latched here, and FRB records
+    // nothing about it. Documented above as the caller's to keep.
     if (state != NtsBridgeState.uninitialized) {
       return _inFlight = Future<void>.value();
     }
@@ -129,14 +156,17 @@ abstract final class NtsBridge {
           handler: handler,
           forceSameCodegenVersion: forceSameCodegenVersion,
         ).onError<Object>((error, stackTrace) {
-          // Retain the latch only for a failure that took ownership of
-          // the entrypoint, so the error is replayed to later callers
+          // Retain the latch only for a failure that left the generated
+          // API installed, so the error is replayed to later callers
           // rather than a doomed second `NtsRustLib.init()` being run.
-          // This attempt can only ever install the generated API, so
-          // `native` is the sole state attributable to it: nothing
-          // installed leaves `uninitialized`, and `mock` can only come
-          // from an independent `initMock()`, which is an initialization
-          // that succeeded and must not be shadowed by this error.
+          // This attempt can only ever install that API, so `native` is
+          // the state attributable to it: nothing installed leaves
+          // `uninitialized`, and `mock` can only come from an
+          // independent `initMock()`, which is an initialization that
+          // succeeded and must not be shadowed by this error. A
+          // concurrent `initMock()` supplying the *generated* API is
+          // indistinguishable from our own install and so is documented
+          // as unsupported rather than handled.
           //
           // Either way, only while this attempt is still the latched
           // one -- a `debugReset()` between the throw and this callback

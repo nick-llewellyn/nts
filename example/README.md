@@ -192,11 +192,20 @@ fvm flutter run -d macos -t lib/main.dart --dart-define=NTS_BRIDGE=mock
 If bridge initialization throws at startup (typically because rustup is
 missing, the build hook was skipped — `dart run` instead of
 `flutter run` — or the host triple isn't pinned in
-`rust-toolchain.toml`), the app falls back to the mock so the rest of
-the UI stays usable: a banner reports the load error and the header
-label switches to `mock (load failed)`. Passing
-`--dart-define=NTS_BRIDGE=mock` selects the mock up front instead —
-no banner, plain `mock` label.
+`rust-toolchain.toml`), what happens depends on how far it got:
+
+* **Failed before installing anything** — the usual case, and the one
+  every cause listed above produces. The app falls back to the mock so
+  the rest of the UI stays usable: a banner reports the load error and
+  the header label switches to `mock (load failed)`.
+* **Failed after installing** — a Rust-side initializer threw once FRB
+  had already taken the entrypoint. That state cannot be replaced in
+  the process and no mock can stand in for it, so the app renders a
+  `Bridge unavailable` screen carrying the error rather than a UI whose
+  every action would throw.
+
+Passing `--dart-define=NTS_BRIDGE=mock` selects the mock up front
+instead — no banner, plain `mock` label.
 
 ### Verbose Rust logs
 

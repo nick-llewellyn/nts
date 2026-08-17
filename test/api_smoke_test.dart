@@ -3314,6 +3314,12 @@ void main() {
         // before its failure surfaces. The staged API must be the
         // *generated* one, since that is the only state an attempt of
         // this method could have installed itself.
+        //
+        // The staging route -- a concurrent `initMock()` supplying that
+        // generated API -- is one `ensureInitialized` documents as
+        // unsupported, precisely because it is indistinguishable from a
+        // self-owned install. That indistinguishability is what makes
+        // it usable here as a stand-in for the real ordering.
         final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
         final binding = GeneralizedFrbRustBinding(lib);
         final handler = BaseHandler();

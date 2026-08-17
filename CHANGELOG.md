@@ -57,13 +57,25 @@ tarball.
     which is an initialisation that *succeeded*; the latch is dropped
     in that case so a later caller completes over the usable mock
     instead of failing on a stale native-load error.
-  - `ensureInitialized`'s dartdoc states that calling
-    `NtsRustLib.init()` directly *concurrently* with it is unsupported.
-    FRB installs the entrypoint state before awaiting its Rust
-    initializers, so the wrapper can see `.native` and complete while
-    the direct call is still running, and a failure it then suffers is
-    invisible to the wrapper. FRB exposes no way to await someone
-    else's attempt.
+  - `ensureInitialized`'s dartdoc states that driving the raw
+    entrypoint *concurrently* with it is unsupported in either
+    direction, and why neither case is detectable. A concurrent
+    `NtsRustLib.init()`: FRB installs the entrypoint state before
+    awaiting its Rust initializers, so the wrapper can see `.native`
+    and complete while the direct call is still running, and a failure
+    it then suffers is invisible; FRB exposes no way to await someone
+    else's attempt. A concurrent `NtsRustLib.initMock()` supplying the
+    *generated* implementation: that also reads as `.native`, hence is
+    indistinguishable from state the wrapper installed itself, so a
+    failure of the wrapper's own attempt would be replayed over a
+    bridge that is in fact usable. (A hand-written double is not
+    affected — it reads `.mock`, which is attributable to someone
+    else.) The dartdoc also records the one case a *completed* direct
+    call leaves behind: an `init()` that threw from its Rust
+    initializers leaves the entrypoint installed and permanently
+    unusable, and `ensureInitialized` reports success over it, because
+    FRB records nothing about the failure and the attempt was never
+    latched. That error is the direct caller's to keep.
 - `CONTRIBUTING.md` — the GitHub-surfaced entry point for third-party
   contributors. Covers prerequisites, the one-time
   `git config core.hooksPath tool/hooks` opt-in, the branch and pull
@@ -117,6 +129,19 @@ tarball.
   unconditional `initMock` threw a second `StateError` over the top of
   the real error, so the banner never rendered. Example app only; no
   package API change.
+- That other arm now aborts to a `Bridge unavailable` screen rather
+  than proceeding into the normal UI. No mock can stand in for a
+  half-built entrypoint, so bootstrap carries a `bridgeUsable` flag and
+  `main()` short-circuits on it: no `AppState`, no `NtsController`, and
+  so no `NtsClient` minted over a bridge every call would throw
+  through. Previously the arm fell through, and the UI then misreported
+  itself — the corner banner reads `mock fallback` off any non-null
+  load error, and `AppState.bridgeLoadError` was documented as implying
+  one had been installed. `AppState` gains a `mockFallback` flag that
+  says whether it actually was, the corner banner is driven off that
+  rather than off the error, and `bridgeLoadError` is described as what
+  it is: a bootstrap diagnostic that a catalog failure also populates.
+  Example app only; no package API change.
 - The example app moves from `file_picker` `^12.0.0-beta.7` to the
   `^12.0.0` stable release. `FilePicker.pickFiles()` now returns
   `List<PlatformFile>` rather than a nullable result object, so

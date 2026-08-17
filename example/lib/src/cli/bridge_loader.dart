@@ -47,11 +47,14 @@ enum BridgeDisposition {
 /// Classify the bridge state a run encounters against what it asked
 /// for.
 ///
-/// The bridge rejects a second initialisation with a `StateError`. A
-/// CLI run reaches [initBridge] once, but a caller that already
-/// installed a bridge of the requested kind (a test driving this
-/// function) would otherwise get an unhandled throw, so that satisfies
-/// the request.
+/// An installed bridge of the requested kind satisfies the request, so
+/// the run reuses it rather than resolving a dylib and initialising
+/// over the top. What that avoids differs by kind: a second
+/// `NtsRustLib.initMock()` throws a `StateError`, whereas
+/// `NtsBridge.ensureInitialized()` is idempotent and would merely do
+/// redundant path resolution. A CLI run reaches [initBridge] once
+/// either way; the case that matters is a caller that already installed
+/// one (a test driving this function).
 ///
 /// The other kind does not, in either direction. Reusing a native
 /// bridge for a `--mock` run would issue real network work against
