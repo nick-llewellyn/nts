@@ -65,6 +65,13 @@ dependencies:
   # variant types. Runtime annotations only; the generator itself is in
   # `dev_dependencies`.
   freezed_annotation: ^3.1.0
+  # Annotations only, for `@visibleForTesting` in `lib/src/api/bridge.dart`.
+  # Taken from `meta` rather than `package:flutter/foundation.dart` so the
+  # public API stays loadable outside the Flutter engine: `lib/nts.dart`
+  # exports that library, and a `flutter/foundation.dart` import there
+  # transitively pulls `dart:ui`, which breaks the `dart run` consumers
+  # documented in the README.
+  meta: ^1.18.0
   # Build-hook dependencies (consumed only by `hook/build.dart`). The Dart
   # SDK resolves these out-of-band when running the Native Assets pipeline,
   # so they don't pull native_toolchain_rust into the app's runtime graph.

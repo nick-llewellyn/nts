@@ -14,9 +14,9 @@
 // mock-vs-native distinction consumers need as a plain enum so nothing
 // outside this package touches `instance` or `api`.
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show BaseApiImpl, BaseHandler, ExternalLibrary;
+import 'package:meta/meta.dart' show visibleForTesting;
 
 import '../ffi/frb_generated.dart' show NtsRustLib;
 
