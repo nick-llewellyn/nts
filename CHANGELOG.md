@@ -141,7 +141,12 @@ tarball.
   says whether it actually was, the corner banner is driven off that
   rather than off the error, and `bridgeLoadError` is described as what
   it is: a bootstrap diagnostic that a catalog failure also populates.
-  Example app only; no package API change.
+  A `shell diagnostics` group covers the resulting three-way split
+  through the public `NtsExampleApp`: no diagnostic renders neither
+  banner, a diagnostic without a fallback renders the error banner
+  alone, and a fallback renders both. The middle case is the one the
+  old condition got wrong, and it fails against it. Example app only;
+  no package API change.
 - The example app moves from `file_picker` `^12.0.0-beta.7` to the
   `^12.0.0` stable release. `FilePicker.pickFiles()` now returns
   `List<PlatformFile>` rather than a nullable result object, so

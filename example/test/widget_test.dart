@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:nts/nts.dart' show NtsRustLib, TrustMode;
+import 'package:nts_example/main.dart' show NtsExampleApp;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
 import 'package:nts_example/src/mock_api.dart';
@@ -55,6 +56,24 @@ Future<({AppState state, NtsController controller})> _bootHarness() async {
   // from one test cannot react to a later one's signal writes.
   addTearDown(controller.dispose);
   return (state: state, controller: controller);
+}
+
+/// [AppState] carrying the bootstrap diagnostics the shell renders off.
+/// Unlike [_bootHarness] this mints no [NtsController] — `NtsExampleApp`
+/// owns its own, and disposes it when the widget is torn down.
+Future<AppState> _stateWith({
+  required String? loadError,
+  bool mockFallback = false,
+}) async {
+  SharedPreferences.setMockInitialValues(<String, Object>{});
+  return AppState(
+    bridgeMode: mockFallback ? 'mock (load failed)' : 'mock',
+    bridgeLoadError: loadError,
+    mockFallback: mockFallback,
+    catalog: _testCatalog,
+    favorites: await FavoritesStore.load(),
+    log: NtsLogBuffer(),
+  );
 }
 
 void main() {
@@ -676,5 +695,50 @@ void main() {
     // tripping the PrimaryScrollController collision).
     expect(find.text('time.cloudflare.com'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  group('shell diagnostics', () {
+    // The shell renders two independent things off bootstrap state: a
+    // MaterialBanner carrying whatever diagnostic bootstrap produced,
+    // and a corner Banner claiming the mock stood in for a real bridge
+    // that failed. Only the first is a function of `bridgeLoadError` —
+    // a catalog-load failure populates that field while leaving the
+    // requested bridge in place, so the corner label has to come from
+    // `mockFallback` instead.
+    final cornerBanner = find.byWidgetPredicate(
+      (w) => w is Banner && w.message == 'mock fallback',
+    );
+
+    testWidgets('a clean bootstrap renders neither banner', (tester) async {
+      final state = await _stateWith(loadError: null);
+      await tester.pumpWidget(NtsExampleApp(state: state));
+      await tester.pump();
+
+      expect(find.byType(MaterialBanner), findsNothing);
+      expect(cornerBanner, findsNothing);
+    });
+
+    testWidgets('a diagnostic without a mock fallback reports the error but '
+        'does not claim the mock stood in', (tester) async {
+      const message = 'Failed to load assets/nts-sources.yml: boom';
+      final state = await _stateWith(loadError: message);
+      await tester.pumpWidget(NtsExampleApp(state: state));
+      await tester.pump();
+
+      expect(find.text(message), findsOneWidget);
+      expect(cornerBanner, findsNothing);
+    });
+
+    testWidgets('a mock fallback reports the error and labels the corner', (
+      tester,
+    ) async {
+      const message = 'Bridge initialization failed: boom';
+      final state = await _stateWith(loadError: message, mockFallback: true);
+      await tester.pumpWidget(NtsExampleApp(state: state));
+      await tester.pump();
+
+      expect(find.text(message), findsOneWidget);
+      expect(cornerBanner, findsOneWidget);
+    });
   });
 }
