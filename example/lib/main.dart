@@ -9,7 +9,7 @@
 //      when the dylib fails to load (e.g. the host triple isn't pinned
 //      in `rust/rust-toolchain.toml`). A load failure that already took
 //      the entrypoint admits no mock, and short-circuits to
-//      `_BridgeUnavailableApp` instead of the steps below.
+//      [BridgeUnavailableApp] instead of the steps below.
 //   3. Load the bundled NTS server catalog from
 //      `assets/nts-sources.yml`.
 //   4. Hydrate the persisted favourites from `SharedPreferences`.
@@ -147,7 +147,7 @@ Future<void> main() async {
     // controller to drive: constructing one would mint an `NtsClient`
     // over the half-built entrypoint and every button would throw.
     // Report the failure and stop.
-    runApp(_BridgeUnavailableApp(message: boot.loadError!));
+    runApp(BridgeUnavailableApp(message: boot.loadError!));
     return;
   }
   final state = AppState(
@@ -379,8 +379,12 @@ class _Shell extends StatelessWidget {
 /// this process. Nothing native-dependent is constructed — no
 /// [AppState], no [NtsController] — because every call through them
 /// would throw.
-class _BridgeUnavailableApp extends StatelessWidget {
-  const _BridgeUnavailableApp({required this.message});
+///
+/// Public so a widget test can pump it directly; [main] is the only
+/// production caller, and it cannot be driven from a test because
+/// `bridgeUsable == false` requires a real half-built entrypoint.
+class BridgeUnavailableApp extends StatelessWidget {
+  const BridgeUnavailableApp({super.key, required this.message});
 
   final String message;
 

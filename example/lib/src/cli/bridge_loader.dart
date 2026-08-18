@@ -56,6 +56,10 @@ enum BridgeDisposition {
 /// either way; the case that matters is a caller that already installed
 /// one (a test driving this function).
 ///
+/// Reuse is not the same as "nothing to do", though, which is why
+/// [initBridge] still awaits `NtsBridge.ensureInitialized()` on the
+/// native arm — see the note there.
+///
 /// The other kind does not, in either direction. Reusing a native
 /// bridge for a `--mock` run would issue real network work against
 /// real servers; reusing a mock for a native run would report success
@@ -104,6 +108,26 @@ Future<void> initBridge({
 }) async {
   switch (bridgeDisposition(NtsBridge.state, useMock: useMock)) {
     case BridgeDisposition.reuse:
+      // A mock is usable the moment `initMock()` returns, so there is
+      // nothing to await. A native bridge is not: an earlier
+      // `NtsBridge.ensureInitialized()` whose Rust initializers threw
+      // leaves the entrypoint installed, unusable, and the failure
+      // retained on the latch. Returning here would convert that
+      // half-built bridge into apparent success, so await the latch and
+      // let the retained error surface as a load failure instead. When
+      // no attempt is outstanding this is the same no-op the mock arm
+      // takes directly.
+      if (useMock) return;
+      try {
+        await NtsBridge.ensureInitialized();
+      } catch (e) {
+        wipeRegisteredCustomRoots();
+        stderr.writeln(
+          'error: an earlier Rust bridge initialization failed and the '
+          'entrypoint cannot be reinitialized in this process: $e',
+        );
+        exit(kExitBridgeFailure);
+      }
       return;
     case BridgeDisposition.conflict:
       wipeRegisteredCustomRoots();

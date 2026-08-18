@@ -76,6 +76,12 @@ tarball.
     unusable, and `ensureInitialized` reports success over it, because
     FRB records nothing about the failure and the attempt was never
     latched. That error is the direct caller's to keep.
+  - The live suite (`test/live/nts_live_test.dart`) bootstraps through
+    `ensureInitialized()` rather than `NtsRustLib.init()`, and asserts a
+    repeat call completes with `state == .native`. That covers the
+    fresh-success branch, which no mock-only test can reach: it needs a
+    real library whose Rust initializers actually run. The mock-only
+    suite covers the already-installed and failed-load branches.
 - `CONTRIBUTING.md` — the GitHub-surfaced entry point for third-party
   contributors. Covers prerequisites, the one-time
   `git config core.hooksPath tool/hooks` opt-in, the branch and pull
@@ -145,8 +151,20 @@ tarball.
   through the public `NtsExampleApp`: no diagnostic renders neither
   banner, a diagnostic without a fallback renders the error banner
   alone, and a fallback renders both. The middle case is the one the
-  old condition got wrong, and it fails against it. Example app only;
-  no package API change.
+  old condition got wrong, and it fails against it. The dead-end screen
+  is public as `BridgeUnavailableApp` so a fourth case can pump it
+  directly; `main()`'s branch into it cannot be driven from a test,
+  since reaching it needs a real half-built entrypoint. Example app
+  only; no package API change.
+- The example CLI loader awaits `NtsBridge.ensureInitialized()` on the
+  native *reuse* arm rather than returning immediately. A retained
+  initialisation failure lives on the wrapper's latch, so returning
+  there converted an installed-but-half-built bridge into apparent
+  success; awaiting it surfaces the original error and exits 70 like
+  every other load failure. Mock reuse still returns directly — a mock
+  is usable the moment `initMock()` returns, and routing it through the
+  wrapper would latch a completed future over state the wrapper never
+  installed. Example app only; no package API change.
 - The example app moves from `file_picker` `^12.0.0-beta.7` to the
   `^12.0.0` stable release. `FilePicker.pickFiles()` now returns
   `List<PlatformFile>` rather than a nullable result object, so

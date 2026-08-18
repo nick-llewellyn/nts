@@ -7,7 +7,11 @@
 // The disposition group tests `bridgeDisposition` rather than
 // `initBridge`, because the conflict arm of the latter ends in `exit`,
 // which an in-process test cannot observe. The `initBridge` case below
-// covers the one arm that returns: an installed mock being reused.
+// covers the one arm that returns: an installed mock being reused. Its
+// native counterpart awaits `NtsBridge.ensureInitialized()` so a
+// retained initialization failure is not reported as success, and that
+// arm is out of reach here too — reaching it needs a native bridge in
+// this process, and its failure path also ends in `exit`.
 //
 // That case reads the installed api to prove nothing was replaced,
 // which means naming the internal entrypoint.

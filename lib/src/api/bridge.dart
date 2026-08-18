@@ -110,8 +110,14 @@ abstract final class NtsBridge {
   ///
   /// * A concurrent `NtsRustLib.init()` installs the entrypoint state
   ///   before awaiting its Rust initializers, so this method can
-  ///   observe [state] as [NtsBridgeState.native], complete
-  ///   successfully, and never see the failure that call then suffers.
+  ///   observe that state, complete successfully, and never see the
+  ///   failure that call then suffers. Which [state] it observes
+  ///   depends on what that call installed: the generated
+  ///   implementation reads as [NtsBridgeState.native], while an `api:`
+  ///   the caller supplied reads as [NtsBridgeState.mock]. The
+  ///   early-completion exposure is the same either way, so callers
+  ///   using the `api:` overload are no better protected than the
+  ///   default one.
   /// * A concurrent `NtsRustLib.initMock()` that supplies the
   ///   *generated* implementation also reads as
   ///   [NtsBridgeState.native], which is indistinguishable from state

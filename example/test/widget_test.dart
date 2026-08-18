@@ -12,7 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:nts/nts.dart' show NtsRustLib, TrustMode;
-import 'package:nts_example/main.dart' show NtsExampleApp;
+import 'package:nts_example/main.dart' show BridgeUnavailableApp, NtsExampleApp;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
 import 'package:nts_example/src/mock_api.dart';
@@ -739,6 +739,28 @@ void main() {
 
       expect(find.text(message), findsOneWidget);
       expect(cornerBanner, findsOneWidget);
+    });
+
+    testWidgets('the bridge-unavailable dead end renders the diagnostic and '
+        'builds nothing that would dispatch through the bridge', (
+      tester,
+    ) async {
+      // `main` pumps this instead of `NtsExampleApp` when bootstrap
+      // reports `bridgeUsable == false`. That branch cannot be driven
+      // from a test — it needs a real entrypoint left half-built by a
+      // failed `ensureInitialized()` — so the screen is pumped directly
+      // and the two properties `main` relies on are asserted here.
+      const message =
+          'Bridge initialization failed: DynamicLibrary.open failed: boom';
+      await tester.pumpWidget(const BridgeUnavailableApp(message: message));
+      await tester.pump();
+
+      expect(find.text('Bridge unavailable'), findsOneWidget);
+      expect(find.text(message), findsOneWidget);
+      // No AppState, no NtsController, and so no HomePage: every button
+      // there dispatches through the bridge that just failed.
+      expect(find.byType(HomePage), findsNothing);
+      expect(tester.takeException(), isNull);
     });
   });
 }
