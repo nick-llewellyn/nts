@@ -108,7 +108,10 @@ tarball.
   `example/main.dart`, `example/example.md`, and `ARCHITECTURE.md` now
   document `NtsBridge.ensureInitialized()` as the bootstrap and
   describe `NtsRustLib.init()` accurately as the single-shot raw
-  entrypoint. (The `no-op` wording in
+  entrypoint. The `NtsSyncedTime` class and constructor dartdoc in
+  `lib/src/api/models.dart` state their initialisation prerequisite the
+  same way, keeping `NtsRustLib.initMock()` as the test alternative.
+  (The `no-op` wording in
   `android/.../PlatformInit.kt` is correct and unchanged — that
   bootstrap really is idempotent.)
 - The README's non-Flutter loader guidance no longer describes a later

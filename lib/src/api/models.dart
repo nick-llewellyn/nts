@@ -783,9 +783,9 @@ class NtsTrustStatus {
 /// hardware. Re-run `getTime` when tighter bounds are needed;
 /// [elapsedSinceSync] exposes the age so callers can decide when.
 ///
-/// Constructing an instance before `NtsRustLib.init()` /
-/// `NtsRustLib.initMock()` throws a [StateError] from the
-/// [MonotonicClock.instance] anchor capture. In mock mode with an
+/// Constructing an instance before `NtsBridge.ensureInitialized()`
+/// (or `NtsRustLib.initMock()`, in tests) throws a [StateError] from
+/// the [MonotonicClock.instance] anchor capture. In mock mode with an
 /// API that does not stub the boottime call, the anchor degrades to
 /// a plain monotonic source that freezes during suspend
 /// (test-fixture path); production instances come from `ntsGetTime`,
@@ -876,8 +876,8 @@ class NtsSyncedTime {
   /// fixtures; production code receives instances from `ntsGetTime`.
   ///
   /// The anchor uses the package's sleep-aware monotonic clock.
-  /// Constructing before `NtsRustLib.init()` /
-  /// `NtsRustLib.initMock()` throws a [StateError] from
+  /// Constructing before `NtsBridge.ensureInitialized()` (or
+  /// `NtsRustLib.initMock()`, in tests) throws a [StateError] from
   /// [MonotonicClock.instance]. Under a mock API
   /// without a boottime stub the anchor permanently resolves to a
   /// plain monotonic [Stopwatch] source, which does not count time
