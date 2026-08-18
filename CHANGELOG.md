@@ -97,6 +97,21 @@ tarball.
 
 ### Changed
 
+- The AES-SIV-CMAC paths (AEAD IDs 15 and 17) migrated to the
+  `aes-siv` 0.8 API, completing the move of both SIV families onto the
+  RustCrypto `hybrid-array` traits line. The crate dropped its
+  `aead::generic_array` re-export, so `SivKey::cipher` and
+  `SivKey512::cipher` construct the key array via the infallible
+  `&[u8; N]` conversion instead of `GenericArray::from_slice`, and the
+  `aes_gcm_siv::KeyInit` import is no longer needed now that
+  `aes_siv::KeyInit` is the same trait. No behavioural change: key
+  handling, the zeroization derives, and the wire format are
+  untouched. With `aes-siv` off the old line, `cargo deny`'s
+  `multiple-versions` gate sheds six of its version-pinned skips
+  (`aead`, `aes`, `cipher`, `cpufeatures`, `ctr`, `inout`); the
+  remaining duplicates — `block-buffer`, `crypto-common`, and now
+  `digest` — are held by `flutter_rust_bridge_macros -> md-5 ->
+  digest 0.10` and expire when that chain moves.
 - The documentation no longer claims that bridge initialisation is a
   no-op after the first call. `NtsRustLib.init()` throws a `StateError`
   instead, so the claim was wrong everywhere it appeared, and the

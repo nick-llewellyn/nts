@@ -21,9 +21,7 @@
 
 use aes_gcm_siv::aead::Aead as _;
 use aes_gcm_siv::Aes128GcmSiv;
-use aes_gcm_siv::KeyInit as _;
 use aes_gcm_siv::Nonce;
-use aes_siv::aead::generic_array::GenericArray;
 use aes_siv::siv::{Aes128Siv, Aes256Siv};
 use aes_siv::KeyInit;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -121,7 +119,7 @@ impl SivKey {
     }
 
     fn cipher(&self) -> Aes128Siv {
-        Aes128Siv::new(GenericArray::from_slice(&self.bytes))
+        Aes128Siv::new((&self.bytes).into())
     }
 }
 
@@ -158,7 +156,7 @@ impl SivKey512 {
     }
 
     fn cipher(&self) -> Aes256Siv {
-        Aes256Siv::new(GenericArray::from_slice(&self.bytes))
+        Aes256Siv::new((&self.bytes).into())
     }
 }
 
@@ -456,7 +454,7 @@ mod tests {
     use super::*;
 
     /// RFC 5297 §A.1 deterministic-mode vector (single AD, plaintext `11..ee`).
-    /// Cross-checked against `aes-siv` 0.7's `aes128cmacsiv` test fixture.
+    /// Cross-checked against `aes-siv` 0.8's `aes128cmacsiv` test fixture.
     #[test]
     fn rfc_5297_a1_deterministic_vector() {
         let key_bytes = hex("fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0\
