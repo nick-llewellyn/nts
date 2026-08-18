@@ -118,9 +118,14 @@ tarball.
   synchronously inside its own constructor, so the argument's load-time
   initializers have already run by the time `ensureInitialized` is
   entered and can decide to discard it. The library-hijack surface the
-  section exists to describe is closed by controlling where the path
-  comes from, not by a later call being ignored, and the guidance says
-  so.
+  section exists to describe is closed by nominating one call site as
+  the initialization owner and constructing the library only there, not
+  by a later call being ignored, and the guidance says so. It also says
+  what `NtsBridge.state` is not: a way to tell whether a call will be
+  the one that initializes. The getter rules out a *completed*
+  initialization only — a latched attempt still awaiting its library
+  load has installed no entrypoint state, so `state` reads
+  `uninitialized` for that whole window.
 - The pull request template no longer asks every contributor to bump
   `pubspec.yaml` `version:` following semver. That instruction
   contradicted the release-only bumping policy, under which version

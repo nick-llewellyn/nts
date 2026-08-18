@@ -99,8 +99,14 @@ abstract final class NtsBridge {
   /// time this method is entered and can decide to discard the object.
   /// Callers must therefore treat the *construction* of the argument,
   /// not this method's use of it, as the point at which a path is
-  /// trusted: build it only on the call that owns the trusted path, or
-  /// guard the call site on [state].
+  /// trusted: only a designated owner should construct an
+  /// [ExternalLibrary] at all. [state] does not identify that owner —
+  /// it rules out a *completed* initialization and nothing more. An
+  /// attempt that is latched but still awaiting its library load has
+  /// not installed entrypoint state yet, so [state] reads
+  /// [NtsBridgeState.uninitialized] throughout that window and a second
+  /// caller guarding on it maps its own library before this method
+  /// discards the argument.
   ///
   /// On failure the error propagates to every caller awaiting the
   /// attempt. If the entrypoint is left holding the generated API — the

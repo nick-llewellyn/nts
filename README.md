@@ -563,10 +563,15 @@ executes that library's load-time initializers even when the call
 turns out to be a no-op — the argument is evaluated before
 `ensureInitialized` runs at all. The hijack surface described above
 is therefore closed by controlling where the *path* comes from, not
-by relying on a later call being ignored. Where a path cannot be
-trusted, do not construct an `ExternalLibrary` from it; check
-`NtsBridge.state` first if the call site cannot otherwise tell
-whether it is the one that initializes.
+by relying on a later call being ignored: nominate one call site as
+the initialization owner, and construct an `ExternalLibrary` only
+there.
+
+`NtsBridge.state` is not a substitute for that. It rules out a
+completed initialization, not an in-flight one — an attempt that is
+still awaiting its library load has not installed entrypoint state
+yet, so `state` reads `uninitialized` for the whole of that window and
+a second call site guarding on it maps its library anyway.
 
 ## API summary
 
