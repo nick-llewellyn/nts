@@ -8,8 +8,9 @@
 //      `MockNtsApi` when `--dart-define=NTS_BRIDGE=mock` is passed or
 //      when the dylib fails to load (e.g. the host triple isn't pinned
 //      in `rust/rust-toolchain.toml`). A load failure that already took
-//      the entrypoint admits no mock, and short-circuits to
-//      [BridgeUnavailableApp] instead of the steps below.
+//      the entrypoint admits no mock: bootstrap returns immediately
+//      without running steps 3-5, and [BridgeUnavailableApp] is
+//      rendered instead.
 //   3. Load the bundled NTS server catalog from
 //      `assets/nts-sources.yml`.
 //   4. Hydrate the persisted favourites from `SharedPreferences`.
@@ -41,11 +42,20 @@ class _Boot {
   const _Boot({
     required this.label,
     required this.loadError,
-    required this.bridgeUsable,
     required this.mockFallback,
     required this.catalog,
     required this.favorites,
-  });
+  }) : bridgeUsable = true;
+
+  /// The dead-end outcome: the bridge failed in a way that admits no
+  /// mock, so nothing after it ran. [catalog] is empty and [favorites]
+  /// is null, and [loadError] is the only meaningful field.
+  const _Boot.bridgeUnavailable(String this.loadError)
+    : label = 'bridge unavailable',
+      bridgeUsable = false,
+      mockFallback = false,
+      catalog = const [],
+      favorites = null;
 
   final String label;
   final String? loadError;
@@ -60,42 +70,45 @@ class _Boot {
   /// from a working bridge that merely hit a catalog error.
   final bool mockFallback;
   final List<NtsServerEntry> catalog;
-  final FavoritesStore favorites;
+
+  /// Null exactly when [bridgeUsable] is false: that path returns
+  /// before `SharedPreferences` is touched.
+  final FavoritesStore? favorites;
 }
 
 Future<_Boot> _bootstrap() async {
   String label;
   String? loadError;
-  var bridgeUsable = true;
   var mockFallback = false;
   if (_bridgeMode == 'real') {
     try {
       await NtsBridge.ensureInitialized();
       label = 'real bridge';
     } catch (e) {
-      // Fall back to mock so the UI still renders; the banner will
-      // explain why we ended up here. Only a failure that installed
-      // nothing leaves the `initMock` slot free: FRB installs its
-      // state before awaiting the Rust initializers, so one of those
-      // throwing leaves the bridge `native` but half-built, and a
-      // second init would throw over the top of the real error. That
-      // leaves no usable bridge at all, so the app renders a dead-end
-      // screen rather than a UI whose every button would throw.
-      if (NtsBridge.state == NtsBridgeState.uninitialized) {
-        NtsRustLib.initMock(api: MockNtsApi());
-        label = 'mock (load failed)';
-        mockFallback = true;
-      } else {
-        label = 'bridge unavailable';
-        bridgeUsable = false;
-      }
-      loadError =
+      final detail =
           'Bridge initialization failed: $e\n'
           'The Native Assets hook (hook/build.dart) should bundle '
           'libnts_rust automatically; check that the host '
           'triple is pinned in rust/rust-toolchain.toml and that '
           '`flutter run` was used (not `dart run`). Pass '
           '--dart-define=NTS_BRIDGE=mock to silence this banner.';
+      // Fall back to mock so the UI still renders; the banner will
+      // explain why we ended up here. Only a failure that installed
+      // nothing leaves the `initMock` slot free: FRB installs its
+      // state before awaiting the Rust initializers, so one of those
+      // throwing leaves the bridge `native` but half-built, and a
+      // second init would throw over the top of the real error. That
+      // leaves no usable bridge at all, so we return here rather than
+      // loading a catalog and hydrating preferences for a UI that will
+      // never be built — either of which could throw over the top of
+      // this error and lose it.
+      if (NtsBridge.state != NtsBridgeState.uninitialized) {
+        return _Boot.bridgeUnavailable(detail);
+      }
+      NtsRustLib.initMock(api: MockNtsApi());
+      label = 'mock (load failed)';
+      mockFallback = true;
+      loadError = detail;
     }
   } else {
     NtsRustLib.initMock(api: MockNtsApi());
@@ -125,7 +138,6 @@ Future<_Boot> _bootstrap() async {
   return _Boot(
     label: label,
     loadError: loadError,
-    bridgeUsable: bridgeUsable,
     mockFallback: mockFallback,
     catalog: catalog,
     favorites: favorites,
@@ -155,7 +167,7 @@ Future<void> main() async {
     bridgeLoadError: boot.loadError,
     mockFallback: boot.mockFallback,
     catalog: boot.catalog,
-    favorites: boot.favorites,
+    favorites: boot.favorites!,
     log: NtsLogBuffer(),
   );
   state.log.info(

@@ -540,9 +540,33 @@ supplies the load path before the relative fallback can fire.
 
 Note that `externalLibrary` configures the *first* initialization
 only. A later `ensureInitialized()` call passing a different library
-is a no-op, because the bridge is already initialized and has no
+*ignores* it, because the bridge is already initialized and has no
 de-init — so the call site that owns the trusted path must be the one
 that runs first.
+
+Ignored is not the same as harmless. `ExternalLibrary.open` maps the
+library synchronously, in its own constructor, so writing
+
+```dart
+import 'package:nts/nts.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show ExternalLibrary;
+
+final String untrustedPath = '/some/path/libnts_rust.dylib';
+
+await NtsBridge.ensureInitialized(
+  externalLibrary: ExternalLibrary.open(untrustedPath),
+);
+```
+
+executes that library's load-time initializers even when the call
+turns out to be a no-op — the argument is evaluated before
+`ensureInitialized` runs at all. The hijack surface described above
+is therefore closed by controlling where the *path* comes from, not
+by relying on a later call being ignored. Where a path cannot be
+trusted, do not construct an `ExternalLibrary` from it; check
+`NtsBridge.state` first if the call site cannot otherwise tell
+whether it is the one that initializes.
 
 ## API summary
 

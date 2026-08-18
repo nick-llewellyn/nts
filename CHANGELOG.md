@@ -111,6 +111,16 @@ tarball.
   entrypoint. (The `no-op` wording in
   `android/.../PlatformInit.kt` is correct and unchanged — that
   bootstrap really is idempotent.)
+- The README's non-Flutter loader guidance no longer describes a later
+  `ensureInitialized()` call passing a different library as a "no-op",
+  and both it and the `ensureInitialized` dartdoc now warn that
+  *ignored* is not *unloaded*. `ExternalLibrary.open` maps the library
+  synchronously inside its own constructor, so the argument's load-time
+  initializers have already run by the time `ensureInitialized` is
+  entered and can decide to discard it. The library-hijack surface the
+  section exists to describe is closed by controlling where the path
+  comes from, not by a later call being ignored, and the guidance says
+  so.
 - The pull request template no longer asks every contributor to bump
   `pubspec.yaml` `version:` following semver. That instruction
   contradicted the release-only bumping policy, under which version
@@ -156,6 +166,15 @@ tarball.
   directly; `main()`'s branch into it cannot be driven from a test,
   since reaching it needs a real half-built entrypoint. Example app
   only; no package API change.
+- That arm now returns from bootstrap immediately, via a
+  `_Boot.bridgeUnavailable` variant, instead of setting a flag and
+  falling through the remaining steps. Loading the server catalog and
+  hydrating `SharedPreferences` for a UI that will never be built was
+  wasted at best, and at worst lost the bridge error: the catalog arm
+  prefixes rather than replaces, but an uncaught `FavoritesStore.load()`
+  failure propagated out of bootstrap and `BridgeUnavailableApp` never
+  rendered. `_Boot.favorites` is now nullable, non-null exactly when
+  `bridgeUsable` is true. Example app only; no package API change.
 - The example CLI loader awaits `NtsBridge.ensureInitialized()` on the
   native *reuse* arm rather than returning immediately. A retained
   initialisation failure lives on the wrapper's latch, so returning

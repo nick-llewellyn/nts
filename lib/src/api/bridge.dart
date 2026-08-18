@@ -92,6 +92,16 @@ abstract final class NtsBridge {
   /// this method exists for. Callers that need specific arguments
   /// honoured must be the ones to initialize the bridge.
   ///
+  /// Ignoring [externalLibrary] is not the same as not loading it.
+  /// `ExternalLibrary.open` is synchronous — it calls
+  /// `DynamicLibrary.open` in its constructor — so the library is
+  /// already mapped, and its load-time initializers already run, by the
+  /// time this method is entered and can decide to discard the object.
+  /// Callers must therefore treat the *construction* of the argument,
+  /// not this method's use of it, as the point at which a path is
+  /// trusted: build it only on the call that owns the trusted path, or
+  /// guard the call site on [state].
+  ///
   /// On failure the error propagates to every caller awaiting the
   /// attempt. If the entrypoint is left holding the generated API — the
   /// Rust-side initializers threw after FRB installed its state — the
