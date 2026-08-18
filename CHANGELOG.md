@@ -104,10 +104,18 @@ tarball.
   `SivKey512::cipher` construct the key array via the infallible
   `&[u8; N]` conversion instead of `GenericArray::from_slice`, and the
   `aes_gcm_siv::KeyInit` import is no longer needed now that
-  `aes_siv::KeyInit` is the same trait. No behavioural change: key
-  handling, the zeroization derives, and the wire format are
-  untouched. With `aes-siv` off the old line, `cargo deny`'s
-  `multiple-versions` gate sheds six of its version-pinned skips
+  `aes_siv::KeyInit` is the same trait. The dependency also gains an
+  explicit `zeroize` feature: 0.7 wiped `Siv::encryption_key` in
+  `Drop` unconditionally, 0.8 gates that wipe behind an optional
+  dependency absent from `default`, so a `default-features = false`
+  build that carried the old feature list forward would have dropped
+  the wipe of the key copy each `cipher()` call makes — silently, with
+  nothing failing to flag it. A new compile-time assertion pins
+  `Aes128Siv` and `Aes256Siv` as `ZeroizeOnDrop` so removing the
+  feature again fails to build. With that in place there is no
+  behavioural change: key handling, the zeroization derives, and the
+  wire format are untouched. With `aes-siv` off the old line, the
+  `multiple-versions` gate in `cargo deny` sheds six version-pinned skips
   (`aead`, `aes`, `cipher`, `cpufeatures`, `ctr`, `inout`); the
   remaining duplicates — `block-buffer`, `crypto-common`, and now
   `digest` — are held by `flutter_rust_bridge_macros -> md-5 ->

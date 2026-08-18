@@ -812,6 +812,30 @@ mod tests {
         assert_zeroize_on_drop::<Aes128GcmSivKey>();
     }
 
+    /// Compile-time pin on the *upstream* SIV cipher types
+    /// [`SivKey::cipher`] and [`SivKey512::cipher`] return. Each
+    /// copies the encryption half of the key into the `Siv` value,
+    /// and `aes-siv` 0.8 gates the wipe of that copy behind an
+    /// optional `zeroize` feature absent from `default` — so a
+    /// `default-features = false` declaration that omits the feature
+    /// drops the wipe silently, with no compile error and no test
+    /// failure anywhere else. The wrapped-key derives asserted above
+    /// do not cover this: they wipe our copy, not the cipher's.
+    /// Dropping `"zeroize"` from the `aes-siv` entry in `Cargo.toml`
+    /// fails to compile this test.
+    ///
+    /// `Aes128GcmSiv` is deliberately absent: `aes-gcm-siv` 0.12
+    /// wipes its derived subkeys at the end of each operation rather
+    /// than in `Drop`, so it does not implement the trait and the
+    /// `"zeroize"` feature on that entry is pinned by inspection, not
+    /// by a bound.
+    #[test]
+    fn upstream_siv_ciphers_implement_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<Aes128Siv>();
+        assert_zeroize_on_drop::<Aes256Siv>();
+    }
+
     /// Behavioural pin for [`SivKey`]'s derived [`zeroize::Zeroize`]
     /// implementation: invoking `zeroize` on a key constructed from
     /// non-zero material must leave the key behaviourally
