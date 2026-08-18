@@ -41,14 +41,22 @@ library;
 // handle capture for `rustls-platform-verifier`, which is a separate
 // concern that runs on the platform thread before Dart `main()` starts.
 //
-// `NtsRustLib.init()` is exported for callers that need to supply their
-// own `api:` (test mocks) or otherwise drive the generated entrypoint
-// directly. It is single-shot -- a second call throws a `StateError`,
-// and there is no de-init -- so ordinary consumers should use
-// `NtsBridge.ensureInitialized()` below instead. Member dartdocs on the
-// public API state that requirement as `NtsBridge.ensureInitialized()`
-// accordingly; where they name `NtsRustLib.init()` it is as the
-// underlying step, not as the recommended call.
+// The entrypoint is exported for callers that need to drive it
+// directly -- supplying their own `externalLibrary:`, or relaxing
+// `forceSameCodegenVersion:`. `NtsRustLib.init()` is single-shot -- a
+// second call throws a `StateError`, and there is no de-init -- so
+// ordinary consumers should use `NtsBridge.ensureInitialized()` below
+// instead. Member dartdocs on the public API state that requirement as
+// `NtsBridge.ensureInitialized()` accordingly; where they name
+// `NtsRustLib.init()` it is as the underlying step, not as the
+// recommended call.
+//
+// Tests that want a hand-written double use `NtsRustLib.initMock()`,
+// not `init(api:)`. The `api:` parameter only substitutes the dispatch
+// object: `init()` still loads a library through the Native Assets
+// pipeline and still runs the content-hash check against it, so it is
+// not a way to avoid the native side. `initMock()` installs the double
+// without loading anything.
 export 'src/ffi/frb_generated.dart' show NtsRustLib;
 
 // Safe, idempotent lifecycle wrapper over the generated entrypoint,
