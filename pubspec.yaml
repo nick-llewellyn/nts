@@ -93,7 +93,7 @@ dev_dependencies:
   ffigen: ">=20.1.1 <22.0.0"
   # Code generator backing `@freezed`. FRB v2 invokes it transparently when
   # bridging Rust enums-with-data to Dart sealed classes.
-  freezed: ^3.2.5
+  freezed: ">=3.2.5 <5.0.0"
   # Required by `freezed`'s build pipeline.
   build_runner: ^2.15.0
 
