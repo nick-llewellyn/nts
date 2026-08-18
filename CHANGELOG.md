@@ -129,6 +129,18 @@ tarball.
   initialization only — a latched attempt still awaiting its library
   load has installed no entrypoint state, so `state` reads
   `uninitialized` for that whole window.
+- The CI matrix's old-SDK leg is no longer documented as exercising the
+  declared SDK floor. It runs Flutter 3.38.10, which is ten patches
+  above the `flutter: '>=3.38.0'` constraint and is not the oldest
+  release satisfying it — earlier 3.38.x patches do not build native
+  dependencies through the Native Assets build hook reliably, so a leg
+  pinned to the literal floor would fail for reasons unrelated to this
+  package's sources. The pin is deliberate and unchanged; what moved is
+  the claim attached to it in `ci.yml`, `pubspec.yaml`,
+  `DEVELOPMENT.md` (both the bullet and the workflow table), and the
+  pull request template, all of which described 3.38.10 as the declared
+  floor. The declared floor is a dependency-resolution bound, not a
+  build-verified one, and the comments now say which is which.
 - The pull request template no longer asks every contributor to bump
   `pubspec.yaml` `version:` following semver. That instruction
   contradicted the release-only bumping policy, under which version

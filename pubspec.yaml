@@ -36,9 +36,10 @@ platforms:
 environment:
   # Lower bound matches the `hooks` package floor (Dart >=3.10.0), which
   # corresponds to Flutter 3.38.0 stable (Nov 2025) -- the first release to
-  # ship Dart 3.10. CI exercises both this floor and the latest `stable`
-  # channel (matches `.fvmrc`) to keep Native Assets + FRB bindings
-  # drift-free.
+  # ship Dart 3.10. CI's old-SDK leg runs 3.38.10 rather than this floor,
+  # because earlier 3.38.x patches do not build native dependencies
+  # through the build hook reliably; the declared floor is the
+  # dependency-resolution bound, not a build-verified one.
   sdk: '^3.10.0'
   flutter: '>=3.38.0'
 
