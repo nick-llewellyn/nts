@@ -7,7 +7,10 @@
 //   2. Bind the FRB bridge: real Rust dylib by default, in-memory
 //      `MockNtsApi` when `--dart-define=NTS_BRIDGE=mock` is passed or
 //      when the dylib fails to load (e.g. the host triple isn't pinned
-//      in `rust/rust-toolchain.toml`).
+//      in `rust/rust-toolchain.toml`). A load failure that already took
+//      the entrypoint admits no mock: bootstrap returns immediately
+//      without running steps 3-5, and [BridgeUnavailableApp] is
+//      rendered instead.
 //   3. Load the bundled NTS server catalog from
 //      `assets/nts-sources.yml`.
 //   4. Hydrate the persisted favourites from `SharedPreferences`.
@@ -17,7 +20,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
-import 'package:nts/nts.dart' show NtsRustLib;
+import 'package:nts/nts.dart' show NtsBridge, NtsBridgeState, NtsRustLib;
 import 'package:signals/signals.dart' show SignalsObserver;
 
 import 'src/data/server_entry.dart';
@@ -39,35 +42,73 @@ class _Boot {
   const _Boot({
     required this.label,
     required this.loadError,
+    required this.mockFallback,
     required this.catalog,
     required this.favorites,
-  });
+  }) : bridgeUsable = true;
+
+  /// The dead-end outcome: the bridge failed in a way that admits no
+  /// mock, so nothing after it ran. [catalog] is empty and [favorites]
+  /// is null, and [loadError] is the only meaningful field.
+  const _Boot.bridgeUnavailable(String this.loadError)
+    : label = 'bridge unavailable',
+      bridgeUsable = false,
+      mockFallback = false,
+      catalog = const [],
+      favorites = null;
 
   final String label;
   final String? loadError;
+
+  /// Whether a working bridge — real or mock — ended up installed. False
+  /// only on the post-install initialization failure, where no `NtsClient`
+  /// can be constructed and no query can be dispatched.
+  final bool bridgeUsable;
+
+  /// Whether the mock stood in for a real bridge that failed to load.
+  /// Distinguishes the fallback from a run that asked for the mock, and
+  /// from a working bridge that merely hit a catalog error.
+  final bool mockFallback;
   final List<NtsServerEntry> catalog;
-  final FavoritesStore favorites;
+
+  /// Null exactly when [bridgeUsable] is false: that path returns
+  /// before `SharedPreferences` is touched.
+  final FavoritesStore? favorites;
 }
 
 Future<_Boot> _bootstrap() async {
   String label;
   String? loadError;
+  var mockFallback = false;
   if (_bridgeMode == 'real') {
     try {
-      await NtsRustLib.init();
+      await NtsBridge.ensureInitialized();
       label = 'real bridge';
     } catch (e) {
-      // Fall back to mock so the UI still renders; the banner will
-      // explain why we ended up here.
-      NtsRustLib.initMock(api: MockNtsApi());
-      label = 'mock (load failed)';
-      loadError =
-          'NtsRustLib.init() failed: $e\n'
+      final detail =
+          'Bridge initialization failed: $e\n'
           'The Native Assets hook (hook/build.dart) should bundle '
           'libnts_rust automatically; check that the host '
           'triple is pinned in rust/rust-toolchain.toml and that '
           '`flutter run` was used (not `dart run`). Pass '
           '--dart-define=NTS_BRIDGE=mock to silence this banner.';
+      // Fall back to mock so the UI still renders; the banner will
+      // explain why we ended up here. Only a failure that installed
+      // nothing leaves the `initMock` slot free: FRB installs its
+      // state before awaiting the Rust initializers, so one of those
+      // throwing leaves the bridge `native` but half-built, and a
+      // second init would throw over the top of the real error. That
+      // leaves no usable bridge at all, so we return here rather than
+      // loading a catalog and hydrating preferences for a UI that will
+      // never be built — either of which could throw over the top of
+      // this error and lose it.
+      if (NtsBridge.state != NtsBridgeState.uninitialized) {
+        return _Boot.bridgeUnavailable(detail);
+      }
+      NtsRustLib.initMock(api: MockNtsApi());
+      label = 'mock (load failed)';
+      mockFallback = true;
+      loadError = detail;
     }
   } else {
     NtsRustLib.initMock(api: MockNtsApi());
@@ -97,6 +138,7 @@ Future<_Boot> _bootstrap() async {
   return _Boot(
     label: label,
     loadError: loadError,
+    mockFallback: mockFallback,
     catalog: catalog,
     favorites: favorites,
   );
@@ -112,11 +154,20 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _lockOrientationOnPhones();
   final boot = await _bootstrap();
+  if (!boot.bridgeUsable) {
+    // No bridge to dispatch through, so there is nothing for the
+    // controller to drive: constructing one would mint an `NtsClient`
+    // over the half-built entrypoint and every button would throw.
+    // Report the failure and stop.
+    runApp(BridgeUnavailableApp(message: boot.loadError!));
+    return;
+  }
   final state = AppState(
     bridgeMode: boot.label,
     bridgeLoadError: boot.loadError,
+    mockFallback: boot.mockFallback,
     catalog: boot.catalog,
-    favorites: boot.favorites,
+    favorites: boot.favorites!,
     log: NtsLogBuffer(),
   );
   state.log.info(
@@ -216,6 +267,7 @@ class _NtsExampleAppState extends State<NtsExampleApp> {
       darkTheme: _buildTheme(Brightness.dark),
       home: _Shell(
         loadError: widget.state.bridgeLoadError,
+        mockFallback: widget.state.mockFallback,
         child: HomePage(state: widget.state, controller: _controller),
       ),
     );
@@ -296,25 +348,85 @@ class _NtsExampleAppState extends State<NtsExampleApp> {
 }
 
 class _Shell extends StatelessWidget {
-  const _Shell({required this.child, required this.loadError});
+  const _Shell({
+    required this.child,
+    required this.loadError,
+    required this.mockFallback,
+  });
 
   final Widget child;
   final String? loadError;
 
+  /// Whether the diagnostic in [loadError] is the bridge-load failure
+  /// that installed the mock. A catalog error also populates
+  /// [loadError] while leaving the requested bridge in place, so the
+  /// corner banner cannot be labelled off that field alone.
+  final bool mockFallback;
+
   @override
   Widget build(BuildContext context) {
     if (loadError == null) return child;
+    final banner = MaterialBanner(
+      content: Text(loadError!),
+      actions: const [SizedBox.shrink()],
+    );
+    final body = Column(
+      children: [
+        banner,
+        Expanded(child: child),
+      ],
+    );
+    if (!mockFallback) return body;
     return Banner(
       message: 'mock fallback',
       location: BannerLocation.topEnd,
-      child: Column(
-        children: [
-          MaterialBanner(
-            content: Text(loadError!),
-            actions: const [SizedBox.shrink()],
+      child: body,
+    );
+  }
+}
+
+/// Dead-end screen for the one failure that leaves no usable bridge: an
+/// `ensureInitialized()` that threw *after* FRB installed its state, so
+/// the entrypoint is occupied, half-built, and cannot be replaced in
+/// this process. Nothing native-dependent is constructed — no
+/// [AppState], no [NtsController] — because every call through them
+/// would throw.
+///
+/// Public so a widget test can pump it directly; [main] is the only
+/// production caller, and it cannot be driven from a test because
+/// `bridgeUsable == false` requires a real half-built entrypoint.
+class BridgeUnavailableApp extends StatelessWidget {
+  const BridgeUnavailableApp({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'NTS',
+      debugShowCheckedModeBanner: false,
+      theme: _NtsExampleAppState._buildTheme(Brightness.light),
+      darkTheme: _NtsExampleAppState._buildTheme(Brightness.dark),
+      home: Scaffold(
+        appBar: AppBar(title: const Text('NTS')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline, size: 48),
+                const SizedBox(height: 16),
+                Text(
+                  'Bridge unavailable',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 12),
+                Text(message, textAlign: TextAlign.center),
+              ],
+            ),
           ),
-          Expanded(child: child),
-        ],
+        ),
       ),
     );
   }

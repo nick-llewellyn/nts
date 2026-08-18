@@ -48,6 +48,8 @@ coverage/
 .beads-credential-key
 .beads/issues.jsonl
 .beads/last_pull
+.beads.backup-pre-recovery/
+.beads.gate.lock
 .linear.toml
 
 

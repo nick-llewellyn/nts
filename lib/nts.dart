@@ -15,13 +15,18 @@
 ///    ahead of plugin registration) can call
 ///    `com.nllewellyn.nts.PlatformInit.init(context)` from Kotlin
 ///    directly.
-/// 2. **Dart/FRB initialization** — `await NtsRustLib.init()` once during
-///    startup before any `nts*` entry point. This loads the bundled
-///    Rust dylib through the Native Assets pipeline and wires the
-///    `flutter_rust_bridge` v2 dispatch table on the Dart isolate.
+/// 2. **Dart/FRB initialization** — `await NtsBridge.ensureInitialized()`
+///    during startup, before any `nts*` entry point. This loads the
+///    bundled Rust dylib through the Native Assets pipeline and wires
+///    the `flutter_rust_bridge` v2 dispatch table on the Dart isolate.
 ///    Mandatory on every platform; the plugin layer cannot perform
 ///    this step because it runs on the Android platform thread before
-///    the Dart isolate exists. Subsequent calls are no-ops.
+///    the Dart isolate exists. Safe to call repeatedly and
+///    concurrently: after the first call it completes without
+///    re-initializing. The underlying `NtsRustLib.init()` is
+///    single-shot by contrast — it throws a `StateError` on every call
+///    after the first — so prefer the wrapper anywhere more than one
+///    code path can reach the bootstrap.
 ///
 /// The hand-written wrapper in `src/api/nts.dart` is the package's
 /// stable public contract: the underlying Rust-side bindings live in
@@ -29,14 +34,36 @@
 /// `ARCHITECTURE.md`'s "Public API stability layer" for the rationale.
 library;
 
-// Bridge entrypoint. `await NtsRustLib.init()` is mandatory on every
-// platform: it loads the bundled Rust dylib via the Native Assets
-// pipeline and binds the FRB v2 dispatch table on the calling isolate.
-// The Android `NtsPlugin` does *not* subsume this step -- it only
-// handles the JNI handle capture for `rustls-platform-verifier`, which
-// is a separate concern that runs on the platform thread before Dart
-// `main()` starts. Subsequent invocations are no-ops.
+// Bridge entrypoint. Initialization is mandatory on every platform: it
+// loads the bundled Rust dylib via the Native Assets pipeline and binds
+// the FRB v2 dispatch table on the calling isolate. The Android
+// `NtsPlugin` does *not* subsume this step -- it only handles the JNI
+// handle capture for `rustls-platform-verifier`, which is a separate
+// concern that runs on the platform thread before Dart `main()` starts.
+//
+// The entrypoint is exported for callers that need to drive it
+// directly -- supplying their own `externalLibrary:`, or relaxing
+// `forceSameCodegenVersion:`. `NtsRustLib.init()` is single-shot -- a
+// second call throws a `StateError`, and there is no de-init -- so
+// ordinary consumers should use `NtsBridge.ensureInitialized()` below
+// instead. Member dartdocs on the public API state that requirement as
+// `NtsBridge.ensureInitialized()` accordingly; where they name
+// `NtsRustLib.init()` it is as the underlying step, not as the
+// recommended call.
+//
+// Tests that want a hand-written double use `NtsRustLib.initMock()`,
+// not `init(api:)`. The `api:` parameter only substitutes the dispatch
+// object: `init()` still loads a library through the Native Assets
+// pipeline and still runs the content-hash check against it, so it is
+// not a way to avoid the native side. `initMock()` installs the double
+// without loading anything.
 export 'src/ffi/frb_generated.dart' show NtsRustLib;
+
+// Safe, idempotent lifecycle wrapper over the generated entrypoint,
+// plus the `NtsBridgeState` predicate consumers need to tell an
+// uninitialized bridge from a mock or a native one without reaching
+// into FRB-internal members.
+export 'src/api/bridge.dart';
 
 // Public sleep-aware monotonic clock. A general-purpose primitive
 // whose readings keep advancing across device deep sleep; the shared

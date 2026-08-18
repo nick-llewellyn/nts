@@ -42,8 +42,8 @@ part of 'nts.dart';
 /// them. There is no clone-as-sendable-token API on the public
 /// surface today.
 ///
-/// **Initialization**: `await NtsRustLib.init()` from
-/// `package:nts/src/ffi/frb_generated.dart` must have completed
+/// **Initialization**: `await NtsBridge.ensureInitialized()` must
+/// have completed
 /// before the [NtsClient] default constructor or any of its
 /// methods is called — the constructor synchronously dispatches
 /// through the FRB bridge to mint the underlying Rust handle, and
@@ -93,11 +93,13 @@ class NtsClient {
   /// itself is confidential.
   ///
   /// Synchronous: dispatches through the FRB bridge to mint the
-  /// underlying Rust handle in-line. `await NtsRustLib.init()` must
+  /// underlying Rust handle in-line. `await
+  /// NtsBridge.ensureInitialized()` must
   /// have completed first; calling this before init throws a
   /// `StateError` from FRB's dispatcher rather than an [NtsError].
   /// Apps that mint a long-lived [NtsClient] during startup should
-  /// do so after the same `await NtsRustLib.init()` they would do
+  /// do so after the same `await NtsBridge.ensureInitialized()` they
+  /// would do
   /// before calling [ntsQuery].
   factory NtsClient({
     TrustMode trustMode = TrustMode.platformWithFallback,
@@ -123,7 +125,8 @@ class NtsClient {
   /// Trust-anchor policy this client was constructed with.
   /// Synchronous: backed by a one-byte read on the Rust side.
   ///
-  /// Requires `await NtsRustLib.init()` to have completed on the
+  /// Requires `await NtsBridge.ensureInitialized()` to have completed
+  /// on the
   /// calling isolate before invocation: the read happens on the Rust
   /// side and dispatches through the FRB v2 dispatch table even
   /// though the call returns synchronously, so a missed
@@ -267,7 +270,8 @@ class NtsClient {
   /// expose via [ntsQuery] / [ntsWarmCookies]) rather than
   /// soft-failing as `false`.
   ///
-  /// Requires `await NtsRustLib.init()` to have completed on the
+  /// Requires `await NtsBridge.ensureInitialized()` to have completed
+  /// on the
   /// calling isolate before invocation: the mutex acquisition and
   /// `HashMap::remove` happen on the Rust side and dispatch through
   /// the FRB v2 dispatch table even though the call returns
@@ -294,7 +298,8 @@ class NtsClient {
   /// Synchronous: backed by one mutex acquisition and one
   /// `HashMap::clear` on the Rust side; no isolate hop.
   ///
-  /// Requires `await NtsRustLib.init()` to have completed on the
+  /// Requires `await NtsBridge.ensureInitialized()` to have completed
+  /// on the
   /// calling isolate before invocation: the mutex acquisition and
   /// `HashMap::clear` happen on the Rust side and dispatch through
   /// the FRB v2 dispatch table even though the call returns

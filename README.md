@@ -88,8 +88,8 @@ flutter pub add nts
 
 Supported on **Android, iOS, macOS, Linux, and Windows**. On every
 platform, integration is `flutter pub add nts` plus one
-`await NtsRustLib.init()` during application startup before the
-first `ntsGetTime` / `ntsQuery` / `ntsWarmCookies` call — no
+`await NtsBridge.ensureInitialized()` during application startup
+before the first `ntsGetTime` / `ntsQuery` / `ntsWarmCookies` call — no
 per-platform bootstrap code. See "Initialization has two layers"
 below for the rationale.
 
@@ -122,11 +122,12 @@ jitter, and worst-case error-bound statistics.
 import 'package:nts/nts.dart';
 
 Future<void> main() async {
-  // 1. Initialize the FRB bridge exactly once, before anything else
-  //    in this package. This loads the bundled Rust binary that does
-  //    the actual NTS-KE handshake and AEAD-NTP exchange and wires
-  //    the Dart-side dispatch table. Required on every platform.
-  await NtsRustLib.init();
+  // 1. Initialize the FRB bridge before anything else in this
+  //    package. This loads the bundled Rust binary that does the
+  //    actual NTS-KE handshake and AEAD-NTP exchange and wires the
+  //    Dart-side dispatch table. Required on every platform, and safe
+  //    to call from more than one bootstrap path.
+  await NtsBridge.ensureInitialized();
 
   // 2. Pick an RFC 8915 NTS-KE endpoint. Port 4460 is the IANA default.
   const spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
@@ -181,19 +182,26 @@ what your host code needs to do.
    can call `com.nllewellyn.nts.PlatformInit.init(context)` from
    Kotlin directly; see the KDoc on that class.
 
-2. **Dart/FRB initialization** (`await NtsRustLib.init()`, every
-   platform, manual). This loads the bundled Rust dylib through the
-   Native Assets pipeline and wires the
+2. **Dart/FRB initialization** (`await NtsBridge.ensureInitialized()`,
+   every platform, manual). This loads the bundled Rust dylib through
+   the Native Assets pipeline and wires the
    [`flutter_rust_bridge`](https://pub.dev/packages/flutter_rust_bridge)
    v2 dispatch table on the calling isolate. The Android plugin does
-   *not* subsume this step: `NtsRustLib.init()` mutates Dart isolate
-   state, and the plugin runs on the Android platform thread before
-   the Dart isolate exists. Calling `ntsGetTime`, `ntsQuery`, or
-   `ntsWarmCookies` before `NtsRustLib.init()` resolves raises an
-   error. In a Flutter
-   app, do it right after `WidgetsFlutterBinding.ensureInitialized()`
-   in `main()`; subsequent invocations are no-ops, so it is safe to
-   call from a shared bootstrap path.
+   *not* subsume this step: it mutates Dart isolate state, and the
+   plugin runs on the Android platform thread before the Dart isolate
+   exists. Calling `ntsGetTime`, `ntsQuery`, or `ntsWarmCookies` before
+   it resolves raises an error. In a Flutter app, do it right after
+   `WidgetsFlutterBinding.ensureInitialized()` in `main()`; repeated
+   and concurrent calls converge on the first one rather than
+   re-initializing, so it is safe to call from a shared bootstrap
+   path.
+
+   The underlying `NtsRustLib.init()` is exported too, for callers
+   that need to drive the generated entrypoint directly (supplying
+   their own `api:`, for instance). It is single-shot: a second call
+   throws a `StateError`, and there is no de-init. Prefer
+   `NtsBridge.ensureInitialized()` unless you specifically need the
+   raw entrypoint.
 
 A complete, runnable version with exhaustive `NtsError` handling
 lives in [`example/main.dart`](example/main.dart). For valid hostnames
@@ -400,7 +408,7 @@ inspection, construct the client explicitly with
 import 'package:nts/nts.dart';
 
 Future<void> main() async {
-  await NtsRustLib.init(); // must complete before using NtsClient
+  await NtsBridge.ensureInitialized(); // before using NtsClient
   final client = NtsClient(trustMode: TrustMode.bundledOnly);
   final sample = await client.query(
     spec: const NtsServerSpec(host: 'time.cloudflare.com', port: 4460),
@@ -445,7 +453,7 @@ import 'dart:io';
 import 'package:nts/nts.dart';
 
 Future<void> main() async {
-  await NtsRustLib.init(); // must complete before using NtsClient
+  await NtsBridge.ensureInitialized(); // before using NtsClient
 
   // Trusts only the private CA, so it authenticates only the
   // internal server; public hosts are rejected.
@@ -487,9 +495,9 @@ boundary.
 The automatic library resolution described under
 [Prerequisites](#prerequisites) is a Flutter-specific feature: the
 Native Assets build hook only runs inside `flutter run` /
-`flutter build`, where it compiles the Rust crate and hands
-`NtsRustLib.init()` a controlled absolute path to the resulting
-dynamic library.
+`flutter build`, where it compiles the Rust crate and hands bridge
+initialization a controlled absolute path to the resulting dynamic
+library.
 
 Pure Dart environments — a `dart run` CLI such as the bundled
 [`example/bin/nts_cli.dart`](example/bin/nts_cli.dart), a
@@ -501,8 +509,8 @@ resolving the *relative* directory `rust/target/release/` against
 the current working directory.
 
 That fallback is a security problem, not just a convenience gap.
-Calling `await NtsRustLib.init()` with no `externalLibrary:`
-argument from a working directory an attacker can influence is a
+Initializing with no `externalLibrary:` argument from a working
+directory an attacker can influence is a
 library-hijack surface: a malicious
 `rust/target/release/libnts_rust.dylib` (or `.so` / `.dll`) dropped
 there yields arbitrary code execution under the calling process's
@@ -521,20 +529,58 @@ import 'package:nts/nts.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show ExternalLibrary;
 
-await NtsRustLib.init(
+await NtsBridge.ensureInitialized(
   externalLibrary: ExternalLibrary.open('/absolute/path/to/libnts_rust.dylib'),
 );
 ```
 
-Flutter callers can keep using the bare `await NtsRustLib.init()`
-form: the Native Assets pipeline supplies the load path before the
-relative fallback can fire.
+Flutter callers can keep using the bare
+`await NtsBridge.ensureInitialized()` form: the Native Assets pipeline
+supplies the load path before the relative fallback can fire.
+
+Note that `externalLibrary` configures the *first* initialization
+only. A later `ensureInitialized()` call passing a different library
+*ignores* it, because the bridge is already initialized and has no
+de-init — so the call site that owns the trusted path must be the one
+that runs first.
+
+Ignored is not the same as harmless. `ExternalLibrary.open` maps the
+library synchronously, in its own constructor, so writing
+
+```dart
+import 'package:nts/nts.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show ExternalLibrary;
+
+final String untrustedPath = '/some/path/libnts_rust.dylib';
+
+await NtsBridge.ensureInitialized(
+  externalLibrary: ExternalLibrary.open(untrustedPath),
+);
+```
+
+executes that library's load-time initializers even when the call
+turns out to be a no-op — the argument is evaluated before
+`ensureInitialized` runs at all. The hijack surface described above
+is therefore closed by controlling where the *path* comes from, not
+by relying on a later call being ignored: nominate one call site as
+the initialization owner, and construct an `ExternalLibrary` only
+there.
+
+`NtsBridge.state` is not a substitute for that. It rules out a
+completed initialization, not an in-flight one — an attempt that is
+still awaiting its library load has not installed entrypoint state
+yet, so `state` reads `uninitialized` for the whole of that window and
+a second call site guarding on it maps its library anyway.
 
 ## API summary
 
 | Symbol | Purpose |
 |--------|---------|
-| `NtsRustLib.init()` | Load the native dylib and wire the FRB v2 dispatch table on the calling isolate. Await once before any other call, on every platform. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
+| `NtsBridge.ensureInitialized({externalLibrary, handler, forceSameCodegenVersion})` | **Recommended bootstrap.** Load the native dylib and wire the FRB v2 dispatch table on the calling isolate, or complete immediately when that is already done. Await before any other call, on every platform; safe to call repeatedly and concurrently, so it can live in a shared bootstrap path. Arguments configure the first initialization only. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
+| `NtsBridge.state` | Which of `NtsBridgeState.uninitialized` / `.mock` / `.native` the bridge holds on this isolate. The split is *structural*, on the installed API's type, not by initialization route or by who supplied it: `.native` means a generated FFI dispatch implementation (a `BaseApiImpl`) is installed, so calls cross into the Rust core — including when a caller passed that generated implementation to `NtsRustLib.initMock()`. `.mock` means the installed API is not one, in practice a hand-written double. |
+| `NtsBridge.dispose()` | Release the bridge's Dart-side resources, or do nothing when it was never initialized. Optional — the bridge is torn down with the process. Not a de-init: `NtsBridge.state` is unchanged afterwards. |
+| `NtsRustLib.init()` | Raw generated entrypoint, for callers that must supply their own `api:` or otherwise drive it directly. Single-shot: a second call throws a `StateError`, and there is no de-init. Prefer `NtsBridge.ensureInitialized()`. |
 | `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-delay selection (the measured round trip in practice; the RFC 5905 peer delay is taken only inside the strict selection window `(0, roundTripMicros]`, which every healthy sample across the bundled server catalog measured above), `delay / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8-second **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. |
 | `ntsQuery({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: one authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTime` (optional `DateTime`, interpreted as UTC, not before the epoch) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. |
 | `ntsWarmCookies({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTime` carries the same clock-skew-rescue semantics as on `ntsQuery`. |
@@ -546,7 +592,7 @@ relative fallback can fire.
 | `kDefaultBridgeConcurrencyCap` | Package default for `bridgeConcurrencyCap` (`4`, sized to the smallest common mobile FRB worker pool — see the constant's dartdoc). |
 | `NtsServerSpec(host, port)` | NTS-KE endpoint (port 4460 by default). |
 | `NtsSyncedTime` | Synchronized clock returned by `getTime`: `utcUnixMicros` (compensated best sample at the anchor), `roundTripMicros` (winning sample), `samplesUsed`, `trustBackend`, `offsetMicros` (winning sample's RFC 5905 θ), `jitterMicros` (burst RMS jitter ψ), `errorBoundMicros` (worst-case error at the anchor, root-distance recipe), `utcNow` (sleep-aware monotonic projection immune to system clock changes and device suspend), `elapsedSinceSync`. Identity semantics — a live clock, not a value-type DTO. |
-| `MonotonicClock` | General-purpose sleep-aware monotonic time source: readings keep advancing across device deep sleep, unlike `Stopwatch` (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on iOS/macOS, `QueryInterruptTimePrecise` on Windows). The shared `MonotonicClock.instance` singleton is the same timeline the package uses internally; constructing an instance (or first accessing `MonotonicClock.instance`) before `NtsRustLib.init()` / `NtsRustLib.initMock()` throws a `StateError`. `nowMicros()`, `elapsedSince(startMicros)`. |
+| `MonotonicClock` | General-purpose sleep-aware monotonic time source: readings keep advancing across device deep sleep, unlike `Stopwatch` (`CLOCK_BOOTTIME` on Android/Linux, `mach_continuous_time` on iOS/macOS, `QueryInterruptTimePrecise` on Windows). The shared `MonotonicClock.instance` singleton is the same timeline the package uses internally; constructing an instance (or first accessing `MonotonicClock.instance`) while `NtsBridge.state` is `NtsBridgeState.uninitialized` throws a `StateError`. `nowMicros()`, `elapsedSince(startMicros)`. |
 | `NtsTimeSample` | `utcUnixMicros`, `roundTripMicros`, `serverStratum`, `aeadId`, `freshCookies`, `phaseTimings`, `trustBackend`, `recvBoottimeMicros` (sleep-aware monotonic wire-level receipt stamp, taken immediately after the UDP recv in the native worker — same clock/epoch as `MonotonicClock`, per-boot epoch, never persist), plus the RFC 5905 statistics `offsetMicros` (θ), `peerDelayMicros` (δ), `rootDelayMicros`, `rootDispersionMicros`, `serverPrecision`, plus `keWarnings` (non-fatal NTS-KE warning codes from the establishing handshake, RFC 8915 §4.1.4 record type 3, as raw `int` values — empty for every server observed in practice, since the IANA registry has no assignments as of RFC 8915). `roundTripMicros` is the UDP-phase wall-clock cost; the four pre-NTP phases live on `phaseTimings`; `trustBackend` records which trust-anchor backend the post-handshake TLS verification chose. `keWarnings` describes the handshake rather than the call, so like `trustBackend` — and unlike `phaseTimings` — it follows the session across cached-session queries instead of resetting to empty. |
 | `NtsWarmCookiesOutcome` | `freshCookies`, `phaseTimings`, `trustBackend`, `keWarnings`. The UDP phase does not run on this path, so only KE-pipeline timings are populated; `trustBackend` carries the same per-handshake attribution as on `NtsTimeSample`. `keWarnings` carries the same warning codes, with no cached-path nuance: this call always runs a fresh handshake, so the codes are always that handshake's own. |
 | `PhaseTimings` | `dnsMicros`, `connectMicros`, `tlsHandshakeMicros`, `keRecordIoMicros`. Microsecond-resolution wall-clock breakdown of the four pre-NTP phases of an `ntsQuery` / `ntsWarmCookies` call. Phases that did not run report `0`. See ARCHITECTURE.md's "Phase attribution and timings" section. |

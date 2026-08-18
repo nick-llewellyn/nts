@@ -142,9 +142,8 @@ class _CustomRootsPanelState extends State<CustomRootsPanel> {
 
   Future<void> _pickFile() async {
     try {
-      final result = await FilePicker.pickFiles();
-      if (result == null || result.files.isEmpty) return;
-      final file = result.files.first;
+      final file = await FilePicker.pickFile();
+      if (file == null) return;
       final bytes = await file.readAsBytes();
       // The picker dialog is modal-async: the widget can be disposed
       // while it is open (e.g. the trust mode is flipped by another

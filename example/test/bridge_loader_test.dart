@@ -4,37 +4,33 @@
 // Native Assets pipeline, so nothing else keeps the loaded library in
 // step with `rust/src/**`.
 //
-// The disposition group tests `mockBridgeDisposition` rather than
+// The disposition group tests `bridgeDisposition` rather than
 // `initBridge`, because the conflict arm of the latter ends in `exit`,
 // which an in-process test cannot observe. The `initBridge` case below
-// covers the one arm that returns: an installed mock being reused.
+// covers the one arm that returns: an installed mock being reused. Its
+// native counterpart awaits `NtsBridge.ensureInitialized()` so a
+// retained initialization failure is not reported as success, and that
+// arm is out of reach here too — reaching it needs a native bridge in
+// this process, and its failure path also ends in `exit`.
 //
-// Constructing a non-mock `NtsRustLibApi` means naming the internal
-// api contract, the same way `lib/src/mock_api.dart` does.
+// That case reads the installed api to prove nothing was replaced,
+// which means naming the internal entrypoint.
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
-import 'package:nts/src/ffi/frb_generated.dart' show NtsRustLib, NtsRustLibApi;
+import 'package:nts/nts.dart' show NtsBridgeState;
+// ignore: depend_on_referenced_packages
+import 'package:nts/src/ffi/frb_generated.dart' show NtsRustLib;
 import 'package:nts_example/src/cli/bridge_loader.dart'
     show
-        MockBridgeDisposition,
+        BridgeDisposition,
+        bridgeDisposition,
         dylibStalenessWarning,
-        initBridge,
-        mockBridgeDisposition;
+        initBridge;
 import 'package:nts_example/src/mock_api.dart' show MockNtsApi;
-
-/// Stand-in for the dylib-backed `NtsRustLibApiImpl`: anything that is
-/// an `NtsRustLibApi` but not a [MockNtsApi]. Never dispatched
-/// through — only its type is under test — so every member is left to
-/// `noSuchMethod`.
-class _NativeLikeApi implements NtsRustLibApi {
-  @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      throw UnimplementedError('${invocation.memberName}');
-}
 
 /// Build a throwaway crate layout — `<root>/src/lib.rs`,
 /// `<root>/Cargo.toml`, `<root>/target/release/libnts_rust.dylib` —
@@ -161,37 +157,42 @@ void main() {
     });
   });
 
-  group('mockBridgeDisposition', () {
-    test('nothing installed -> fresh', () {
+  group('bridgeDisposition', () {
+    test('nothing installed -> fresh, either way', () {
+      for (final useMock in [true, false]) {
+        expect(
+          bridgeDisposition(NtsBridgeState.uninitialized, useMock: useMock),
+          BridgeDisposition.fresh,
+        );
+      }
+    });
+
+    test('the requested kind is already installed -> reuse', () {
       expect(
-        mockBridgeDisposition(initialized: false, api: null),
-        MockBridgeDisposition.fresh,
+        bridgeDisposition(NtsBridgeState.mock, useMock: true),
+        BridgeDisposition.reuse,
+      );
+      expect(
+        bridgeDisposition(NtsBridgeState.native, useMock: false),
+        BridgeDisposition.reuse,
       );
     });
 
-    test('an installed mock -> reuse', () {
+    test('the other kind is installed -> conflict, either way', () {
+      // The defect this guards: a bare "is it initialised" bool is
+      // true for both, so a `--mock` run would have reused the native
+      // bridge and issued real handshakes against real servers. The
+      // inverse is just as wrong and quieter, because
+      // `NtsBridge.ensureInitialized()` completes over an installed
+      // mock: a native run would report success and then dispatch
+      // every call to `MockNtsApi`.
       expect(
-        mockBridgeDisposition(initialized: true, api: MockNtsApi()),
-        MockBridgeDisposition.reuse,
+        bridgeDisposition(NtsBridgeState.native, useMock: true),
+        BridgeDisposition.conflict,
       );
-    });
-
-    test('an installed native api -> conflict', () {
-      // The defect this guards: `initialized` alone is true for both,
-      // so a `--mock` run would have reused the native bridge and
-      // issued real handshakes against real servers.
       expect(
-        mockBridgeDisposition(initialized: true, api: _NativeLikeApi()),
-        MockBridgeDisposition.conflict,
-      );
-    });
-
-    test('a subclassed mock still -> reuse', () {
-      // Other suites install `MockNtsApi` subclasses to script the
-      // bridge; the check is a subtype test, not an exact-type one.
-      expect(
-        mockBridgeDisposition(initialized: true, api: _ScriptedMockApi()),
-        MockBridgeDisposition.reuse,
+        bridgeDisposition(NtsBridgeState.mock, useMock: false),
+        BridgeDisposition.conflict,
       );
     });
   });
@@ -215,7 +216,3 @@ void main() {
     });
   });
 }
-
-/// A [MockNtsApi] subclass, matching how the other suites script the
-/// bridge, to pin that the disposition check accepts subtypes.
-class _ScriptedMockApi extends MockNtsApi {}

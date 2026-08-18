@@ -383,7 +383,8 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
 /// future / isolate hop): backed by four atomic-relaxed loads, cheap
 /// enough to call from a UI poll loop.
 ///
-/// Requires `await NtsRustLib.init()` to have completed on the calling
+/// Requires `await NtsBridge.ensureInitialized()` to have completed on
+/// the calling
 /// isolate before invocation: the four atomic reads happen on the Rust
 /// side and dispatch through the FRB v2 dispatch table even though the
 /// call returns synchronously, so a missed initialization fails with a
@@ -435,7 +436,8 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 /// loads, cheap enough to call from a UI poll loop or a pre-flight
 /// "can I even validate against the platform store?" check.
 ///
-/// Requires `await NtsRustLib.init()` to have completed on the calling
+/// Requires `await NtsBridge.ensureInitialized()` to have completed on
+/// the calling
 /// isolate before invocation: the seven atomic reads happen on the
 /// Rust side and dispatch through the FRB v2 dispatch table even
 /// though the call returns synchronously, so a missed initialization
@@ -445,7 +447,7 @@ NtsDnsPoolStats ntsDnsPoolStats() =>
 /// `androidPlatformInitSucceeded` and `androidHybridFallbackCount`
 /// observables below are populated by the separate Android
 /// `NtsPlugin` JNI bootstrap that runs before `main()`, distinct from
-/// `NtsRustLib.init()`.
+/// bridge initialization.
 ///
 /// Returns seven observables that callers cannot recover from a
 /// per-query [NtsTimeSample] alone:

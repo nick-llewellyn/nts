@@ -93,12 +93,23 @@ jobs:
               - 'tool/hooks/**'
 
   build:
-    # Matrix exercises both the declared SDK floor (3.38.10 -- oldest stable
-    # satisfying `flutter: ^3.38.0` in pubspec.yaml, ships Dart 3.10.9) and
-    # the latest `stable` channel (matches .fvmrc `"flutter": "stable"`).
-    # Format check runs only on the stable leg because `dart format` output
-    # can shift between Dart minors and we don't want spurious failures on
-    # the floor.
+    # Matrix exercises an old-SDK leg (3.38.10, ships Dart 3.10.9) and the
+    # latest `stable` channel (matches .fvmrc `"flutter": "stable"`).
+    #
+    # 3.38.10 is deliberately *above* the `flutter: '>=3.38.0'` floor
+    # declared in pubspec.yaml, and is not the oldest release satisfying
+    # it: earlier 3.38.x patches do not build native dependencies through
+    # the Native Assets build hook reliably, so a leg pinned to the
+    # literal floor would fail for reasons that have nothing to do with
+    # this package's sources. This leg therefore guards against
+    # Dart-minor drift on the oldest SDK the pipeline can actually build
+    # on -- it is not evidence that the declared floor itself resolves
+    # and builds. Raise the `flutter:` constraint to match if that
+    # evidence is ever wanted.
+    #
+    # Format check runs only on the stable leg because `dart format`
+    # output can shift between Dart minors and we don't want spurious
+    # failures on the old leg.
     #
     # Skipped (whole matrix) when the diff is doc-only: `**.md` is no
     # longer in trigger-level `paths-ignore` (so required status checks

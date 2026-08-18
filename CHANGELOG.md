@@ -10,6 +10,78 @@ tarball.
 
 ### Added
 
+- `NtsBridge` (`lib/src/api/bridge.dart`, exported from
+  `lib/nts.dart`) — a safe, idempotent lifecycle wrapper over the
+  FRB-generated entrypoint, and the recommended bootstrap from now on:
+  - `NtsBridge.ensureInitialized({externalLibrary, handler,
+    forceSameCodegenVersion})` initialises the bridge if it is not
+    already initialised and completes once it is. Safe to call
+    repeatedly and from more than one code path, which
+    `NtsRustLib.init()` is not — that throws a `StateError` on every
+    call after the first, and there is no de-init. It is also safe
+    *concurrently*: FRB's `initImpl` assigns its state only after
+    awaiting the external library load, so the guard a consumer would
+    otherwise write by hand (`if (!initialized) await init()`) races —
+    two callers both observe `false`, both enter, and the second
+    throws. `NtsBridge` latches on the in-flight future instead. An
+    initialisation performed directly (including
+    `NtsRustLib.initMock()`) is recognised rather than fought.
+    Arguments configure the attempt a call actually starts; a call that
+    joins a latched attempt, or finds the bridge already initialised,
+    ignores them.
+  - `NtsBridge.state` reports `NtsBridgeState.uninitialized`, `.mock`,
+    or `.native`. This is the discrimination consumers previously had
+    to reach into FRB's `@internal` `instance` / `api` members to
+    obtain — `MonotonicClock` and the example CLI loader both did, each
+    with an `invalid_use_of_internal_member` ignore, and both now
+    switch on the enum instead. The mock/native split is structural, on
+    `api is BaseApiImpl`, not on the initialisation route: a
+    hand-written double reads as `.mock` however it was installed, and
+    the generated implementation reads as `.native` even when supplied
+    to `initMock()`.
+  - Public member dartdocs that stated the initialisation requirement
+    as `NtsRustLib.init()` now name `NtsBridge.ensureInitialized()`
+    (`NtsClient` and its synchronous members, `ntsDnsPoolStats`,
+    `ntsTrustStats`, the `TrustMode` example). `NtsRustLib.init()` is
+    still exported and still described where the underlying step is the
+    point.
+  - `NtsBridge.dispose()` releases the bridge's Dart-side resources, or
+    does nothing when it was never initialised. `NtsRustLib.dispose()`
+    throws in that case. Disposal is not de-initialisation: `state` is
+    unchanged afterwards.
+  - A failed `ensureInitialized` attempt retains its latch — replaying
+    the error to every later caller — only when the attempt itself took
+    ownership of the entrypoint, which it can only ever do by
+    installing the generated API. A `.mock` observed after the failure
+    can only have come from an independent `NtsRustLib.initMock()`,
+    which is an initialisation that *succeeded*; the latch is dropped
+    in that case so a later caller completes over the usable mock
+    instead of failing on a stale native-load error.
+  - `ensureInitialized`'s dartdoc states that driving the raw
+    entrypoint *concurrently* with it is unsupported in either
+    direction, and why neither case is detectable. A concurrent
+    `NtsRustLib.init()`: FRB installs the entrypoint state before
+    awaiting its Rust initializers, so the wrapper can see `.native`
+    and complete while the direct call is still running, and a failure
+    it then suffers is invisible; FRB exposes no way to await someone
+    else's attempt. A concurrent `NtsRustLib.initMock()` supplying the
+    *generated* implementation: that also reads as `.native`, hence is
+    indistinguishable from state the wrapper installed itself, so a
+    failure of the wrapper's own attempt would be replayed over a
+    bridge that is in fact usable. (A hand-written double is not
+    affected — it reads `.mock`, which is attributable to someone
+    else.) The dartdoc also records the one case a *completed* direct
+    call leaves behind: an `init()` that threw from its Rust
+    initializers leaves the entrypoint installed and permanently
+    unusable, and `ensureInitialized` reports success over it, because
+    FRB records nothing about the failure and the attempt was never
+    latched. That error is the direct caller's to keep.
+  - The live suite (`test/live/nts_live_test.dart`) bootstraps through
+    `ensureInitialized()` rather than `NtsRustLib.init()`, and asserts a
+    repeat call completes with `state == .native`. That covers the
+    fresh-success branch, which no mock-only test can reach: it needs a
+    real library whose Rust initializers actually run. The mock-only
+    suite covers the already-installed and failed-load branches.
 - `CONTRIBUTING.md` — the GitHub-surfaced entry point for third-party
   contributors. Covers prerequisites, the one-time
   `git config core.hooksPath tool/hooks` opt-in, the branch and pull
@@ -25,6 +97,50 @@ tarball.
 
 ### Changed
 
+- The documentation no longer claims that bridge initialisation is a
+  no-op after the first call. `NtsRustLib.init()` throws a `StateError`
+  instead, so the claim was wrong everywhere it appeared, and the
+  README went further and drew an operational conclusion from it
+  ("safe to call from a shared bootstrap path") that described
+  precisely the usage that throws. The library dartdoc in
+  `lib/nts.dart`, the README's two-layer initialisation section, quick
+  start, platform support, non-Flutter loader guidance and API summary,
+  `example/main.dart`, `example/example.md`, and `ARCHITECTURE.md` now
+  document `NtsBridge.ensureInitialized()` as the bootstrap and
+  describe `NtsRustLib.init()` accurately as the single-shot raw
+  entrypoint. The `NtsSyncedTime` class and constructor dartdoc in
+  `lib/src/api/models.dart` state their initialisation prerequisite the
+  same way, keeping `NtsRustLib.initMock()` as the test alternative.
+  (The `no-op` wording in
+  `android/.../PlatformInit.kt` is correct and unchanged — that
+  bootstrap really is idempotent.)
+- The README's non-Flutter loader guidance no longer describes a later
+  `ensureInitialized()` call passing a different library as a "no-op",
+  and both it and the `ensureInitialized` dartdoc now warn that
+  *ignored* is not *unloaded*. `ExternalLibrary.open` maps the library
+  synchronously inside its own constructor, so the argument's load-time
+  initializers have already run by the time `ensureInitialized` is
+  entered and can decide to discard it. The library-hijack surface the
+  section exists to describe is closed by nominating one call site as
+  the initialization owner and constructing the library only there, not
+  by a later call being ignored, and the guidance says so. It also says
+  what `NtsBridge.state` is not: a way to tell whether a call will be
+  the one that initializes. The getter rules out a *completed*
+  initialization only — a latched attempt still awaiting its library
+  load has installed no entrypoint state, so `state` reads
+  `uninitialized` for that whole window.
+- The CI matrix's old-SDK leg is no longer documented as exercising the
+  declared SDK floor. It runs Flutter 3.38.10, which is ten patches
+  above the `flutter: '>=3.38.0'` constraint and is not the oldest
+  release satisfying it — earlier 3.38.x patches do not build native
+  dependencies through the Native Assets build hook reliably, so a leg
+  pinned to the literal floor would fail for reasons unrelated to this
+  package's sources. The pin is deliberate and unchanged; what moved is
+  the claim attached to it in `ci.yml`, `pubspec.yaml`,
+  `DEVELOPMENT.md` (both the bullet and the workflow table), and the
+  pull request template, all of which described 3.38.10 as the declared
+  floor. The declared floor is a dependency-resolution bound, not a
+  build-verified one, and the comments now say which is which.
 - The pull request template no longer asks every contributor to bump
   `pubspec.yaml` `version:` following semver. That instruction
   contradicted the release-only bumping policy, under which version
@@ -35,6 +151,68 @@ tarball.
   convention with a placeholder (`NTS-<num>`) rather than a real,
   long-closed issue identifier, so the example cannot be pasted
   through into a pull request that has nothing to do with it.
+- The example CLI loader rejects a bridge of the wrong kind in both
+  directions rather than only one. `mockBridgeDisposition` becomes
+  `bridgeDisposition(state, useMock:)`, and a native run that finds an
+  installed mock now exits with the same diagnostic shape as a `--mock`
+  run that finds an installed native bridge. Previously that direction
+  fell through to `NtsBridge.ensureInitialized()`, which completes for
+  any installed state, so the run reported success and then dispatched
+  every call to `MockNtsApi`. Example app only; no package API change.
+- The example app's GUI bootstrap installs its fallback mock only when
+  the failed `ensureInitialized()` left the bridge uninitialized. A
+  Rust-initializer failure leaves it `native` but half-built, and the
+  unconditional `initMock` threw a second `StateError` over the top of
+  the real error, so the banner never rendered. Example app only; no
+  package API change.
+- That other arm now aborts to a `Bridge unavailable` screen rather
+  than proceeding into the normal UI. No mock can stand in for a
+  half-built entrypoint, so bootstrap carries a `bridgeUsable` flag and
+  `main()` short-circuits on it: no `AppState`, no `NtsController`, and
+  so no `NtsClient` minted over a bridge every call would throw
+  through. Previously the arm fell through, and the UI then misreported
+  itself — the corner banner reads `mock fallback` off any non-null
+  load error, and `AppState.bridgeLoadError` was documented as implying
+  one had been installed. `AppState` gains a `mockFallback` flag that
+  says whether it actually was, the corner banner is driven off that
+  rather than off the error, and `bridgeLoadError` is described as what
+  it is: a bootstrap diagnostic that a catalog failure also populates.
+  A `shell diagnostics` group covers the resulting three-way split
+  through the public `NtsExampleApp`: no diagnostic renders neither
+  banner, a diagnostic without a fallback renders the error banner
+  alone, and a fallback renders both. The middle case is the one the
+  old condition got wrong, and it fails against it. The dead-end screen
+  is public as `BridgeUnavailableApp` so a fourth case can pump it
+  directly; `main()`'s branch into it cannot be driven from a test,
+  since reaching it needs a real half-built entrypoint. Example app
+  only; no package API change.
+- That arm now returns from bootstrap immediately, via a
+  `_Boot.bridgeUnavailable` variant, instead of setting a flag and
+  falling through the remaining steps. Loading the server catalog and
+  hydrating `SharedPreferences` for a UI that will never be built was
+  wasted at best, and at worst lost the bridge error: the catalog arm
+  prefixes rather than replaces, but an uncaught `FavoritesStore.load()`
+  failure propagated out of bootstrap and `BridgeUnavailableApp` never
+  rendered. `_Boot.favorites` is now nullable, non-null exactly when
+  `bridgeUsable` is true. Example app only; no package API change.
+- The example CLI loader awaits `NtsBridge.ensureInitialized()` on the
+  native *reuse* arm rather than returning immediately. A retained
+  initialisation failure lives on the wrapper's latch, so returning
+  there converted an installed-but-half-built bridge into apparent
+  success; awaiting it surfaces the original error and exits 70 like
+  every other load failure. Mock reuse still returns directly — a mock
+  is usable the moment `initMock()` returns, and routing it through the
+  wrapper would latch a completed future over state the wrapper never
+  installed. Example app only; no package API change.
+- The example app moves from `file_picker` `^12.0.0-beta.7` to the
+  `^12.0.0` stable release. `FilePicker.pickFiles()` now returns
+  `List<PlatformFile>` rather than a nullable result object, so
+  `CustomRootsPanel._pickFile` calls the single-file
+  `FilePicker.pickFile()` instead, which returns `PlatformFile?` and
+  matches what the panel wants. The macOS generated plugin registrant
+  follows the plugin's split into federated packages
+  (`file_picker` → `file_picker_darwin`). Example app only; no package
+  API change.
 - `AGENTS.md` and `CLAUDE.md` now say which of their sections are
   maintainer workflow. Both open with a short note on who the file is
   for, and every section covering the maintainer's issue tracking

@@ -16,13 +16,14 @@ library;
 // carries the `live` tag (the `@Tags(['live'])` library annotation
 // above), and the root `dart_test.yaml` marks that tag `skip:` by
 // default. So a bare `flutter test` discovers this file but skips its
-// tests before `NtsRustLib.init()` or any socket is touched.
+// tests before the bridge is initialized or any socket is touched.
 //
 // To run the suite:
 //
 //   1. Build the native dylib so its FRB content-hash matches the
 //      committed bindings:  `cargo build --release -p nts_rust` (from
-//      `rust/`). `NtsRustLib.init()` loads it from `rust/target/release/`.
+//      `rust/`). `NtsBridge.ensureInitialized()` loads it from
+//      `rust/target/release/`.
 //   2. `fvm flutter test --run-skipped test/live/`
 //      (`--run-skipped` overrides the default tag skip; pointing at
 //      `test/live/` alone still skips, since the tag config applies.)
@@ -59,13 +60,29 @@ const _aeadAesSivCmac256 = 15;
 
 void main() {
   // Matches the other suites in this repo (api_smoke_test.dart,
-  // ffi_smoke_test.dart): the binding must be live before NtsRustLib.init()
+  // ffi_smoke_test.dart): the binding must be live before the bridge
   // loads the dylib over the FFI / Native Assets path.
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('live nts', () {
     setUpAll(() async {
-      await NtsRustLib.init();
+      // Initialized through the wrapper rather than `NtsRustLib.init()`
+      // so this suite covers the fresh-success branch of
+      // `NtsBridge.ensureInitialized()` — the one path no mock-only test
+      // can reach, since it needs a real library whose Rust
+      // initializers actually run. The mock-only suite covers the
+      // already-installed and failed-load branches.
+      await NtsBridge.ensureInitialized();
+      expect(NtsBridge.state, NtsBridgeState.native);
+    });
+
+    // Repeats the call the whole suite already depends on, so a
+    // regression that dropped the completed latch (and so re-entered
+    // `NtsRustLib.init()`, which throws on every call after the first)
+    // fails here with a clear cause rather than in `setUpAll`.
+    test('ensureInitialized is idempotent over a live native bridge', () async {
+      await expectLater(NtsBridge.ensureInitialized(), completes);
+      expect(NtsBridge.state, NtsBridgeState.native);
     });
 
     // (1) Happy path across all three servers, >= 2/3 must pass.

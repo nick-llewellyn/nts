@@ -36,9 +36,10 @@ platforms:
 environment:
   # Lower bound matches the `hooks` package floor (Dart >=3.10.0), which
   # corresponds to Flutter 3.38.0 stable (Nov 2025) -- the first release to
-  # ship Dart 3.10. CI exercises both this floor and the latest `stable`
-  # channel (matches `.fvmrc`) to keep Native Assets + FRB bindings
-  # drift-free.
+  # ship Dart 3.10. CI's old-SDK leg runs 3.38.10 rather than this floor,
+  # because earlier 3.38.x patches do not build native dependencies
+  # through the build hook reliably; the declared floor is the
+  # dependency-resolution bound, not a build-verified one.
   sdk: '^3.10.0'
   flutter: '>=3.38.0'
 
@@ -65,6 +66,18 @@ dependencies:
   # variant types. Runtime annotations only; the generator itself is in
   # `dev_dependencies`.
   freezed_annotation: ^3.1.0
+  # Annotations only, for `@visibleForTesting` in `lib/src/api/bridge.dart`.
+  # Taken from `meta` rather than `package:flutter/foundation.dart` so the
+  # public API stays loadable outside the Flutter engine: `lib/nts.dart`
+  # exports that library, and a `flutter/foundation.dart` import there
+  # transitively pulls `dart:ui`, which breaks the `dart run` consumers
+  # documented in the README.
+  #
+  # Lower bound is set by the oldest Flutter this package supports --
+  # 3.38.0, per the `flutter:` constraint above: the SDK's
+  # `flutter_test` pins `meta` exactly, and 3.38.0 pins 1.17.0, so
+  # anything higher makes version solving fail on that gate.
+  meta: ^1.17.0
   # Build-hook dependencies (consumed only by `hook/build.dart`). The Dart
   # SDK resolves these out-of-band when running the Native Assets pipeline,
   # so they don't pull native_toolchain_rust into the app's runtime graph.
