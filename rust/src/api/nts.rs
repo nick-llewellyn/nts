@@ -324,9 +324,12 @@ pub struct NtsTimeSample {
     ///
     /// δ shares an anchor with `round_trip_micros`: T1 is stamped
     /// immediately before the C2S AEAD seal and `round_trip_micros`
-    /// starts at the `send` that follows it, so the only interval δ
-    /// carries that the round trip does not is that seal, which does
-    /// no I/O and costs single-digit microseconds. δ can therefore sit
+    /// starts at the `send` that follows it, so the only work δ
+    /// carries that the round trip does not is that seal plus the
+    /// socket write-timeout re-arm that bounds the `send` against the
+    /// call's remaining budget. Neither blocks on I/O — the seal is
+    /// memcpy-scale, the re-arm a single non-blocking syscall — and
+    /// together they cost single-digit microseconds. δ can therefore sit
     /// a few microseconds above `round_trip_micros` when the server's
     /// T3−T2 is smaller still, and the two are read off different
     /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
@@ -343,8 +346,8 @@ pub struct NtsTimeSample {
     /// the latter gives up a δ that was never corrupt, which is the
     /// direction that fails safe. Consumers applying their own upper
     /// bound need only a microsecond-scale additive allowance over
-    /// `round_trip_micros` for the seal and the clock-source
-    /// difference, plus whatever scheduling headroom their host
+    /// `round_trip_micros` for the seal, the re-arm and the
+    /// clock-source difference, plus whatever scheduling headroom their host
     /// warrants; a ratio-derived ceiling is not needed, and neither
     /// is an allowance sized from `phase_timings.dns_micros` (Dart:
     /// `phaseTimings.dnsMicros`), since no DNS lookup falls between
@@ -3207,25 +3210,22 @@ struct UdpBindOutcome {
     dns_micros: i64,
 }
 
-fn bind_connected_udp(
-    host: &str,
-    port: u16,
-    timeout: Duration,
-    dns_concurrency_cap: usize,
-) -> Result<UdpBindOutcome, NtsError> {
-    bind_connected_udp_using(host, port, timeout, dns_concurrency_cap, system_lookup)
-}
-
-/// Test-friendly variant of [`bind_connected_udp`] that takes a
-/// caller-supplied lookup closure. Production callers go through
-/// [`bind_connected_udp`] which forwards [`system_lookup`]; the
-/// `nts-6ka` slow-DNS regression test injects a closure that
-/// `thread::sleep`s past the budget so the
-/// `ErrorKind::TimedOut → NtsError::Timeout` mapping can be exercised
-/// deterministically without standing up an adversarial nameserver.
+/// Resolve `host:port` and bind a connected UDP socket, taking a
+/// caller-supplied lookup closure.
 ///
-/// Honours the same single-budget-spans-DNS-and-UDP-I/O contract as
-/// [`bind_connected_udp`]; see that function for the deadline rules.
+/// Production callers reach this through [`nts_query_inner`], which
+/// forwards [`system_lookup`]; the `nts-6ka` slow-DNS regression test
+/// injects a closure that `thread::sleep`s past the budget so the
+/// `ErrorKind::TimedOut → NtsError::Timeout` mapping can be exercised
+/// deterministically without standing up an adversarial nameserver,
+/// and the nts-362p capture-point test injects one that sleeps a known
+/// interval so the T1 stamp's position relative to this bind is
+/// observable on the wire.
+///
+/// `timeout` is the slice of the call-wide budget left for this leg;
+/// the same single deadline spans the DNS lookup and the UDP I/O, so
+/// the post-bind socket timeouts are armed from what remains after the
+/// lookup rather than from `timeout` afresh.
 fn bind_connected_udp_using<F>(
     host: &str,
     port: u16,
@@ -3481,6 +3481,46 @@ fn nts_query_inner(
     is_default_client: bool,
     verification_time_ms: Option<i64>,
 ) -> Result<NtsTimeSample, NtsError> {
+    nts_query_inner_using(
+        table,
+        spec,
+        timeout_ms,
+        dns_concurrency_cap,
+        trust_mode,
+        is_default_client,
+        verification_time_ms,
+        system_lookup,
+    )
+}
+
+/// Test-friendly variant of [`nts_query_inner`] that takes a
+/// caller-supplied lookup closure for the NTPv4-host resolution the
+/// UDP bind performs, mirroring [`bind_connected_udp_using`].
+///
+/// The seam exists so the T1 capture point can be pinned *on the
+/// production path* rather than only in the arithmetic: a closure that
+/// sleeps before returning a loopback address makes the UDP setup
+/// interval large and known, so a test can read T1 off the wire and
+/// compare it against the delay it injected. Stamping T1 above the
+/// bind — the pre-9.2 ordering this release fixes — puts the injected
+/// interval inside δ, which such a test observes directly. Injecting
+/// at the lookup rather than faking the clock keeps
+/// [`system_time_to_ntp64`] and the bind in their production
+/// positions, so the ordering itself is what is under test.
+#[allow(clippy::too_many_arguments)]
+fn nts_query_inner_using<F>(
+    table: &SessionTable,
+    spec: NtsServerSpec,
+    timeout_ms: u32,
+    dns_concurrency_cap: u32,
+    trust_mode: KeTrustMode,
+    is_default_client: bool,
+    verification_time_ms: Option<i64>,
+    lookup: F,
+) -> Result<NtsTimeSample, NtsError>
+where
+    F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+{
     validate(&spec)?;
     validate_verification_time_ms(verification_time_ms)?;
     let timeout = effective_timeout(timeout_ms);
@@ -3581,18 +3621,23 @@ fn nts_query_inner(
     let UdpBindOutcome {
         socket,
         dns_micros: udp_dns_micros,
-    } = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, udp_budget, cap)
+    } = bind_connected_udp_using(&ctx.ntpv4_host, ctx.ntpv4_port, udp_budget, cap, lookup)
         .map_err(attribute_post_handshake)?;
 
     // T1 (client transmit timestamp, RFC 5905 §8) is stamped after the
     // bind so that it and `send_at` — the monotonic anchor of
-    // `round_trip_micros` — share a start point. Only the C2S AEAD seal
-    // in `build_client_request` sits between them, so the peer delay
+    // `round_trip_micros` — share a start point. Two pieces of work sit
+    // between them: the C2S AEAD seal in `build_client_request`, and the
+    // `set_write_timeout` re-arm in `arm_send_against_call_deadline`
+    // below. Neither blocks on I/O — the seal is memcpy-scale, the
+    // re-arm is a single non-blocking syscall — so the peer delay
     // δ = (T4−T1)−(T3−T2) no longer carries the UDP setup interval (bind
     // plus the NTPv4-host DNS lookup) that the round trip excludes, and
     // θ no longer carries half of it as apparent offset. T1 cannot move
     // below the seal: it is an authenticated field of the packet the seal
-    // covers.
+    // covers. It could in principle move below the re-arm, but the
+    // re-arm has to be the last thing before the `send` to bound it
+    // against the freshest budget reading.
     let transmit_timestamp = system_time_to_ntp64();
     let req = ClientRequest {
         unique_id: uid.to_vec(),

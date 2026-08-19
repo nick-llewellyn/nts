@@ -223,11 +223,14 @@ class NtsTimeSample {
   ///
   /// δ shares an anchor with [roundTripMicros]: T1 is stamped
   /// immediately before the C2S AEAD seal and [roundTripMicros]
-  /// starts at the send that follows it, so the only interval δ
-  /// carries that the round trip does not is that seal, which does no
-  /// I/O and costs single-digit microseconds. δ can therefore sit a
-  /// few microseconds above [roundTripMicros] when the server's T3−T2
-  /// is smaller still, and the two are read off different clocks
+  /// starts at the send that follows it, so the only work δ carries
+  /// that the round trip does not is that seal plus the socket
+  /// write-timeout re-arm that bounds the send against the call's
+  /// remaining budget. Neither blocks on I/O — the seal is
+  /// memcpy-scale, the re-arm a single non-blocking syscall — and
+  /// together they cost single-digit microseconds. δ can therefore sit
+  /// a few microseconds above [roundTripMicros] when the server's
+  /// T3−T2 is smaller still, and the two are read off different clocks
   /// (T1/T4 wall-clock, the round trip monotonic) so a slew
   /// mid-exchange separates them too. Scheduling separates them as
   /// well: the worker can be preempted between T1 and the send, and δ
@@ -241,8 +244,9 @@ class NtsTimeSample {
   /// latter gives up a δ that was never corrupt, which is the
   /// direction that fails safe. Consumers applying their own upper
   /// bound need only a microsecond-scale additive allowance over
-  /// [roundTripMicros] for the seal and the clock-source difference,
-  /// plus whatever scheduling headroom their host warrants; a
+  /// [roundTripMicros] for the seal, the re-arm and the clock-source
+  /// difference, plus whatever scheduling headroom their host
+  /// warrants; a
   /// ratio-derived ceiling is not needed, and neither is an allowance
   /// sized from [PhaseTimings.dnsMicros], since no DNS lookup falls
   /// between T1 and the send.

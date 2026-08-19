@@ -539,9 +539,11 @@ that the send follows, so δ and the round trip share an anchor and the
 window normally admits δ rather than rejecting it on ordinary setup
 cost — before 9.2 T1 preceded the bind, so δ ran 1–9% above the round
 trip and the fallback was the branch taken on every healthy sample. It
-is a selection policy, not an exhaustive diagnosis: a clock step, a
-slew, or preemption of the worker between T1 and the send all put δ
-out of range, and the last of those leaves θ intact, so the fallback
+is a selection policy, not an exhaustive diagnosis: the fixed pre-send
+overhead δ still carries (the seal and the socket write-timeout re-arm,
+neither blocking on I/O), a clock step, a slew, or preemption of the
+worker between T1 and the send all put δ out of range, and the fixed
+overhead and the preemption leave θ intact, so the fallback
 costs accuracy rather than correctness), computes the
 burst RMS jitter ψ from
 the

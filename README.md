@@ -261,11 +261,15 @@ samples — the same two `ntsGetTime` automates:
    offset error. T1 shares an anchor with `roundTripMicros` (stamped
    immediately before the C2S seal, which the send follows), so the
    window normally admits δ rather than rejecting it on the ordinary
-   setup cost it carried before 9.2. A δ outside the window is a clock
-   step, a slew, or — on a loaded host — the worker being preempted
-   between T1 and the send, which inflates δ while leaving the offset
-   intact. See the `peerDelayMicros` dartdoc for the residual
-   allowance to use when applying a bound of your own. More
+   setup cost it carried before 9.2. What δ still carries that the
+   round trip does not is that seal plus the socket write-timeout
+   re-arm before the send — microseconds, neither blocking on I/O, but
+   enough to put δ outside the window when the server's own T3−T2 is
+   smaller still. Beyond that fixed overhead, a δ outside the window is
+   a clock step, a slew, or — on a loaded host — the worker being
+   preempted between T1 and the send, which inflates δ while leaving
+   the offset intact. See the `peerDelayMicros` dartdoc for the
+   residual allowance to use when applying a bound of your own. More
    sophisticated callers can median-filter,
    score by `serverStratum`, or run Marzullo's algorithm across multiple
    servers.

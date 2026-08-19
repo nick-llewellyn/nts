@@ -273,6 +273,138 @@ fn aligned_capture_points_keep_peer_delay_within_round_trip() {
     );
 }
 
+/// Production-path guard for the capture point itself
+/// (nts-362p / NTS-153).
+///
+/// The sibling `aligned_capture_points_keep_peer_delay_within_round_trip`
+/// pins the *arithmetic* by handing `on_wire_statistics` both T1
+/// candidates directly, so it stays green if the `system_time_to_ntp64()`
+/// call moves back above the UDP bind — the very edit this
+/// release makes. This test closes that gap by reading T1 off the wire
+/// on the real `nts_query_inner` path.
+///
+/// The setup interval is made large and known by injecting a resolver
+/// that sleeps `SETUP` before returning the loopback faux server's
+/// address (`nts_query_inner_using`, the same seam shape as
+/// `bind_connected_udp_using`). Everything else — the
+/// `system_time_to_ntp64()` stamp, the bind, the C2S seal, the
+/// write-timeout re-arm, the send — stays in its production position,
+/// so the ordering is what is under test rather than a faked clock.
+///
+/// The faux server records its own arrival instant and compares it
+/// against the T1 the client authenticated into the request: with T1
+/// stamped below the bind those are within a hair of each other,
+/// whereas the pre-9.2 ordering separates them by the whole injected
+/// interval. Asserting T1 lands in the *second* half of the injected
+/// window is what fails if the stamp moves back above the bind.
+#[test]
+fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
+    use crate::nts::ntp::{NtpHeader, HEADER_LEN};
+
+    const SETUP: Duration = Duration::from_millis(400);
+
+    let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
+    faux_server
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set faux server read timeout");
+    let server_port = faux_server.local_addr().expect("local addr").port();
+    let host = "127.0.0.1";
+
+    // A private table keeps the pre-installed session off the default
+    // singleton's, so this test cannot perturb the live probes.
+    let table = SessionTable::new();
+    let key = format!("{host}:{server_port}");
+    let generation = next_session_generation();
+    let mut session = make_test_session(host, server_port, generation);
+    session.jar.put_many([vec![0xE1; 32]]);
+    table
+        .map
+        .lock()
+        .expect("session table poisoned")
+        .insert(key, session);
+
+    // Capture T1 off the wire, then reply with the request unmodified.
+    // Mode is still CLIENT (3), so the query fails with `NtpProtocol`
+    // after the send — which is all this test needs, since it asserts
+    // on the request's own T1 rather than on a sample.
+    let handler = std::thread::spawn(move || {
+        let mut buf = [0u8; 2048];
+        let (n, src) = faux_server
+            .recv_from(&mut buf)
+            .expect("faux server recv_from");
+        let arrived_at = system_time_to_ntp64();
+        faux_server
+            .send_to(&buf[..n], src)
+            .expect("faux server send_to");
+        let header: [u8; HEADER_LEN] = buf[..HEADER_LEN].try_into().expect("header-sized prefix");
+        (
+            NtpHeader::from_bytes(&header).transmit_timestamp,
+            arrived_at,
+        )
+    });
+
+    let spec = NtsServerSpec {
+        host: host.to_owned(),
+        port: server_port,
+    };
+    let call_started = system_time_to_ntp64();
+    let result = nts_query_inner_using(
+        &table,
+        spec,
+        5_000,
+        64,
+        KeTrustMode::BundledOnly,
+        false,
+        None,
+        move |_host, _port| {
+            std::thread::sleep(SETUP);
+            Ok(vec![SocketAddr::from(([127, 0, 0, 1], server_port))])
+        },
+    );
+    let (wire_t1, arrived_at) = handler.join().expect("faux server thread panicked");
+
+    // The echoed CLIENT-mode reply is rejected after the send. Asserting
+    // the shape keeps a future refactor from turning this into a test
+    // that silently never reached the wire at all.
+    match result {
+        Err(NtsError::NtpProtocol { .. }) => {}
+        other => panic!("expected NtsError::NtpProtocol after the send, got {other:?}"),
+    }
+
+    let call_started_us = ntp64_to_unix_micros(call_started);
+    let t1_us = ntp64_to_unix_micros(wire_t1);
+    let arrived_us = ntp64_to_unix_micros(arrived_at);
+    let setup_us = SETUP.as_micros() as i64;
+
+    // T1 must fall after the injected lookup, not before it. The
+    // half-interval threshold is deliberately loose: the exact position
+    // depends on how much of `SETUP` elapsed before the stamp, and only
+    // the side of the bind it lands on is under test. Pre-9.2 ordering
+    // put T1 within microseconds of `call_started`, i.e. the first half.
+    let into_call = t1_us - call_started_us;
+    assert!(
+        into_call > setup_us / 2,
+        "T1 landed {into_call} µs into a call whose lookup alone slept \
+         {setup_us} µs — the stamp is above the UDP bind, which is the \
+         pre-9.2 ordering this release fixed",
+    );
+
+    // The tight bound: from T1 to the packet arriving at a loopback
+    // server, only the seal, the write-timeout re-arm and the send
+    // remain. None blocks on I/O, so this interval is orders of
+    // magnitude below the injected setup interval. Generous in absolute
+    // terms so a loaded CI runner cannot flake it, while still far
+    // enough below `setup_us` to fail if the setup interval creeps back
+    // inside.
+    let t1_to_arrival = arrived_us - t1_us;
+    assert!(
+        t1_to_arrival >= 0 && t1_to_arrival < setup_us / 4,
+        "T1-to-arrival was {t1_to_arrival} µs; only the seal, the \
+         write-timeout re-arm and the send may sit in that interval, so \
+         it must stay far below the {setup_us} µs injected setup",
+    );
+}
+
 #[test]
 fn ntp_short_converts_16_16_fixed_point_to_micros() {
     assert_eq!(ntp_short_to_micros(0), 0);
@@ -305,10 +437,10 @@ fn ntp_short_signed_clamps_negative_root_delay_to_zero() {
     assert_eq!(ntp_short_signed_to_micros(u32::MAX), 0);
 }
 
-/// Bind a local IPv4 echo socket and verify `bind_connected_udp`
+/// Bind a local IPv4 echo socket and verify `bind_connected_udp_using`
 /// resolves `127.0.0.1`, picks a matching-family local socket, and
 /// completes a round trip. This is the address-family-matching
-/// regression guard for [`bind_connected_udp`] on the IPv4 leg.
+/// regression guard for [`bind_connected_udp_using`] on the IPv4 leg.
 #[test]
 fn bind_connected_udp_handles_ipv4_loopback() {
     let echo = UdpSocket::bind("127.0.0.1:0").expect("bind echo");
@@ -318,9 +450,14 @@ fn bind_connected_udp_handles_ipv4_loopback() {
     // (which leak detached workers for ~2 s) cannot saturate the
     // global pool out from under this test. Pool-cap behaviour
     // itself is covered by `dns::tests::cap_reached_returns_would_block`.
-    let UdpBindOutcome { socket, .. } =
-        bind_connected_udp("127.0.0.1", echo_port, Duration::from_secs(2), 64)
-            .expect("bind_connected_udp");
+    let UdpBindOutcome { socket, .. } = bind_connected_udp_using(
+        "127.0.0.1",
+        echo_port,
+        Duration::from_secs(2),
+        64,
+        system_lookup,
+    )
+    .expect("bind_connected_udp");
     assert!(matches!(
         socket.local_addr().expect("local addr"),
         SocketAddr::V4(_)
@@ -349,7 +486,7 @@ fn bind_connected_udp_handles_ipv6_loopback() {
     let echo_port = echo.local_addr().expect("local addr").port();
 
     let UdpBindOutcome { socket, .. } =
-        bind_connected_udp("::1", echo_port, Duration::from_secs(2), 64)
+        bind_connected_udp_using("::1", echo_port, Duration::from_secs(2), 64, system_lookup)
             .expect("bind_connected_udp");
     assert!(matches!(
         socket.local_addr().expect("local addr"),
@@ -994,8 +1131,14 @@ fn nts_query_preserves_session_on_ntsn_kod_with_wrong_uid() {
 /// hits a real DNS responder.
 #[test]
 fn bind_connected_udp_reports_dns_failure() {
-    let err = bind_connected_udp("no-such-host.invalid", 123, Duration::from_millis(500), 64)
-        .expect_err("must fail");
+    let err = bind_connected_udp_using(
+        "no-such-host.invalid",
+        123,
+        Duration::from_millis(500),
+        64,
+        system_lookup,
+    )
+    .expect_err("must fail");
     match err {
         NtsError::Network { message: msg, .. } => {
             assert!(
@@ -1007,7 +1150,7 @@ fn bind_connected_udp_reports_dns_failure() {
     }
 }
 
-/// Slow-DNS regression guard for [`bind_connected_udp`]. Injects a
+/// Slow-DNS regression guard for [`bind_connected_udp_using`]. Injects a
 /// resolver that blocks past the budget and asserts the call
 /// returns `NtsError::Timeout { phase: TimeoutPhase::DnsTimeout, trust_backend: None }` (not
 /// `NtsError::Network`) well inside the cap. Pinning the phase
@@ -1037,7 +1180,7 @@ fn bind_connected_udp_surfaces_slow_dns_as_timeout() {
     let cap = budget * 5;
     assert!(
         elapsed < cap,
-        "bind_connected_udp took {elapsed:?} (> {cap:?}); \
+        "bind_connected_udp_using took {elapsed:?} (> {cap:?}); \
          resolver budget did not propagate",
     );
 }
@@ -1207,7 +1350,7 @@ fn arm_send_against_call_deadline_short_circuits_after_expiry() {
 
 /// Companion to `bind_connected_udp_socket_timeouts_reflect_remaining_budget`
 /// for the post-bind portion of `nts_query`. The UDP socket
-/// emerges from `bind_connected_udp` with a read timeout sized to
+/// emerges from `bind_connected_udp_using` with a read timeout sized to
 /// the budget remaining at *bind* completion; without re-arming
 /// before recv, a slow `send` or scheduling delay between bind
 /// and recv would let recv block for that full bind-time budget

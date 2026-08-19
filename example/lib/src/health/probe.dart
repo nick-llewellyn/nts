@@ -291,11 +291,13 @@ Future<ServerHealth> probeHost(
 }
 
 /// The whole pre-send interval as of 9.2: the C2S AEAD seal that
-/// builds the request packet, which is memcpy-scale with no I/O wait,
-/// so the ceiling is sized for it rather than measured. Before 9.2 it
-/// also had to cover the UDP bind and the NTPv4-host DNS lookup,
-/// which is why the allowance below once claimed the sample's own
-/// `dnsMicros` on top.
+/// builds the request packet, and the socket write-timeout re-arm that
+/// bounds the send against the call's remaining budget. The seal is
+/// memcpy-scale and the re-arm a single non-blocking syscall, so
+/// neither waits on I/O and the ceiling is sized for them rather than
+/// measured. Before 9.2 it also had to cover the UDP bind and the
+/// NTPv4-host DNS lookup, which is why the allowance below once
+/// claimed the sample's own `dnsMicros` on top.
 ///
 /// What it cannot cover is scheduling. The worker can be preempted
 /// between T1 and the send, and a loaded probe host can lose more
@@ -332,9 +334,10 @@ const _kSetupSlackMicros = 5000;
 /// The upper bound catches forward steps. It stays marginally looser
 /// than the `δ <= roundTripMicros` one `ntsGetTime` applies (see
 /// `_effectiveDelayMicros`): as of 9.2 T1 is captured immediately
-/// before the C2S seal that the send follows, so the only interval δ
-/// carries that the round trip does not is that seal, and
-/// [_kSetupSlackMicros] is the allowance for it. Sizing the allowance
+/// before the C2S seal that the send follows, so the only work δ
+/// carries that the round trip does not is that seal plus the socket
+/// write-timeout re-arm before the send, and [_kSetupSlackMicros] is
+/// the allowance for both. Sizing the allowance
 /// for the interval itself bounds the step that can slip through at
 /// single-digit milliseconds, so single-digit milliseconds of
 /// corruption in θ, rather than at whatever the verdict threshold
