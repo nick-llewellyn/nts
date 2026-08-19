@@ -282,10 +282,11 @@ Future<NtsSyncedTime> _getTime({
 // and T3, or server stamps that are simply inconsistent. The upper
 // bound admits δ on healthy samples under ordinary scheduling: T1
 // shares an anchor with `roundTripMicros` (stamped immediately before
-// the C2S seal, which the send follows), so the only work δ carries
-// that the round trip does not is that seal plus the socket
-// write-timeout re-arm that bounds the send against the call's
-// remaining budget — neither of which blocks on I/O. A δ above
+// the request is built and sealed, which the send follows), so the
+// only work δ carries that the round trip does not is that request
+// build and seal plus the socket write-timeout re-arm that bounds the
+// send against the call's remaining budget — neither of which blocks
+// on I/O. A δ above
 // `roundTripMicros` by more than that fixed overhead is a forward
 // clock step, a slew separating the wall-clock T1/T4 pair from the
 // monotonic round trip, or — on a loaded host — preemption of the

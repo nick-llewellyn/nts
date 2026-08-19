@@ -111,9 +111,11 @@ tarball.
   every healthy sample — enough that the `(0, roundTripMicros]`
   selection window `ntsGetTime` applies rejected δ in practice and the
   `roundTripMicros` fallback was the branch always taken. δ and the
-  round trip now share an anchor, separated only by the seal and the
+  round trip now share an anchor, separated only by the request build
+  and seal and the
   socket write-timeout re-arm that bounds the send against the call's
-  remaining budget — the seal memcpy-scale, the re-arm a single
+  remaining budget — the build and seal memcpy-scale over a packet of a
+  few hundred bytes, the re-arm a single
   non-blocking syscall, neither waiting on I/O; the window admits δ on
   healthy samples under ordinary scheduling. It is not reserved solely for implausible exchanges: the
   worker can still be preempted between T1 and the send, which
@@ -130,7 +132,8 @@ tarball.
 - The example health prober's per-sample θ gate
   (`example/lib/src/health/probe.dart`) tightened accordingly: the
   allowance over `roundTripMicros` is now a flat 5 ms ceiling covering
-  the whole pre-send interval — the C2S seal and the socket
+  the whole pre-send interval — building and sealing the request packet,
+  and the socket
   write-timeout re-arm, neither of which blocks on I/O. It previously
   added the sample's own
   `phaseTimings.dnsMicros`, gated on an inference about whether the

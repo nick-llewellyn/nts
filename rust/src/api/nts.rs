@@ -323,13 +323,17 @@ pub struct NtsTimeSample {
     /// fall back to `round_trip_micros`.
     ///
     /// δ shares an anchor with `round_trip_micros`: T1 is stamped
-    /// immediately before the C2S AEAD seal and `round_trip_micros`
-    /// starts at the `send` that follows it, so the only work δ
-    /// carries that the round trip does not is that seal plus the
-    /// socket write-timeout re-arm that bounds the `send` against the
-    /// call's remaining budget. Neither blocks on I/O — the seal is
-    /// memcpy-scale, the re-arm a single non-blocking syscall — and
-    /// together they cost single-digit microseconds. δ can therefore sit
+    /// immediately before the request is built and sealed, and
+    /// `round_trip_micros` starts at the `send` that follows, so the
+    /// only work δ carries that the round trip does not is that
+    /// request build — serialising the header, the unique identifier,
+    /// the cookie and its placeholders, then sealing them under the
+    /// C2S key into the authenticator — plus the socket write-timeout
+    /// re-arm that bounds the `send` against the call's remaining
+    /// budget. Neither blocks on I/O — the build and seal are
+    /// memcpy-scale over a packet of a few hundred bytes, the re-arm a
+    /// single non-blocking syscall — and together they cost
+    /// single-digit microseconds. δ can therefore sit
     /// a few microseconds above `round_trip_micros` when the server's
     /// T3−T2 is smaller still, and the two are read off different
     /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
@@ -346,8 +350,9 @@ pub struct NtsTimeSample {
     /// the latter gives up a δ that was never corrupt, which is the
     /// direction that fails safe. Consumers applying their own upper
     /// bound need only a microsecond-scale additive allowance over
-    /// `round_trip_micros` for the seal, the re-arm and the
-    /// clock-source difference, plus whatever scheduling headroom their host
+    /// `round_trip_micros` for the request build and seal, the re-arm
+    /// and the clock-source difference, plus whatever scheduling
+    /// headroom their host
     /// warrants; a ratio-derived ceiling is not needed, and neither
     /// is an allowance sized from `phase_timings.dns_micros` (Dart:
     /// `phaseTimings.dnsMicros`), since no DNS lookup falls between
@@ -3507,7 +3512,13 @@ fn nts_query_inner(
 /// at the lookup rather than faking the clock keeps
 /// [`system_time_to_ntp64`] and the bind in their production
 /// positions, so the ordering itself is what is under test.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the eight parameters are `nts_query_inner`'s seven plus the \
+              lookup seam; grouping them into a struct would exist only to \
+              satisfy the lint and would obscure that the seam adds exactly \
+              one injected dependency"
+)]
 fn nts_query_inner_using<F>(
     table: &SessionTable,
     spec: NtsServerSpec,
@@ -3627,17 +3638,20 @@ where
     // T1 (client transmit timestamp, RFC 5905 §8) is stamped after the
     // bind so that it and `send_at` — the monotonic anchor of
     // `round_trip_micros` — share a start point. Two pieces of work sit
-    // between them: the C2S AEAD seal in `build_client_request`, and the
-    // `set_write_timeout` re-arm in `arm_send_against_call_deadline`
-    // below. Neither blocks on I/O — the seal is memcpy-scale, the
-    // re-arm is a single non-blocking syscall — so the peer delay
-    // δ = (T4−T1)−(T3−T2) no longer carries the UDP setup interval (bind
-    // plus the NTPv4-host DNS lookup) that the round trip excludes, and
-    // θ no longer carries half of it as apparent offset. T1 cannot move
-    // below the seal: it is an authenticated field of the packet the seal
-    // covers. It could in principle move below the re-arm, but the
-    // re-arm has to be the last thing before the `send` to bound it
-    // against the freshest budget reading.
+    // between them: the whole `build_client_request` call, which
+    // serialises the header, the unique identifier, the cookie and its
+    // placeholders before sealing them under the C2S key into the
+    // authenticator; and the `set_write_timeout` re-arm in
+    // `arm_send_against_call_deadline` below. Neither blocks on I/O —
+    // the build and seal are memcpy-scale over a packet of a few hundred
+    // bytes, the re-arm is a single non-blocking syscall — so the peer
+    // delay δ = (T4−T1)−(T3−T2) no longer carries the UDP setup interval
+    // (bind plus the NTPv4-host DNS lookup) that the round trip
+    // excludes, and θ no longer carries half of it as apparent offset.
+    // T1 cannot move below the build: it is an authenticated field of
+    // the packet the seal covers. It could in principle move below the
+    // re-arm, but the re-arm has to be the last thing before the `send`
+    // to bound it against the freshest budget reading.
     let transmit_timestamp = system_time_to_ntp64();
     let req = ClientRequest {
         unique_id: uid.to_vec(),

@@ -291,15 +291,18 @@ fn aligned_capture_points_keep_peer_delay_within_round_trip() {
 /// write-timeout re-arm, the send — stays in its production position,
 /// so the ordering is what is under test rather than a faked clock.
 ///
-/// The faux server records its own arrival instant and compares it
-/// against the T1 the client authenticated into the request: with T1
-/// stamped below the bind those are within a hair of each other,
-/// whereas the pre-9.2 ordering separates them by the whole injected
-/// interval. Asserting T1 lands in the *second* half of the injected
-/// window is what fails if the stamp moves back above the bind.
+/// The assertion is an *ordering* one, not a duration one: the injected
+/// resolver stamps the instant it returns, and the T1 the client
+/// authenticated into the request must follow it. Stamping T1 above the
+/// bind puts it before the resolver returns and the comparison fails by
+/// the whole injected interval. Nothing here bounds how long any step
+/// takes, so preemption anywhere in the call — which the release notes
+/// explicitly treat as a healthy cause of δ exceeding the round trip —
+/// cannot make this flake.
 #[test]
 fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
     use crate::nts::ntp::{NtpHeader, HEADER_LEN};
+    use std::sync::{Arc, Mutex};
 
     const SETUP: Duration = Duration::from_millis(400);
 
@@ -332,21 +335,22 @@ fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
         let (n, src) = faux_server
             .recv_from(&mut buf)
             .expect("faux server recv_from");
-        let arrived_at = system_time_to_ntp64();
         faux_server
             .send_to(&buf[..n], src)
             .expect("faux server send_to");
         let header: [u8; HEADER_LEN] = buf[..HEADER_LEN].try_into().expect("header-sized prefix");
-        (
-            NtpHeader::from_bytes(&header).transmit_timestamp,
-            arrived_at,
-        )
+        NtpHeader::from_bytes(&header).transmit_timestamp
     });
 
     let spec = NtsServerSpec {
         host: host.to_owned(),
         port: server_port,
     };
+    // The instant the injected resolver returns. Everything the fix
+    // moved below the T1 stamp happens after this, so it is the exact
+    // ordering reference the assertion needs — no duration ceiling.
+    let resolver_returned_at = Arc::new(Mutex::new(None::<u64>));
+    let resolver_stamp = Arc::clone(&resolver_returned_at);
     let call_started = system_time_to_ntp64();
     let result = nts_query_inner_using(
         &table,
@@ -358,10 +362,11 @@ fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
         None,
         move |_host, _port| {
             std::thread::sleep(SETUP);
+            *resolver_stamp.lock().expect("resolver stamp poisoned") = Some(system_time_to_ntp64());
             Ok(vec![SocketAddr::from(([127, 0, 0, 1], server_port))])
         },
     );
-    let (wire_t1, arrived_at) = handler.join().expect("faux server thread panicked");
+    let wire_t1 = handler.join().expect("faux server thread panicked");
 
     // The echoed CLIENT-mode reply is rejected after the send. Asserting
     // the shape keeps a future refactor from turning this into a test
@@ -371,37 +376,28 @@ fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
         other => panic!("expected NtsError::NtpProtocol after the send, got {other:?}"),
     }
 
+    let resolved = resolver_returned_at
+        .lock()
+        .expect("resolver stamp poisoned")
+        .expect("injected resolver was never called");
     let call_started_us = ntp64_to_unix_micros(call_started);
+    let resolved_us = ntp64_to_unix_micros(resolved);
     let t1_us = ntp64_to_unix_micros(wire_t1);
-    let arrived_us = ntp64_to_unix_micros(arrived_at);
     let setup_us = SETUP.as_micros() as i64;
 
-    // T1 must fall after the injected lookup, not before it. The
-    // half-interval threshold is deliberately loose: the exact position
-    // depends on how much of `SETUP` elapsed before the stamp, and only
-    // the side of the bind it lands on is under test. Pre-9.2 ordering
-    // put T1 within microseconds of `call_started`, i.e. the first half.
-    let into_call = t1_us - call_started_us;
+    // The whole test: T1 is stamped after the resolution the bind
+    // consumes, so it cannot precede the resolver's return. Pre-9.2
+    // ordering stamped T1 within microseconds of `call_started`, i.e.
+    // roughly `setup_us` *before* this reference.
     assert!(
-        into_call > setup_us / 2,
-        "T1 landed {into_call} µs into a call whose lookup alone slept \
-         {setup_us} µs — the stamp is above the UDP bind, which is the \
+        t1_us >= resolved_us,
+        "T1 was stamped {} µs before the injected resolver returned \
+         (T1 {} µs into the call, resolver {} µs in, having slept \
+         {setup_us} µs) — the stamp is above the UDP bind, which is the \
          pre-9.2 ordering this release fixed",
-    );
-
-    // The tight bound: from T1 to the packet arriving at a loopback
-    // server, only the seal, the write-timeout re-arm and the send
-    // remain. None blocks on I/O, so this interval is orders of
-    // magnitude below the injected setup interval. Generous in absolute
-    // terms so a loaded CI runner cannot flake it, while still far
-    // enough below `setup_us` to fail if the setup interval creeps back
-    // inside.
-    let t1_to_arrival = arrived_us - t1_us;
-    assert!(
-        t1_to_arrival >= 0 && t1_to_arrival < setup_us / 4,
-        "T1-to-arrival was {t1_to_arrival} µs; only the seal, the \
-         write-timeout re-arm and the send may sit in that interval, so \
-         it must stay far below the {setup_us} µs injected setup",
+        resolved_us - t1_us,
+        t1_us - call_started_us,
+        resolved_us - call_started_us,
     );
 }
 
@@ -503,8 +499,19 @@ fn bind_connected_udp_handles_ipv6_loopback() {
 ///
 /// Uses AES-SIV-CMAC-256 because it's the RFC 8915 §5.1 baseline
 /// and `AeadKey::from_keying_material` will accept any 32-byte
-/// blob — these tests never seal or open packets, they only
-/// exercise the session-table bookkeeping around `deposit_cookies`.
+/// blob. Most callers only exercise the session-table bookkeeping
+/// around `deposit_cookies` and never touch the keys.
+///
+/// `t1_is_stamped_after_the_udp_bind_on_the_production_path` is the
+/// exception: it drives `build_client_request` and so does seal with
+/// the C2S key above. That works because sealing needs only a
+/// well-formed key of the right length, and nothing in that test
+/// opens the reply — the faux server echoes the request back
+/// unmodified and the query is expected to fail on the CLIENT-mode
+/// header. A future caller that needs a *verifiable* round trip
+/// cannot use the all-zero material here on both ends without
+/// asserting the two sides agree, which this helper does not
+/// establish.
 fn make_test_session(host: &str, ntpv4_port: u16, generation: u64) -> Session {
     let key_material = [0u8; 32];
     let c2s_key = AeadKey::from_keying_material(aead_ids::AES_SIV_CMAC_256, &key_material)

@@ -692,24 +692,29 @@ client sends it as the request's transmit timestamp and the server
 echoes it back as the originate timestamp, but θ is computed from the
 locally captured copy.) That is what the screens below exist for. θ is
 only meaningful if the *local* clock
-was not stepped between T1 and T4 — a window that opens before the UDP
-send, since T1 precedes the packet build and the socket bind — so a
+was not stepped between T1 and T4 — a window that opens just before the
+UDP send, since as of 9.2 T1 is stamped after the socket bind and the
+NTPv4-host lookup, immediately before the request is built and sealed —
+so a
 sample that fails either of two plausibility screens is excluded from
 the median rather than counted as a zero offset.
 
 The first screen is the sample's own peer delay. A sufficiently large
 backwards step drives it to a non-positive value, which no real delay
 can be; a sufficiently large forward step inflates it, so delays beyond
-the round trip plus the sample's own `dnsMicros` plus a few
-milliseconds for the build and the bind are rejected too. The allowance
-is additive rather than a multiple of the round trip because a DNS
-lookup's latency is unrelated to it, and it is measured from the sample
-rather than derived from the verdict threshold so that the undetectable
-step stays at the scale of the setup cost. The `dnsMicros` term is
-claimed only on a sample that ran no handshake of its own: the field
-sums both lookups a query can make, and on a re-handshake the KE-host
-lookup completes before T1, so it cannot account for any part of the
-delay.
+the round trip plus a few milliseconds are rejected too. That flat
+allowance covers the whole pre-send interval — building and sealing the
+request packet, and the socket write-timeout re-arm that bounds the
+send — neither of which blocks on I/O. It is additive rather than a
+multiple of the round trip so that a LAN-local server is held to the
+same absolute tolerance as a distant one, and it is sized from that
+interval rather than derived from the verdict threshold so that the
+undetectable step stays at the scale of the pre-send cost. Before 9.2
+T1 preceded the bind and the lookup, so the allowance also had to claim
+the sample's own `dnsMicros` — gated on whether the query had
+re-handshaked, since that field sums both lookups a query can make and
+only the NTPv4-host one fell inside the pre-send interval. No lookup
+falls there now, so both the term and the gate are gone.
 
 The second screen is corroboration across the burst: a surviving θ is
 kept only if some other surviving sample agrees with it to within half
@@ -726,8 +731,11 @@ and suppressing everything is not the safe default, since a host left
 with no θ is judged without the clock check at all. The scale comes
 from the round trip rather than the peer delay because the round trip
 is measured on a monotonic clock — no step of either direction can
-widen it — and it excludes the setup cost, which is not a property of
-the path. Neither screen is a proof of a steady clock: a step small
+widen it, whereas the peer delay is derived from the wall-clock T1/T4
+pair and a slew mid-exchange moves it. (Before 9.2 the round trip also
+excluded the setup cost that the peer delay carried; the two share an
+anchor now, so that is no longer the distinguishing property.) Neither
+screen is a proof of a steady clock: a step small
 enough to disturb neither is not detected.
 
 A host with no usable sample left is not judged on an offset it never

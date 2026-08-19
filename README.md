@@ -259,11 +259,13 @@ samples — the same two `ntsGetTime` automates:
    `roundTripMicros`); on a low-delay path the symmetric-path assumption
    below holds tightest, so that sample carries the smallest residual
    offset error. T1 shares an anchor with `roundTripMicros` (stamped
-   immediately before the C2S seal, which the send follows), so the
+   immediately before the request is built and sealed, which the send
+   follows), so the
    window normally admits δ rather than rejecting it on the ordinary
    setup cost it carried before 9.2. What δ still carries that the
-   round trip does not is that seal plus the socket write-timeout
-   re-arm before the send — microseconds, neither blocking on I/O, but
+   round trip does not is that request build and seal plus the socket
+   write-timeout re-arm before the send — microseconds, neither
+   blocking on I/O, but
    enough to put δ outside the window when the server's own T3−T2 is
    smaller still. Beyond that fixed overhead, a δ outside the window is
    a clock step, a slew, or — on a loaded host — the worker being

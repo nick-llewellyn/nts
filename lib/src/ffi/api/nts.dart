@@ -627,13 +627,17 @@ class NtsTimeSample {
   /// fall back to `round_trip_micros`.
   ///
   /// δ shares an anchor with `round_trip_micros`: T1 is stamped
-  /// immediately before the C2S AEAD seal and `round_trip_micros`
-  /// starts at the `send` that follows it, so the only work δ
-  /// carries that the round trip does not is that seal plus the
-  /// socket write-timeout re-arm that bounds the `send` against the
-  /// call's remaining budget. Neither blocks on I/O — the seal is
-  /// memcpy-scale, the re-arm a single non-blocking syscall — and
-  /// together they cost single-digit microseconds. δ can therefore sit
+  /// immediately before the request is built and sealed, and
+  /// `round_trip_micros` starts at the `send` that follows, so the
+  /// only work δ carries that the round trip does not is that
+  /// request build — serialising the header, the unique identifier,
+  /// the cookie and its placeholders, then sealing them under the
+  /// C2S key into the authenticator — plus the socket write-timeout
+  /// re-arm that bounds the `send` against the call's remaining
+  /// budget. Neither blocks on I/O — the build and seal are
+  /// memcpy-scale over a packet of a few hundred bytes, the re-arm a
+  /// single non-blocking syscall — and together they cost
+  /// single-digit microseconds. δ can therefore sit
   /// a few microseconds above `round_trip_micros` when the server's
   /// T3−T2 is smaller still, and the two are read off different
   /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
@@ -650,8 +654,9 @@ class NtsTimeSample {
   /// the latter gives up a δ that was never corrupt, which is the
   /// direction that fails safe. Consumers applying their own upper
   /// bound need only a microsecond-scale additive allowance over
-  /// `round_trip_micros` for the seal, the re-arm and the
-  /// clock-source difference, plus whatever scheduling headroom their host
+  /// `round_trip_micros` for the request build and seal, the re-arm
+  /// and the clock-source difference, plus whatever scheduling
+  /// headroom their host
   /// warrants; a ratio-derived ceiling is not needed, and neither
   /// is an allowance sized from `phase_timings.dns_micros` (Dart:
   /// `phaseTimings.dnsMicros`), since no DNS lookup falls between

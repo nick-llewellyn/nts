@@ -163,12 +163,24 @@ so. Two mechanisms matter:
 elapsed immediately after the matching `recv`. Because `Instant` is
 monotonic, the measurement cannot be corrupted by an NTP slew or
 clock step landing mid-round-trip — which matters doubly here,
-because RTT is not just a diagnostic: it is the plausibility ceiling
+because RTT is not just a diagnostic: it is the selection ceiling
 for the RFC 5905 peer delay that drives `ntsGetTime`'s burst
-selection (and the fallback delay when the peer delay is
-implausible), and `delay / 2` is the symmetric-path compensation
-applied to the final offset (RFC 5905 §8). A wall-clock-contaminated
-RTT would corrupt the synchronized time itself.
+selection (and the fallback delay when the peer delay falls outside
+`(0, roundTripMicros]`), and `delay / 2` is the symmetric-path
+compensation applied to the final offset (RFC 5905 §8). A
+wall-clock-contaminated RTT would corrupt the synchronized time itself.
+
+Falling outside that window is not the same as being implausible. A
+non-positive δ genuinely is — no real duration is negative — but the
+upper bound is a selection policy rather than a verdict. δ carries the
+fixed pre-send work the round trip does not (building and sealing the
+request, and the socket write-timeout re-arm), so it can exceed the
+round trip whenever the server's own T3−T2 is smaller still; and
+because δ is read off the wall clock while the round trip is monotonic,
+a slew or a preemption between T1 and the send inflates δ while leaving
+θ intact. Taking the fallback in those cases costs accuracy, not
+correctness, since the fallback is the quantity actually measured
+across the exchange.
 
 ### NTS-KE handshake deadlines
 

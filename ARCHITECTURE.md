@@ -534,14 +534,16 @@ The cross-sample quantities live in Dart (`_getTime` in
 `lib/src/api/nts.dart`), because only the burst orchestrator sees
 all samples. It selects the winning sample by lowest network delay
 (δ inside the selection window `(0, roundTripMicros]`, else the
-measured round trip; T1 is stamped immediately before the C2S seal
-that the send follows, so δ and the round trip share an anchor and the
+measured round trip; T1 is stamped immediately before the request is
+built and sealed, which the send follows, so δ and the round trip share
+an anchor and the
 window normally admits δ rather than rejecting it on ordinary setup
 cost — before 9.2 T1 preceded the bind, so δ ran 1–9% above the round
 trip and the fallback was the branch taken on every healthy sample. It
 is a selection policy, not an exhaustive diagnosis: the fixed pre-send
-overhead δ still carries (the seal and the socket write-timeout re-arm,
-neither blocking on I/O), a clock step, a slew, or preemption of the
+overhead δ still carries (the request build and seal, and the socket
+write-timeout re-arm, neither blocking on I/O), a clock step, a slew,
+or preemption of the
 worker between T1 and the send all put δ out of range, and the fixed
 overhead and the preemption leave θ intact, so the fallback
 costs accuracy rather than correctness), computes the
