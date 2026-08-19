@@ -258,17 +258,13 @@ samples — the same two `ntsGetTime` automates:
    (`peerDelayMicros` when it falls inside `(0, roundTripMicros]`, else
    `roundTripMicros`); on a low-delay path the symmetric-path assumption
    below holds tightest, so that sample carries the smallest residual
-   offset error. That window is a selection policy rather than a
-   verdict on the sample: T1 is stamped before the UDP bind while the
-   round trip starts at the send that follows it, so `peerDelayMicros`
-   carries setup cost `roundTripMicros` does not, while
-   `roundTripMicros` alone carries the server's processing interval.
-   Across the bundled server catalog the setup cost dominated on every
-   healthy sample, putting `peerDelayMicros` above the ceiling and
-   making `roundTripMicros` the branch selected in practice. See the
-   `peerDelayMicros` dartdoc for the measured figures and for the
-   tolerant upper bound to use when screening for clock steps
-   specifically. More sophisticated callers can median-filter,
+   offset error. Both bounds of that window are diagnostic: T1 shares
+   an anchor with `roundTripMicros` (stamped immediately before the
+   C2S seal, which the send follows), so a δ outside the window is a
+   clock step or a slew rather than the ordinary setup cost it was
+   before 9.2. See the `peerDelayMicros` dartdoc for the residual
+   allowance to use when applying a bound of your own. More
+   sophisticated callers can median-filter,
    score by `serverStratum`, or run Marzullo's algorithm across multiple
    servers.
 

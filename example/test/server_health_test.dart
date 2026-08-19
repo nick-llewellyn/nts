@@ -388,10 +388,11 @@ void main() {
 
     test('a peer delay modestly above the round trip is not treated as '
         'a step', () {
-      // T1 is captured before the UDP bind while `roundTripMicros`
-      // starts at the send, so δ legitimately exceeds the round trip on
-      // healthy servers (1–9% across the bundled catalog). Suppressing
-      // on that would discard every real sample.
+      // T1 shares an anchor with `roundTripMicros`, but the C2S seal
+      // still sits between them and the two quantities come off
+      // different clocks, so a healthy δ can read marginally above the
+      // round trip. Suppressing on that would discard a sample whose θ
+      // was never corrupt.
       api.peerDelayMicros = 1090;
       api.offsetMicros = 1200;
       return probe().then((h) {
@@ -405,8 +406,8 @@ void main() {
       // A forward local step adds to δ instead of subtracting, so the
       // lower bound alone would pass it through while θ is corrupted by
       // half the step in the opposite direction. The scripted δ is 3 s
-      // against a 1 ms round trip, well past the pre-send interval the
-      // gate tolerates.
+      // against a 1 ms round trip, well past the seal interval the gate
+      // tolerates.
       api.peerDelayMicros = 3000000;
       api.offsetMicros = -1500000;
       final h = await probe();
@@ -416,9 +417,9 @@ void main() {
     });
 
     test('θ survives a peer delay exactly at the allowance', () async {
-      // The bound is `roundTripMicros + dnsMicros + 5 ms`: 1 ms + 0 +
-      // 5 ms against this fixture. It is inclusive, so the boundary
-      // value is the largest excess the gate still reads as setup cost.
+      // The bound is `roundTripMicros + 5 ms`: 1 ms + 5 ms against this
+      // fixture. It is inclusive, so the boundary value is the largest
+      // excess the gate still reads as seal cost.
       api.peerDelayMicros = 6000;
       api.offsetMicros = 1200;
       final h = await probe();
@@ -438,60 +439,18 @@ void main() {
       expect(h.note, contains('clock offset unavailable'));
     });
 
-    test('the allowance tracks the sample\'s own DNS cost', () async {
-      // The allowance is measured from the sample rather than taken
-      // from a constant or from the verdict threshold, so a lookup that
-      // actually cost 20 ms widens the bound by exactly that much. The
-      // same δ that was suppressed one test above now sits well inside
-      // it, and the new boundary is 20 ms further out.
+    test('the allowance ignores the sample\'s DNS cost', () async {
+      // No lookup falls between T1 and the send, so `dnsMicros` cannot
+      // excuse any part of δ and the bound is flat. A 20 ms lookup that
+      // once widened it by exactly that much now buys nothing: the δ
+      // suppressed one test above stays suppressed. Behind a slow
+      // resolver the difference is the whole gate.
       api.dnsMicros = 20000;
-      api.peerDelayMicros = 6001;
-      api.offsetMicros = 1200;
-      final h = await probe();
-      expect(h.offsetMicros, 1200);
-      expect(h.note, isNull);
-
-      api.reset();
-      api.dnsMicros = 20000;
-      api.peerDelayMicros = 26001;
-      api.offsetMicros = 1200;
-      final past = await probe();
-      expect(past.offsetMicros, isNull);
-      expect(past.note, contains('clock offset unavailable'));
-    });
-
-    test('a sample that re-handshaked cannot claim its DNS cost', () async {
-      // `dnsMicros` sums the KE-host and NTPv4-host lookups, and the
-      // KE-host one completes before T1 is stamped, so on a
-      // re-handshaked sample it over-counts the pre-send interval. The
-      // same 20 ms lookup that widened the bound one test above buys
-      // nothing here: a δ inside the widened bound but outside the flat
-      // 5 ms one is rejected. Behind a slow resolver the difference is
-      // the whole gate.
-      api.dnsMicros = 20000;
-      api.keRecordIoMicros = 1;
       api.peerDelayMicros = 6001;
       api.offsetMicros = 1200;
       final h = await probe();
       expect(h.offsetMicros, isNull);
       expect(h.note, contains('clock offset unavailable'));
-    });
-
-    test('the corroboration window ignores a sample\'s DNS cost', () async {
-      // The window is built from `roundTripMicros`, not from δ. A
-      // 400 ms lookup inflates every δ well past the offsets' spread,
-      // so a δ-derived window would have admitted the outlier at
-      // +400 ms as a corroborating witness of its neighbours. The
-      // round trips are 1 ms and unmoved by the lookup, so every pair
-      // is scored against a 1 ms window: the outlier is dropped and
-      // the agreeing pair still carries the median.
-      api.dnsMicros = 400000;
-      api.peerDelayMicros = 400500;
-      api.offsetScript = [1200, 1200, 400000];
-      final h = await probe();
-      expect(h.offsetMicros, 1200);
-      expect(h.successes, 3);
-      expect(h.note, isNull);
     });
 
     test('a slow sample can still corroborate a fast one', () async {
@@ -808,15 +767,9 @@ class _ScriptedApi extends MockNtsApi {
   int roundTripMicros = 1000;
 
   /// `phaseTimings.dnsMicros` reported by every scripted sample. Zero
-  /// by default, which is the cache-hit case; a test raises it to widen
-  /// the per-sample plausibility bound by a measured lookup cost.
+  /// by default, which is the cache-hit case; a test raises it to show
+  /// that the per-sample plausibility bound does not track it.
   int dnsMicros = 0;
-
-  /// `phaseTimings.keRecordIoMicros` reported by every scripted sample.
-  /// Zero by default; a non-zero value marks the sample as having run a
-  /// handshake of its own, which is what the prober keys on to decide
-  /// whether [dnsMicros] is attributable to the pre-send interval.
-  int keRecordIoMicros = 0;
 
   int queryCalls = 0;
 
@@ -833,7 +786,6 @@ class _ScriptedApi extends MockNtsApi {
     roundTripScript = const [];
     roundTripMicros = 1000;
     dnsMicros = 0;
-    keRecordIoMicros = 0;
     queryCalls = 0;
   }
 
@@ -909,7 +861,7 @@ class _ScriptedApi extends MockNtsApi {
       serverStratum: 1,
       aeadId: 15,
       freshCookies: 1,
-      phaseTimings: _timings(dnsMicros, keRecordIoMicros: keRecordIoMicros),
+      phaseTimings: _timings(dnsMicros),
       trustBackend: backend,
       recvBoottimeMicros: PlatformInt64Util.from(0),
       offsetMicros: PlatformInt64Util.from(offset),
@@ -924,10 +876,9 @@ class _ScriptedApi extends MockNtsApi {
 
 ffi.PhaseTimings _zeroTimings() => _timings(0);
 
-ffi.PhaseTimings _timings(int dnsMicros, {int keRecordIoMicros = 0}) =>
-    ffi.PhaseTimings(
-      dnsMicros: PlatformInt64Util.from(dnsMicros),
-      connectMicros: PlatformInt64Util.from(0),
-      tlsHandshakeMicros: PlatformInt64Util.from(0),
-      keRecordIoMicros: PlatformInt64Util.from(keRecordIoMicros),
-    );
+ffi.PhaseTimings _timings(int dnsMicros) => ffi.PhaseTimings(
+  dnsMicros: PlatformInt64Util.from(dnsMicros),
+  connectMicros: PlatformInt64Util.from(0),
+  tlsHandshakeMicros: PlatformInt64Util.from(0),
+  keRecordIoMicros: PlatformInt64Util.from(0),
+);

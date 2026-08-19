@@ -276,19 +276,20 @@ Future<NtsSyncedTime> _getTime({
 // `(0, roundTripMicros]` (δ excludes server processing time), else
 // the locally measured round trip.
 //
-// `(0, roundTripMicros]` is a delay-selection policy, not a
-// plausibility verdict on the sample. Only the lower bound is
-// diagnostic: a `0` marks a pre-7.1 fixture, and a non-positive δ is
-// evidence of an implausible timestamp exchange — a local clock step
-// mid-exchange, a server clock stepped between T2 and T3, or server
-// stamps that are simply inconsistent. The upper bound rejects
-// healthy samples by construction: T1 is stamped before the UDP bind
-// while `roundTripMicros` starts at the send that follows it, so δ
-// runs 1–9% above the round trip on healthy samples and this window
-// selects `roundTripMicros` in practice (NTS-153 aligns the capture
-// points). It is kept regardless: accepting a δ that carries
-// pre-bind setup cost would overstate the one-way delay, whereas the
-// fallback is the quantity actually measured across the exchange.
+// Both bounds are diagnostic. A `0` marks a pre-7.1 fixture, and a
+// non-positive δ is evidence of an implausible timestamp exchange — a
+// local clock step mid-exchange, a server clock stepped between T2
+// and T3, or server stamps that are simply inconsistent. The upper
+// bound admits δ on healthy samples: T1 shares an anchor with
+// `roundTripMicros` (stamped immediately before the C2S seal, which
+// the send follows), so the only interval δ carries that the round
+// trip does not is that seal. A δ above `roundTripMicros` by more
+// than that is either a forward clock step or a slew separating the
+// wall-clock T1/T4 pair from the monotonic round trip, and the
+// fallback is then the quantity actually measured across the
+// exchange. Before 9.2 T1 was stamped ahead of the bind, so δ ran
+// 1–9% above the round trip and this window selected the fallback on
+// every healthy sample.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros

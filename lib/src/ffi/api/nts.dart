@@ -154,7 +154,7 @@ PlatformInt64 ntsBoottimeMicros() =>
 /// delay δ, which excludes server processing time) when it falls inside
 /// the selection window `(0, round_trip_micros]`, falling back to
 /// `round_trip_micros` otherwise; see [NtsTimeSample.peerDelayMicros]
-/// for why that fallback is what fires today. For high-precision
+/// for what that window admits. For high-precision
 /// synchronization, take a burst of samples and pick the one with the
 /// smallest such delay before applying that adjustment; this is exactly
 /// what the one-call `ntsGetTime` convenience does.
@@ -542,8 +542,7 @@ class NtsTimeSample {
   /// delay falls inside the selection window
   /// `(0, round_trip_micros]`, else `round_trip_micros / 2` — to
   /// estimate the server's clock at the moment the reply arrived. See
-  /// `peer_delay_micros` for why that window selects
-  /// `round_trip_micros` on healthy samples today.
+  /// `peer_delay_micros` for what the window admits.
   final PlatformInt64 utcUnixMicros;
 
   /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
@@ -603,18 +602,19 @@ class NtsTimeSample {
   ///
   /// T1 and T4 are local system-clock readings, so θ is only
   /// meaningful if the system clock was not stepped between them.
-  /// That window opens *before* the UDP send: T1 is stamped ahead
-  /// of the packet build and the socket bind (see
-  /// `peer_delay_micros`), so a step during that setup corrupts θ
-  /// as well.
+  /// T1 is stamped immediately before the C2S AEAD seal that
+  /// produces the request packet, after the UDP socket is bound and
+  /// connected (see `peer_delay_micros`), so that window is the
+  /// round trip plus the seal rather than the round trip plus the
+  /// whole UDP setup interval.
   ///
-  /// The same early T1 biases θ upward by half the setup interval
-  /// even when the clock is steady, since T1 is earlier than the
-  /// instant the request actually left. Measured against the
-  /// bundled server catalog that interval runs 1–9% of
-  /// `round_trip_micros`, so the bias is sub-millisecond to a few
-  /// milliseconds. Aligning the capture points is tracked as
-  /// NTS-153. New in 7.1.
+  /// New in 7.1. Changed in 9.2: T1 was previously stamped ahead of
+  /// the packet build *and* the bind, which biased θ upward by half
+  /// the setup interval — measured at 1–9% of `round_trip_micros`
+  /// against the bundled server catalog — even on a steady clock.
+  /// Aligning the capture points removed that bias, so
+  /// `offset_micros` reads slightly lower than on 9.1 and earlier
+  /// for the same exchange.
   final PlatformInt64 offsetMicros;
 
   /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905
@@ -626,40 +626,34 @@ class NtsTimeSample {
   /// stamps that are simply inconsistent — and consumers should
   /// fall back to `round_trip_micros`.
   ///
-  /// δ is **not** bounded above by `round_trip_micros` on this
-  /// client. T1 is stamped before the UDP socket is bound and
-  /// connected, while `round_trip_micros` is measured from the
-  /// `send` that follows the bind, so δ carries setup cost the
-  /// round trip does not — measured 1–9% above `round_trip_micros`
-  /// across the bundled server catalog, on every healthy sample.
-  /// The `(0, round_trip_micros]` window applied by `nts_get_time`
-  /// (Dart: `ntsGetTime`) is therefore conservative rather than
-  /// diagnostic: it selects the `round_trip_micros` fallback on
-  /// healthy samples too. Consumers screening only for clock steps
-  /// should pair the lower bound with a tolerant upper bound
-  /// instead of the strict window. Make that allowance *additive*
-  /// over `round_trip_micros` rather than a multiple of it: the
-  /// pre-send interval includes the NTPv4-host DNS lookup, whose
-  /// latency bears no relation to the round trip, so a ratio-derived
-  /// ceiling can reject a healthy sample from a nearby server behind
-  /// a slow resolver. That lookup is reported per sample as
-  /// `phase_timings.dns_micros` (Dart: `phaseTimings.dnsMicros`), so
-  /// the allowance can be measured rather than guessed: on a query
-  /// that ran no handshake the field is the NTPv4-host lookup alone,
-  /// and the rest of the interval is the packet build and the bind,
-  /// which do no I/O. Claim it only on such a query. On one that did
-  /// handshake, the field also carries the KE-host lookup, which
-  /// completed before T1 was stamped and so accounts for none of δ;
-  /// the KE-only phases (`connect_micros`, `tls_handshake_micros`,
-  /// `ke_record_io_micros`; Dart: `connectMicros`,
-  /// `tlsHandshakeMicros`, `keRecordIoMicros`) are a one-way signal
-  /// for that: any non-zero value proves a handshake ran, while all
-  /// three reading zero only fails to prove it, since each is
-  /// truncated to whole microseconds.
-  /// Aligning the two capture points is tracked as
-  /// NTS-153.
+  /// δ shares an anchor with `round_trip_micros`: T1 is stamped
+  /// immediately before the C2S AEAD seal and `round_trip_micros`
+  /// starts at the `send` that follows it, so the only interval δ
+  /// carries that the round trip does not is that seal, which does
+  /// no I/O and costs single-digit microseconds. δ can therefore sit
+  /// a few microseconds above `round_trip_micros` when the server's
+  /// T3−T2 is smaller still, and the two are read off different
+  /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
+  /// mid-exchange separates them too. The `(0, round_trip_micros]`
+  /// window applied by `nts_get_time` (Dart: `ntsGetTime`) admits δ
+  /// on healthy samples and selects the `round_trip_micros`
+  /// fallback for the implausible ones it is meant to catch.
+  /// Consumers applying their own upper bound need only a
+  /// microsecond-scale additive allowance over `round_trip_micros`
+  /// for the seal and the clock-source difference; a
+  /// ratio-derived ceiling is not needed, and neither is an
+  /// allowance sized from `phase_timings.dns_micros` (Dart:
+  /// `phaseTimings.dnsMicros`), since no DNS lookup falls between
+  /// T1 and the send.
   ///
-  /// New in 7.1.
+  /// New in 7.1. Changed in 9.2: T1 was previously stamped before
+  /// the bind, so δ carried the bind and the NTPv4-host DNS lookup
+  /// and ran 1–9% *above* `round_trip_micros` on every healthy
+  /// sample, which made the window above select the fallback in
+  /// practice. `peer_delay_micros` now reads lower than on 9.1 and
+  /// earlier for the same exchange, and consumers that widened
+  /// their own upper bound to accommodate the setup interval can
+  /// tighten it.
   final PlatformInt64 peerDelayMicros;
 
   /// Server-reported root delay in microseconds: total round-trip

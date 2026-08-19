@@ -290,21 +290,21 @@ Future<ServerHealth> probeHost(
   );
 }
 
-/// Everything in the pre-send interval that is not the NTPv4-host DNS
-/// lookup: building and signing the request packet, and binding and
-/// connecting the UDP socket. The work itself is syscall- and
-/// memcpy-scale with no I/O wait, so the ceiling is sized for it
-/// rather than measured.
+/// The whole pre-send interval as of 9.2: the C2S AEAD seal that
+/// builds the request packet, which is memcpy-scale with no I/O wait,
+/// so the ceiling is sized for it rather than measured. Before 9.2 it
+/// also had to cover the UDP bind and the NTPv4-host DNS lookup,
+/// which is why the allowance below once claimed the sample's own
+/// `dnsMicros` on top.
 ///
 /// What it cannot cover is scheduling. The worker can be preempted
-/// anywhere between T1 and the send, and a loaded probe host can lose
-/// more than this to the run queue; δ carries that loss where the
-/// round trip does not, so a preempted sample fails the bound and
-/// gives up a θ that was never corrupt. A burst where every sample
-/// does leaves the host judged without the clock check at all, which
-/// is the direction that fails open — hence the note the summary
-/// carries when no offset survives. Measuring the interval natively
-/// is what removes the guess, and is tracked as NTS-153.
+/// between T1 and the send, and a loaded probe host can lose more
+/// than this to the run queue; δ carries that loss where the round
+/// trip does not, so a preempted sample fails the bound and gives up
+/// a θ that was never corrupt. A burst where every sample does leaves
+/// the host judged without the clock check at all, which is the
+/// direction that fails open — hence the note the summary carries
+/// when no offset survives.
 const _kSetupSlackMicros = 5000;
 
 /// θ for each of [samples] in order, `null` where it cannot be trusted.
@@ -329,30 +329,26 @@ const _kSetupSlackMicros = 5000;
 /// also marks a pre-7.1 or hand-built sample, which carries no θ worth
 /// reporting either.
 ///
-/// The upper bound catches forward steps, but it cannot be the
-/// `δ <= roundTripMicros` one `ntsGetTime` applies (see
-/// `_effectiveDelayMicros`). T1 is captured before the packet is built
-/// and the UDP socket bound, while `roundTripMicros` starts at the
-/// send, so δ legitimately carries a pre-send interval the round trip
-/// excludes — measured against the catalog it exceeds the round trip by
-/// 1–9% on every healthy server, so that bound would suppress every
-/// real sample.
+/// The upper bound catches forward steps. It stays marginally looser
+/// than the `δ <= roundTripMicros` one `ntsGetTime` applies (see
+/// `_effectiveDelayMicros`): as of 9.2 T1 is captured immediately
+/// before the C2S seal that the send follows, so the only interval δ
+/// carries that the round trip does not is that seal, and
+/// [_kSetupSlackMicros] is the allowance for it. Sizing the allowance
+/// for the interval itself bounds the step that can slip through at
+/// single-digit milliseconds, so single-digit milliseconds of
+/// corruption in θ, rather than at whatever the verdict threshold
+/// happens to be. It is additive rather than a multiple of the round
+/// trip, so a LAN-local server is held to the same absolute tolerance
+/// as a distant one.
 ///
-/// The allowance over the round trip is therefore that interval,
-/// measured rather than assumed: `phaseTimings.dnsMicros` where it is
-/// the NTPv4-host lookup alone, plus [_kSetupSlackMicros] for the build
-/// and the bind. Sizing it from the sample bounds the step that can slip
-/// through at the setup cost itself — single-digit milliseconds, so
-/// single-digit milliseconds of corruption in θ — rather than at
-/// whatever the verdict threshold happens to be. It has to be additive
-/// rather than a multiple of the round trip, since a slow lookup in
-/// front of a LAN-local server would blow any ratio-derived ceiling on a
-/// perfectly healthy sample. The bound can tighten to the strict one
-/// once the native capture points are aligned.
-///
-/// The lookup term is only claimable on a sample that ran no handshake,
-/// which is why [_rehandshaked] gates it: `dnsMicros` sums both lookups
-/// a query can make, and the KE-host one precedes T1.
+/// Before 9.2 T1 preceded the UDP bind, so δ also carried the bind and
+/// the NTPv4-host lookup and exceeded the round trip by 1–9% on every
+/// healthy server. The allowance had to add the sample's own
+/// `phaseTimings.dnsMicros` — and gate that term on whether the query
+/// re-handshaked, since the field sums both lookups a query can make
+/// and the KE-host one precedes T1. No lookup falls between T1 and the
+/// send now, so the term and its gate are gone.
 ///
 /// The burst test then requires corroboration: a surviving θ is kept
 /// only if some other surviving sample agrees with it to within what
@@ -373,12 +369,9 @@ const _kSetupSlackMicros = 5000;
 /// without the clock check at all — so too tight a window fails open on
 /// exactly the skewed server the check exists to catch.
 ///
-/// The scale is taken from `roundTripMicros` rather than δ for two
-/// reasons: δ carries the pre-send interval this file has just finished
-/// documenting, so a slow lookup would widen the window by an amount
-/// that has nothing to do with the path, and δ is computed from the
-/// stepped clock itself, whereas `roundTripMicros` is a monotonic
-/// measurement no step can move. That immunity is what makes the
+/// The scale is taken from `roundTripMicros` rather than δ because δ is
+/// computed from the stepped clock itself, whereas `roundTripMicros` is
+/// a monotonic measurement no step can move. That immunity is what makes the
 /// residual symmetric: a backwards step deflates δ where a forward step
 /// inflates it, but neither touches the window. This is what stops a
 /// step small enough to pass the per-sample bound from moving a host's
@@ -409,46 +402,14 @@ bool _agree(List<NtsTimeSample> samples, List<int?> gated, int i, int j) =>
     2 * (gated[i]! - gated[j]!).abs() <=
     samples[i].roundTripMicros + samples[j].roundTripMicros;
 
-/// Whether [s]'s query ran an NTS-KE handshake of its own, which a burst
-/// sample does only when the warmed pool was exhausted or its session
-/// evicted.
-///
-/// It matters because `phaseTimings.dnsMicros` is the *sum* of the
-/// KE-host and NTPv4-host lookups, while T1 is stamped after the
-/// handshake completes. On a re-handshaked sample the field therefore
-/// over-counts the pre-send interval by a lookup that finished before
-/// T1 and so cannot excuse any part of δ — enough, behind a slow
-/// resolver, to widen the bound past a step it exists to catch. The
-/// three KE-only phases are the available signal — any one of them
-/// non-zero proves a handshake ran — so their disjunction is the
-/// discriminator; on a re-handshaked sample the NTPv4-host lookup goes
-/// unclaimed and the bound is merely stricter than it could be.
-///
-/// The contract guarantees zero on a cache hit but not the converse, so
-/// this infers presence from durations that are truncated to whole
-/// microseconds. Reading a handshake as a cache hit would need a TCP
-/// connect, a TLS 1.3 exchange and a record read to each round to zero
-/// on the same query, which no remote peer produces; a mock or a fixture
-/// can, and gets a wider bound than it should. An explicit indicator
-/// would remove the inference, and belongs with the capture-point work
-/// tracked as NTS-153 rather than in the prober.
-bool _rehandshaked(NtsTimeSample s) =>
-    s.phaseTimings.connectMicros != 0 ||
-    s.phaseTimings.tlsHandshakeMicros != 0 ||
-    s.phaseTimings.keRecordIoMicros != 0;
-
 /// [s]'s θ when its own peer delay is a plausible duration for the
 /// exchange that produced it, else `null`. See [_corroborateOffsets]
 /// for the derivation and for the burst-level test layered on top.
-int? _plausibleOffsetMicros(NtsTimeSample s) {
-  final allowance = _rehandshaked(s)
-      ? _kSetupSlackMicros
-      : s.phaseTimings.dnsMicros + _kSetupSlackMicros;
-  return s.peerDelayMicros > 0 &&
-          s.peerDelayMicros <= s.roundTripMicros + allowance
-      ? s.offsetMicros
-      : null;
-}
+int? _plausibleOffsetMicros(NtsTimeSample s) =>
+    s.peerDelayMicros > 0 &&
+        s.peerDelayMicros <= s.roundTripMicros + _kSetupSlackMicros
+    ? s.offsetMicros
+    : null;
 
 /// Reduce a host to the single severe KE-stage `TrustBackendMismatch`
 /// failure a `--require-trust-backend` violation earns, whichever

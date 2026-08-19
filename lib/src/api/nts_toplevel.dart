@@ -98,7 +98,7 @@ part of 'nts.dart';
 /// it falls inside the selection window `(0, roundTripMicros]`,
 /// falling back to `roundTripMicros` otherwise;
 /// see [NtsTimeSample.peerDelayMicros]
-/// for why that fallback is what fires today. For high-precision
+/// for what that window admits. For high-precision
 /// synchronization, take a burst of samples and pick the one with the
 /// smallest such delay before applying that adjustment; this is
 /// exactly what the one-call [ntsGetTime] convenience does.

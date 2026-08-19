@@ -97,6 +97,39 @@ tarball.
 
 ### Changed
 
+- **Behavioural: `offsetMicros` and `peerDelayMicros` read lower than
+  on 9.1 for the same exchange.** T1, the RFC 5905 client transmit
+  timestamp, is now stamped immediately before the C2S AEAD seal that
+  builds the request packet, after the UDP socket is bound and
+  connected. It previously preceded both the packet build and the
+  bind, while `roundTripMicros` was anchored at the `send` that
+  follows the bind, so the two intervals had different start points:
+  the peer delay δ = (T4−T1)−(T3−T2) carried the bind and the
+  NTPv4-host DNS lookup that the round trip excluded, and θ carried
+  half of that interval as apparent offset. Measured against the
+  bundled server catalog, δ ran 1–9% *above* `roundTripMicros` on
+  every healthy sample — enough that the `(0, roundTripMicros]`
+  selection window `ntsGetTime` applies rejected δ in practice and the
+  `roundTripMicros` fallback was the branch always taken. δ and the
+  round trip now share an anchor, separated only by the seal, which
+  does no I/O; the window admits δ on healthy samples and the fallback
+  is reserved for the implausible ones it exists to catch. Callers
+  that recorded absolute `offsetMicros` or `peerDelayMicros` values
+  from 9.1 or earlier should expect a small downward shift, and any
+  consumer that widened its own δ upper bound to accommodate the setup
+  interval — as the example health prober did — can tighten it to a
+  microsecond-scale additive allowance. `ntsGetTime`'s synchronized
+  UTC is unaffected in direction: it compensates by half the selected
+  delay either way, but now selects the tighter of the two estimates.
+- The example health prober's per-sample θ gate
+  (`example/lib/src/health/probe.dart`) tightened accordingly: the
+  allowance over `roundTripMicros` is now the flat 5 ms seal ceiling
+  alone. It previously added the sample's own
+  `phaseTimings.dnsMicros`, gated on an inference about whether the
+  query had re-handshaked (since that field sums both lookups a query
+  can make and only the NTPv4-host one fell inside the pre-send
+  interval). No lookup falls between T1 and the send now, so both the
+  DNS term and the inference are gone.
 - The AES-SIV-CMAC paths (AEAD IDs 15 and 17) migrated to the
   `aes-siv` 0.8 API, completing the move of both SIV families onto the
   RustCrypto `hybrid-array` traits line. The crate dropped its

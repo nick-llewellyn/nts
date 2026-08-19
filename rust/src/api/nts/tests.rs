@@ -1831,11 +1831,15 @@ fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
         sample.offset_micros,
     );
     // Peer delay excludes server processing time, so it must not
-    // exceed the locally measured round trip (plus a small slack for
-    // the sub-ms quantisation of the wall-clock reads on both ends).
+    // exceed the locally measured round trip. T1 shares an anchor with
+    // `round_trip_micros` — only the C2S seal sits between them — so
+    // the slack covers that seal, the sub-µs quantisation of the
+    // wall-clock reads on both ends, and any slew separating the
+    // wall-clock T1/T4 pair from the monotonic round trip. Before the
+    // capture points were aligned this needed 10 ms.
     assert!(
         sample.peer_delay_micros > 0
-            && sample.peer_delay_micros <= sample.round_trip_micros + 10_000,
+            && sample.peer_delay_micros <= sample.round_trip_micros + 1_000,
         "peer_delay {} µs implausible against round_trip {} µs",
         sample.peer_delay_micros,
         sample.round_trip_micros,
