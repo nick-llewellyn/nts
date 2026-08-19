@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `arm_send_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
 
@@ -634,15 +634,23 @@ class NtsTimeSample {
   /// a few microseconds above `round_trip_micros` when the server's
   /// T3−T2 is smaller still, and the two are read off different
   /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
-  /// mid-exchange separates them too. The `(0, round_trip_micros]`
-  /// window applied by `nts_get_time` (Dart: `ntsGetTime`) admits δ
-  /// on healthy samples and selects the `round_trip_micros`
-  /// fallback for the implausible ones it is meant to catch.
-  /// Consumers applying their own upper bound need only a
-  /// microsecond-scale additive allowance over `round_trip_micros`
-  /// for the seal and the clock-source difference; a
-  /// ratio-derived ceiling is not needed, and neither is an
-  /// allowance sized from `phase_timings.dns_micros` (Dart:
+  /// mid-exchange separates them too. Scheduling separates them as
+  /// well: the worker can be preempted between T1 and the send, and
+  /// δ carries that loss where the round trip does not, so a loaded
+  /// host can push a healthy δ above `round_trip_micros` by however
+  /// long it spent on the run queue. The `(0, round_trip_micros]`
+  /// window applied by `nts_get_time` (Dart: `ntsGetTime`)
+  /// therefore admits δ on healthy samples under ordinary
+  /// scheduling, and selects the `round_trip_micros` fallback both
+  /// for the implausible exchanges it is meant to catch and for
+  /// healthy ones that lost the pre-send interval to preemption —
+  /// the latter gives up a δ that was never corrupt, which is the
+  /// direction that fails safe. Consumers applying their own upper
+  /// bound need only a microsecond-scale additive allowance over
+  /// `round_trip_micros` for the seal and the clock-source
+  /// difference, plus whatever scheduling headroom their host
+  /// warrants; a ratio-derived ceiling is not needed, and neither
+  /// is an allowance sized from `phase_timings.dns_micros` (Dart:
   /// `phaseTimings.dnsMicros`), since no DNS lookup falls between
   /// T1 and the send.
   ///

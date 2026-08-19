@@ -229,15 +229,23 @@ class NtsTimeSample {
   /// few microseconds above [roundTripMicros] when the server's T3−T2
   /// is smaller still, and the two are read off different clocks
   /// (T1/T4 wall-clock, the round trip monotonic) so a slew
-  /// mid-exchange separates them too. The `(0, roundTripMicros]`
-  /// window applied by `ntsGetTime` admits δ on healthy samples and
-  /// selects the [roundTripMicros] fallback for the implausible ones
-  /// it is meant to catch. Consumers applying their own upper bound
-  /// need only a microsecond-scale additive allowance over
-  /// [roundTripMicros] for the seal and the clock-source difference;
-  /// a ratio-derived ceiling is not needed, and neither is an
-  /// allowance sized from [PhaseTimings.dnsMicros], since no DNS
-  /// lookup falls between T1 and the send.
+  /// mid-exchange separates them too. Scheduling separates them as
+  /// well: the worker can be preempted between T1 and the send, and δ
+  /// carries that loss where the round trip does not, so a loaded host
+  /// can push a healthy δ above [roundTripMicros] by however long it
+  /// spent on the run queue. The `(0, roundTripMicros]` window applied
+  /// by `ntsGetTime` therefore admits δ on healthy samples under
+  /// ordinary scheduling, and selects the [roundTripMicros] fallback
+  /// both for the implausible exchanges it is meant to catch and for
+  /// healthy ones that lost the pre-send interval to preemption — the
+  /// latter gives up a δ that was never corrupt, which is the
+  /// direction that fails safe. Consumers applying their own upper
+  /// bound need only a microsecond-scale additive allowance over
+  /// [roundTripMicros] for the seal and the clock-source difference,
+  /// plus whatever scheduling headroom their host warrants; a
+  /// ratio-derived ceiling is not needed, and neither is an allowance
+  /// sized from [PhaseTimings.dnsMicros], since no DNS lookup falls
+  /// between T1 and the send.
   ///
   /// New in 7.1. Changed in 9.2: T1 was previously stamped before the
   /// bind, so δ carried the bind and the NTPv4-host DNS lookup and

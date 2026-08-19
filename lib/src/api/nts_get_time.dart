@@ -280,16 +280,20 @@ Future<NtsSyncedTime> _getTime({
 // non-positive δ is evidence of an implausible timestamp exchange — a
 // local clock step mid-exchange, a server clock stepped between T2
 // and T3, or server stamps that are simply inconsistent. The upper
-// bound admits δ on healthy samples: T1 shares an anchor with
-// `roundTripMicros` (stamped immediately before the C2S seal, which
-// the send follows), so the only interval δ carries that the round
-// trip does not is that seal. A δ above `roundTripMicros` by more
-// than that is either a forward clock step or a slew separating the
-// wall-clock T1/T4 pair from the monotonic round trip, and the
-// fallback is then the quantity actually measured across the
-// exchange. Before 9.2 T1 was stamped ahead of the bind, so δ ran
-// 1–9% above the round trip and this window selected the fallback on
-// every healthy sample.
+// bound admits δ on healthy samples under ordinary scheduling: T1
+// shares an anchor with `roundTripMicros` (stamped immediately before
+// the C2S seal, which the send follows), so the only interval δ
+// carries that the round trip does not is that seal. A δ above
+// `roundTripMicros` by more than that is a forward clock step, a slew
+// separating the wall-clock T1/T4 pair from the monotonic round trip,
+// or — on a loaded host — preemption of the worker between T1 and the
+// send, which inflates δ while leaving θ intact. This is a selection
+// policy, not a clock-integrity test: the fallback is the quantity
+// actually measured across the exchange, so taking it costs accuracy
+// rather than correctness whichever of those three put δ out of
+// range. Before 9.2 T1 was stamped ahead of the bind, so δ ran 1–9%
+// above the round trip and this window selected the fallback on every
+// healthy sample.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros

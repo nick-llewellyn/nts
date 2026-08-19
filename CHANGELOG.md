@@ -112,8 +112,12 @@ tarball.
   selection window `ntsGetTime` applies rejected δ in practice and the
   `roundTripMicros` fallback was the branch always taken. δ and the
   round trip now share an anchor, separated only by the seal, which
-  does no I/O; the window admits δ on healthy samples and the fallback
-  is reserved for the implausible ones it exists to catch. Callers
+  does no I/O; the window admits δ on healthy samples under ordinary
+  scheduling. It is not reserved solely for implausible exchanges: the
+  worker can still be preempted between T1 and the send, which
+  inflates δ without corrupting θ, so a loaded host can select the
+  fallback on a healthy sample — giving up accuracy, not correctness,
+  since the fallback is the quantity actually measured. Callers
   that recorded absolute `offsetMicros` or `peerDelayMicros` values
   from 9.1 or earlier should expect a small downward shift, and any
   consumer that widened its own δ upper bound to accommodate the setup
@@ -130,6 +134,20 @@ tarball.
   can make and only the NTPv4-host one fell inside the pre-send
   interval). No lookup falls between T1 and the send now, so both the
   DNS term and the inference are gone.
+
+### Fixed
+
+- The UDP socket's write timeout is now re-armed against the call-wide
+  deadline immediately before the `send`, matching the re-arm the
+  `recv` already had. The bind-time value is anchored at bind
+  completion, and the T1 stamp and the C2S seal now sit between that
+  anchor and the `send`; the seal does no I/O, but the worker can be
+  preempted across it, so the bind-time value was stale by an
+  unbounded amount. A blocking `send` could therefore run for the full
+  bind-time budget on top of the time already spent, overshooting the
+  single wall-clock budget `timeout` documents. An already-lapsed
+  budget now fails with `NtsError.timeout(TimeoutPhase.ntp)` instead of
+  putting a packet on the wire the caller has stopped waiting for.
 - The AES-SIV-CMAC paths (AEAD IDs 15 and 17) migrated to the
   `aes-siv` 0.8 API, completing the move of both SIV families onto the
   RustCrypto `hybrid-array` traits line. The crate dropped its

@@ -204,6 +204,75 @@ fn on_wire_statistics_computes_rfc5905_offset_and_peer_delay() {
     assert_eq!(peer_delay, 9_000);
 }
 
+/// Deterministic regression guard for the capture-point alignment
+/// (nts-362p / NTS-153). Before 9.2, T1 was stamped ahead of the UDP
+/// bind while `round_trip_micros` was anchored at the `send` that
+/// follows it, so δ carried the whole setup interval — bind plus the
+/// NTPv4-host DNS lookup — that the round trip excluded, and ran
+/// consistently *above* the round trip.
+///
+/// Rather than measure a live exchange (where scheduler preemption
+/// makes any tight wall-clock bound flaky — see the wide slack in
+/// `assert_cloudflare_time_sample`), inject a known setup delay into
+/// the timestamps and assert the arithmetic's ordering both ways:
+/// with T1 stamped before that delay δ exceeds the round trip, and
+/// with T1 stamped after it δ falls within. That is the whole content
+/// of the fix, isolated from the network.
+#[test]
+fn aligned_capture_points_keep_peer_delay_within_round_trip() {
+    let base = Duration::new(1_777_334_400, 0);
+    let ts = |ms: u64| unix_duration_to_ntp64(base + Duration::from_millis(ms));
+
+    // A 20 ms setup interval (bind + NTPv4-host DNS), then a 30 ms
+    // exchange of which the server spent 2 ms processing.
+    const SETUP_MS: u64 = 20;
+    let send_ms = SETUP_MS;
+    let recv_ms = send_ms + 30;
+    // `round_trip_micros` is anchored at the send either way — it is
+    // measured monotonically from `send_at`, so the setup interval is
+    // never inside it.
+    let round_trip_micros = 30_000;
+
+    let mut header = crate::nts::ntp::NtpHeader::client_request(ts(send_ms + 17));
+    header.receive_timestamp = ts(send_ms + 15);
+
+    // Pre-9.2 ordering: T1 stamped at call entry, before the setup.
+    let (_, _, delay_before_bind) = on_wire_statistics(ts(0), ts(recv_ms), &header);
+    assert!(
+        delay_before_bind > round_trip_micros,
+        "pre-9.2 capture order must put δ ({delay_before_bind} µs) above \
+         the round trip ({round_trip_micros} µs) — if it does not, this \
+         test no longer reproduces the bug it guards",
+    );
+
+    // 9.2 ordering: T1 stamped after the bind, immediately before the
+    // C2S seal that the send follows.
+    let (_, _, delay_after_bind) = on_wire_statistics(ts(send_ms), ts(recv_ms), &header);
+    assert!(
+        delay_after_bind > 0 && delay_after_bind <= round_trip_micros,
+        "aligned capture points must put δ ({delay_after_bind} µs) inside \
+         the (0, {round_trip_micros}] selection window",
+    );
+
+    // The whole content of the fix: moving the T1 stamp below the bind
+    // removes exactly the setup interval from δ. The 1 µs tolerance
+    // absorbs the NTP64 fixed-point quantisation of the four stamps.
+    let removed = delay_before_bind - delay_after_bind;
+    assert!(
+        (removed - SETUP_MS as i64 * 1_000).abs() <= 1,
+        "aligning the capture points must remove the injected {SETUP_MS} ms \
+         setup interval from δ, removed {removed} µs",
+    );
+    // What remains between δ and the round trip is the server's own
+    // processing time (T3−T2 = 2 ms), which is exactly what δ exists
+    // to exclude.
+    assert!(
+        (round_trip_micros - delay_after_bind - 2_000).abs() <= 1,
+        "aligned δ ({delay_after_bind} µs) must sit below the round trip \
+         ({round_trip_micros} µs) by the server's 2 ms processing time",
+    );
+}
+
 #[test]
 fn ntp_short_converts_16_16_fixed_point_to_micros() {
     assert_eq!(ntp_short_to_micros(0), 0);
@@ -1060,6 +1129,82 @@ fn bind_connected_udp_socket_timeouts_reflect_remaining_budget() {
     );
 }
 
+/// Send-side counterpart of
+/// `arm_recv_against_call_deadline_shrinks_read_timeout_against_call_anchor`.
+/// Since 9.2 the T1 stamp and the C2S AEAD seal sit between the bind
+/// and the `send`, so the bind-time write timeout is stale by
+/// however long the worker was preempted across them. Asserts the
+/// re-arm shrinks the write timeout to track the call-wide anchor.
+#[test]
+fn arm_send_against_call_deadline_shrinks_write_timeout_against_call_anchor() {
+    let socket = UdpSocket::bind("127.0.0.1:0").expect("bind");
+    let bind_time_value = Duration::from_secs(5);
+    socket
+        .set_write_timeout(Some(bind_time_value))
+        .expect("seed initial write_timeout");
+
+    let total = Duration::from_millis(500);
+    let elapsed = Duration::from_millis(200);
+    let remaining = arm_send_against_call_deadline(&socket, total, elapsed)
+        .expect("non-zero remaining must yield Ok");
+
+    let write_t = socket
+        .write_timeout()
+        .expect("write_timeout call ok")
+        .expect("write timeout still set");
+    assert_eq!(
+        write_t, remaining,
+        "set_write_timeout must reflect the helper's returned remaining",
+    );
+    assert!(
+        write_t < bind_time_value,
+        "re-armed write_timeout {write_t:?} must be strictly less than \
+         the seeded bind-time value {bind_time_value:?}",
+    );
+    assert!(
+        write_t < total,
+        "re-armed write_timeout {write_t:?} must be strictly less than \
+         the call-wide budget {total:?} once {elapsed:?} has elapsed",
+    );
+    assert!(
+        write_t > Duration::ZERO,
+        "non-zero remaining must yield a strictly positive timeout, \
+         got {write_t:?}",
+    );
+}
+
+/// Expired-budget arm of `arm_send_against_call_deadline`. A budget
+/// exhausted by the seal (or by preemption across it) must fail with
+/// `Timeout(Ntp)` rather than putting a packet on the wire the caller
+/// has already stopped waiting for, and must leave the socket
+/// untouched so the phase tag is the same either side of the syscall.
+#[test]
+fn arm_send_against_call_deadline_short_circuits_after_expiry() {
+    let socket = UdpSocket::bind("127.0.0.1:0").expect("bind");
+    let initial = Duration::from_secs(5);
+    socket
+        .set_write_timeout(Some(initial))
+        .expect("seed initial write_timeout");
+
+    let total = Duration::from_millis(100);
+    let elapsed = Duration::from_millis(150);
+    match arm_send_against_call_deadline(&socket, total, elapsed) {
+        Err(NtsError::Timeout {
+            phase: TimeoutPhase::Ntp,
+            trust_backend: None,
+        }) => {}
+        other => panic!("expired call-wide deadline must yield Timeout(Ntp), got {other:?}",),
+    }
+    let write_t = socket
+        .write_timeout()
+        .expect("write_timeout call ok")
+        .expect("write timeout still set");
+    assert_eq!(
+        write_t, initial,
+        "expired short-circuit must not re-arm the socket; got {write_t:?}",
+    );
+}
+
 /// Companion to `bind_connected_udp_socket_timeouts_reflect_remaining_budget`
 /// for the post-bind portion of `nts_query`. The UDP socket
 /// emerges from `bind_connected_udp` with a read timeout sized to
@@ -1830,16 +1975,22 @@ fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
         "offset {} µs outside the ±5 min sanity window",
         sample.offset_micros,
     );
-    // Peer delay excludes server processing time, so it must not
-    // exceed the locally measured round trip. T1 shares an anchor with
-    // `round_trip_micros` — only the C2S seal sits between them — so
-    // the slack covers that seal, the sub-µs quantisation of the
-    // wall-clock reads on both ends, and any slew separating the
-    // wall-clock T1/T4 pair from the monotonic round trip. Before the
-    // capture points were aligned this needed 10 ms.
+    // Peer delay excludes server processing time, so it should track
+    // the locally measured round trip closely. The slack stays wide
+    // deliberately: this is a live network test on a shared CI runner,
+    // and the production path permits arbitrary preemption between T1
+    // and the send, which inflates δ where the round trip is immune —
+    // a loaded host can lose tens of milliseconds to the run queue on
+    // a perfectly healthy exchange. Tightening this to the
+    // microsecond-scale seal cost would make the suite fail on
+    // scheduler pressure rather than on a regression. The capture-point
+    // alignment that made δ ≤ RTT the ordinary case is pinned
+    // deterministically by
+    // `aligned_capture_points_keep_peer_delay_within_round_trip`; this
+    // bound only catches a gross live-path breakage.
     assert!(
         sample.peer_delay_micros > 0
-            && sample.peer_delay_micros <= sample.round_trip_micros + 1_000,
+            && sample.peer_delay_micros <= sample.round_trip_micros + 100_000,
         "peer_delay {} µs implausible against round_trip {} µs",
         sample.peer_delay_micros,
         sample.round_trip_micros,

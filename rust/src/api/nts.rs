@@ -330,15 +330,23 @@ pub struct NtsTimeSample {
     /// a few microseconds above `round_trip_micros` when the server's
     /// T3−T2 is smaller still, and the two are read off different
     /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
-    /// mid-exchange separates them too. The `(0, round_trip_micros]`
-    /// window applied by `nts_get_time` (Dart: `ntsGetTime`) admits δ
-    /// on healthy samples and selects the `round_trip_micros`
-    /// fallback for the implausible ones it is meant to catch.
-    /// Consumers applying their own upper bound need only a
-    /// microsecond-scale additive allowance over `round_trip_micros`
-    /// for the seal and the clock-source difference; a
-    /// ratio-derived ceiling is not needed, and neither is an
-    /// allowance sized from `phase_timings.dns_micros` (Dart:
+    /// mid-exchange separates them too. Scheduling separates them as
+    /// well: the worker can be preempted between T1 and the send, and
+    /// δ carries that loss where the round trip does not, so a loaded
+    /// host can push a healthy δ above `round_trip_micros` by however
+    /// long it spent on the run queue. The `(0, round_trip_micros]`
+    /// window applied by `nts_get_time` (Dart: `ntsGetTime`)
+    /// therefore admits δ on healthy samples under ordinary
+    /// scheduling, and selects the `round_trip_micros` fallback both
+    /// for the implausible exchanges it is meant to catch and for
+    /// healthy ones that lost the pre-send interval to preemption —
+    /// the latter gives up a δ that was never corrupt, which is the
+    /// direction that fails safe. Consumers applying their own upper
+    /// bound need only a microsecond-scale additive allowance over
+    /// `round_trip_micros` for the seal and the clock-source
+    /// difference, plus whatever scheduling headroom their host
+    /// warrants; a ratio-derived ceiling is not needed, and neither
+    /// is an allowance sized from `phase_timings.dns_micros` (Dart:
     /// `phaseTimings.dnsMicros`), since no DNS lookup falls between
     /// T1 and the send.
     ///
@@ -2092,6 +2100,43 @@ fn remaining_budget_or_ntp_timeout(
         })
 }
 
+/// Re-arm a connected UDP socket's write timeout against the
+/// call-wide wall-clock budget anchored at the start of
+/// [`nts_query`], immediately before the `send`.
+///
+/// The companion to [`arm_recv_against_call_deadline`] on the
+/// outbound leg. The bind-time write timeout written by
+/// [`bind_connected_udp_using`] is anchored at bind completion, and
+/// since 9.2 the T1 stamp and the C2S AEAD seal both sit between
+/// that anchor and the `send`. The seal does no I/O, but the worker
+/// can be preempted across it, so the bind-time value is stale by
+/// an unbounded amount by the time the `send` is reached: without
+/// this re-arm a blocking `send` could run for that full bind-time
+/// budget on top of the time already spent, overshooting the single
+/// wall-clock budget `timeout_ms` documents. Re-checking here also
+/// means an already-lapsed budget fails with `Timeout(Ntp)` instead
+/// of putting a packet on the wire the caller has stopped waiting
+/// for.
+///
+/// Same contract as the recv-side helper: returns the re-armed
+/// remaining budget, short-circuits with `Timeout(Ntp)` on an
+/// exhausted budget without touching the socket, and surfaces a
+/// failure to apply the timeout as `NtsError::Network`.
+fn arm_send_against_call_deadline(
+    socket: &UdpSocket,
+    total: Duration,
+    elapsed: Duration,
+) -> Result<Duration, NtsError> {
+    let remaining = remaining_budget_or_ntp_timeout(total, elapsed)?;
+    socket
+        .set_write_timeout(Some(remaining))
+        .map_err(|e| NtsError::Network {
+            message: format!("set_write_timeout for send: {e}"),
+            trust_backend: None,
+        })?;
+    Ok(remaining)
+}
+
 /// Re-arm a connected UDP socket's read timeout against the
 /// call-wide wall-clock budget anchored at the start of
 /// [`nts_query`]. The bind-time timeout written by
@@ -3557,6 +3602,17 @@ fn nts_query_inner(
         transmit_timestamp,
     };
     let packet = build_client_request(&req, &ctx.c2s_key).map_err(evict_on_rekey_signal)?;
+
+    // Re-arm the socket's write timeout against the call-wide
+    // deadline before the send. The bind-time value was anchored at
+    // bind completion, and the T1 stamp and the seal above sit
+    // between that anchor and here — the seal does no I/O, but the
+    // worker can be preempted across it, so the bind-time value is
+    // stale by an unbounded amount. Short-circuits to `Timeout(Ntp)`
+    // rather than putting a packet on the wire once the budget is
+    // spent. See `arm_send_against_call_deadline`.
+    arm_send_against_call_deadline(&socket, timeout, started.elapsed())
+        .map_err(attribute_post_handshake)?;
 
     let send_at = Instant::now();
     socket
