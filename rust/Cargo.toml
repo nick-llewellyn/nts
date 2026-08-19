@@ -69,7 +69,10 @@ __internal-fuzz = []
 # build silently loses the wipe of the derived POLYVAL/AES subkeys and the
 # per-message counter block. See the zeroize note further down this file.
 aes-gcm-siv = { version = "0.12", default-features = false, features = ["alloc", "aes", "zeroize"] }
-aes-siv = { version = "0.7", default-features = false, features = ["alloc"] }
+# Same story one release later: 0.7 wiped `Siv::encryption_key` in `Drop`
+# unconditionally, 0.8 gates that wipe behind an optional `zeroize`
+# dependency absent from `default`, so the feature is explicit here too.
+aes-siv = { version = "0.8", default-features = false, features = ["alloc", "zeroize"] }
 # Pinned to match the `flutter_rust_bridge` Dart dependency in pubspec.yaml.
 # Bumps must be coordinated across both sides (`cargo update` + `flutter pub upgrade`).
 flutter_rust_bridge = "=2.12.0"
