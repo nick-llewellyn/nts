@@ -20,8 +20,11 @@
 // in `PlatformInit` resolves it via the platform linker, so this Gradle
 // module needs no `jniLibs` directory or Cargo integration of its own.
 
+import com.android.build.api.dsl.LibraryExtension
 import groovy.json.JsonSlurper
 import java.io.File
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 
 plugins {
     // Versions are inherited from the consuming Flutter app's
@@ -30,7 +33,17 @@ plugins {
     // own copies. Listing them with `apply false` here would break that
     // contract, so the un-versioned form is intentional.
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
+}
+
+// AGP 9.0 ships built-in Kotlin support and applies it automatically; the
+// standalone `org.jetbrains.kotlin.android` plugin is not just redundant
+// there but actively incompatible with AGP 9's built-in Kotlin, so it must
+// only be applied on the AGP < 9 versions that still need it. Other
+// published Flutter plugins facing the same AGP 9 migration use this same
+// gate (e.g. `cunning_document_scanner`).
+val agpMajor = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.substringBefore('.').toInt()
+if (agpMajor < 9) {
+    pluginManager.apply("org.jetbrains.kotlin.android")
 }
 
 group = "com.nllewellyn.nts"
@@ -142,7 +155,12 @@ repositories {
     mavenCentral()
 }
 
-android {
+// `android { ... }` is the classic extension-function accessor
+// (`Project.android(Action<LibraryExtension>)`); it is deprecated once
+// `android.newDsl=true` (the AGP 9 default) and removed in AGP 10.
+// `configure<LibraryExtension> { ... }` is the stable replacement that
+// works unchanged across AGP 8.x and 9.x.
+configure<LibraryExtension> {
     namespace = "com.nllewellyn.nts"
     // Pinned to the AGP 8.x / Flutter 3.38 stable default. The plugin
     // module itself only consumes platform APIs available since API 24
@@ -157,10 +175,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {
@@ -178,7 +192,24 @@ android {
 
     sourceSets {
         getByName("main") {
-            java.srcDirs("src/main/kotlin")
+            // `srcDirs(...)` is deprecated in favor of the `directories`
+            // mutable set (both add to, rather than replace, the default
+            // source dirs).
+            java.directories.add("src/main/kotlin")
+        }
+    }
+}
+
+// `android.kotlinOptions { jvmTarget = ... }` had its deprecation level
+// raised to ERROR in Kotlin 2.2.0, so it now fails script compilation
+// rather than just warning. `kotlin.compilerOptions` is the replacement,
+// but it only applies (and only needs applying) when the standalone
+// Kotlin plugin is present -- on AGP 9's built-in Kotlin, `jvmTarget`
+// already defaults from `compileOptions.targetCompatibility` above.
+plugins.withId("org.jetbrains.kotlin.android") {
+    configure<KotlinAndroidProjectExtension> {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
         }
     }
 }
