@@ -3110,6 +3110,44 @@ fn evict_session(spec_key: &str, expected_generation: u64) {
     default_session_table().evict_session(spec_key, expected_generation);
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Ordering marker for the capture-point guard (nts-362p /
+    /// NTS-153), stamped by [`bind_connected_udp_using`] the moment
+    /// `connect` succeeds.
+    ///
+    /// The T1 stamp must follow the *whole* UDP bind, not merely the
+    /// name resolution that precedes it: `UdpSocket::bind`, both
+    /// `set_*_timeout` calls, and `connect` all run after the lookup
+    /// returns, so a T1 placed anywhere in that interval would put
+    /// bind cost back into δ. Anchoring the guard on the resolver's
+    /// return cannot see that; anchoring it here can.
+    ///
+    /// Thread-local rather than a global, so a test reads only the
+    /// stamp its own call produced and the guard stays correct under
+    /// the parallel test harness. `#[cfg(test)]` on both the storage
+    /// and the call site keeps it out of release builds entirely.
+    static LAST_UDP_CONNECT_NTP64: std::cell::Cell<Option<u64>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Record the wall-clock instant `connect` returned, on the same clock
+/// that produces T1 so the two are directly comparable. Overwrites any
+/// previous value: a query binds once, and a test reads the stamp
+/// immediately after the call it belongs to.
+#[cfg(test)]
+fn record_udp_connect_stamp() {
+    let now = system_time_to_ntp64();
+    LAST_UDP_CONNECT_NTP64.with(|c| c.set(Some(now)));
+}
+
+/// Take the stamp recorded by the most recent successful UDP connect on
+/// this thread, clearing it so a later read cannot silently reuse it.
+#[cfg(test)]
+fn take_udp_connect_stamp() -> Option<u64> {
+    LAST_UDP_CONNECT_NTP64.with(std::cell::Cell::take)
+}
+
 /// Resolve `(host, port)` and return a UDP socket bound to the local
 /// wildcard address of the matching family, already `connect()`ed to the
 /// first remote candidate that accepts the binding.
@@ -3335,7 +3373,11 @@ where
             continue;
         }
         match socket.connect(addr) {
-            Ok(()) => return Ok(UdpBindOutcome { socket, dns_micros }),
+            Ok(()) => {
+                #[cfg(test)]
+                record_udp_connect_stamp();
+                return Ok(UdpBindOutcome { socket, dns_micros });
+            }
             Err(e) => errors.push(format!("connect {addr}: {e}")),
         }
     }

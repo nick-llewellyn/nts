@@ -5,7 +5,7 @@
 //! `Duration` argument and can stall for tens of seconds when the
 //! recursive resolver is slow or blackholed. The synchronous NTS code
 //! paths in this crate (`nts::ke::connect_with_timeout` and
-//! `api::nts::bind_connected_udp`) need to honour a wall-clock budget
+//! `api::nts::bind_connected_udp_using`) need to honour a wall-clock budget
 //! that includes name resolution; this module bounds that step by
 //! offloading the call to a one-shot thread and waiting for it on a
 //! channel with `recv_timeout`.
@@ -516,7 +516,7 @@ mod tests {
     /// Deterministic adversarial-resolver case: inject a lookup that
     /// blocks past the budget and prove the deadline fires with
     /// `ErrorKind::TimedOut`. Pinning the kind here is what guarantees
-    /// `bind_connected_udp` can safely map the error onto
+    /// `bind_connected_udp_using` can safely map the error onto
     /// `NtsError::Timeout` (rather than `NtsError::Network`) for slow
     /// recursive resolvers, without standing up a fake nameserver in
     /// the test harness. Wall-clock cap of 5× the budget absorbs CI

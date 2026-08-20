@@ -291,20 +291,28 @@ fn aligned_capture_points_keep_peer_delay_within_round_trip() {
 /// write-timeout re-arm, the send — stays in its production position,
 /// so the ordering is what is under test rather than a faked clock.
 ///
-/// The assertion is an *ordering* one, not a duration one: the injected
-/// resolver stamps the instant it returns, and the T1 the client
-/// authenticated into the request must follow it. Stamping T1 above the
-/// bind puts it before the resolver returns and the comparison fails by
-/// the whole injected interval. Nothing here bounds how long any step
-/// takes, so preemption anywhere in the call — which the release notes
-/// explicitly treat as a healthy cause of δ exceeding the round trip —
-/// cannot make this flake.
+/// The assertion is an *ordering* one, not a duration one: the T1 the
+/// client authenticated into the request must follow the instant
+/// `connect` returned, which `bind_connected_udp_using` stamps through
+/// a `#[cfg(test)]` marker. Anchoring on the *bind* rather than on the
+/// resolver's return is what makes the test match its name — the
+/// socket bind, both `set_*_timeout` calls, and the `connect` all run
+/// after the lookup returns, so a T1 stamped anywhere in that interval
+/// would put bind cost back into δ while a resolver-anchored assertion
+/// stayed green. Nothing here bounds how long any step takes, so
+/// preemption anywhere in the call — which the release notes explicitly
+/// treat as a healthy cause of δ exceeding the round trip — cannot make
+/// this flake.
 #[test]
 fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
     use crate::nts::ntp::{NtpHeader, HEADER_LEN};
-    use std::sync::{Arc, Mutex};
 
     const SETUP: Duration = Duration::from_millis(400);
+
+    // The marker is thread-local and this test reads its own call's
+    // stamp; clear any residue so a stale value cannot satisfy the
+    // assertion if the call under test never binds at all.
+    let _ = take_udp_connect_stamp();
 
     let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
     faux_server
@@ -346,11 +354,6 @@ fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
         host: host.to_owned(),
         port: server_port,
     };
-    // The instant the injected resolver returns. Everything the fix
-    // moved below the T1 stamp happens after this, so it is the exact
-    // ordering reference the assertion needs — no duration ceiling.
-    let resolver_returned_at = Arc::new(Mutex::new(None::<u64>));
-    let resolver_stamp = Arc::clone(&resolver_returned_at);
     let call_started = system_time_to_ntp64();
     let result = nts_query_inner_using(
         &table,
@@ -362,7 +365,6 @@ fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
         None,
         move |_host, _port| {
             std::thread::sleep(SETUP);
-            *resolver_stamp.lock().expect("resolver stamp poisoned") = Some(system_time_to_ntp64());
             Ok(vec![SocketAddr::from(([127, 0, 0, 1], server_port))])
         },
     );
@@ -376,28 +378,29 @@ fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
         other => panic!("expected NtsError::NtpProtocol after the send, got {other:?}"),
     }
 
-    let resolved = resolver_returned_at
-        .lock()
-        .expect("resolver stamp poisoned")
-        .expect("injected resolver was never called");
+    // The instant `connect` returned, i.e. the end of the whole UDP
+    // bind rather than of the lookup alone. Everything the fix moved
+    // below the T1 stamp completes by here, so it is the exact ordering
+    // reference the assertion needs — and no duration ceiling.
+    let connected = take_udp_connect_stamp().expect("UDP connect stamp was never recorded");
     let call_started_us = ntp64_to_unix_micros(call_started);
-    let resolved_us = ntp64_to_unix_micros(resolved);
+    let connected_us = ntp64_to_unix_micros(connected);
     let t1_us = ntp64_to_unix_micros(wire_t1);
     let setup_us = SETUP.as_micros() as i64;
 
-    // The whole test: T1 is stamped after the resolution the bind
-    // consumes, so it cannot precede the resolver's return. Pre-9.2
-    // ordering stamped T1 within microseconds of `call_started`, i.e.
-    // roughly `setup_us` *before* this reference.
+    // The whole test: T1 is stamped after the bind completes, so it
+    // cannot precede the connect. Pre-9.2 ordering stamped T1 within
+    // microseconds of `call_started`, i.e. roughly `setup_us` *before*
+    // this reference.
     assert!(
-        t1_us >= resolved_us,
-        "T1 was stamped {} µs before the injected resolver returned \
-         (T1 {} µs into the call, resolver {} µs in, having slept \
-         {setup_us} µs) — the stamp is above the UDP bind, which is the \
-         pre-9.2 ordering this release fixed",
-        resolved_us - t1_us,
+        t1_us >= connected_us,
+        "T1 was stamped {} µs before the UDP connect returned \
+         (T1 {} µs into the call, connect {} µs in, the injected \
+         resolver having slept {setup_us} µs) — the stamp is above the \
+         UDP bind, which is the pre-9.2 ordering this release fixed",
+        connected_us - t1_us,
         t1_us - call_started_us,
-        resolved_us - call_started_us,
+        connected_us - call_started_us,
     );
 }
 
