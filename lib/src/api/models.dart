@@ -140,8 +140,8 @@ class NtsTimeSample {
   /// half the network delay — `peerDelayMicros / 2` when the peer
   /// delay falls inside the selection window `(0, roundTripMicros]`,
   /// else `roundTripMicros / 2` — to estimate the server's clock at the
-  /// moment the reply arrived. See [peerDelayMicros] for why that
-  /// window selects [roundTripMicros] on healthy samples today.
+  /// moment the reply arrived. See [peerDelayMicros] for what the
+  /// window admits.
   final int utcUnixMicros;
 
   /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP send
