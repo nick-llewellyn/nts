@@ -276,19 +276,31 @@ Future<NtsSyncedTime> _getTime({
 // `(0, roundTripMicros]` (δ excludes server processing time), else
 // the locally measured round trip.
 //
-// `(0, roundTripMicros]` is a delay-selection policy, not a
-// plausibility verdict on the sample. Only the lower bound is
-// diagnostic: a `0` marks a pre-7.1 fixture, and a non-positive δ is
-// evidence of an implausible timestamp exchange — a local clock step
-// mid-exchange, a server clock stepped between T2 and T3, or server
-// stamps that are simply inconsistent. The upper bound rejects
-// healthy samples by construction: T1 is stamped before the UDP bind
-// while `roundTripMicros` starts at the send that follows it, so δ
-// runs 1–9% above the round trip on healthy samples and this window
-// selects `roundTripMicros` in practice (NTS-153 aligns the capture
-// points). It is kept regardless: accepting a δ that carries
-// pre-bind setup cost would overstate the one-way delay, whereas the
-// fallback is the quantity actually measured across the exchange.
+// Only the lower bound is diagnostic. A `0` marks a pre-7.1 fixture,
+// and a non-positive δ is evidence of an implausible timestamp
+// exchange — a local clock step mid-exchange, a server clock stepped
+// between T2 and T3, or server stamps that are simply inconsistent.
+//
+// The upper bound is a selection policy, not a clock-integrity test.
+// It admits δ on healthy samples under ordinary scheduling: T1 shares
+// an anchor with `roundTripMicros` (stamped immediately before the
+// request is built and sealed, which the send follows), so the only
+// work δ carries that the round trip does not is that request build
+// and seal plus the socket write-timeout re-arm that bounds the send
+// against the call's remaining budget — neither of which blocks on
+// I/O. A δ above `roundTripMicros` by more than that overhead is a
+// forward clock step, a slew separating the wall-clock T1/T4 pair
+// from the monotonic round trip, or — on a loaded host — preemption
+// of the worker between T1 and the send. Taking the fallback is
+// therefore not evidence of clock corruption. It is also not a
+// wasted rejection: an interval `p` between T1 and the send lands
+// inside T2−T1 with nothing offsetting it in T3−T4, adding `p` to δ
+// and `p/2` to `offsetMicros`, so the fallback is what keeps `p` out
+// of the delay the compensation below halves. It cannot repair the
+// `p/2` already in θ — this window selects a delay, it does not
+// screen θ. Before 9.2 T1 was stamped ahead of the bind, so δ ran
+// 1–9% above the round trip and this window selected the fallback on
+// every healthy sample.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros

@@ -247,8 +247,7 @@ pub struct NtsTimeSample {
     /// delay falls inside the selection window
     /// `(0, round_trip_micros]`, else `round_trip_micros / 2` — to
     /// estimate the server's clock at the moment the reply arrived. See
-    /// `peer_delay_micros` for why that window selects
-    /// `round_trip_micros` on healthy samples today.
+    /// `peer_delay_micros` for what the window admits.
     pub utc_unix_micros: i64,
     /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
     /// `send` and the matching `recv`. This *is* the UDP-phase
@@ -300,18 +299,19 @@ pub struct NtsTimeSample {
     ///
     /// T1 and T4 are local system-clock readings, so θ is only
     /// meaningful if the system clock was not stepped between them.
-    /// That window opens *before* the UDP send: T1 is stamped ahead
-    /// of the packet build and the socket bind (see
-    /// `peer_delay_micros`), so a step during that setup corrupts θ
-    /// as well.
+    /// T1 is stamped immediately before the C2S AEAD seal that
+    /// produces the request packet, after the UDP socket is bound and
+    /// connected (see `peer_delay_micros`), so that window is the
+    /// round trip plus the seal rather than the round trip plus the
+    /// whole UDP setup interval.
     ///
-    /// The same early T1 biases θ upward by half the setup interval
-    /// even when the clock is steady, since T1 is earlier than the
-    /// instant the request actually left. Measured against the
-    /// bundled server catalog that interval runs 1–9% of
-    /// `round_trip_micros`, so the bias is sub-millisecond to a few
-    /// milliseconds. Aligning the capture points is tracked as
-    /// NTS-153. New in 7.1.
+    /// New in 7.1. Changed in 9.2: T1 was previously stamped ahead of
+    /// the packet build *and* the bind, which biased θ upward by half
+    /// the setup interval — measured at 1–9% of `round_trip_micros`
+    /// against the bundled server catalog — even on a steady clock.
+    /// Aligning the capture points removed that bias, so
+    /// `offset_micros` reads slightly lower than on 9.1 and earlier
+    /// for the same exchange.
     pub offset_micros: i64,
     /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905
     /// §8): the network round trip excluding the server's processing
@@ -322,40 +322,59 @@ pub struct NtsTimeSample {
     /// stamps that are simply inconsistent — and consumers should
     /// fall back to `round_trip_micros`.
     ///
-    /// δ is **not** bounded above by `round_trip_micros` on this
-    /// client. T1 is stamped before the UDP socket is bound and
-    /// connected, while `round_trip_micros` is measured from the
-    /// `send` that follows the bind, so δ carries setup cost the
-    /// round trip does not — measured 1–9% above `round_trip_micros`
-    /// across the bundled server catalog, on every healthy sample.
-    /// The `(0, round_trip_micros]` window applied by `nts_get_time`
-    /// (Dart: `ntsGetTime`) is therefore conservative rather than
-    /// diagnostic: it selects the `round_trip_micros` fallback on
-    /// healthy samples too. Consumers screening only for clock steps
-    /// should pair the lower bound with a tolerant upper bound
-    /// instead of the strict window. Make that allowance *additive*
-    /// over `round_trip_micros` rather than a multiple of it: the
-    /// pre-send interval includes the NTPv4-host DNS lookup, whose
-    /// latency bears no relation to the round trip, so a ratio-derived
-    /// ceiling can reject a healthy sample from a nearby server behind
-    /// a slow resolver. That lookup is reported per sample as
-    /// `phase_timings.dns_micros` (Dart: `phaseTimings.dnsMicros`), so
-    /// the allowance can be measured rather than guessed: on a query
-    /// that ran no handshake the field is the NTPv4-host lookup alone,
-    /// and the rest of the interval is the packet build and the bind,
-    /// which do no I/O. Claim it only on such a query. On one that did
-    /// handshake, the field also carries the KE-host lookup, which
-    /// completed before T1 was stamped and so accounts for none of δ;
-    /// the KE-only phases (`connect_micros`, `tls_handshake_micros`,
-    /// `ke_record_io_micros`; Dart: `connectMicros`,
-    /// `tlsHandshakeMicros`, `keRecordIoMicros`) are a one-way signal
-    /// for that: any non-zero value proves a handshake ran, while all
-    /// three reading zero only fails to prove it, since each is
-    /// truncated to whole microseconds.
-    /// Aligning the two capture points is tracked as
-    /// NTS-153.
+    /// δ shares an anchor with `round_trip_micros`: T1 is stamped
+    /// immediately before the request is built and sealed, and
+    /// `round_trip_micros` starts at the `send` that follows, so the
+    /// only work δ carries that the round trip does not is that
+    /// request build — serialising the header, the unique identifier,
+    /// the cookie and its placeholders, then sealing them under the
+    /// C2S key into the authenticator — plus the socket write-timeout
+    /// re-arm that bounds the `send` against the call's remaining
+    /// budget. Neither blocks on I/O — the build and seal are
+    /// memcpy-scale over a packet of a few hundred bytes, the re-arm a
+    /// single non-blocking syscall — though the seal's cost tracks the
+    /// negotiated AEAD algorithm and the host CPU, so this crate
+    /// cannot quote a figure that holds across targets. δ can
+    /// therefore sit above `round_trip_micros` when the server's
+    /// T3−T2 is smaller still, and the two are read off different
+    /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
+    /// mid-exchange separates them too. Scheduling separates them as
+    /// well: the worker can be preempted between T1 and the send, and
+    /// δ carries that loss where the round trip does not, so a loaded
+    /// host can push δ above `round_trip_micros` by however long it
+    /// spent on the run queue.
     ///
-    /// New in 7.1.
+    /// Any interval between T1 and the send biases `offset_micros`
+    /// too, and in the same direction the pre-9.2 setup interval did:
+    /// an interval `p` lands inside T2−T1 with nothing offsetting it
+    /// in T3−T4, so it adds `p` to δ and `p/2` to θ. The
+    /// `(0, round_trip_micros]` window applied by `nts_get_time`
+    /// (Dart: `ntsGetTime`) admits δ on healthy samples under
+    /// ordinary scheduling, and selects the `round_trip_micros`
+    /// fallback both for the implausible exchanges the lower bound
+    /// catches and for healthy ones that lost the pre-send interval
+    /// to preemption. The latter is not a wasted rejection: the
+    /// fallback keeps `p` out of the delay a caller compensates by.
+    /// It does not repair θ, which carries the `p/2` either way — the
+    /// window is a delay-selection policy, not a screen on
+    /// `offset_micros`. Consumers applying their own upper bound
+    /// should size the additive allowance over `round_trip_micros`
+    /// from measurement on their own targets, covering the request
+    /// build and seal, the re-arm and the clock-source difference,
+    /// plus whatever scheduling headroom their host warrants; a
+    /// ratio-derived ceiling is not needed, and neither is an
+    /// allowance sized from `phase_timings.dns_micros` (Dart:
+    /// `phaseTimings.dnsMicros`), since no DNS lookup falls between
+    /// T1 and the send.
+    ///
+    /// New in 7.1. Changed in 9.2: T1 was previously stamped before
+    /// the bind, so δ carried the bind and the NTPv4-host DNS lookup
+    /// and ran 1–9% *above* `round_trip_micros` on every healthy
+    /// sample, which made the window above select the fallback in
+    /// practice. `peer_delay_micros` now reads lower than on 9.1 and
+    /// earlier for the same exchange, and consumers that widened
+    /// their own upper bound to accommodate the setup interval can
+    /// tighten it.
     pub peer_delay_micros: i64,
     /// Server-reported root delay in microseconds: total round-trip
     /// delay from the server to the reference clock (RFC 5905 §7.3,
@@ -2098,6 +2117,43 @@ fn remaining_budget_or_ntp_timeout(
         })
 }
 
+/// Re-arm a connected UDP socket's write timeout against the
+/// call-wide wall-clock budget anchored at the start of
+/// [`nts_query`], immediately before the `send`.
+///
+/// The companion to [`arm_recv_against_call_deadline`] on the
+/// outbound leg. The bind-time write timeout written by
+/// [`bind_connected_udp_using`] is anchored at bind completion, and
+/// since 9.2 the T1 stamp and the C2S AEAD seal both sit between
+/// that anchor and the `send`. The seal does no I/O, but the worker
+/// can be preempted across it, so the bind-time value is stale by
+/// an unbounded amount by the time the `send` is reached: without
+/// this re-arm a blocking `send` could run for that full bind-time
+/// budget on top of the time already spent, overshooting the single
+/// wall-clock budget `timeout_ms` documents. Re-checking here also
+/// means an already-lapsed budget fails with `Timeout(Ntp)` instead
+/// of putting a packet on the wire the caller has stopped waiting
+/// for.
+///
+/// Same contract as the recv-side helper: returns the re-armed
+/// remaining budget, short-circuits with `Timeout(Ntp)` on an
+/// exhausted budget without touching the socket, and surfaces a
+/// failure to apply the timeout as `NtsError::Network`.
+fn arm_send_against_call_deadline(
+    socket: &UdpSocket,
+    total: Duration,
+    elapsed: Duration,
+) -> Result<Duration, NtsError> {
+    let remaining = remaining_budget_or_ntp_timeout(total, elapsed)?;
+    socket
+        .set_write_timeout(Some(remaining))
+        .map_err(|e| NtsError::Network {
+            message: format!("set_write_timeout for send: {e}"),
+            trust_backend: None,
+        })?;
+    Ok(remaining)
+}
+
 /// Re-arm a connected UDP socket's read timeout against the
 /// call-wide wall-clock budget anchored at the start of
 /// [`nts_query`]. The bind-time timeout written by
@@ -3063,6 +3119,44 @@ fn evict_session(spec_key: &str, expected_generation: u64) {
     default_session_table().evict_session(spec_key, expected_generation);
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Ordering marker for the capture-point guard (nts-362p /
+    /// NTS-153), stamped by [`bind_connected_udp_using`] the moment
+    /// `connect` succeeds.
+    ///
+    /// The T1 stamp must follow the *whole* UDP bind, not merely the
+    /// name resolution that precedes it: `UdpSocket::bind`, both
+    /// `set_*_timeout` calls, and `connect` all run after the lookup
+    /// returns, so a T1 placed anywhere in that interval would put
+    /// bind cost back into δ. Anchoring the guard on the resolver's
+    /// return cannot see that; anchoring it here can.
+    ///
+    /// Thread-local rather than a global, so a test reads only the
+    /// stamp its own call produced and the guard stays correct under
+    /// the parallel test harness. `#[cfg(test)]` on both the storage
+    /// and the call site keeps it out of release builds entirely.
+    static LAST_UDP_CONNECT_NTP64: std::cell::Cell<Option<u64>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Record the wall-clock instant `connect` returned, on the same clock
+/// that produces T1 so the two are directly comparable. Overwrites any
+/// previous value: a query binds once, and a test reads the stamp
+/// immediately after the call it belongs to.
+#[cfg(test)]
+fn record_udp_connect_stamp() {
+    let now = system_time_to_ntp64();
+    LAST_UDP_CONNECT_NTP64.with(|c| c.set(Some(now)));
+}
+
+/// Take the stamp recorded by the most recent successful UDP connect on
+/// this thread, clearing it so a later read cannot silently reuse it.
+#[cfg(test)]
+fn take_udp_connect_stamp() -> Option<u64> {
+    LAST_UDP_CONNECT_NTP64.with(std::cell::Cell::take)
+}
+
 /// Resolve `(host, port)` and return a UDP socket bound to the local
 /// wildcard address of the matching family, already `connect()`ed to the
 /// first remote candidate that accepts the binding.
@@ -3168,25 +3262,22 @@ struct UdpBindOutcome {
     dns_micros: i64,
 }
 
-fn bind_connected_udp(
-    host: &str,
-    port: u16,
-    timeout: Duration,
-    dns_concurrency_cap: usize,
-) -> Result<UdpBindOutcome, NtsError> {
-    bind_connected_udp_using(host, port, timeout, dns_concurrency_cap, system_lookup)
-}
-
-/// Test-friendly variant of [`bind_connected_udp`] that takes a
-/// caller-supplied lookup closure. Production callers go through
-/// [`bind_connected_udp`] which forwards [`system_lookup`]; the
-/// `nts-6ka` slow-DNS regression test injects a closure that
-/// `thread::sleep`s past the budget so the
-/// `ErrorKind::TimedOut → NtsError::Timeout` mapping can be exercised
-/// deterministically without standing up an adversarial nameserver.
+/// Resolve `host:port` and bind a connected UDP socket, taking a
+/// caller-supplied lookup closure.
 ///
-/// Honours the same single-budget-spans-DNS-and-UDP-I/O contract as
-/// [`bind_connected_udp`]; see that function for the deadline rules.
+/// Production callers reach this through [`nts_query_inner`], which
+/// forwards [`system_lookup`]; the `nts-6ka` slow-DNS regression test
+/// injects a closure that `thread::sleep`s past the budget so the
+/// `ErrorKind::TimedOut → NtsError::Timeout` mapping can be exercised
+/// deterministically without standing up an adversarial nameserver,
+/// and the nts-362p capture-point test injects one that sleeps a known
+/// interval so the T1 stamp's position relative to this bind is
+/// observable on the wire.
+///
+/// `timeout` is the slice of the call-wide budget left for this leg;
+/// the same single deadline spans the DNS lookup and the UDP I/O, so
+/// the post-bind socket timeouts are armed from what remains after the
+/// lookup rather than from `timeout` afresh.
 fn bind_connected_udp_using<F>(
     host: &str,
     port: u16,
@@ -3291,7 +3382,11 @@ where
             continue;
         }
         match socket.connect(addr) {
-            Ok(()) => return Ok(UdpBindOutcome { socket, dns_micros }),
+            Ok(()) => {
+                #[cfg(test)]
+                record_udp_connect_stamp();
+                return Ok(UdpBindOutcome { socket, dns_micros });
+            }
             Err(e) => errors.push(format!("connect {addr}: {e}")),
         }
     }
@@ -3351,7 +3446,7 @@ where
 /// delay δ, which excludes server processing time) when it falls inside
 /// the selection window `(0, round_trip_micros]`, falling back to
 /// `round_trip_micros` otherwise; see [`NtsTimeSample::peer_delay_micros`]
-/// for why that fallback is what fires today. For high-precision
+/// for what that window admits. For high-precision
 /// synchronization, take a burst of samples and pick the one with the
 /// smallest such delay before applying that adjustment; this is exactly
 /// what the one-call `ntsGetTime` convenience does.
@@ -3442,6 +3537,52 @@ fn nts_query_inner(
     is_default_client: bool,
     verification_time_ms: Option<i64>,
 ) -> Result<NtsTimeSample, NtsError> {
+    nts_query_inner_using(
+        table,
+        spec,
+        timeout_ms,
+        dns_concurrency_cap,
+        trust_mode,
+        is_default_client,
+        verification_time_ms,
+        system_lookup,
+    )
+}
+
+/// Test-friendly variant of [`nts_query_inner`] that takes a
+/// caller-supplied lookup closure for the NTPv4-host resolution the
+/// UDP bind performs, mirroring [`bind_connected_udp_using`].
+///
+/// The seam exists so the T1 capture point can be pinned *on the
+/// production path* rather than only in the arithmetic: a closure that
+/// sleeps before returning a loopback address makes the UDP setup
+/// interval large and known, so a test can read T1 off the wire and
+/// compare it against the delay it injected. Stamping T1 above the
+/// bind — the pre-9.2 ordering this release fixes — puts the injected
+/// interval inside δ, which such a test observes directly. Injecting
+/// at the lookup rather than faking the clock keeps
+/// [`system_time_to_ntp64`] and the bind in their production
+/// positions, so the ordering itself is what is under test.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the eight parameters are `nts_query_inner`'s seven plus the \
+              lookup seam; grouping them into a struct would exist only to \
+              satisfy the lint and would obscure that the seam adds exactly \
+              one injected dependency"
+)]
+fn nts_query_inner_using<F>(
+    table: &SessionTable,
+    spec: NtsServerSpec,
+    timeout_ms: u32,
+    dns_concurrency_cap: u32,
+    trust_mode: KeTrustMode,
+    is_default_client: bool,
+    verification_time_ms: Option<i64>,
+    lookup: F,
+) -> Result<NtsTimeSample, NtsError>
+where
+    F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+{
     validate(&spec)?;
     validate_verification_time_ms(verification_time_ms)?;
     let timeout = effective_timeout(timeout_ms);
@@ -3524,16 +3665,6 @@ fn nts_query_inner(
 
     let (uid, nonce) = fresh_request_uid_and_nonce(ctx.c2s_key.nonce_len())?;
 
-    let transmit_timestamp = system_time_to_ntp64();
-    let req = ClientRequest {
-        unique_id: uid.to_vec(),
-        cookie: ctx.cookie,
-        placeholder_count: PLACEHOLDERS_PER_QUERY,
-        nonce,
-        transmit_timestamp,
-    };
-    let packet = build_client_request(&req, &ctx.c2s_key).map_err(evict_on_rekey_signal)?;
-
     // RFC 5905 is address-family agnostic; bind a local socket that matches
     // the family of whichever resolved address actually accepts a UDP
     // connection. The previous hard-coded `0.0.0.0:0` bind silently broke
@@ -3552,7 +3683,45 @@ fn nts_query_inner(
     let UdpBindOutcome {
         socket,
         dns_micros: udp_dns_micros,
-    } = bind_connected_udp(&ctx.ntpv4_host, ctx.ntpv4_port, udp_budget, cap)
+    } = bind_connected_udp_using(&ctx.ntpv4_host, ctx.ntpv4_port, udp_budget, cap, lookup)
+        .map_err(attribute_post_handshake)?;
+
+    // T1 (client transmit timestamp, RFC 5905 §8) is stamped after the
+    // bind so that it and `send_at` — the monotonic anchor of
+    // `round_trip_micros` — share a start point. Two pieces of work sit
+    // between them: the whole `build_client_request` call, which
+    // serialises the header, the unique identifier, the cookie and its
+    // placeholders before sealing them under the C2S key into the
+    // authenticator; and the `set_write_timeout` re-arm in
+    // `arm_send_against_call_deadline` below. Neither blocks on I/O —
+    // the build and seal are memcpy-scale over a packet of a few hundred
+    // bytes, the re-arm is a single non-blocking syscall — so the peer
+    // delay δ = (T4−T1)−(T3−T2) no longer carries the UDP setup interval
+    // (bind plus the NTPv4-host DNS lookup) that the round trip
+    // excludes, and θ no longer carries half of it as apparent offset.
+    // T1 cannot move below the build: it is an authenticated field of
+    // the packet the seal covers. It could in principle move below the
+    // re-arm, but the re-arm has to be the last thing before the `send`
+    // to bound it against the freshest budget reading.
+    let transmit_timestamp = system_time_to_ntp64();
+    let req = ClientRequest {
+        unique_id: uid.to_vec(),
+        cookie: ctx.cookie,
+        placeholder_count: PLACEHOLDERS_PER_QUERY,
+        nonce,
+        transmit_timestamp,
+    };
+    let packet = build_client_request(&req, &ctx.c2s_key).map_err(evict_on_rekey_signal)?;
+
+    // Re-arm the socket's write timeout against the call-wide
+    // deadline before the send. The bind-time value was anchored at
+    // bind completion, and the T1 stamp and the seal above sit
+    // between that anchor and here — the seal does no I/O, but the
+    // worker can be preempted across it, so the bind-time value is
+    // stale by an unbounded amount. Short-circuits to `Timeout(Ntp)`
+    // rather than putting a packet on the wire once the budget is
+    // spent. See `arm_send_against_call_deadline`.
+    arm_send_against_call_deadline(&socket, timeout, started.elapsed())
         .map_err(attribute_post_handshake)?;
 
     let send_at = Instant::now();

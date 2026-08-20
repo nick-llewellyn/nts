@@ -8,7 +8,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `bind_connected_udp_using`, `bind_connected_udp`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `arm_send_against_call_deadline`, `bind_connected_udp_using`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner_using`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
 
@@ -154,7 +154,7 @@ PlatformInt64 ntsBoottimeMicros() =>
 /// delay δ, which excludes server processing time) when it falls inside
 /// the selection window `(0, round_trip_micros]`, falling back to
 /// `round_trip_micros` otherwise; see [NtsTimeSample.peerDelayMicros]
-/// for why that fallback is what fires today. For high-precision
+/// for what that window admits. For high-precision
 /// synchronization, take a burst of samples and pick the one with the
 /// smallest such delay before applying that adjustment; this is exactly
 /// what the one-call `ntsGetTime` convenience does.
@@ -542,8 +542,7 @@ class NtsTimeSample {
   /// delay falls inside the selection window
   /// `(0, round_trip_micros]`, else `round_trip_micros / 2` — to
   /// estimate the server's clock at the moment the reply arrived. See
-  /// `peer_delay_micros` for why that window selects
-  /// `round_trip_micros` on healthy samples today.
+  /// `peer_delay_micros` for what the window admits.
   final PlatformInt64 utcUnixMicros;
 
   /// Wall-clock microseconds elapsed between the AEAD-NTPv4 UDP
@@ -603,18 +602,19 @@ class NtsTimeSample {
   ///
   /// T1 and T4 are local system-clock readings, so θ is only
   /// meaningful if the system clock was not stepped between them.
-  /// That window opens *before* the UDP send: T1 is stamped ahead
-  /// of the packet build and the socket bind (see
-  /// `peer_delay_micros`), so a step during that setup corrupts θ
-  /// as well.
+  /// T1 is stamped immediately before the C2S AEAD seal that
+  /// produces the request packet, after the UDP socket is bound and
+  /// connected (see `peer_delay_micros`), so that window is the
+  /// round trip plus the seal rather than the round trip plus the
+  /// whole UDP setup interval.
   ///
-  /// The same early T1 biases θ upward by half the setup interval
-  /// even when the clock is steady, since T1 is earlier than the
-  /// instant the request actually left. Measured against the
-  /// bundled server catalog that interval runs 1–9% of
-  /// `round_trip_micros`, so the bias is sub-millisecond to a few
-  /// milliseconds. Aligning the capture points is tracked as
-  /// NTS-153. New in 7.1.
+  /// New in 7.1. Changed in 9.2: T1 was previously stamped ahead of
+  /// the packet build *and* the bind, which biased θ upward by half
+  /// the setup interval — measured at 1–9% of `round_trip_micros`
+  /// against the bundled server catalog — even on a steady clock.
+  /// Aligning the capture points removed that bias, so
+  /// `offset_micros` reads slightly lower than on 9.1 and earlier
+  /// for the same exchange.
   final PlatformInt64 offsetMicros;
 
   /// Peer delay δ = (T4−T1)−(T3−T2) in microseconds (RFC 5905
@@ -626,40 +626,59 @@ class NtsTimeSample {
   /// stamps that are simply inconsistent — and consumers should
   /// fall back to `round_trip_micros`.
   ///
-  /// δ is **not** bounded above by `round_trip_micros` on this
-  /// client. T1 is stamped before the UDP socket is bound and
-  /// connected, while `round_trip_micros` is measured from the
-  /// `send` that follows the bind, so δ carries setup cost the
-  /// round trip does not — measured 1–9% above `round_trip_micros`
-  /// across the bundled server catalog, on every healthy sample.
-  /// The `(0, round_trip_micros]` window applied by `nts_get_time`
-  /// (Dart: `ntsGetTime`) is therefore conservative rather than
-  /// diagnostic: it selects the `round_trip_micros` fallback on
-  /// healthy samples too. Consumers screening only for clock steps
-  /// should pair the lower bound with a tolerant upper bound
-  /// instead of the strict window. Make that allowance *additive*
-  /// over `round_trip_micros` rather than a multiple of it: the
-  /// pre-send interval includes the NTPv4-host DNS lookup, whose
-  /// latency bears no relation to the round trip, so a ratio-derived
-  /// ceiling can reject a healthy sample from a nearby server behind
-  /// a slow resolver. That lookup is reported per sample as
-  /// `phase_timings.dns_micros` (Dart: `phaseTimings.dnsMicros`), so
-  /// the allowance can be measured rather than guessed: on a query
-  /// that ran no handshake the field is the NTPv4-host lookup alone,
-  /// and the rest of the interval is the packet build and the bind,
-  /// which do no I/O. Claim it only on such a query. On one that did
-  /// handshake, the field also carries the KE-host lookup, which
-  /// completed before T1 was stamped and so accounts for none of δ;
-  /// the KE-only phases (`connect_micros`, `tls_handshake_micros`,
-  /// `ke_record_io_micros`; Dart: `connectMicros`,
-  /// `tlsHandshakeMicros`, `keRecordIoMicros`) are a one-way signal
-  /// for that: any non-zero value proves a handshake ran, while all
-  /// three reading zero only fails to prove it, since each is
-  /// truncated to whole microseconds.
-  /// Aligning the two capture points is tracked as
-  /// NTS-153.
+  /// δ shares an anchor with `round_trip_micros`: T1 is stamped
+  /// immediately before the request is built and sealed, and
+  /// `round_trip_micros` starts at the `send` that follows, so the
+  /// only work δ carries that the round trip does not is that
+  /// request build — serialising the header, the unique identifier,
+  /// the cookie and its placeholders, then sealing them under the
+  /// C2S key into the authenticator — plus the socket write-timeout
+  /// re-arm that bounds the `send` against the call's remaining
+  /// budget. Neither blocks on I/O — the build and seal are
+  /// memcpy-scale over a packet of a few hundred bytes, the re-arm a
+  /// single non-blocking syscall — though the seal's cost tracks the
+  /// negotiated AEAD algorithm and the host CPU, so this crate
+  /// cannot quote a figure that holds across targets. δ can
+  /// therefore sit above `round_trip_micros` when the server's
+  /// T3−T2 is smaller still, and the two are read off different
+  /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
+  /// mid-exchange separates them too. Scheduling separates them as
+  /// well: the worker can be preempted between T1 and the send, and
+  /// δ carries that loss where the round trip does not, so a loaded
+  /// host can push δ above `round_trip_micros` by however long it
+  /// spent on the run queue.
   ///
-  /// New in 7.1.
+  /// Any interval between T1 and the send biases `offset_micros`
+  /// too, and in the same direction the pre-9.2 setup interval did:
+  /// an interval `p` lands inside T2−T1 with nothing offsetting it
+  /// in T3−T4, so it adds `p` to δ and `p/2` to θ. The
+  /// `(0, round_trip_micros]` window applied by `nts_get_time`
+  /// (Dart: `ntsGetTime`) admits δ on healthy samples under
+  /// ordinary scheduling, and selects the `round_trip_micros`
+  /// fallback both for the implausible exchanges the lower bound
+  /// catches and for healthy ones that lost the pre-send interval
+  /// to preemption. The latter is not a wasted rejection: the
+  /// fallback keeps `p` out of the delay a caller compensates by.
+  /// It does not repair θ, which carries the `p/2` either way — the
+  /// window is a delay-selection policy, not a screen on
+  /// `offset_micros`. Consumers applying their own upper bound
+  /// should size the additive allowance over `round_trip_micros`
+  /// from measurement on their own targets, covering the request
+  /// build and seal, the re-arm and the clock-source difference,
+  /// plus whatever scheduling headroom their host warrants; a
+  /// ratio-derived ceiling is not needed, and neither is an
+  /// allowance sized from `phase_timings.dns_micros` (Dart:
+  /// `phaseTimings.dnsMicros`), since no DNS lookup falls between
+  /// T1 and the send.
+  ///
+  /// New in 7.1. Changed in 9.2: T1 was previously stamped before
+  /// the bind, so δ carried the bind and the NTPv4-host DNS lookup
+  /// and ran 1–9% *above* `round_trip_micros` on every healthy
+  /// sample, which made the window above select the fallback in
+  /// practice. `peer_delay_micros` now reads lower than on 9.1 and
+  /// earlier for the same exchange, and consumers that widened
+  /// their own upper bound to accommodate the setup interval can
+  /// tighten it.
   final PlatformInt64 peerDelayMicros;
 
   /// Server-reported root delay in microseconds: total round-trip

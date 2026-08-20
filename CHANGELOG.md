@@ -97,6 +97,67 @@ tarball.
 
 ### Changed
 
+- **Behavioural: `offsetMicros` and `peerDelayMicros` read lower than
+  on 9.1 for the same exchange.** T1, the RFC 5905 client transmit
+  timestamp, is now stamped immediately before the C2S AEAD seal that
+  builds the request packet, after the UDP socket is bound and
+  connected. It previously preceded both the packet build and the
+  bind, while `roundTripMicros` was anchored at the `send` that
+  follows the bind, so the two intervals had different start points:
+  the peer delay δ = (T4−T1)−(T3−T2) carried the bind and the
+  NTPv4-host DNS lookup that the round trip excluded, and θ carried
+  half of that interval as apparent offset. Measured against the
+  bundled server catalog, δ ran 1–9% *above* `roundTripMicros` on
+  every healthy sample — enough that the `(0, roundTripMicros]`
+  selection window `ntsGetTime` applies rejected δ in practice and the
+  `roundTripMicros` fallback was the branch always taken. δ and the
+  round trip now share an anchor, separated only by the request build
+  and seal and the
+  socket write-timeout re-arm that bounds the send against the call's
+  remaining budget — the build and seal memcpy-scale over a packet of a
+  few hundred bytes, the re-arm a single
+  non-blocking syscall, neither waiting on I/O; the window admits δ on
+  healthy samples under ordinary scheduling. It is not reserved solely for implausible exchanges: the
+  worker can still be preempted between T1 and the send, so a loaded
+  host can select the fallback on a healthy sample. That selection
+  excludes a real bias rather than discarding a clean measurement —
+  any interval `p` between T1 and the send adds `p` to δ and `p/2` to
+  `offsetMicros`, the same arithmetic that made the pre-9.2 ordering a
+  bias, and the fallback keeps the `p` out of the delay the
+  compensation halves. It does not undo the `p/2` in θ. Callers
+  that recorded absolute `offsetMicros` or `peerDelayMicros` values
+  from 9.1 or earlier should expect a small downward shift, and any
+  consumer that widened its own δ upper bound to accommodate the setup
+  interval — as the example health prober did — can tighten it to an
+  allowance measured on its own targets. `ntsGetTime`'s synchronized
+  UTC is unaffected in direction: it compensates by half the selected
+  delay either way, but now selects the tighter of the two estimates.
+- The example health prober's per-sample θ gate
+  (`example/lib/src/health/probe.dart`) tightened accordingly: the
+  allowance over `roundTripMicros` is now a flat 5 ms ceiling covering
+  the whole pre-send interval — building and sealing the request packet,
+  and the socket
+  write-timeout re-arm, neither of which blocks on I/O. It previously
+  added the sample's own
+  `phaseTimings.dnsMicros`, gated on an inference about whether the
+  query had re-handshaked (since that field sums both lookups a query
+  can make and only the NTPv4-host one fell inside the pre-send
+  interval). No lookup falls between T1 and the send now, so both the
+  DNS term and the inference are gone.
+
+### Fixed
+
+- The UDP socket's write timeout is now re-armed against the call-wide
+  deadline immediately before the `send`, matching the re-arm the
+  `recv` already had. The bind-time value is anchored at bind
+  completion, and the T1 stamp and the C2S seal now sit between that
+  anchor and the `send`; the seal does no I/O, but the worker can be
+  preempted across it, so the bind-time value was stale by an
+  unbounded amount. A blocking `send` could therefore run for the full
+  bind-time budget on top of the time already spent, overshooting the
+  single wall-clock budget `timeout` documents. An already-lapsed
+  budget now fails with `NtsError.timeout(TimeoutPhase.ntp)` instead of
+  putting a packet on the wire the caller has stopped waiting for.
 - The AES-SIV-CMAC paths (AEAD IDs 15 and 17) migrated to the
   `aes-siv` 0.8 API, completing the move of both SIV families onto the
   RustCrypto `hybrid-array` traits line. The crate dropped its

@@ -533,14 +533,25 @@ event-loop latency happen *after* every measurement is frozen.
 The cross-sample quantities live in Dart (`_getTime` in
 `lib/src/api/nts.dart`), because only the burst orchestrator sees
 all samples. It selects the winning sample by lowest network delay
-(δ inside the strict selection window `(0, roundTripMicros]`, else
-the measured round trip; the upper bound is a selection policy, not
-a verdict on the sample, since T1 is stamped before the UDP bind
-while the round trip starts at the send that follows it, so δ
-carries setup cost the round trip does not while the round trip
-alone carries the server's T3−T2 — across the bundled catalog the
-setup cost dominated on every healthy sample, making the round trip
-the branch taken in practice), computes the burst RMS jitter ψ from
+(δ inside the selection window `(0, roundTripMicros]`, else the
+measured round trip; T1 is stamped immediately before the request is
+built and sealed, which the send follows, so δ and the round trip share
+an anchor and the
+window normally admits δ rather than rejecting it on ordinary setup
+cost — before 9.2 T1 preceded the bind, so δ ran 1–9% above the round
+trip and the fallback was the branch taken on every healthy sample. It
+is a selection policy, not an exhaustive diagnosis: the pre-send
+overhead δ still carries (the request build and seal, and the socket
+write-timeout re-arm, neither blocking on I/O), a clock step, a slew,
+or preemption of the
+worker between T1 and the send all put δ out of range. Taking the
+fallback there excludes the pre-send bias rather than discarding a
+clean measurement — by the same arithmetic that made the pre-9.2
+ordering a bias, an interval `p` before the send adds `p` to δ and
+`p/2` to θ, and the fallback keeps the `p` out of the delay the
+compensation halves. The `p/2` stays in θ; nothing selects it away),
+computes the
+burst RMS jitter ψ from
 the
 per-sample θ values, derives the worst-case `errorBoundMicros`
 via the RFC 5905 root-distance recipe (delay/2 + rootDelay/2 +
