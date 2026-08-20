@@ -540,13 +540,17 @@ an anchor and the
 window normally admits δ rather than rejecting it on ordinary setup
 cost — before 9.2 T1 preceded the bind, so δ ran 1–9% above the round
 trip and the fallback was the branch taken on every healthy sample. It
-is a selection policy, not an exhaustive diagnosis: the fixed pre-send
+is a selection policy, not an exhaustive diagnosis: the pre-send
 overhead δ still carries (the request build and seal, and the socket
 write-timeout re-arm, neither blocking on I/O), a clock step, a slew,
 or preemption of the
-worker between T1 and the send all put δ out of range, and the fixed
-overhead and the preemption leave θ intact, so the fallback
-costs accuracy rather than correctness), computes the
+worker between T1 and the send all put δ out of range. Taking the
+fallback there excludes the pre-send bias rather than discarding a
+clean measurement — by the same arithmetic that made the pre-9.2
+ordering a bias, an interval `p` before the send adds `p` to δ and
+`p/2` to θ, and the fallback keeps the `p` out of the delay the
+compensation halves. The `p/2` stays in θ; nothing selects it away),
+computes the
 burst RMS jitter ψ from
 the
 per-sample θ values, derives the worst-case `errorBoundMicros`

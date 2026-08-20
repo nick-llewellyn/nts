@@ -2134,8 +2134,8 @@ fn assert_cloudflare_time_sample(sample: &NtsTimeSample) {
     // and the production path permits arbitrary preemption between T1
     // and the send, which inflates δ where the round trip is immune —
     // a loaded host can lose tens of milliseconds to the run queue on
-    // a perfectly healthy exchange. Tightening this to the
-    // microsecond-scale seal cost would make the suite fail on
+    // a perfectly healthy exchange. Tightening this to the seal cost
+    // measured on a quiet host would make the suite fail on
     // scheduler pressure rather than on a regression. The capture-point
     // alignment that made δ ≤ RTT the ordinary case is pinned
     // deterministically by

@@ -177,10 +177,13 @@ fixed pre-send work the round trip does not (building and sealing the
 request, and the socket write-timeout re-arm), so it can exceed the
 round trip whenever the server's own T3−T2 is smaller still; and
 because δ is read off the wall clock while the round trip is monotonic,
-a slew or a preemption between T1 and the send inflates δ while leaving
-θ intact. Taking the fallback in those cases costs accuracy, not
-correctness, since the fallback is the quantity actually measured
-across the exchange.
+a slew or a preemption between T1 and the send inflates δ too. Taking
+the fallback in those cases is what keeps that inflation out of the
+delay the offset is compensated by: an interval `p` before the send
+lands inside T2−T1 with nothing offsetting it in T3−T4, so it adds `p`
+to δ and `p/2` to θ. The fallback excludes the `p` from the delay term;
+it cannot remove the `p/2` already in θ, which no selection here
+repairs.
 
 ### NTS-KE handshake deadlines
 

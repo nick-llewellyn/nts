@@ -391,8 +391,10 @@ void main() {
       // T1 shares an anchor with `roundTripMicros`, but the C2S seal
       // still sits between them and the two quantities come off
       // different clocks, so a healthy δ can read marginally above the
-      // round trip. Suppressing on that would discard a sample whose θ
-      // was never corrupt.
+      // round trip. The allowance accepts the θ bias that excess
+      // implies — half the pre-send interval — rather than claiming
+      // the sample carries none; suppressing on it would cost the
+      // clock check entirely.
       api.peerDelayMicros = 1090;
       api.offsetMicros = 1200;
       return probe().then((h) {

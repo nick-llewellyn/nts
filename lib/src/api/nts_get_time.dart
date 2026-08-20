@@ -288,16 +288,19 @@ Future<NtsSyncedTime> _getTime({
 // work δ carries that the round trip does not is that request build
 // and seal plus the socket write-timeout re-arm that bounds the send
 // against the call's remaining budget — neither of which blocks on
-// I/O. A δ above `roundTripMicros` by more than that fixed overhead
-// is a forward clock step, a slew separating the wall-clock T1/T4
-// pair from the monotonic round trip, or — on a loaded host —
-// preemption of the worker between T1 and the send, which inflates δ
-// while leaving θ intact. Taking the fallback is therefore not
-// evidence of clock corruption: it is the quantity actually measured
-// across the exchange, so it costs accuracy rather than correctness
-// whichever of those put δ out of range. Before 9.2 T1 was stamped
-// ahead of the bind, so δ ran 1–9% above the round trip and this
-// window selected the fallback on every healthy sample.
+// I/O. A δ above `roundTripMicros` by more than that overhead is a
+// forward clock step, a slew separating the wall-clock T1/T4 pair
+// from the monotonic round trip, or — on a loaded host — preemption
+// of the worker between T1 and the send. Taking the fallback is
+// therefore not evidence of clock corruption. It is also not a
+// wasted rejection: an interval `p` between T1 and the send lands
+// inside T2−T1 with nothing offsetting it in T3−T4, adding `p` to δ
+// and `p/2` to `offsetMicros`, so the fallback is what keeps `p` out
+// of the delay the compensation below halves. It cannot repair the
+// `p/2` already in θ — this window selects a delay, it does not
+// screen θ. Before 9.2 T1 was stamped ahead of the bind, so δ ran
+// 1–9% above the round trip and this window selected the fallback on
+// every healthy sample.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros

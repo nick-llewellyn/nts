@@ -311,11 +311,15 @@ Future<ServerHealth> probeHost(
 /// What it cannot cover is scheduling. The worker can be preempted
 /// between T1 and the send, and a loaded probe host can lose more
 /// than this to the run queue; δ carries that loss where the round
-/// trip does not, so a preempted sample fails the bound and gives up
-/// a θ that was never corrupt. A burst where every sample does leaves
-/// the host judged without the clock check at all, which is the
-/// direction that fails open — hence the note the summary carries
-/// when no offset survives.
+/// trip does not, so a preempted sample fails the bound. Rejecting it
+/// is defensible on its own terms — an interval `p` there adds `p` to
+/// δ and `p/2` to θ, so the excess this gate sees is proportional to
+/// the bias in the offset it is screening — but the cause is the run
+/// queue, not the host's clock, which is what the gate is nominally
+/// looking for. A burst where every sample fails leaves the host
+/// judged without the clock check at all, which is the direction that
+/// fails open — hence the note the summary carries when no offset
+/// survives.
 const _kSetupSlackMicros = 5000;
 
 /// θ for each of [samples] in order, `null` where it cannot be trusted.

@@ -118,15 +118,18 @@ tarball.
   few hundred bytes, the re-arm a single
   non-blocking syscall, neither waiting on I/O; the window admits δ on
   healthy samples under ordinary scheduling. It is not reserved solely for implausible exchanges: the
-  worker can still be preempted between T1 and the send, which
-  inflates δ without corrupting θ, so a loaded host can select the
-  fallback on a healthy sample — giving up accuracy, not correctness,
-  since the fallback is the quantity actually measured. Callers
+  worker can still be preempted between T1 and the send, so a loaded
+  host can select the fallback on a healthy sample. That selection
+  excludes a real bias rather than discarding a clean measurement —
+  any interval `p` between T1 and the send adds `p` to δ and `p/2` to
+  `offsetMicros`, the same arithmetic that made the pre-9.2 ordering a
+  bias, and the fallback keeps the `p` out of the delay the
+  compensation halves. It does not undo the `p/2` in θ. Callers
   that recorded absolute `offsetMicros` or `peerDelayMicros` values
   from 9.1 or earlier should expect a small downward shift, and any
   consumer that widened its own δ upper bound to accommodate the setup
-  interval — as the example health prober did — can tighten it to a
-  microsecond-scale additive allowance. `ntsGetTime`'s synchronized
+  interval — as the example health prober did — can tighten it to an
+  allowance measured on its own targets. `ntsGetTime`'s synchronized
   UTC is unaffected in direction: it compensates by half the selected
   delay either way, but now selects the tighter of the two estimates.
 - The example health prober's per-sample θ gate

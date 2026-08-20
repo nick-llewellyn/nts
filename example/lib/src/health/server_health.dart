@@ -64,9 +64,12 @@ sealed class ProbeResult {
 /// The screen errs in both directions. It is not a proof of a steady
 /// clock: a step too small to disturb the peer delay beyond the setup
 /// allowance, and too small to break the burst's agreement, is not
-/// detected. Nor is a `null` proof of a corrupt one — the peer-delay
-/// upper bound also rejects a sample whose worker was preempted
-/// between T1 and the send, whose θ is intact.
+/// detected. Nor is a `null` proof of a stepped one — the peer-delay
+/// upper bound also rejects a sample whose worker was merely
+/// preempted between T1 and the send. That θ is biased (by half the
+/// stall, the same arithmetic the pre-9.2 capture point suffered)
+/// rather than corrupt, so the `null` withholds a usable-but-skewed
+/// offset on a host whose clock was never in question.
 class ProbeOk extends ProbeResult {
   final int rttMicros;
   final int stratum;

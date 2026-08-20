@@ -2627,10 +2627,10 @@ void main() {
       api.queryScript = [
         // Peer delay above the measured RTT. A forward clock step is one
         // cause, but so are a slew and preemption between T1 and the
-        // send, neither of which corrupts θ — the fallback is a
-        // selection policy, not a verdict on the sample. Effective
-        // delay = rtt = 4000, so this sample still wins and is
-        // compensated by rtt/2.
+        // send — the fallback selects a delay, it does not judge the
+        // sample's θ, which keeps half of any pre-send interval either
+        // way. Effective delay = rtt = 4000, so this sample still wins
+        // and is compensated by rtt/2.
         _ffiSample(
           utcUnixMicros: 1_000_000,
           roundTripMicros: 4000,

@@ -636,29 +636,38 @@ class NtsTimeSample {
   /// re-arm that bounds the `send` against the call's remaining
   /// budget. Neither blocks on I/O — the build and seal are
   /// memcpy-scale over a packet of a few hundred bytes, the re-arm a
-  /// single non-blocking syscall — and together they cost
-  /// single-digit microseconds. δ can therefore sit
-  /// a few microseconds above `round_trip_micros` when the server's
+  /// single non-blocking syscall — though the seal's cost tracks the
+  /// negotiated AEAD algorithm and the host CPU, so this crate
+  /// cannot quote a figure that holds across targets. δ can
+  /// therefore sit above `round_trip_micros` when the server's
   /// T3−T2 is smaller still, and the two are read off different
   /// clocks (T1/T4 wall-clock, the round trip monotonic) so a slew
   /// mid-exchange separates them too. Scheduling separates them as
   /// well: the worker can be preempted between T1 and the send, and
   /// δ carries that loss where the round trip does not, so a loaded
-  /// host can push a healthy δ above `round_trip_micros` by however
-  /// long it spent on the run queue. The `(0, round_trip_micros]`
-  /// window applied by `nts_get_time` (Dart: `ntsGetTime`)
-  /// therefore admits δ on healthy samples under ordinary
-  /// scheduling, and selects the `round_trip_micros` fallback both
-  /// for the implausible exchanges it is meant to catch and for
-  /// healthy ones that lost the pre-send interval to preemption —
-  /// the latter gives up a δ that was never corrupt, which is the
-  /// direction that fails safe. Consumers applying their own upper
-  /// bound need only a microsecond-scale additive allowance over
-  /// `round_trip_micros` for the request build and seal, the re-arm
-  /// and the clock-source difference, plus whatever scheduling
-  /// headroom their host
-  /// warrants; a ratio-derived ceiling is not needed, and neither
-  /// is an allowance sized from `phase_timings.dns_micros` (Dart:
+  /// host can push δ above `round_trip_micros` by however long it
+  /// spent on the run queue.
+  ///
+  /// Any interval between T1 and the send biases `offset_micros`
+  /// too, and in the same direction the pre-9.2 setup interval did:
+  /// an interval `p` lands inside T2−T1 with nothing offsetting it
+  /// in T3−T4, so it adds `p` to δ and `p/2` to θ. The
+  /// `(0, round_trip_micros]` window applied by `nts_get_time`
+  /// (Dart: `ntsGetTime`) admits δ on healthy samples under
+  /// ordinary scheduling, and selects the `round_trip_micros`
+  /// fallback both for the implausible exchanges the lower bound
+  /// catches and for healthy ones that lost the pre-send interval
+  /// to preemption. The latter is not a wasted rejection: the
+  /// fallback keeps `p` out of the delay a caller compensates by.
+  /// It does not repair θ, which carries the `p/2` either way — the
+  /// window is a delay-selection policy, not a screen on
+  /// `offset_micros`. Consumers applying their own upper bound
+  /// should size the additive allowance over `round_trip_micros`
+  /// from measurement on their own targets, covering the request
+  /// build and seal, the re-arm and the clock-source difference,
+  /// plus whatever scheduling headroom their host warrants; a
+  /// ratio-derived ceiling is not needed, and neither is an
+  /// allowance sized from `phase_timings.dns_micros` (Dart:
   /// `phaseTimings.dnsMicros`), since no DNS lookup falls between
   /// T1 and the send.
   ///

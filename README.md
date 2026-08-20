@@ -264,14 +264,16 @@ samples — the same two `ntsGetTime` automates:
    window normally admits δ rather than rejecting it on the ordinary
    setup cost it carried before 9.2. What δ still carries that the
    round trip does not is that request build and seal plus the socket
-   write-timeout re-arm before the send — microseconds, neither
+   write-timeout re-arm before the send — neither
    blocking on I/O, but
    enough to put δ outside the window when the server's own T3−T2 is
-   smaller still. Beyond that fixed overhead, a δ outside the window is
+   smaller still. Beyond that overhead, a δ outside the window is
    a clock step, a slew, or — on a loaded host — the worker being
-   preempted between T1 and the send, which inflates δ while leaving
-   the offset intact. See the `peerDelayMicros` dartdoc for the
-   residual allowance to use when applying a bound of your own. More
+   preempted between T1 and the send. Any such interval `p` adds `p`
+   to δ and `p/2` to `offsetMicros`, so taking the fallback keeps `p`
+   out of the delay halved below; it does not undo the `p/2` in the
+   offset. See the `peerDelayMicros` dartdoc for the
+   allowance to measure when applying a bound of your own. More
    sophisticated callers can median-filter,
    score by `serverStratum`, or run Marzullo's algorithm across multiple
    servers.
