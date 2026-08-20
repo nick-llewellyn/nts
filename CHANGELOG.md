@@ -166,9 +166,9 @@ tarball.
   `java.directories` instead of calling `srcDirs(...)`. Verified
   against both AGP 8.11.1 (the example app's existing pin, unaffected)
   and AGP 9.2.1 with `android.newDsl=true` / `android.builtInKotlin=true`
-  forced on. The example app's own `android/build.gradle.kts` and
-  `android/app/build.gradle.kts` follow the same pattern, and its AGP
-  pin moved to 9.2.1 with the Gradle wrapper on 9.7.1.
+  forced on. The example app's own `android/app/build.gradle.kts`
+  follows the same pattern, and its AGP pin moved to 9.2.1 with the
+  Gradle wrapper on 9.7.1.
 - The UDP socket's write timeout is now re-armed against the call-wide
   deadline immediately before the `send`, matching the re-arm the
   `recv` already had. The bind-time value is anchored at bind
