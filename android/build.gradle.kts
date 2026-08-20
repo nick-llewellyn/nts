@@ -38,11 +38,19 @@ plugins {
 // AGP 9.0 ships built-in Kotlin support and applies it automatically; the
 // standalone `org.jetbrains.kotlin.android` plugin is not just redundant
 // there but actively incompatible with AGP 9's built-in Kotlin, so it must
-// only be applied on the AGP < 9 versions that still need it. Other
-// published Flutter plugins facing the same AGP 9 migration use this same
-// gate (e.g. `cunning_document_scanner`).
+// only be applied when built-in Kotlin is not in effect. Gating on the AGP
+// major version alone is not sufficient: AGP 9 still supports
+// `android.builtInKotlin=false` (Flutter 3.44's migrators force exactly
+// that into `gradle.properties` regardless of AGP version -- see this
+// repo's own `example/android/gradle.properties`), and Flutter 3.38 (this
+// package's floor) has no fallback that applies KGP for us on that
+// compatibility path. So the effective property is checked as well as the
+// AGP major version. Other published Flutter plugins facing the same AGP 9
+// migration use this same gate (e.g. `cunning_document_scanner`).
 val agpMajor = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.substringBefore('.').toInt()
-if (agpMajor < 9) {
+val builtInKotlinProperty = providers.gradleProperty("android.builtInKotlin").orNull
+val builtInKotlinEnabled = agpMajor >= 9 && (builtInKotlinProperty?.toBoolean() ?: true)
+if (!builtInKotlinEnabled) {
     pluginManager.apply("org.jetbrains.kotlin.android")
 }
 

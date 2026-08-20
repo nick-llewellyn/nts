@@ -157,18 +157,23 @@ tarball.
   = ... }` had its deprecation level raised to `ERROR` in Kotlin
   2.2.0; and `AndroidSourceDirectorySet.srcDirs(...)` is deprecated in
   favor of the `directories` mutable set. The module now applies
-  `org.jetbrains.kotlin.android` only when the resolved AGP major
-  version is below 9 (AGP 9 ships built-in Kotlin support and is
-  incompatible with the standalone plugin), configures the `android`
-  extension via `configure<LibraryExtension> { ... }`, moves
-  `jvmTarget` to `kotlin.compilerOptions` behind a
+  `org.jetbrains.kotlin.android` only when built-in Kotlin is not in
+  effect. Gating on the resolved AGP major version alone is not
+  sufficient, since AGP 9 still supports `android.builtInKotlin=false`
+  (and this package's Flutter 3.38 floor has no fallback that applies
+  KGP on that compatibility path), so the effective
+  `android.builtInKotlin` Gradle property is checked too. The module
+  also configures the `android` extension via
+  `configure<LibraryExtension> { ... }`, moves `jvmTarget` to
+  `kotlin.compilerOptions` behind a
   `plugins.withId("org.jetbrains.kotlin.android")` guard, and adds to
   `java.directories` instead of calling `srcDirs(...)`. Verified
   against both AGP 8.11.1 (the example app's existing pin, unaffected)
   and AGP 9.2.1 with `android.newDsl=true` / `android.builtInKotlin=true`
-  forced on. The example app's own `android/app/build.gradle.kts`
-  follows the same pattern, and its AGP pin moved to 9.2.1 with the
-  Gradle wrapper on 9.7.1.
+  forced on, as well as AGP 9.2.1 with `android.builtInKotlin=false`
+  (Flutter 3.44's current forced default). The example app's own
+  `android/app/build.gradle.kts` follows the same pattern, and its AGP
+  pin moved to 9.2.1 with the Gradle wrapper on 9.7.1.
 - The UDP socket's write timeout is now re-armed against the call-wide
   deadline immediately before the `send`, matching the re-arm the
   `recv` already had. The bind-time value is anchored at bind

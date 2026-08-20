@@ -10,10 +10,18 @@ plugins {
 
 // AGP 9.0 ships built-in Kotlin support and applies it automatically; the
 // standalone `kotlin-android` plugin is incompatible with AGP 9's
-// built-in Kotlin, so it is only applied on AGP < 9. See NTS-161 (the
-// same gate on the `nts` plugin's own `android/build.gradle.kts`).
+// built-in Kotlin, so it is only applied when built-in Kotlin is not in
+// effect. Gating on the AGP major version alone is not sufficient: this
+// app's `gradle.properties` sets `android.builtInKotlin=false` (forced
+// there by Flutter 3.44's migrators regardless of AGP version), and
+// Flutter 3.38 (this package's floor) has no fallback that applies KGP
+// for us on that compatibility path -- so the effective property is
+// checked as well as the AGP major version. See NTS-161 (the same gate
+// on the `nts` plugin's own `android/build.gradle.kts`).
 val agpMajor = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.substringBefore('.').toInt()
-if (agpMajor < 9) {
+val builtInKotlinProperty = providers.gradleProperty("android.builtInKotlin").orNull
+val builtInKotlinEnabled = agpMajor >= 9 && (builtInKotlinProperty?.toBoolean() ?: true)
+if (!builtInKotlinEnabled) {
     pluginManager.apply("kotlin-android")
 }
 
