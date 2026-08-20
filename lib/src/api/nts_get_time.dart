@@ -276,27 +276,28 @@ Future<NtsSyncedTime> _getTime({
 // `(0, roundTripMicros]` (δ excludes server processing time), else
 // the locally measured round trip.
 //
-// Both bounds are diagnostic. A `0` marks a pre-7.1 fixture, and a
-// non-positive δ is evidence of an implausible timestamp exchange — a
-// local clock step mid-exchange, a server clock stepped between T2
-// and T3, or server stamps that are simply inconsistent. The upper
-// bound admits δ on healthy samples under ordinary scheduling: T1
-// shares an anchor with `roundTripMicros` (stamped immediately before
-// the request is built and sealed, which the send follows), so the
-// only work δ carries that the round trip does not is that request
-// build and seal plus the socket write-timeout re-arm that bounds the
-// send against the call's remaining budget — neither of which blocks
-// on I/O. A δ above
-// `roundTripMicros` by more than that fixed overhead is a forward
-// clock step, a slew separating the wall-clock T1/T4 pair from the
-// monotonic round trip, or — on a loaded host — preemption of the
-// worker between T1 and the send, which inflates δ while leaving θ
-// intact. This is a selection policy, not a clock-integrity test: the
-// fallback is the quantity actually measured across the exchange, so
-// taking it costs accuracy rather than correctness whichever of those
-// put δ out of range. Before 9.2 T1 was stamped ahead of the bind, so
-// δ ran 1–9% above the round trip and this window selected the
-// fallback on every healthy sample.
+// Only the lower bound is diagnostic. A `0` marks a pre-7.1 fixture,
+// and a non-positive δ is evidence of an implausible timestamp
+// exchange — a local clock step mid-exchange, a server clock stepped
+// between T2 and T3, or server stamps that are simply inconsistent.
+//
+// The upper bound is a selection policy, not a clock-integrity test.
+// It admits δ on healthy samples under ordinary scheduling: T1 shares
+// an anchor with `roundTripMicros` (stamped immediately before the
+// request is built and sealed, which the send follows), so the only
+// work δ carries that the round trip does not is that request build
+// and seal plus the socket write-timeout re-arm that bounds the send
+// against the call's remaining budget — neither of which blocks on
+// I/O. A δ above `roundTripMicros` by more than that fixed overhead
+// is a forward clock step, a slew separating the wall-clock T1/T4
+// pair from the monotonic round trip, or — on a loaded host —
+// preemption of the worker between T1 and the send, which inflates δ
+// while leaving θ intact. Taking the fallback is therefore not
+// evidence of clock corruption: it is the quantity actually measured
+// across the exchange, so it costs accuracy rather than correctness
+// whichever of those put δ out of range. Before 9.2 T1 was stamped
+// ahead of the bind, so δ ran 1–9% above the round trip and this
+// window selected the fallback on every healthy sample.
 int _effectiveDelayMicros(NtsTimeSample s) =>
     (s.peerDelayMicros > 0 && s.peerDelayMicros <= s.roundTripMicros)
     ? s.peerDelayMicros

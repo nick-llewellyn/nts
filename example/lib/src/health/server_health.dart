@@ -54,15 +54,19 @@ sealed class ProbeResult {
 ///
 /// [offsetMicros] is the sample's RFC 5905 §8 clock offset θ, signed so
 /// that positive means the server's clock is ahead of the local one, or
-/// `null` when the sample carried no usable θ. θ is derived from two
-/// local system-clock readings, T1 and T4, so it is meaningless if the
-/// local clock was stepped anywhere between them — a window that opens
-/// before the UDP send, since T1 precedes the packet build and the
-/// socket bind. [probeHost] screens for that and passes `null` rather
-/// than a value it cannot trust. The screen is a plausibility filter,
-/// not a proof of a steady clock: a step too small to disturb the peer
-/// delay beyond the setup cost, and too small to break the burst's
-/// agreement, is not detected.
+/// `null` when [probeHost] would not stand behind it. θ is derived from
+/// two local system-clock readings, T1 and T4, so it is meaningless if
+/// the local clock was stepped anywhere between them — a window that
+/// opens just before the UDP send, since as of 9.2 T1 follows the
+/// socket bind and precedes only the packet build. [probeHost] screens
+/// for that and passes `null` rather than a value it cannot trust.
+///
+/// The screen errs in both directions. It is not a proof of a steady
+/// clock: a step too small to disturb the peer delay beyond the setup
+/// allowance, and too small to break the burst's agreement, is not
+/// detected. Nor is a `null` proof of a corrupt one — the peer-delay
+/// upper bound also rejects a sample whose worker was preempted
+/// between T1 and the send, whose θ is intact.
 class ProbeOk extends ProbeResult {
   final int rttMicros;
   final int stratum;

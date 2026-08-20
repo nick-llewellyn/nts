@@ -102,9 +102,15 @@ Future<List<ServerHealth>> probeAll(
 /// carrying the sample's RFC 5905 clock offset θ, or a `null` offset
 /// when the sample's own peer delay (see [_plausibleOffsetMicros]) or
 /// the rest of the burst (see [_corroborateOffsets]) leaves θ
-/// untrustworthy; an [NtsError] becomes a typed [ProbeStage.ntp]
+/// unvouched for; an [NtsError] becomes a typed [ProbeStage.ntp]
 /// [ProbeFailure]; any other throwable is bucketed as a severe
 /// `Unhandled` failure.
+///
+/// A `null` is a refusal to vouch, not a finding of corruption. The
+/// non-positive half of the per-sample bound does witness an
+/// implausible exchange, but the upper half is a selection policy that
+/// also discards a healthy sample whose worker was preempted between
+/// T1 and the send (see [_kSetupSlackMicros]).
 ///
 /// [client] routes both stages through a caller-owned [NtsClient]
 /// instead of the top-level functions' process-wide default client.
