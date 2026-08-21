@@ -168,7 +168,7 @@ tarball.
   `kotlin.compilerOptions` behind a
   `plugins.withId("org.jetbrains.kotlin.android")` guard, and adds to
   `java.directories` instead of calling `srcDirs(...)`. Verified
-  against both AGP 8.11.1 (the example app's existing pin, unaffected)
+  against both AGP 8.11.1 (the example app's previous pin, unaffected)
   and AGP 9.2.1 with `android.newDsl=true` / `android.builtInKotlin=true`
   forced on, as well as AGP 9.2.1 with `android.builtInKotlin=false`
   (Flutter 3.44's current forced default). The example app's own
