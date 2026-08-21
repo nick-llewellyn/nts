@@ -6,7 +6,7 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 9.2
+## 9.2.0
 
 ### Added
 
