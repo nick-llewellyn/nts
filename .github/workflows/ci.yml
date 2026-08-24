@@ -56,6 +56,7 @@ jobs:
       ci: ${{ steps.filter.outputs.ci }}
       docs: ${{ steps.filter.outputs.docs }}
       hooks: ${{ steps.filter.outputs.hooks }}
+      android: ${{ steps.filter.outputs.android }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,6 +92,10 @@ jobs:
               - 'tool/check_doc_snippets.dart'
             hooks:
               - 'tool/hooks/**'
+            android:
+              - 'android/**'
+              - 'example/android/**'
+              - 'tool/test_android_kgp_gate.sh'
 
   build:
     # Matrix exercises an old-SDK leg (3.38.10, ships Dart 3.10.9) and the
@@ -849,3 +854,71 @@ jobs:
 
       - name: Run functional hook tests
         run: sh tool/hooks/test_hooks.sh
+
+  android-kgp-gate:
+    # Configures the `:nts` Android module standalone across the
+    # `android.newDsl` / `android.builtInKotlin` matrix and asserts the
+    # KGP gate in `android/build.gradle.kts` behaves.
+    #
+    # This is the only coverage the `newDsl=true` legs can get: the
+    # example app cannot configure under the new DSL because the Flutter
+    # Gradle Plugin resolves the legacy `BaseExtension` with a non-null
+    # assertion (flutter/flutter#180137), so `:app` would fail for
+    # reasons unrelated to this package. Isolating the module is what
+    # makes the matrix testable ahead of that upstream work. See
+    # NTS-162.
+    #
+    # Configuration only (`:nts:tasks`) -- compiling would need the
+    # Flutter embedding, which the host app provides. Rust is installed
+    # because the module shells out to `cargo metadata` at configuration
+    # time to locate the rustls-platform-verifier AAR.
+    name: Android KGP gate matrix
+    runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      needs.changes.outputs.android == 'true'
+      || needs.changes.outputs.ci == 'true'
+      || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo registry + crate target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+
+      # The example app's `gradlew` and `gradle-wrapper.jar` are
+      # gitignored (Flutter generates them), so a CI checkout has no
+      # wrapper to run. The distribution URL in the tracked
+      # `gradle-wrapper.properties` is still the version of record, so
+      # it is parsed out and installed on PATH -- the harness falls back
+      # to `gradle` when no wrapper is present.
+      - name: Resolve Gradle version from the wrapper properties
+        id: gradle-version
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's|.*distributions/gradle-\([0-9.]*\)-.*\.zip|\1|p' \
+            example/android/gradle/wrapper/gradle-wrapper.properties)
+          if [ -z "$version" ]; then
+            echo "could not parse distributionUrl from gradle-wrapper.properties" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          gradle-version: ${{ steps.gradle-version.outputs.version }}
+
+      - name: Run KGP gate matrix
+        run: sh tool/test_android_kgp_gate.sh

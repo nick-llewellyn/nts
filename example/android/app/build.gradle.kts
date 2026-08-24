@@ -18,9 +18,23 @@ plugins {
 // for us on that compatibility path -- so the effective property is
 // checked as well as the AGP major version. See NTS-161 (the same gate
 // on the `nts` plugin's own `android/build.gradle.kts`).
+//
+// `android.newDsl=true` rules out the standalone plugin entirely: KGP
+// casts the `android` extension to the legacy `BaseExtension`, which AGP
+// does not register under the new DSL. That combination is rejected up
+// front rather than left to surface as a `ClassCastException`, mirroring
+// the plugin module. See NTS-162.
 val agpMajor = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.substringBefore('.').toInt()
+val newDslProperty = providers.gradleProperty("android.newDsl").orNull
+val newDslEnabled = agpMajor >= 9 && (newDslProperty?.toBoolean() ?: true)
 val builtInKotlinProperty = providers.gradleProperty("android.builtInKotlin").orNull
 val builtInKotlinEnabled = agpMajor >= 9 && (builtInKotlinProperty?.toBoolean() ?: true)
+require(!(newDslEnabled && !builtInKotlinEnabled)) {
+    "android.newDsl=true requires android.builtInKotlin=true. The " +
+        "standalone Kotlin Gradle Plugin casts the android extension to " +
+        "the legacy com.android.build.gradle.BaseExtension, which AGP does " +
+        "not register under the new DSL."
+}
 if (!builtInKotlinEnabled) {
     pluginManager.apply("kotlin-android")
 }
