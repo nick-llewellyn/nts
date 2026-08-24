@@ -579,7 +579,8 @@ Two cheaper filters run before the workflow even queues:
   assets — `LICENSE`, `.gitignore`, `.beads/**`, `screenshots/**` —
   never trigger a workflow run. Markdown is **not** in this list:
   doc-only PRs need to trigger the workflow so required status
-  checks resolve (the `build`, `rust`, and `rust-bridge-sync` jobs
+  checks resolve (the `build`, `rust`, `rust-bridge-sync`,
+  `hooks-syntax`, `hooks-behaviour`, and `android-kgp-gate` jobs
   then skip via job-level `if:` and report green, since GitHub
   treats skipped jobs as passing for branch protection).
 - **`[skip ci]` commit-message flag**: any commit whose message
@@ -594,7 +595,7 @@ Two cheaper filters run before the workflow even queues:
 
 | Change | Behaviour |
 |--------|-----------|
-| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, and `hooks-behaviour` skip via `if:`. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
+| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, and `android-kgp-gate` skip via `if:`. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
 | Beads issue update (`.beads/**`) | Workflow doesn't run (`paths-ignore`). |
 | Screenshot asset swap (`screenshots/**`) | Workflow doesn't run (`paths-ignore`). |
 | Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust` and `rust-bridge-sync` skip. |
