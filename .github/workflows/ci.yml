@@ -897,18 +897,28 @@ jobs:
         with:
           workspaces: rust
 
-      - name: Cache Gradle distribution + caches
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+      # The example app's `gradlew` and `gradle-wrapper.jar` are
+      # gitignored (Flutter generates them), so a CI checkout has no
+      # wrapper to run. The distribution URL in the tracked
+      # `gradle-wrapper.properties` is still the version of record, so
+      # it is parsed out and installed on PATH -- the harness falls back
+      # to `gradle` when no wrapper is present.
+      - name: Resolve Gradle version from the wrapper properties
+        id: gradle-version
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's|.*distributions/gradle-\([0-9.]*\)-.*\.zip|\1|p' \
+            example/android/gradle/wrapper/gradle-wrapper.properties)
+          if [ -z "$version" ]; then
+            echo "could not parse distributionUrl from gradle-wrapper.properties" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: >-
-            gradle-${{ runner.os }}-${{ hashFiles(
-              'example/android/settings.gradle.kts',
-              'example/android/gradle/wrapper/gradle-wrapper.properties',
-              'android/build.gradle.kts') }}
-          restore-keys: gradle-${{ runner.os }}-
+          gradle-version: ${{ steps.gradle-version.outputs.version }}
 
       - name: Run KGP gate matrix
         run: sh tool/test_android_kgp_gate.sh

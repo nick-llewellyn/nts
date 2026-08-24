@@ -16,9 +16,11 @@
 # Only configuration is exercised (`:nts:tasks`); compiling would pull in
 # the Flutter embedding, which is the host app's to provide.
 #
-# Requires: a JDK, an Android SDK (ANDROID_HOME or ANDROID_SDK_ROOT), and
+# Requires: a JDK, an Android SDK (ANDROID_HOME or ANDROID_SDK_ROOT),
 # `cargo` on PATH (the module resolves the rustls-platform-verifier AAR
-# through `cargo metadata`).
+# through `cargo metadata`), and Gradle -- either the example app's
+# wrapper, if a local Flutter build has materialised it, or `gradle` on
+# PATH.
 #
 # Run locally:  sh tool/test_android_kgp_gate.sh
 set -eu
@@ -46,21 +48,34 @@ KGP_VERSION=$(sed -n 's/.*id("org.jetbrains.kotlin.android") version "\([^"]*\)"
   echo "ERROR: could not read AGP/KGP versions from $EXAMPLE_ANDROID/settings.gradle.kts" >&2
   exit 1
 }
-echo "AGP $AGP_VERSION / KGP $KGP_VERSION"
+GRADLE_VERSION=$(sed -n 's/.*distributions\/gradle-\([0-9.]*\)-.*\.zip/\1/p' \
+  "$EXAMPLE_ANDROID/gradle/wrapper/gradle-wrapper.properties")
+echo "AGP $AGP_VERSION / KGP $KGP_VERSION / Gradle ${GRADLE_VERSION:-unknown}"
+
+# The example app's `gradlew` and `gradle-wrapper.jar` are gitignored
+# (Flutter's own `.gitignore` for generated app scaffolding), so a fresh
+# checkout has no wrapper to reuse. Prefer it when a local Flutter run
+# has materialised it -- that is the exact toolchain the repo builds
+# with -- and fall back to a `gradle` on PATH otherwise, which is how
+# CI runs (the workflow installs the version parsed above).
+if [ -x "$EXAMPLE_ANDROID/gradlew" ]; then
+  GRADLE="$EXAMPLE_ANDROID/gradlew"
+elif command -v gradle >/dev/null 2>&1; then
+  GRADLE=$(command -v gradle)
+else
+  echo "ERROR: no Gradle available. Run 'flutter build apk --config-only' in" >&2
+  echo "       example/ to materialise the wrapper, or install Gradle" >&2
+  echo "       ${GRADLE_VERSION:-9.x} on PATH." >&2
+  exit 1
+fi
+echo "using $GRADLE"
 
 WORK_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t ntsgate)
 cleanup() {
-  [ -x "$WORK_DIR/gradlew" ] && "$WORK_DIR/gradlew" -p "$WORK_DIR" --stop >/dev/null 2>&1
+  "$GRADLE" -p "$WORK_DIR" --stop >/dev/null 2>&1 || true
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT INT TERM
-
-# Reuse the example's wrapper so the probe pins the same Gradle version.
-cp -f "$EXAMPLE_ANDROID/gradlew" "$WORK_DIR/gradlew"
-mkdir -p "$WORK_DIR/gradle/wrapper"
-cp -f "$EXAMPLE_ANDROID/gradle/wrapper/gradle-wrapper.properties" \
-  "$EXAMPLE_ANDROID/gradle/wrapper/gradle-wrapper.jar" "$WORK_DIR/gradle/wrapper/"
-chmod +x "$WORK_DIR/gradlew"
 
 printf 'sdk.dir=%s\n' "$SDK_DIR" > "$WORK_DIR/local.properties"
 
@@ -106,7 +121,7 @@ android.builtInKotlin=$built_in
 EOF
   out="$WORK_DIR/out.txt"
   set +e
-  "$WORK_DIR/gradlew" -p "$WORK_DIR" :nts:tasks --console=plain >"$out" 2>&1
+  "$GRADLE" -p "$WORK_DIR" :nts:tasks --console=plain >"$out" 2>&1
   rc=$?
   set -e
 
