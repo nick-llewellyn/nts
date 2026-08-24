@@ -47,9 +47,30 @@ plugins {
 // compatibility path. So the effective property is checked as well as the
 // AGP major version. Other published Flutter plugins facing the same AGP 9
 // migration use this same gate (e.g. `cunning_document_scanner`).
+//
+// `android.builtInKotlin` is not a free variable once `android.newDsl=true`,
+// though: under the new DSL AGP does not register the legacy
+// `com.android.build.gradle.BaseExtension`, and KGP casts the `android`
+// extension to exactly that type as it applies itself. So
+// `newDsl=true` + `builtInKotlin=false` leaves no way to compile this
+// module's Kotlin -- built-in Kotlin is off and the standalone plugin
+// cannot attach. AGP only warns about the combination, so the first hard
+// signal is a `ClassCastException` raised from this script; the check
+// below turns that into an actionable message instead. See NTS-162.
 val agpMajor = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.substringBefore('.').toInt()
+val newDslProperty = providers.gradleProperty("android.newDsl").orNull
+val newDslEnabled = agpMajor >= 9 && (newDslProperty?.toBoolean() ?: true)
 val builtInKotlinProperty = providers.gradleProperty("android.builtInKotlin").orNull
 val builtInKotlinEnabled = agpMajor >= 9 && (builtInKotlinProperty?.toBoolean() ?: true)
+require(!(newDslEnabled && !builtInKotlinEnabled)) {
+    "nts: android.newDsl=true requires android.builtInKotlin=true. The " +
+        "standalone Kotlin Gradle Plugin casts the android extension to " +
+        "the legacy com.android.build.gradle.BaseExtension, which AGP does " +
+        "not register under the new DSL. Set android.builtInKotlin=true in " +
+        "gradle.properties, or set android.newDsl=false (what Flutter's own " +
+        "migrators write, and currently required by the Flutter Gradle " +
+        "Plugin regardless of this package)."
+}
 if (!builtInKotlinEnabled) {
     pluginManager.apply("org.jetbrains.kotlin.android")
 }

@@ -6,6 +6,40 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 9.2.1
+
+### Fixed
+
+- The plugin's Android module gated application of the standalone
+  Kotlin Gradle Plugin on `android.builtInKotlin` alone, which is not a
+  free variable once `android.newDsl=true`
+  ([#316](https://github.com/nick-llewellyn/nts/issues/316), follow-up
+  to [#313](https://github.com/nick-llewellyn/nts/issues/313)). Under
+  the new DSL, AGP does not register the legacy
+  `com.android.build.gradle.BaseExtension`, and KGP casts the `android`
+  extension to exactly that type as it applies itself — so a host with
+  `android.newDsl=true` and `android.builtInKotlin=false` got a
+  `ClassCastException` pointing at this package's build script. AGP only
+  warns about that combination, so the cast failure was the first hard
+  signal. `android.newDsl` is now read alongside
+  `android.builtInKotlin`, and the unsupported pairing is rejected up
+  front with a message naming both properties and the fix. The example
+  app's `android/app/build.gradle.kts` carries the same gate.
+
+### Internal
+
+- `tool/test_android_kgp_gate.sh` configures the plugin's Android module
+  standalone — no app project, no Flutter Gradle Plugin — across the
+  `android.newDsl` / `android.builtInKotlin` matrix, asserting both the
+  configuration outcome and whether the standalone Kotlin plugin ended
+  up applied. The example app cannot cover the `newDsl=true` legs: its
+  `:app` project fails to configure under the new DSL because the
+  Flutter Gradle Plugin resolves the legacy `BaseExtension` with a
+  non-null assertion (flutter/flutter#180137), so isolating the module
+  is what makes those legs testable ahead of that upstream work. Wired
+  into CI as the `android-kgp-gate` job behind a new `android` path
+  filter (`android/**`, `example/android/**`, and the harness itself).
+
 ## 9.2.0
 
 ### Added
@@ -169,9 +203,13 @@ tarball.
   `plugins.withId("org.jetbrains.kotlin.android")` guard, and adds to
   `java.directories` instead of calling `srcDirs(...)`. Verified
   against both AGP 8.11.1 (the example app's previous pin, unaffected)
-  and AGP 9.2.1 with `android.newDsl=true` / `android.builtInKotlin=true`
-  forced on, as well as AGP 9.2.1 with `android.builtInKotlin=false`
-  (Flutter 3.44's current forced default). The example app's own
+  and AGP 9.2.1 with `android.builtInKotlin=false` (Flutter 3.44's
+  current forced default). The `android.newDsl=true` /
+  `android.builtInKotlin=true` combination was verified for the plugin's
+  Android module in isolation, not end to end through an app build: no
+  Flutter app can configure under `android.newDsl=true` today, because
+  the Flutter Gradle Plugin itself resolves the legacy `BaseExtension`
+  with a non-null assertion (flutter/flutter#180137). The example app's own
   `android/app/build.gradle.kts` follows the same pattern, and its AGP
   pin moved to 9.2.1 with the Gradle wrapper on 9.7.1.
 - The UDP socket's write timeout is now re-armed against the call-wide
