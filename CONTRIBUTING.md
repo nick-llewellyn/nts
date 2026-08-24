@@ -132,11 +132,11 @@ Tick the boxes you actually ran; do not blanket-check the rest.
 
 ## What CI requires
 
-Six status checks gate the merge: `Detect changed paths`,
+Seven status checks gate the merge: `Detect changed paths`,
 `Dart tests gate`, `Verify FRB bindings are in sync`, `Rust build +
-tests + coverage`, `Hooks shell-syntax check`, and `Hooks behaviour
-check`. Doc-only diffs still run the workflow, but the heavy jobs skip
-and report as passing.
+tests + coverage`, `Hooks shell-syntax check`, `Hooks behaviour
+check`, and `Android KGP gate matrix`. Doc-only diffs still run the
+workflow, but the heavy jobs skip and report as passing.
 
 Approvals are not required — green CI is the gate. Two further
 conditions apply before the merge button unblocks, and both are on the

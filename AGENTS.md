@@ -54,9 +54,9 @@ self-merge once the required status checks pass; **agents must
 not** self-merge — see [Agent merge policy](#agent-merge-policy-read-this-before-any-gh-pr-merge)
 below. Every PR triggers the CI workflow (including doc-only
 ones); the `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`,
-and `hooks-behaviour` jobs all skip the heavy work on doc-only
-diffs but still report a status, so branch protection resolves
-without manual intervention. See
+`hooks-behaviour`, and `android-kgp-gate` jobs all skip the heavy
+work on doc-only diffs but still report a status, so branch
+protection resolves without manual intervention. See
 [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow) for the
 authoritative branch-protection table.
 
@@ -289,11 +289,11 @@ consumes:
        maintainer-bypass path that otherwise would let a single
        `git push` skip every required check (re-apply with
        `gh api -X POST /repos/<owner>/<repo>/branches/main/protection/enforce_admins`).
-     - `required_status_checks` refuses the PR merge until the six
+     - `required_status_checks` refuses the PR merge until the seven
        listed contexts (`Detect changed paths`, `Dart tests gate`,
        `Verify FRB bindings are in sync`, `Rust build + tests +
        coverage`, `Hooks shell-syntax check`, `Hooks behaviour
-       check`) report success.
+       check`, `Android KGP gate matrix`) report success.
 
 CI is not a separate enforcement layer — it does not gate the
 merge. It runs the workflows that publish the status checks
