@@ -429,7 +429,7 @@ that push events don't have:
 
 | Job | Cost | Purpose |
 |-----|------|---------|
-| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, `docs`, `hooks`, and `android` flags consumed by the gates below (`docs` is informational — no job gates on it; `hooks` gates the two hook jobs; `android` gates the KGP gate matrix). Always runs. |
+| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, `docs`, `hooks`, and `android` flags consumed by the gates below (`docs` gates `doc-snippets`; `hooks` gates the two hook jobs; `android` gates the KGP gate matrix). Always runs. |
 | `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the oldest buildable SDK (3.38.10 — above the declared `>=3.38.0` floor; see the comment on the `build` job) and the latest `stable` channel (matches `.fvmrc`). Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Stable-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
 | `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: [changes, build]` + `if: always()` so it runs whether the matrix executed, was skipped, or failed. Passes when `needs.changes.result == 'success'` AND `needs.build.result` is `success` or `skipped`; fails otherwise. The `changes`-success precondition discriminates a legitimate doc-only matrix skip from a `changes`-failure cascade-skip — without it, a transient paths-filter failure would silently green-light branch protection. Required-status-check entry on `main` for the Dart side. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
@@ -551,11 +551,11 @@ skipped unless the diff actually requires them. Filters and gates:
 |--------|---------|-------|
 | `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `build`, `rust`, `rust-bridge-sync`, `cargo-deny` |
 | `bindings` | `lib/src/ffi/**`, `tool/check_bindings.dart` | `build`, `rust-bridge-sync` |
-| `dart` | `lib/**`, `test/**`, `pubspec.yaml`, `analysis_options.yaml` | `build` (whole job), Dart coverage upload step |
+| `dart` | `lib/**`, `test/**`, `example/**`, `pubspec.yaml`, `analysis_options.yaml`, `sonar-project.properties` | `build` (whole job), Dart coverage upload step |
 | `ci` | `.github/workflows/**` | `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, `doc-snippets`, `cargo-deny`, Dart coverage upload |
 | `hooks` | `tool/hooks/**` | `hooks-syntax`, `hooks-behaviour` |
 | `android` | `android/**`, `example/android/**`, `tool/test_android_kgp_gate.sh` | `android-kgp-gate` |
-| `docs` | `**.md` | `doc-snippets` |
+| `docs` | `**.md`, `tool/check_doc_snippets.dart` | `doc-snippets` |
 
 `pubspec.yaml` lives in the `rust` filter because the
 `flutter_rust_bridge: 2.13.0` exact pin sits there; bumping it must
