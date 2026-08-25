@@ -58,10 +58,10 @@ dependencies:
   # `dart pub publish` will warn that this constraint should allow more
   # than one version. That warning is accepted: silent memory corruption
   # on a wire-format mismatch is a worse failure mode than refusing to
-  # pick up a newer FRB. Do not relax to `^2.12.0` without first
+  # pick up a newer FRB. Do not relax to `^2.13.0` without first
   # verifying that the FRB project has stabilised its wire format across
   # minors.
-  flutter_rust_bridge: 2.12.0
+  flutter_rust_bridge: 2.13.0
   # Required by FRB-generated `nts.freezed.dart` for the sealed `NtsError`
   # variant types. Runtime annotations only; the generator itself is in
   # `dev_dependencies`.
@@ -82,6 +82,13 @@ dependencies:
   # SDK resolves these out-of-band when running the Native Assets pipeline,
   # so they don't pull native_toolchain_rust into the app's runtime graph.
   hooks: ^2.0.2
+  # Held at `^1.0.4` rather than the current `1.0.6`: from 1.0.5 onward
+  # `native_toolchain_rust` requires `hooks ^2.1.0`, which pulls
+  # `record_use ^1.0.0` and therefore `meta ^1.19.0`. The Flutter SDK
+  # pins `meta` exactly, and the oldest supported Flutter (3.38.0) pins
+  # 1.17.0 while current stable pins 1.18.0, so any of those floors makes
+  # version solving fail outright. Revisit once a supported Flutter ships
+  # `meta` 1.19.0.
   native_toolchain_rust: ^1.0.4
 
 dev_dependencies:

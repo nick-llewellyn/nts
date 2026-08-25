@@ -32,7 +32,7 @@ page is the short path; where the two disagree, `DEVELOPMENT.md` wins.
   when the binary is missing or its version differs:
 
   ```bash
-  cargo install flutter_rust_bridge_codegen --version "=2.12.0" --locked
+  cargo install flutter_rust_bridge_codegen --version "=2.13.0" --locked
   ```
 
   Never invoke it directly; the script wraps it and applies patch

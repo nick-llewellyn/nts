@@ -3382,17 +3382,32 @@ void main() {
       test('dispose is a no-op when the bridge was never initialized', () {
         NtsRustLib.instance.resetState();
         NtsBridge.debugReset();
-        // `NtsRustLib.dispose()` dereferences the entrypoint state
-        // unconditionally and throws here.
-        expect(NtsRustLib.dispose, throwsA(anything));
         expect(NtsBridge.dispose, returnsNormally);
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
       });
 
-      test('dispose over an installed mock leaves the state intact', () {
-        // Disposal is not de-initialization: the entrypoint keeps its
-        // state, so a later `ensureInitialized` must not try again.
-        expect(NtsBridge.dispose, returnsNormally);
+      test('dispose over an installed mock de-initializes the bridge', () {
         expect(NtsBridge.state, NtsBridgeState.mock);
+        // FRB clears the entrypoint state as it disposes, so disposal
+        // is de-initialization and the latch has to be dropped with it
+        // -- otherwise a later `ensureInitialized` reports success over
+        // a bridge holding nothing.
+        expect(NtsBridge.dispose, returnsNormally);
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+      });
+
+      test('dispose drops the latch, so a later ensureInitialized runs a '
+          'fresh attempt', () async {
+        // Latch a completed attempt over the installed mock.
+        await expectLater(NtsBridge.ensureInitialized(), completes);
+        NtsBridge.dispose();
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+        // Were the latch retained, this would hand back that completed
+        // future and report success over a bridge holding nothing.
+        await expectLater(
+          NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
+          throwsA(anything),
+        );
       });
     });
 

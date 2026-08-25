@@ -6,6 +6,50 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 9.3
+
+### Changed
+
+- Bump the exact `flutter_rust_bridge` pin from `2.12.0` to `2.13.0` in
+  both `pubspec.yaml` and `rust/Cargo.toml`, and regenerate
+  `lib/src/ffi/**` and `rust/src/frb_generated.rs` against
+  `flutter_rust_bridge_codegen 2.13.0`
+  ([#320](https://github.com/nick-llewellyn/nts/issues/320)). Apps on
+  `flutter_rust_bridge: ^2.13.0` could not resolve against the old pin.
+  The pin stays exact — the Dart codegen output and the Rust runtime
+  crate share a wire format whose stability across minors upstream does
+  not guarantee, and a mismatch corrupts memory silently rather than
+  failing loudly.
+- `NtsBridge.dispose()` is now a de-initialization. `flutter_rust_bridge`
+  2.13.0 clears the entrypoint's state before disposing it, where 2.12.0
+  disposed in place and threw when nothing was installed. So
+  `NtsBridge.state` reads `NtsBridgeState.uninitialized` after a
+  disposal rather than being unchanged. `NtsBridge.dispose()` now drops
+  its own initialization latch to match: without that, a later
+  `NtsBridge.ensureInitialized()` would hand back the latched completed
+  future and report success over a bridge holding nothing. Callers that
+  dispose and then re-initialize get a genuine second attempt; callers
+  that never dispose are unaffected.
+
+### Internal
+
+- The generated bindings pick up two upstream codegen changes, neither
+  of which moves the wire format (`rustContentHash` is unchanged): the
+  `Result::<_, ()>::Ok(...)` construction is now written `Ok::<_, ()>(...)`
+  with the return qualified as `std::result::Result::Ok`, and
+  `frb_generated.rs` carries a new `mismatched_lifetime_syntaxes` allow.
+- `native_toolchain_rust` stays at `^1.0.4`. From 1.0.5 onward it
+  requires `hooks ^2.1.0`, which pulls `record_use ^1.0.0` and therefore
+  `meta ^1.19.0`; the Flutter SDK pins `meta` exactly, and neither the
+  oldest supported Flutter (3.38.0, `meta` 1.17.0) nor current stable
+  (3.44.6, `meta` 1.18.0) satisfies that, so the bump makes version
+  solving fail outright. The pubspec records the constraint inline.
+- `DEVELOPMENT.md`'s CI job inventory said `ci.yml` defines eight jobs
+  when it defines eleven, and the table below it had no rows for
+  `doc-snippets` or `cargo-deny`. Count corrected, both rows written,
+  and the doc-only skip list in the lead-in prose extended to
+  `cargo-deny` and `android-kgp-gate`.
+
 ## 9.2.1
 
 ### Fixed

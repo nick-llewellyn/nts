@@ -204,14 +204,17 @@ abstract final class NtsBridge {
   /// Release the bridge's Dart-side resources, or do nothing when the
   /// bridge was never initialized.
   ///
-  /// `NtsRustLib.dispose()` throws when nothing is installed; this does
-  /// not. Disposal is not de-initialization: the entrypoint keeps its
-  /// state afterwards, so [state] is unchanged and [ensureInitialized]
-  /// will not re-initialize. Calling it is optional — the bridge is
-  /// torn down with the process.
+  /// Disposal *is* de-initialization: `flutter_rust_bridge` drops the
+  /// entrypoint's state as it disposes, so [state] reads
+  /// [NtsBridgeState.uninitialized] afterwards. This drops the latch
+  /// with it, so a later [ensureInitialized] runs a fresh attempt
+  /// rather than reporting success over a bridge that no longer holds
+  /// anything. Calling it is optional — the bridge is torn down with
+  /// the process.
   static void dispose() {
     if (state == NtsBridgeState.uninitialized) return;
     NtsRustLib.dispose();
+    _inFlight = null;
   }
 
   /// Drop the latched attempt so a later [ensureInitialized] starts
