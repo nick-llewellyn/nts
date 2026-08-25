@@ -3409,6 +3409,27 @@ void main() {
           throwsA(anything),
         );
       });
+
+      test('a raw NtsRustLib.dispose bypassing the wrapper strands no '
+          'latch', () async {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
+        // Latch a completed attempt, then de-initialize behind the
+        // wrapper's back. `NtsRustLib` is exported, so this sequence is
+        // reachable by consumers; before 2.13.0 it could not strand the
+        // latch, because disposal kept the entrypoint state.
+        await expectLater(NtsBridge.ensureInitialized(), completes);
+        NtsRustLib.dispose();
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+        // The stale latch has to be discarded rather than handed back:
+        // returning it would report success over a bridge holding
+        // nothing, which is what `dispose` drops the latch to avoid.
+        await expectLater(
+          NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
+          throwsA(anything),
+        );
+      });
     });
 
     test('NtsSyncedTime toString carries the diagnostic fields', () {

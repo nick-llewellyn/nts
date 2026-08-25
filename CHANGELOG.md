@@ -22,16 +22,27 @@ tarball.
   failing loudly.
 - `NtsBridge.dispose()` is now a de-initialization. `flutter_rust_bridge`
   2.13.0 clears the entrypoint's state before disposing it, where 2.12.0
-  disposed in place and threw when nothing was installed. So
-  `NtsBridge.state` reads `NtsBridgeState.uninitialized` after a
-  disposal rather than being unchanged. `NtsBridge.dispose()` now drops
-  its own initialization latch to match: without that, a later
+  disposed in place and kept it. So `NtsBridge.state` reads
+  `NtsBridgeState.uninitialized` after a disposal rather than being
+  unchanged. `NtsBridge.dispose()` now drops its own initialization
+  latch to match: without that, a later
   `NtsBridge.ensureInitialized()` would hand back the latched completed
   future and report success over a bridge holding nothing. Callers that
   dispose and then re-initialize get a genuine second attempt; callers
-  that never dispose are unaffected. The dartdoc also now states that
-  disposing while an `ensureInitialized()` is in flight is unsupported,
-  and names the two windows in which it misbehaves.
+  that never dispose are unaffected. (The wrapper's early return for an
+  uninitialized bridge is unchanged and predates this: it has always
+  shielded callers from the `StateError` the raw `NtsRustLib.dispose()`
+  throws in that case.) The dartdoc also now states that disposing while
+  an `ensureInitialized()` is in flight is unsupported, and names the
+  two windows in which it misbehaves.
+- `NtsBridge.ensureInitialized()` now recovers from a raw
+  `NtsRustLib.dispose()`. The entrypoint is exported, so a caller can
+  de-initialize without going through `NtsBridge.dispose()`, which under
+  2.12.0 was harmless — disposal kept the state — but now strands the
+  latch over a bridge holding nothing. The stale latch is detected and
+  discarded, so the next call runs a fresh attempt. Disposal *during* an
+  unawaited `ensureInitialized()` remains unsupported, as it is for
+  `NtsBridge.dispose()`.
 
 ### Internal
 

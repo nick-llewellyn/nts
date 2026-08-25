@@ -63,6 +63,14 @@ abstract final class NtsBridge {
   /// attempt fails without having taken ownership of the entrypoint.
   static Future<void>? _inFlight;
 
+  /// Whether [_inFlight] has finished, either way.
+  ///
+  /// Needed because a latch over an entrypoint holding nothing is
+  /// stale in one case and correct in the other, and the two are
+  /// otherwise indistinguishable: an attempt still awaiting its
+  /// library load has not installed state yet either.
+  static bool _settled = false;
+
   /// What the bridge currently holds on this isolate.
   ///
   /// The native/mock split is structural, on the installed API's type:
@@ -159,49 +167,77 @@ abstract final class NtsBridge {
   /// then reports success over it: the entrypoint records no failure,
   /// and the attempt was never latched here. A caller that drives
   /// `init()` directly owns that error and must keep it — awaiting this
-  /// method afterwards will not resurface it.
+  /// A raw `NtsRustLib.dispose()` is supported once whatever attempt
+  /// preceded it has been awaited. It de-initializes the entrypoint
+  /// without going through [dispose], so the latch this method keeps
+  /// would otherwise be handed back over a bridge holding nothing;
+  /// instead the stale latch is dropped and the next call runs a
+  /// fresh attempt, as it would after [dispose]. That includes
+  /// dropping a latch retained to replay a failure, since the state
+  /// the replay was protecting is gone. Disposal *during* an
+  /// unawaited attempt remains unsupported, exactly as it is for
+  /// [dispose].
   static Future<void> ensureInitialized({
     ExternalLibrary? externalLibrary,
     BaseHandler? handler,
     bool forceSameCodegenVersion = true,
   }) {
     final latched = _inFlight;
-    if (latched != null) return latched;
+    if (latched != null) {
+      // A raw `NtsRustLib.dispose()` clears the entrypoint state
+      // without going through [dispose], stranding a settled latch
+      // over a bridge holding nothing. Start over rather than hand
+      // that latch back: reporting success there would be the same
+      // defect [dispose] drops the latch to avoid. Only checkable
+      // once settled -- an attempt still awaiting its library load
+      // reads `uninitialized` too, and must not be restarted.
+      if (!_settled || state != NtsBridgeState.uninitialized) return latched;
+      _inFlight = null;
+      _settled = false;
+    }
     // Something is installed and no attempt of ours is outstanding, so
     // there is nothing left to do. This reports success even over an
     // entrypoint a *direct* `NtsRustLib.init()` left installed and
     // half-built: that failure was never latched here, and FRB records
     // nothing about it. Documented above as the caller's to keep.
     if (state != NtsBridgeState.uninitialized) {
+      _settled = true;
       return _inFlight = Future<void>.value();
     }
     late final Future<void> attempt;
     attempt =
         NtsRustLib.init(
-          externalLibrary: externalLibrary,
-          handler: handler,
-          forceSameCodegenVersion: forceSameCodegenVersion,
-        ).onError<Object>((error, stackTrace) {
-          // Retain the latch only for a failure that left the generated
-          // API installed, so the error is replayed to later callers
-          // rather than a doomed second `NtsRustLib.init()` being run.
-          // This attempt can only ever install that API, so `native` is
-          // the state attributable to it: nothing installed leaves
-          // `uninitialized`, and `mock` can only come from an
-          // independent `initMock()`, which is an initialization that
-          // succeeded and must not be shadowed by this error. A
-          // concurrent `initMock()` supplying the *generated* API is
-          // indistinguishable from our own install and so is documented
-          // as unsupported rather than handled.
-          //
-          // Either way, only while this attempt is still the latched
-          // one -- a `debugReset()` between the throw and this callback
-          // has already invalidated it.
-          if (identical(_inFlight, attempt) && state != NtsBridgeState.native) {
-            _inFlight = null;
-          }
-          Error.throwWithStackTrace(error, stackTrace);
-        });
+              externalLibrary: externalLibrary,
+              handler: handler,
+              forceSameCodegenVersion: forceSameCodegenVersion,
+            )
+            .onError<Object>((error, stackTrace) {
+              // Retain the latch only for a failure that left the generated
+              // API installed, so the error is replayed to later callers
+              // rather than a doomed second `NtsRustLib.init()` being run.
+              // This attempt can only ever install that API, so `native` is
+              // the state attributable to it: nothing installed leaves
+              // `uninitialized`, and `mock` can only come from an
+              // independent `initMock()`, which is an initialization that
+              // succeeded and must not be shadowed by this error. A
+              // concurrent `initMock()` supplying the *generated* API is
+              // indistinguishable from our own install and so is documented
+              // as unsupported rather than handled.
+              //
+              // Either way, only while this attempt is still the latched
+              // one -- a `debugReset()` between the throw and this callback
+              // has already invalidated it.
+              if (identical(_inFlight, attempt) &&
+                  state != NtsBridgeState.native) {
+                _inFlight = null;
+              }
+              Error.throwWithStackTrace(error, stackTrace);
+            })
+            .whenComplete(() {
+              // Same guard: once this attempt is no longer the latched
+              // one, the flag describes whatever replaced it.
+              if (identical(_inFlight, attempt)) _settled = true;
+            });
     return _inFlight = attempt;
   }
 
@@ -219,7 +255,11 @@ abstract final class NtsBridge {
   /// That contract changed in `nts` 9.3, which moved to
   /// `flutter_rust_bridge` 2.13.0. Through 2.12.0 the entrypoint
   /// disposed in place and kept its state, so [state] was unchanged
-  /// afterwards and this method threw when nothing was installed.
+  /// afterwards and a later [ensureInitialized] would not
+  /// re-initialize. The early return for an uninitialized bridge is
+  /// not part of that change: it has always been here, shielding
+  /// callers from the `StateError` the raw `NtsRustLib.dispose()`
+  /// throws in that case, and it still does.
   ///
   /// Await any outstanding [ensureInitialized] before calling this.
   /// Disposing while an attempt is in flight is unsupported, and the
@@ -236,6 +276,7 @@ abstract final class NtsBridge {
     if (state == NtsBridgeState.uninitialized) return;
     NtsRustLib.dispose();
     _inFlight = null;
+    _settled = false;
   }
 
   /// Drop the latched attempt so a later [ensureInitialized] starts
@@ -250,5 +291,6 @@ abstract final class NtsBridge {
   @visibleForTesting
   static void debugReset() {
     _inFlight = null;
+    _settled = false;
   }
 }
