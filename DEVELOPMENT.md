@@ -549,13 +549,13 @@ skipped unless the diff actually requires them. Filters and gates:
 
 | Filter | Watches | Gates |
 |--------|---------|-------|
-| `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `build`, `rust`, `rust-bridge-sync` |
+| `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `build`, `rust`, `rust-bridge-sync`, `cargo-deny` |
 | `bindings` | `lib/src/ffi/**`, `tool/check_bindings.dart` | `build`, `rust-bridge-sync` |
 | `dart` | `lib/**`, `test/**`, `pubspec.yaml`, `analysis_options.yaml` | `build` (whole job), Dart coverage upload step |
-| `ci` | `.github/workflows/**` | `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, Dart coverage upload |
+| `ci` | `.github/workflows/**` | `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, `doc-snippets`, `cargo-deny`, Dart coverage upload |
 | `hooks` | `tool/hooks/**` | `hooks-syntax`, `hooks-behaviour` |
 | `android` | `android/**`, `example/android/**`, `tool/test_android_kgp_gate.sh` | `android-kgp-gate` |
-| `docs` | `**.md` | informational only — no job consumes this output; surfaced so doc-only diffs are observable in workflow run summaries |
+| `docs` | `**.md` | `doc-snippets` |
 
 `pubspec.yaml` lives in the `rust` filter because the
 `flutter_rust_bridge: 2.13.0` exact pin sits there; bumping it must
@@ -564,7 +564,11 @@ the Codecov / artifact upload step inside `build`, on top of gating
 whether the matrix runs at all — so a `rust`-only or `bindings`-only
 diff still runs the Dart matrix (to catch FFI-surface drift visible
 to Dart tests) but skips the upload (no Dart-relevant coverage delta
-to publish). `workflow_dispatch` (manual reruns from the Actions UI)
+to publish). The `docs` filter is the one gate whose job is cheaper
+than the ones it replaces: `doc-snippets` needs Flutter only to
+resolve package imports, so a doc-only diff is validated without the
+Rust toolchain + FRB codegen pipeline `rust-bridge-sync` requires.
+`workflow_dispatch` (manual reruns from the Actions UI)
 bypasses every gate so a forced run executes the full pipeline.
 
 GitHub treats skipped jobs as passing for branch-protection purposes,
@@ -599,14 +603,14 @@ Two cheaper filters run before the workflow even queues:
 
 | Change | Behaviour |
 |--------|-----------|
-| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, and `android-kgp-gate` skip via `if:`. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
+| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, and `cargo-deny` skip via `if:`. `doc-snippets` runs — it is the one job a doc-only diff gates *on*. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
 | Beads issue update (`.beads/**`) | Workflow doesn't run (`paths-ignore`). |
 | Screenshot asset swap (`screenshots/**`) | Workflow doesn't run (`paths-ignore`). |
-| Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust` and `rust-bridge-sync` skip. |
-| Rust source change (`rust/src/**`) | All three runtime jobs run. |
+| Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust`, `rust-bridge-sync`, and `cargo-deny` skip. |
+| Rust source change (`rust/src/**`) | All three runtime jobs run, plus `cargo-deny`. |
 | Hand-edit of generated bindings | `build` and `rust-bridge-sync` run; `rust-bridge-sync` will fail with a drift error (regenerate via `dart run tool/check_bindings.dart` instead). |
-| `pubspec.yaml` edit | All three runtime jobs run (FRB pin sits there). |
-| Workflow file edit | All three runtime jobs plus `hooks-syntax`, `hooks-behaviour`, and `android-kgp-gate` run (validates the change end-to-end and re-asserts the hook-enforcement layer still parses *and* still enforces, since every gate trips on `ci`). |
+| `pubspec.yaml` edit | All three runtime jobs run, plus `cargo-deny` (FRB pin sits there, in the `rust` filter). |
+| Workflow file edit | All three runtime jobs plus `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, `doc-snippets`, and `cargo-deny` run (validates the change end-to-end and re-asserts the hook-enforcement layer still parses *and* still enforces, since every gate trips on `ci`). |
 | Hook script change (`tool/hooks/**`) | `hooks-syntax` and `hooks-behaviour` run; the runtime jobs skip. |
 | Android Gradle change (`android/**`, `example/android/**`) | `android-kgp-gate` runs; an `example/**` diff also trips the `dart` filter, so `build` runs alongside it. |
 

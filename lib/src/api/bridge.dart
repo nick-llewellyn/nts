@@ -50,9 +50,10 @@ enum NtsBridgeState {
 /// Prefer [ensureInitialized] over `NtsRustLib.init()`: the latter
 /// throws a [StateError] on any call made while the entrypoint holds
 /// state, so it cannot be called from a shared bootstrap path reached
-/// by more than one code path. Only [dispose] clears that state, so
-/// outside a deliberate teardown the rejection stands for the life of
-/// the isolate.
+/// by more than one code path. Only a disposal clears that state —
+/// [dispose], or the raw `NtsRustLib.dispose()` the entrypoint
+/// exports — so outside a deliberate teardown the rejection stands
+/// for the life of the isolate.
 ///
 /// All state here is per-isolate, like the underlying entrypoint and
 /// like `MonotonicClock.instance`: each isolate must initialize the
