@@ -29,7 +29,9 @@ tarball.
   `NtsBridge.ensureInitialized()` would hand back the latched completed
   future and report success over a bridge holding nothing. Callers that
   dispose and then re-initialize get a genuine second attempt; callers
-  that never dispose are unaffected.
+  that never dispose are unaffected. The dartdoc also now states that
+  disposing while an `ensureInitialized()` is in flight is unsupported,
+  and names the two windows in which it misbehaves.
 
 ### Internal
 
@@ -44,6 +46,10 @@ tarball.
   oldest supported Flutter (3.38.0, `meta` 1.17.0) nor current stable
   (3.44.6, `meta` 1.18.0) satisfies that, so the bump makes version
   solving fail outright. The pubspec records the constraint inline.
+- `rust/fuzz/Cargo.lock` moved to 2.13.0 alongside the main workspace
+  lock. The fuzz workspace is standalone and depends on `nts_rust` by
+  path, so the new exact constraint would have failed the nightly
+  `--locked` fuzz build against the stale 2.12.0 resolution.
 - Two CI gates needed adjusting for the bump. The `rust-bridge-sync`
   codegen install now passes `--force`: its cache key is
   version-scoped, but `Swatinem/rust-cache` restores `~/.cargo/bin`

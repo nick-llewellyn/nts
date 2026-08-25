@@ -211,6 +211,23 @@ abstract final class NtsBridge {
   /// rather than reporting success over a bridge that no longer holds
   /// anything. Calling it is optional — the bridge is torn down with
   /// the process.
+  ///
+  /// That contract changed in `nts` 9.3, which moved to
+  /// `flutter_rust_bridge` 2.13.0. Through 2.12.0 the entrypoint
+  /// disposed in place and kept its state, so [state] was unchanged
+  /// afterwards and this method threw when nothing was installed.
+  ///
+  /// Await any outstanding [ensureInitialized] before calling this.
+  /// Disposing while an attempt is in flight is unsupported, and the
+  /// two windows fail differently: before the attempt installs
+  /// entrypoint state, [state] reads [NtsBridgeState.uninitialized] and
+  /// this returns without disposing anything, leaving the bridge
+  /// initialized once the attempt lands; after it installs, this clears
+  /// the state under the attempt, which then completes successfully
+  /// over a bridge holding nothing. Neither is detectable from here —
+  /// FRB exposes no way to observe someone else's attempt — which is
+  /// the same limitation [ensureInitialized] documents for concurrent
+  /// direct `NtsRustLib.init()` calls.
   static void dispose() {
     if (state == NtsBridgeState.uninitialized) return;
     NtsRustLib.dispose();
