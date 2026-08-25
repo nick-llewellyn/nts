@@ -75,7 +75,7 @@ is idempotent, so re-running is safe.
 > gate, and committing it would regress the generated bindings. The
 > script invokes the generator itself, after checking that the
 > generator version matches the exact `flutter_rust_bridge` pin in
-> `pubspec.yaml` (currently `2.12.0`) and that `pubspec.yaml` and
+> `pubspec.yaml` (currently `2.13.0`) and that `pubspec.yaml` and
 > `rust/Cargo.toml` agree on it — codegen and runtime are
 > version-locked.
 
@@ -410,10 +410,12 @@ site.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` defines eight jobs total. `changes` always
-runs on push and PR; `build`, `rust`, and `rust-bridge-sync` are
-job-gated and skip on doc-only diffs (skipped jobs count as passing
-for branch protection). `build-gate` is an always-on aggregator that
+`.github/workflows/ci.yml` defines eleven jobs total. `changes` always
+runs on push and PR; `build`, `rust`, `rust-bridge-sync`,
+`cargo-deny`, and `android-kgp-gate` are job-gated and skip on
+doc-only diffs (skipped jobs count as passing for branch
+protection). `doc-snippets` is the inverse — it is the only job a
+doc-only diff turns *on*. `build-gate` is an always-on aggregator that
 collapses the `build` matrix into a single status-check name so
 branch protection can require it cleanly even when matrix expansion
 is suppressed by a skip. `hooks-syntax` and `hooks-behaviour` are
@@ -427,12 +429,14 @@ that push events don't have:
 
 | Job | Cost | Purpose |
 |-----|------|---------|
-| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, `docs`, `hooks`, and `android` flags consumed by the gates below (`docs` is informational — no job gates on it; `hooks` gates the two hook jobs; `android` gates the KGP gate matrix). Always runs. |
+| `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, `docs`, `hooks`, and `android` flags consumed by the gates below (`docs` gates `doc-snippets`; `hooks` gates the two hook jobs; `android` gates the KGP gate matrix). Always runs. |
 | `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the oldest buildable SDK (3.38.10 — above the declared `>=3.38.0` floor; see the comment on the `build` job) and the latest `stable` channel (matches `.fvmrc`). Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Stable-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
 | `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: [changes, build]` + `if: always()` so it runs whether the matrix executed, was skipped, or failed. Passes when `needs.changes.result == 'success'` AND `needs.build.result` is `success` or `skipped`; fails otherwise. The `changes`-success precondition discriminates a legitimate doc-only matrix skip from a `changes`-failure cascade-skip — without it, a transient paths-filter failure would silently green-light branch protection. Required-status-check entry on `main` for the Dart side. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated on `rust`/`bindings`/`ci`. |
-| `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `moderate`-or-higher advisories across pubspec + Cargo.toml. Also enforces the NTS-72 SPDX `allow-licenses` list, kept in lockstep with `[licenses].allow` in `rust/deny.toml`. That list is a *distribution* policy — what may be linked into the published package or the `nts_rust` cdylib. Because this action also walks the workflow dependency graph (`pkg:githubactions/...`), which `cargo-deny` never sees, build-time actions are exempted individually via `allow-dependencies-licenses` rather than by widening `allow-licenses`: an action runs on an ephemeral runner and is never conveyed to a user, so its licence imposes no obligation on anything shipped. Currently one entry, `Swatinem/rust-cache` (LGPL-3.0). Adding to that carve-out is not a reason to touch `allow-licenses` or `deny.toml`. |
+| `doc-snippets` | ~1–2 min | Runs `tool/check_doc_snippets.dart`, which extracts fenced `dart` blocks from the Markdown docs, wraps fragments in a harness, and runs `dart analyze` over them. Deliberately light: it needs Flutter only to resolve package imports, so a doc-only diff is validated without the Rust toolchain + FRB codegen pipeline `rust-bridge-sync` requires. Gated on `docs`/`ci`/`workflow_dispatch`. Not a required status check on `main`. |
+| `cargo-deny` | ~1 min | Rust supply-chain policy gate (NTS-72): the `bans`, `licenses`, and `sources` checks from `rust/deny.toml` against the full dependency tree. `advisories` is deliberately excluded — RustSec coverage comes from the daily `cargo-audit` job in `audit.yml`, and running both would mean two independently-drifting ignore lists for the same advisories. `[licenses].allow` is kept in lockstep with the `dependency-review` SPDX allow-list. Gated on `rust`/`ci`/`workflow_dispatch`. Not a required status check on `main` — advisory until it has demonstrated stability; promote deliberately via the branch-protection table above. |
+| `dependency-review` | ~10 s | PR-only supply-chain gate via `actions/dependency-review-action`; fails on `moderate`-or-higher advisories across pubspec + Cargo.toml. Also enforces the NTS-72 SPDX `allow-licenses` list, kept in lockstep with `[licenses].allow` in `rust/deny.toml`. That list is a *distribution* policy — what may be linked into the published package or the `nts_rust` cdylib. Because this action also walks the workflow dependency graph (`pkg:githubactions/...`), which `cargo-deny` never sees, build-time actions are exempted individually via `allow-dependencies-licenses` rather than by widening `allow-licenses`: an action runs on an ephemeral runner and is never conveyed to a user, so its licence imposes no obligation on anything shipped. Currently one such entry, `Swatinem/rust-cache` (LGPL-3.0). The list carries one non-action entry too, `flutter_rust_bridge` — the motivation is not a licence exception, since the package is MIT and already allowed, but pub.dev publishes the field as the lowercase non-SPDX string `mit`, which the action cannot validate and so fails closed on. Note that `allow-dependencies-licenses` is package-scoped, not error-scoped: a listed package is dropped from licence evaluation entirely, so any licence a future FRB release declares would pass unexamined — re-verify by hand on each exact-pin bump. Adding to that carve-out is not a reason to touch `allow-licenses` or `deny.toml`. |
 | `hooks-syntax` | ~5 s | POSIX-shell syntax (`sh -n`), presence, and exec-bit check for the repo-tracked git hooks under `tool/hooks/` (`pre-commit`, `pre-merge-commit`, `pre-push`). The validation step enumerates the required hooks explicitly rather than globbing — git treats missing or non-executable hook files as no-ops, so a glob would silently pass on a PR that deletes, renames, or chmod-strips a hook, and the explicit list fails closed for that shape. A second drift check then loops over `tool/hooks/*`, skips `test_hooks.sh`, and fails CI if any file matching a recognised git client-hook name (per `git help hooks`) is missing from `required_hooks`, so the list cannot silently fall behind when a new hook is added to the directory. Gated on `hooks`/`ci`/`workflow_dispatch`. Required-status-check entry on `main`. |
 | `hooks-behaviour` | ~10 s | Runtime functional check that complements `hooks-syntax`. Runs `tool/hooks/test_hooks.sh`, which provisions a throwaway repo, points `core.hooksPath` at `tool/hooks/`, stages real commits and real merges, and invokes `pre-push` directly with synthetic refs/SHAs on stdin (git's documented pre-push contract: read updates from stdin, exit non-zero to abort — running an actual `git push` would also need a remote target without exercising any additional hook logic). Asserts on exit codes plus stderr content. Catches the regression shape `sh -n` cannot — a script that parses but no longer enforces policy at runtime — including the round-9 unquoted-heredoc bug where `set -u` aborted `pre-commit` before the recovery recipe printed (the recipe assertion is the explicit sentinel). Gated on `hooks`/`ci`/`workflow_dispatch`. Required-status-check entry on `main`. |
 | `android-kgp-gate` | ~2–4 min | Runs `tool/test_android_kgp_gate.sh`, which configures the `:nts` Android module standalone (no app project, no Flutter Gradle Plugin) across the `android.newDsl` / `android.builtInKotlin` matrix and asserts both the configuration outcome and whether the standalone Kotlin Gradle Plugin ended up applied. The `newDsl=true` legs cannot be covered by the example app: `:app` fails to configure under the new DSL because the Flutter Gradle Plugin resolves the legacy `BaseExtension` with a non-null assertion (flutter/flutter#180137). Configuration only (`:nts:tasks`) — compiling would need the Flutter embedding the host app provides. Installs a JDK, a Rust toolchain (the module shells out to `cargo metadata` at configuration time), and Gradle — the example app's `gradlew` and wrapper jar are gitignored, so the version is parsed out of the tracked `gradle-wrapper.properties` and installed on PATH; the harness prefers the wrapper when a local Flutter build has materialised it. Gated on `android`/`ci`/`workflow_dispatch`. Required-status-check entry on `main`. |
@@ -545,22 +549,26 @@ skipped unless the diff actually requires them. Filters and gates:
 
 | Filter | Watches | Gates |
 |--------|---------|-------|
-| `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `build`, `rust`, `rust-bridge-sync` |
+| `rust` | `rust/**`, `hook/**`, `flutter_rust_bridge.yaml`, `pubspec.yaml` | `build`, `rust`, `rust-bridge-sync`, `cargo-deny` |
 | `bindings` | `lib/src/ffi/**`, `tool/check_bindings.dart` | `build`, `rust-bridge-sync` |
-| `dart` | `lib/**`, `test/**`, `pubspec.yaml`, `analysis_options.yaml` | `build` (whole job), Dart coverage upload step |
-| `ci` | `.github/workflows/**` | `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, Dart coverage upload |
+| `dart` | `lib/**`, `test/**`, `example/**`, `pubspec.yaml`, `analysis_options.yaml`, `sonar-project.properties` | `build` (whole job), Dart coverage upload step |
+| `ci` | `.github/workflows/**` | `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, `doc-snippets`, `cargo-deny`, Dart coverage upload |
 | `hooks` | `tool/hooks/**` | `hooks-syntax`, `hooks-behaviour` |
 | `android` | `android/**`, `example/android/**`, `tool/test_android_kgp_gate.sh` | `android-kgp-gate` |
-| `docs` | `**.md` | informational only — no job consumes this output; surfaced so doc-only diffs are observable in workflow run summaries |
+| `docs` | `**.md`, `tool/check_doc_snippets.dart` | `doc-snippets` |
 
 `pubspec.yaml` lives in the `rust` filter because the
-`flutter_rust_bridge: 2.12.0` exact pin sits there; bumping it must
+`flutter_rust_bridge: 2.13.0` exact pin sits there; bumping it must
 trigger a full Rust + drift run. The `dart` filter additionally gates
 the Codecov / artifact upload step inside `build`, on top of gating
 whether the matrix runs at all — so a `rust`-only or `bindings`-only
 diff still runs the Dart matrix (to catch FFI-surface drift visible
 to Dart tests) but skips the upload (no Dart-relevant coverage delta
-to publish). `workflow_dispatch` (manual reruns from the Actions UI)
+to publish). The `docs` filter is the one gate whose job is cheaper
+than the ones it replaces: `doc-snippets` needs Flutter only to
+resolve package imports, so a doc-only diff is validated without the
+Rust toolchain + FRB codegen pipeline `rust-bridge-sync` requires.
+`workflow_dispatch` (manual reruns from the Actions UI)
 bypasses every gate so a forced run executes the full pipeline.
 
 GitHub treats skipped jobs as passing for branch-protection purposes,
@@ -595,14 +603,14 @@ Two cheaper filters run before the workflow even queues:
 
 | Change | Behaviour |
 |--------|-----------|
-| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, and `android-kgp-gate` skip via `if:`. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
+| Doc-only edit (`README.md`, `ARCHITECTURE.md`, …) | Workflow runs; `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, and `cargo-deny` skip via `if:`. `doc-snippets` runs — it is the one job a doc-only diff gates *on*. Required checks report skipped → passing. Codecov inherits the parent's report via `.codecov.yml` carryforward flags. |
 | Beads issue update (`.beads/**`) | Workflow doesn't run (`paths-ignore`). |
 | Screenshot asset swap (`screenshots/**`) | Workflow doesn't run (`paths-ignore`). |
-| Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust` and `rust-bridge-sync` skip. |
-| Rust source change (`rust/src/**`) | All three runtime jobs run. |
+| Pure Dart edit outside `lib/src/ffi/` | `build` runs; `rust`, `rust-bridge-sync`, and `cargo-deny` skip. |
+| Rust source change (`rust/src/**`) | All three runtime jobs run, plus `cargo-deny`. |
 | Hand-edit of generated bindings | `build` and `rust-bridge-sync` run; `rust-bridge-sync` will fail with a drift error (regenerate via `dart run tool/check_bindings.dart` instead). |
-| `pubspec.yaml` edit | All three runtime jobs run (FRB pin sits there). |
-| Workflow file edit | All three runtime jobs plus `hooks-syntax`, `hooks-behaviour`, and `android-kgp-gate` run (validates the change end-to-end and re-asserts the hook-enforcement layer still parses *and* still enforces, since every gate trips on `ci`). |
+| `pubspec.yaml` edit | All three runtime jobs run, plus `cargo-deny` (FRB pin sits there, in the `rust` filter). |
+| Workflow file edit | All three runtime jobs plus `hooks-syntax`, `hooks-behaviour`, `android-kgp-gate`, `doc-snippets`, and `cargo-deny` run (validates the change end-to-end and re-asserts the hook-enforcement layer still parses *and* still enforces, since every gate trips on `ci`). |
 | Hook script change (`tool/hooks/**`) | `hooks-syntax` and `hooks-behaviour` run; the runtime jobs skip. |
 | Android Gradle change (`android/**`, `example/android/**`) | `android-kgp-gate` runs; an `example/**` diff also trips the `dart` filter, so `build` runs alongside it. |
 

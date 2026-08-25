@@ -3382,17 +3382,102 @@ void main() {
       test('dispose is a no-op when the bridge was never initialized', () {
         NtsRustLib.instance.resetState();
         NtsBridge.debugReset();
-        // `NtsRustLib.dispose()` dereferences the entrypoint state
-        // unconditionally and throws here.
-        expect(NtsRustLib.dispose, throwsA(anything));
+        // The raw entrypoint no-ops here as of FRB 2.13.0; through
+        // 2.12.0 it dereferenced the state unconditionally and threw,
+        // which is what the wrapper's early return used to shield
+        // callers from. Both are asserted so a future upgrade that
+        // restores the throw is caught here rather than by a consumer.
+        expect(NtsRustLib.dispose, returnsNormally);
         expect(NtsBridge.dispose, returnsNormally);
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
       });
 
-      test('dispose over an installed mock leaves the state intact', () {
-        // Disposal is not de-initialization: the entrypoint keeps its
-        // state, so a later `ensureInitialized` must not try again.
-        expect(NtsBridge.dispose, returnsNormally);
+      test('dispose over an installed mock de-initializes the bridge', () {
         expect(NtsBridge.state, NtsBridgeState.mock);
+        // FRB clears the entrypoint state as it disposes, so disposal
+        // is de-initialization and the latch has to be dropped with it
+        // -- otherwise a later `ensureInitialized` reports success over
+        // a bridge holding nothing.
+        expect(NtsBridge.dispose, returnsNormally);
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+      });
+
+      test('dispose drops the latch, so a later ensureInitialized runs a '
+          'fresh attempt', () async {
+        // Latch a completed attempt over the installed mock.
+        await expectLater(NtsBridge.ensureInitialized(), completes);
+        NtsBridge.dispose();
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+        // Were the latch retained, this would hand back that completed
+        // future and report success over a bridge holding nothing.
+        await expectLater(
+          NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
+          throwsA(anything),
+        );
+      });
+
+      test('a raw NtsRustLib.dispose bypassing the wrapper strands no '
+          'latch', () async {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
+        // Latch a completed attempt, then de-initialize behind the
+        // wrapper's back. `NtsRustLib` is exported, so this sequence is
+        // reachable by consumers; before 2.13.0 it could not strand the
+        // latch, because disposal kept the entrypoint state.
+        await expectLater(NtsBridge.ensureInitialized(), completes);
+        NtsRustLib.dispose();
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+        // The stale latch has to be discarded rather than handed back:
+        // returning it would report success over a bridge holding
+        // nothing, which is what `dispose` drops the latch to avoid.
+        await expectLater(
+          NtsBridge.ensureInitialized(externalLibrary: _failingLibrary()),
+          throwsA(anything),
+        );
+      });
+
+      test('a raw NtsRustLib.dispose drops a latch retained to replay a '
+          'failure', () async {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        // Same staging as the replay case above: an attempt that fails
+        // with the generated API installed keeps its latch, so later
+        // callers replay the error. That is the only latch settled by
+        // the completion callback rather than by the already-installed
+        // short-circuit, so it is the one that covers the callback.
+        final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+        final binding = GeneralizedFrbRustBinding(lib);
+        final handler = BaseHandler();
+        final realApi = NtsRustLibApiImpl(
+          handler: handler,
+          wire: NtsRustLibWire.fromExternalLibrary(lib),
+          generalizedFrbRustBinding: binding,
+          portManager: PortManager(binding, handler),
+        );
+        try {
+          final attempt = NtsBridge.ensureInitialized(
+            externalLibrary: _failingLibrary(),
+          );
+          NtsRustLib.initMock(api: realApi);
+          await expectLater(attempt, throwsA(anything));
+          expect(NtsBridge.state, NtsBridgeState.native);
+          // The state the replay was protecting is what disposal
+          // removes, so the retained latch goes with it.
+          NtsRustLib.dispose();
+          expect(NtsBridge.state, NtsBridgeState.uninitialized);
+          final next = NtsBridge.ensureInitialized(
+            externalLibrary: _failingLibrary(),
+          );
+          // Identity again: a replayed failure would satisfy `throwsA`
+          // just as a fresh failing attempt does.
+          expect(next, isNot(same(attempt)));
+          await expectLater(next, throwsA(anything));
+        } finally {
+          NtsRustLib.instance.resetState();
+          NtsBridge.debugReset();
+          NtsRustLib.initMock(api: api);
+        }
       });
     });
 

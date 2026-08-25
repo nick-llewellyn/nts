@@ -75,7 +75,7 @@ aes-gcm-siv = { version = "0.12", default-features = false, features = ["alloc",
 aes-siv = { version = "0.8", default-features = false, features = ["alloc", "zeroize"] }
 # Pinned to match the `flutter_rust_bridge` Dart dependency in pubspec.yaml.
 # Bumps must be coordinated across both sides (`cargo update` + `flutter pub upgrade`).
-flutter_rust_bridge = "=2.12.0"
+flutter_rust_bridge = "=2.13.0"
 getrandom = { version = "0.4", default-features = false, features = ["std"] }
 # `release_max_level_warn` is forwarded from the crate's own `log-strip`
 # feature (see `[features]` above) so the build hook can flip it via

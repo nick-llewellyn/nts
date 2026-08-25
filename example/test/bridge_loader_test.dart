@@ -198,10 +198,9 @@ void main() {
   });
 
   group('initBridge', () {
-    // Installs for the process, and there is no de-init, so this is
-    // the only arm of the mock path an in-process test can drive: the
-    // conflict arm exits, and the fresh arm would consume the single
-    // `initMock` slot this case needs.
+    // Installed once for the group and never disposed, so this is the
+    // only arm of the mock path it drives: the conflict arm exits, and
+    // the fresh arm would consume the `initMock` slot this case needs.
     setUpAll(() => NtsRustLib.initMock(api: MockNtsApi()));
 
     test('reuses an installed mock instead of re-initialising', () async {

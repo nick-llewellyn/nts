@@ -534,11 +534,19 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: ~/.cargo/bin/flutter_rust_bridge_codegen
-          key: frb-codegen-2.12.0-${{ runner.os }}
+          key: frb-codegen-2.13.0-${{ runner.os }}
 
-      - name: Install flutter_rust_bridge_codegen (=2.12.0)
+      - name: Install flutter_rust_bridge_codegen (=2.13.0)
         if: steps.frb-cache.outputs.cache-hit != 'true'
-        run: cargo install flutter_rust_bridge_codegen --version "=2.12.0" --locked
+        # `--force` because the miss that brings us here is a *version*
+        # miss: the key above is version-scoped, but `Swatinem/rust-cache`
+        # restores `~/.cargo/bin` wholesale and can put the previous
+        # pin's binary back before this step runs. Without `--force`,
+        # cargo refuses with "binary already exists in destination" and
+        # the job fails on the first run after every pin bump.
+        run: >-
+          cargo install flutter_rust_bridge_codegen
+          --version "=2.13.0" --locked --force
 
       - name: Setup Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
@@ -659,18 +667,35 @@ jobs:
           # cross-platform.yml introduced it "newly" from the diff's
           # perspective, since this action reviews added deps only.
           #
-          # Both casings are listed deliberately. purl matching here is
-          # case-sensitive (actions/dependency-review-action#991) and
-          # the graph reports an action as it is *referenced* in the
-          # workflow -- `Swatinem/rust-cache`, capital S -- while the
-          # purl spec's default normalisation is lowercase. Upstream
-          # intends to make the comparison case-insensitive (PR #1057),
-          # which would make the lowercase entry alone sufficient; until
-          # that ships in a release we pin to, listing both is the
-          # documented workaround and costs nothing.
+          # One casing per package is enough. purl matching was
+          # case-sensitive at the time this list was written
+          # (actions/dependency-review-action#991), which mattered
+          # because the graph reports an action as it is *referenced*
+          # in the workflow -- `Swatinem/rust-cache`, capital S -- and
+          # the pub type as `PUB`, while the purl spec's default
+          # normalisation is lowercase. PR #1057 made `purlsMatch`
+          # lower-case both the type and the full name, and shipped in
+          # v4.9.0, so the pinned v5.0.0 above matches either casing.
+          # Restore the duplicates if the pin is ever moved backwards.
+          #
+          # flutter_rust_bridge is the one non-action entry, and the
+          # reason it is listed is narrower than what listing it does.
+          # The package is MIT, which `allow-licenses` above already
+          # permits; pub.dev publishes the field as the lowercase
+          # string `mit`, which is not a valid SPDX identifier, so the
+          # action cannot *validate* it and fails closed with "could
+          # not detect the validity of all licenses" rather than
+          # rejecting the licence itself. This input is the only lever
+          # for that, and it is package-scoped rather than
+          # error-scoped: a listed package is dropped from licence
+          # evaluation entirely, so *any* licence a future FRB release
+          # declares would pass here unexamined. That blind spot is the
+          # cost of the carve-out -- re-verify the licence by hand on
+          # every exact-pin bump, and drop the entry outright if
+          # pub.dev starts emitting canonical SPDX identifiers.
           allow-dependencies-licenses: >-
             pkg:githubactions/Swatinem/rust-cache,
-            pkg:githubactions/swatinem/rust-cache
+            pkg:pub/flutter_rust_bridge
 
   cargo-deny:
     # Rust supply-chain policy gate (NTS-72): runs the `bans`,

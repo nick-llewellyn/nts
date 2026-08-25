@@ -6,6 +6,89 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 9.3
+
+### Changed
+
+- Bump the exact `flutter_rust_bridge` pin from `2.12.0` to `2.13.0` in
+  both `pubspec.yaml` and `rust/Cargo.toml`, and regenerate
+  `lib/src/ffi/**` and `rust/src/frb_generated.rs` against
+  `flutter_rust_bridge_codegen 2.13.0`
+  ([#320](https://github.com/nick-llewellyn/nts/issues/320)). Apps on
+  `flutter_rust_bridge: ^2.13.0` could not resolve against the old pin.
+  The pin stays exact — the Dart codegen output and the Rust runtime
+  crate share a wire format whose stability across minors upstream does
+  not guarantee, and a mismatch corrupts memory silently rather than
+  failing loudly.
+- `NtsBridge.dispose()` is now a de-initialization. `flutter_rust_bridge`
+  2.13.0 clears the entrypoint's state before disposing it, where 2.12.0
+  disposed in place and kept it. So `NtsBridge.state` reads
+  `NtsBridgeState.uninitialized` after a disposal rather than being
+  unchanged. `NtsBridge.dispose()` now drops its own initialization
+  latch to match: without that, a later
+  `NtsBridge.ensureInitialized()` would hand back the latched completed
+  future and report success over a bridge holding nothing. Callers that
+  dispose and then re-initialize get a genuine second attempt; callers
+  that never dispose are unaffected. (The wrapper's early return for an
+  uninitialized bridge is unchanged and predates this. Under 2.12.0 it
+  shielded callers from the `StateError` the raw `NtsRustLib.dispose()`
+  threw in that case; 2.13.0 made that raw call a no-op when nothing is
+  installed, so the two now agree.) The dartdoc also now states that
+  disposing while an `ensureInitialized()` is in flight is unsupported,
+  and names the two windows in which it misbehaves.
+- The raw `NtsRustLib.dispose()` is a de-initialization too, and
+  `NtsBridge.ensureInitialized()` now recovers from one. The entrypoint
+  is exported, so a caller can clear its state without going through
+  `NtsBridge.dispose()` — harmless under 2.12.0, where disposal kept the
+  state, but under 2.13.0 it strands the wrapper's latch over a bridge
+  holding nothing. The stale latch is detected and discarded, so the
+  next call runs a fresh attempt. Disposal *during* an unawaited
+  `ensureInitialized()` remains unsupported, as it is for
+  `NtsBridge.dispose()`.
+
+### Internal
+
+- The generated bindings pick up two upstream codegen changes, both
+  cosmetic: the `Result::<_, ()>::Ok(...)` construction is now written
+  `Ok::<_, ()>(...)` with the return qualified as
+  `std::result::Result::Ok`, and `frb_generated.rs` carries a new
+  `mismatched_lifetime_syntaxes` allow. `rustContentHash` is unchanged
+  as well, but that is not evidence of wire-format stability: codegen
+  derives it from the sorted bridged function names and nothing else,
+  so it guards against a Dart/Rust function-set mismatch rather than
+  against a signature, codec, or runtime-behaviour change.
+- `native_toolchain_rust` stays at `^1.0.4`. From 1.0.5 onward it
+  requires `hooks ^2.1.0`, which pulls `record_use ^1.0.0` and therefore
+  `meta ^1.19.0`; the Flutter SDK pins `meta` exactly, and neither the
+  oldest supported Flutter (3.38.0, `meta` 1.17.0) nor current stable
+  (3.44.6, `meta` 1.18.0) satisfies that, so the bump makes version
+  solving fail outright. The pubspec records the constraint inline.
+- `rust/fuzz/Cargo.lock` moved to 2.13.0 alongside the main workspace
+  lock. The fuzz workspace is standalone and depends on `nts_rust` by
+  path, so the new exact constraint would have failed the nightly
+  `--locked` fuzz build against the stale 2.12.0 resolution.
+- Two CI gates needed adjusting for the bump. The `rust-bridge-sync`
+  codegen install now passes `--force`: its cache key is
+  version-scoped, but `Swatinem/rust-cache` restores `~/.cargo/bin`
+  wholesale and can put the previous pin's binary back first, so cargo
+  refused with "binary already exists in destination" on the first run
+  after a bump. And `dependency-review` gained a
+  `pkg:pub/flutter_rust_bridge` carve-out — the motivation is not a
+  licence exception, since the package is MIT and already allowed, but
+  pub.dev publishes the field as the lowercase non-SPDX string `mit`,
+  which the action cannot validate and so fails closed on.
+  `allow-dependencies-licenses` is package-scoped, though, so the entry
+  drops FRB from licence evaluation entirely and any licence a future
+  release declares would pass unexamined; the workflow comment records
+  that blind spot and requires a manual re-check on each pin bump. The
+  duplicate-casing entries in that list also went away: purl matching
+  became case-insensitive in v4.9.0, which the pinned v5.0.0 includes.
+- `DEVELOPMENT.md`'s CI job inventory said `ci.yml` defines eight jobs
+  when it defines eleven, and the table below it had no rows for
+  `doc-snippets` or `cargo-deny`. Count corrected, both rows written,
+  and the doc-only skip list in the lead-in prose extended to
+  `cargo-deny` and `android-kgp-gate`.
+
 ## 9.2.1
 
 ### Fixed
