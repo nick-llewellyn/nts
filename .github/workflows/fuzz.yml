@@ -17,8 +17,7 @@ name: Nightly fuzz
 #     in branch protection's required status checks on `main`. A
 #     red nightly fuzz signal is an actionable finding to triage,
 #     not a per-commit merge blocker. The required-checks list
-#     stays at the six entries from `ci.yml` plus `Detect changed
-#     paths`.
+#     stays at the seven entries from `ci.yml`.
 #
 # Workflow runs the five fuzz targets under `rust/fuzz/`
 # (`parse_extensions`, `parse_message`, `validate_response`,
