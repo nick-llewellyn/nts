@@ -25,9 +25,10 @@
 ///    concurrently: after the first call it completes without
 ///    re-initializing. The underlying `NtsRustLib.init()` rejects
 ///    repeat calls by contrast — it throws a `StateError` whenever the
-///    entrypoint already holds state, which it does until
-///    `NtsBridge.dispose()` clears it — so prefer the wrapper anywhere
-///    more than one code path can reach the bootstrap.
+///    entrypoint already holds state, which it does until either
+///    `NtsBridge.dispose()` or the raw `NtsRustLib.dispose()` clears
+///    it — so prefer the wrapper anywhere more than one code path can
+///    reach the bootstrap.
 ///
 /// The hand-written wrapper in `src/api/nts.dart` is the package's
 /// stable public contract: the underlying Rust-side bindings live in
@@ -46,8 +47,10 @@ library;
 // directly -- supplying their own `externalLibrary:`, or relaxing
 // `forceSameCodegenVersion:`. `NtsRustLib.init()` rejects a call made
 // while the entrypoint holds state -- it throws a `StateError`, and
-// only `NtsBridge.dispose()` clears that state again -- so ordinary
-// consumers should use `NtsBridge.ensureInitialized()` below instead. Member dartdocs on the public API state that requirement as
+// only a disposal clears that state again, whether through
+// `NtsBridge.dispose()` or the raw `NtsRustLib.dispose()` -- so
+// ordinary consumers should use `NtsBridge.ensureInitialized()` below
+// instead. Member dartdocs on the public API state that requirement as
 // `NtsBridge.ensureInitialized()` accordingly; where they name
 // `NtsRustLib.init()` it is as the underlying step, not as the
 // recommended call.

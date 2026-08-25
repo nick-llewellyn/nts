@@ -3382,6 +3382,12 @@ void main() {
       test('dispose is a no-op when the bridge was never initialized', () {
         NtsRustLib.instance.resetState();
         NtsBridge.debugReset();
+        // The raw entrypoint no-ops here as of FRB 2.13.0; through
+        // 2.12.0 it dereferenced the state unconditionally and threw,
+        // which is what the wrapper's early return used to shield
+        // callers from. Both are asserted so a future upgrade that
+        // restores the throw is caught here rather than by a consumer.
+        expect(NtsRustLib.dispose, returnsNormally);
         expect(NtsBridge.dispose, returnsNormally);
         expect(NtsBridge.state, NtsBridgeState.uninitialized);
       });

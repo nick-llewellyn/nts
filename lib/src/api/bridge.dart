@@ -167,6 +167,8 @@ abstract final class NtsBridge {
   /// then reports success over it: the entrypoint records no failure,
   /// and the attempt was never latched here. A caller that drives
   /// `init()` directly owns that error and must keep it — awaiting this
+  /// method afterwards will not resurface it.
+  ///
   /// A raw `NtsRustLib.dispose()` is supported once whatever attempt
   /// preceded it has been awaited. It de-initializes the entrypoint
   /// without going through [dispose], so the latch this method keeps
@@ -257,9 +259,14 @@ abstract final class NtsBridge {
   /// disposed in place and kept its state, so [state] was unchanged
   /// afterwards and a later [ensureInitialized] would not
   /// re-initialize. The early return for an uninitialized bridge is
-  /// not part of that change: it has always been here, shielding
-  /// callers from the `StateError` the raw `NtsRustLib.dispose()`
-  /// throws in that case, and it still does.
+  /// not part of that change: it has always been here, and under
+  /// 2.12.0 it shielded callers from the `StateError` the raw
+  /// `NtsRustLib.dispose()` threw in that case. 2.13.0 made that raw
+  /// call a no-op when nothing is installed, so the early return no
+  /// longer shields anything; it is kept because the do-nothing
+  /// contract above is the documented one, and because returning
+  /// without clearing the latch is what makes the first of the two
+  /// in-flight windows below recoverable rather than silent.
   ///
   /// Await any outstanding [ensureInitialized] before calling this.
   /// Disposing while an attempt is in flight is unsupported, and the

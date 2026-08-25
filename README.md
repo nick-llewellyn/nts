@@ -199,9 +199,10 @@ what your host code needs to do.
    The underlying `NtsRustLib.init()` is exported too, for callers
    that need to drive the generated entrypoint directly (supplying
    their own `api:`, for instance). It rejects a call made while the
-   entrypoint holds state, throwing a `StateError`; only
-   `NtsBridge.dispose()` clears that state, so outside a deliberate
-   teardown the first call is the only one that succeeds. Prefer
+   entrypoint holds state, throwing a `StateError`; either
+   `NtsBridge.dispose()` or the raw `NtsRustLib.dispose()` clears that
+   state, so outside a deliberate teardown the first call is the only
+   one that succeeds. Prefer
    `NtsBridge.ensureInitialized()` unless you specifically need the
    raw entrypoint.
 
@@ -549,8 +550,9 @@ Note that `externalLibrary` configures the *first* initialization
 only. A later `ensureInitialized()` call passing a different library
 *ignores* it, because the bridge is already initialized — so the call
 site that owns the trusted path must be the one that runs first.
-`NtsBridge.dispose()` does clear that state, and a call after it is a
-fresh first initialization, but disposal is a teardown rather than a
+A disposal — `NtsBridge.dispose()`, or the raw `NtsRustLib.dispose()`
+— does clear that state, and a call after it is a fresh first
+initialization, but disposal is a teardown rather than a
 reconfiguration hook: it invalidates everything the disposed bridge
 was serving.
 
@@ -590,7 +592,7 @@ a second call site guarding on it maps its library anyway.
 | `NtsBridge.ensureInitialized({externalLibrary, handler, forceSameCodegenVersion})` | **Recommended bootstrap.** Load the native dylib and wire the FRB v2 dispatch table on the calling isolate, or complete immediately when that is already done. Await before any other call, on every platform; safe to call repeatedly and concurrently, so it can live in a shared bootstrap path. Arguments configure the first initialization only. (Android-side `rustls-platform-verifier` JNI bootstrap is handled separately by the bundled `NtsPlugin` before `main()`; see "Initialization has two layers" above.) |
 | `NtsBridge.state` | Which of `NtsBridgeState.uninitialized` / `.mock` / `.native` the bridge holds on this isolate. The split is *structural*, on the installed API's type, not by initialization route or by who supplied it: `.native` means a generated FFI dispatch implementation (a `BaseApiImpl`) is installed, so calls cross into the Rust core — including when a caller passed that generated implementation to `NtsRustLib.initMock()`. `.mock` means the installed API is not one, in practice a hand-written double. |
 | `NtsBridge.dispose()` | Release the bridge's Dart-side resources, or do nothing when it was never initialized. Optional — the bridge is torn down with the process. It *is* a de-init: `NtsBridge.state` reads `.uninitialized` afterwards, and a later `NtsBridge.ensureInitialized()` runs a fresh attempt. |
-| `NtsRustLib.init()` | Raw generated entrypoint, for callers that must supply their own `api:` or otherwise drive it directly. Rejects a call made while the entrypoint holds state, throwing a `StateError`; `NtsBridge.dispose()` clears that state, so a call after disposal succeeds. Prefer `NtsBridge.ensureInitialized()`. |
+| `NtsRustLib.init()` | Raw generated entrypoint, for callers that must supply their own `api:` or otherwise drive it directly. Rejects a call made while the entrypoint holds state, throwing a `StateError`; either `NtsBridge.dispose()` or the raw `NtsRustLib.dispose()` clears that state, so a call after disposal succeeds. Prefer `NtsBridge.ensureInitialized()`. |
 | `ntsGetTime({required spec, verificationTime})` | **Recommended entry point.** One-call convenience: fresh handshake + serial burst of up to `min(8, freshCookies)` queries, lowest-delay selection (the RFC 5905 peer delay when it falls inside the selection window `(0, roundTripMicros]`, which healthy samples normally do, else the measured round trip), `delay / 2` compensation. Returns `NtsSyncedTime`. Succeeds when at least one burst sample lands. Tuning is fixed and internal: an 8-sample burst and one 8-second **total** budget shared across the handshake and every query; deployments needing different numbers compose `ntsWarmCookies` + `ntsQuery` directly. |
 | `ntsQuery({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: one authenticated NTPv4 exchange. Returns `NtsTimeSample`. `verificationTime` (optional `DateTime`, interpreted as UTC, not before the epoch) pins TLS certificate validity-window checks to a fixed instant instead of the system clock — useful for cold-start clock-skew rescue. |
 | `ntsWarmCookies({required spec, timeout = kDefaultTimeout, dnsConcurrencyCap = kDefaultDnsConcurrencyCap, bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap, verificationTime})` | Advanced primitive: force a fresh NTS-KE handshake. Returns `NtsWarmCookiesOutcome`. `verificationTime` carries the same clock-skew-rescue semantics as on `ntsQuery`. |

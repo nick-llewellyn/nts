@@ -30,18 +30,20 @@ tarball.
   future and report success over a bridge holding nothing. Callers that
   dispose and then re-initialize get a genuine second attempt; callers
   that never dispose are unaffected. (The wrapper's early return for an
-  uninitialized bridge is unchanged and predates this: it has always
+  uninitialized bridge is unchanged and predates this. Under 2.12.0 it
   shielded callers from the `StateError` the raw `NtsRustLib.dispose()`
-  throws in that case.) The dartdoc also now states that disposing while
-  an `ensureInitialized()` is in flight is unsupported, and names the
-  two windows in which it misbehaves.
-- `NtsBridge.ensureInitialized()` now recovers from a raw
-  `NtsRustLib.dispose()`. The entrypoint is exported, so a caller can
-  de-initialize without going through `NtsBridge.dispose()`, which under
-  2.12.0 was harmless — disposal kept the state — but now strands the
-  latch over a bridge holding nothing. The stale latch is detected and
-  discarded, so the next call runs a fresh attempt. Disposal *during* an
-  unawaited `ensureInitialized()` remains unsupported, as it is for
+  threw in that case; 2.13.0 made that raw call a no-op when nothing is
+  installed, so the two now agree.) The dartdoc also now states that
+  disposing while an `ensureInitialized()` is in flight is unsupported,
+  and names the two windows in which it misbehaves.
+- The raw `NtsRustLib.dispose()` is a de-initialization too, and
+  `NtsBridge.ensureInitialized()` now recovers from one. The entrypoint
+  is exported, so a caller can clear its state without going through
+  `NtsBridge.dispose()` — harmless under 2.12.0, where disposal kept the
+  state, but under 2.13.0 it strands the wrapper's latch over a bridge
+  holding nothing. The stale latch is detected and discarded, so the
+  next call runs a fresh attempt. Disposal *during* an unawaited
+  `ensureInitialized()` remains unsupported, as it is for
   `NtsBridge.dispose()`.
 
 ### Internal
