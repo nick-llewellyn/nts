@@ -44,6 +44,16 @@ tarball.
   oldest supported Flutter (3.38.0, `meta` 1.17.0) nor current stable
   (3.44.6, `meta` 1.18.0) satisfies that, so the bump makes version
   solving fail outright. The pubspec records the constraint inline.
+- Two CI gates needed adjusting for the bump. The `rust-bridge-sync`
+  codegen install now passes `--force`: its cache key is
+  version-scoped, but `Swatinem/rust-cache` restores `~/.cargo/bin`
+  wholesale and can put the previous pin's binary back first, so cargo
+  refused with "binary already exists in destination" on the first run
+  after a bump. And `dependency-review` gained a
+  `pkg:pub/flutter_rust_bridge` carve-out — not a licence exception,
+  since the package is MIT and already allowed, but pub.dev publishes
+  the field as the lowercase non-SPDX string `mit`, which the action
+  cannot validate and so fails closed on.
 - `DEVELOPMENT.md`'s CI job inventory said `ci.yml` defines eight jobs
   when it defines eleven, and the table below it had no rows for
   `doc-snippets` or `cargo-deny`. Count corrected, both rows written,

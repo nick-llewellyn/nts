@@ -538,7 +538,15 @@ jobs:
 
       - name: Install flutter_rust_bridge_codegen (=2.13.0)
         if: steps.frb-cache.outputs.cache-hit != 'true'
-        run: cargo install flutter_rust_bridge_codegen --version "=2.13.0" --locked
+        # `--force` because the miss that brings us here is a *version*
+        # miss: the key above is version-scoped, but `Swatinem/rust-cache`
+        # restores `~/.cargo/bin` wholesale and can put the previous
+        # pin's binary back before this step runs. Without `--force`,
+        # cargo refuses with "binary already exists in destination" and
+        # the job fails on the first run after every pin bump.
+        run: >-
+          cargo install flutter_rust_bridge_codegen
+          --version "=2.13.0" --locked --force
 
       - name: Setup Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
@@ -668,9 +676,26 @@ jobs:
           # which would make the lowercase entry alone sufficient; until
           # that ships in a release we pin to, listing both is the
           # documented workaround and costs nothing.
+          #
+          # flutter_rust_bridge is the one non-action entry, and it is
+          # not a licence-policy exception: the package is MIT, which
+          # `allow-licenses` above already permits. pub.dev publishes
+          # the field as the lowercase string `mit`, which is not a
+          # valid SPDX identifier, so the action cannot *validate* it
+          # and fails closed with "could not detect the validity of all
+          # licenses" rather than rejecting the licence itself. The
+          # carve-out suppresses that metadata-normalisation failure
+          # only. It is scoped to this one package deliberately: a
+          # blanket relaxation would also mask a genuinely
+          # unrecognisable licence on some future dependency. Revisit if
+          # pub.dev starts emitting canonical SPDX identifiers. Both
+          # casings are listed for the same case-sensitivity reason as
+          # above, since the graph reports the type as `PUB`.
           allow-dependencies-licenses: >-
             pkg:githubactions/Swatinem/rust-cache,
-            pkg:githubactions/swatinem/rust-cache
+            pkg:githubactions/swatinem/rust-cache,
+            pkg:pub/flutter_rust_bridge,
+            pkg:PUB/flutter_rust_bridge
 
   cargo-deny:
     # Rust supply-chain policy gate (NTS-72): runs the `bans`,
