@@ -667,35 +667,35 @@ jobs:
           # cross-platform.yml introduced it "newly" from the diff's
           # perspective, since this action reviews added deps only.
           #
-          # Both casings are listed deliberately. purl matching here is
-          # case-sensitive (actions/dependency-review-action#991) and
-          # the graph reports an action as it is *referenced* in the
-          # workflow -- `Swatinem/rust-cache`, capital S -- while the
-          # purl spec's default normalisation is lowercase. Upstream
-          # intends to make the comparison case-insensitive (PR #1057),
-          # which would make the lowercase entry alone sufficient; until
-          # that ships in a release we pin to, listing both is the
-          # documented workaround and costs nothing.
+          # One casing per package is enough. purl matching was
+          # case-sensitive at the time this list was written
+          # (actions/dependency-review-action#991), which mattered
+          # because the graph reports an action as it is *referenced*
+          # in the workflow -- `Swatinem/rust-cache`, capital S -- and
+          # the pub type as `PUB`, while the purl spec's default
+          # normalisation is lowercase. PR #1057 made `purlsMatch`
+          # lower-case both the type and the full name, and shipped in
+          # v4.9.0, so the pinned v5.0.0 above matches either casing.
+          # Restore the duplicates if the pin is ever moved backwards.
           #
-          # flutter_rust_bridge is the one non-action entry, and it is
-          # not a licence-policy exception: the package is MIT, which
-          # `allow-licenses` above already permits. pub.dev publishes
-          # the field as the lowercase string `mit`, which is not a
-          # valid SPDX identifier, so the action cannot *validate* it
-          # and fails closed with "could not detect the validity of all
-          # licenses" rather than rejecting the licence itself. The
-          # carve-out suppresses that metadata-normalisation failure
-          # only. It is scoped to this one package deliberately: a
-          # blanket relaxation would also mask a genuinely
-          # unrecognisable licence on some future dependency. Revisit if
-          # pub.dev starts emitting canonical SPDX identifiers. Both
-          # casings are listed for the same case-sensitivity reason as
-          # above, since the graph reports the type as `PUB`.
+          # flutter_rust_bridge is the one non-action entry, and the
+          # reason it is listed is narrower than what listing it does.
+          # The package is MIT, which `allow-licenses` above already
+          # permits; pub.dev publishes the field as the lowercase
+          # string `mit`, which is not a valid SPDX identifier, so the
+          # action cannot *validate* it and fails closed with "could
+          # not detect the validity of all licenses" rather than
+          # rejecting the licence itself. This input is the only lever
+          # for that, and it is package-scoped rather than
+          # error-scoped: a listed package is dropped from licence
+          # evaluation entirely, so *any* licence a future FRB release
+          # declares would pass here unexamined. That blind spot is the
+          # cost of the carve-out -- re-verify the licence by hand on
+          # every exact-pin bump, and drop the entry outright if
+          # pub.dev starts emitting canonical SPDX identifiers.
           allow-dependencies-licenses: >-
             pkg:githubactions/Swatinem/rust-cache,
-            pkg:githubactions/swatinem/rust-cache,
-            pkg:pub/flutter_rust_bridge,
-            pkg:PUB/flutter_rust_bridge
+            pkg:pub/flutter_rust_bridge
 
   cargo-deny:
     # Rust supply-chain policy gate (NTS-72): runs the `bans`,

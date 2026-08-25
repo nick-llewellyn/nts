@@ -48,11 +48,15 @@ tarball.
 
 ### Internal
 
-- The generated bindings pick up two upstream codegen changes, neither
-  of which moves the wire format (`rustContentHash` is unchanged): the
-  `Result::<_, ()>::Ok(...)` construction is now written `Ok::<_, ()>(...)`
-  with the return qualified as `std::result::Result::Ok`, and
-  `frb_generated.rs` carries a new `mismatched_lifetime_syntaxes` allow.
+- The generated bindings pick up two upstream codegen changes, both
+  cosmetic: the `Result::<_, ()>::Ok(...)` construction is now written
+  `Ok::<_, ()>(...)` with the return qualified as
+  `std::result::Result::Ok`, and `frb_generated.rs` carries a new
+  `mismatched_lifetime_syntaxes` allow. `rustContentHash` is unchanged
+  as well, but that is not evidence of wire-format stability: codegen
+  derives it from the sorted bridged function names and nothing else,
+  so it guards against a Dart/Rust function-set mismatch rather than
+  against a signature, codec, or runtime-behaviour change.
 - `native_toolchain_rust` stays at `^1.0.4`. From 1.0.5 onward it
   requires `hooks ^2.1.0`, which pulls `record_use ^1.0.0` and therefore
   `meta ^1.19.0`; the Flutter SDK pins `meta` exactly, and neither the
@@ -69,10 +73,16 @@ tarball.
   wholesale and can put the previous pin's binary back first, so cargo
   refused with "binary already exists in destination" on the first run
   after a bump. And `dependency-review` gained a
-  `pkg:pub/flutter_rust_bridge` carve-out — not a licence exception,
-  since the package is MIT and already allowed, but pub.dev publishes
-  the field as the lowercase non-SPDX string `mit`, which the action
-  cannot validate and so fails closed on.
+  `pkg:pub/flutter_rust_bridge` carve-out — the motivation is not a
+  licence exception, since the package is MIT and already allowed, but
+  pub.dev publishes the field as the lowercase non-SPDX string `mit`,
+  which the action cannot validate and so fails closed on.
+  `allow-dependencies-licenses` is package-scoped, though, so the entry
+  drops FRB from licence evaluation entirely and any licence a future
+  release declares would pass unexamined; the workflow comment records
+  that blind spot and requires a manual re-check on each pin bump. The
+  duplicate-casing entries in that list also went away: purl matching
+  became case-insensitive in v4.9.0, which the pinned v5.0.0 includes.
 - `DEVELOPMENT.md`'s CI job inventory said `ci.yml` defines eight jobs
   when it defines eleven, and the table below it had no rows for
   `doc-snippets` or `cargo-deny`. Count corrected, both rows written,
