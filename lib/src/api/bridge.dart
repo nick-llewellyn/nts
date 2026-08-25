@@ -1,9 +1,11 @@
 // Hand-written safe wrapper around the FRB entrypoint's lifecycle.
 //
-// `NtsRustLib.init()` is single-shot: `BaseEntrypoint.initImpl` throws a
-// `StateError` when the entrypoint already holds state, and there is no
-// de-init. Worse, it assigns that state *after* awaiting the external
-// library load, so the guard a consumer would write by hand --
+// `NtsRustLib.init()` is rejected while the entrypoint holds state:
+// `BaseEntrypoint.initImpl` throws a `StateError`. That state is not
+// permanent -- disposal clears it, so a later `init()` succeeds -- but
+// nothing short of disposal does. Worse, `initImpl` assigns the state
+// *after* awaiting the external library load, so the guard a consumer
+// would write by hand --
 // `if (!NtsRustLib.instance.initialized) await NtsRustLib.init()` --
 // races: two concurrent callers both observe `false`, both enter, and
 // the second throws once the first's load resolves. It also has to read
@@ -46,9 +48,11 @@ enum NtsBridgeState {
 /// Lifecycle entry points for the Rust bridge.
 ///
 /// Prefer [ensureInitialized] over `NtsRustLib.init()`: the latter
-/// throws a [StateError] on every call after the first, so it cannot be
-/// called from a shared bootstrap path reached by more than one code
-/// path.
+/// throws a [StateError] on any call made while the entrypoint holds
+/// state, so it cannot be called from a shared bootstrap path reached
+/// by more than one code path. Only [dispose] clears that state, so
+/// outside a deliberate teardown the rejection stands for the life of
+/// the isolate.
 ///
 /// All state here is per-isolate, like the underlying entrypoint and
 /// like `MonotonicClock.instance`: each isolate must initialize the

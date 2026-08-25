@@ -67,9 +67,11 @@ enum BridgeDisposition {
 /// defect with the reporting inverted —
 /// `NtsBridge.ensureInitialized()` completes for any installed state,
 /// so it cannot catch this itself. Both are caller errors, reported
-/// rather than silently downgraded, since the bridge has no de-init. A
-/// bare "is it initialised" bool cannot tell the two apart, hence
-/// [state].
+/// rather than silently swapped: `NtsBridge.dispose()` would make the
+/// swap mechanically possible, but disposing a bridge this function
+/// did not install pulls it out from under whoever did, so the
+/// conflict is theirs to resolve. A bare "is it initialised" bool
+/// cannot tell the two apart, hence [state].
 ///
 /// Split out from [initBridge] because the conflict arm there ends in
 /// `exit`, which no in-process test can observe.
