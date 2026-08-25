@@ -3436,6 +3436,49 @@ void main() {
           throwsA(anything),
         );
       });
+
+      test('a raw NtsRustLib.dispose drops a latch retained to replay a '
+          'failure', () async {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        // Same staging as the replay case above: an attempt that fails
+        // with the generated API installed keeps its latch, so later
+        // callers replay the error. That is the only latch settled by
+        // the completion callback rather than by the already-installed
+        // short-circuit, so it is the one that covers the callback.
+        final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+        final binding = GeneralizedFrbRustBinding(lib);
+        final handler = BaseHandler();
+        final realApi = NtsRustLibApiImpl(
+          handler: handler,
+          wire: NtsRustLibWire.fromExternalLibrary(lib),
+          generalizedFrbRustBinding: binding,
+          portManager: PortManager(binding, handler),
+        );
+        try {
+          final attempt = NtsBridge.ensureInitialized(
+            externalLibrary: _failingLibrary(),
+          );
+          NtsRustLib.initMock(api: realApi);
+          await expectLater(attempt, throwsA(anything));
+          expect(NtsBridge.state, NtsBridgeState.native);
+          // The state the replay was protecting is what disposal
+          // removes, so the retained latch goes with it.
+          NtsRustLib.dispose();
+          expect(NtsBridge.state, NtsBridgeState.uninitialized);
+          final next = NtsBridge.ensureInitialized(
+            externalLibrary: _failingLibrary(),
+          );
+          // Identity again: a replayed failure would satisfy `throwsA`
+          // just as a fresh failing attempt does.
+          expect(next, isNot(same(attempt)));
+          await expectLater(next, throwsA(anything));
+        } finally {
+          NtsRustLib.instance.resetState();
+          NtsBridge.debugReset();
+          NtsRustLib.initMock(api: api);
+        }
+      });
     });
 
     test('NtsSyncedTime toString carries the diagnostic fields', () {
