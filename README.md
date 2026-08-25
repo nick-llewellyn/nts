@@ -191,10 +191,11 @@ what your host code needs to do.
    plugin runs on the Android platform thread before the Dart isolate
    exists. Calling `ntsGetTime`, `ntsQuery`, or `ntsWarmCookies` before
    it resolves raises an error. In a Flutter app, do it right after
-   `WidgetsFlutterBinding.ensureInitialized()` in `main()`; repeated
-   and concurrent calls converge on the first one rather than
-   re-initializing, so it is safe to call from a shared bootstrap
-   path.
+   `WidgetsFlutterBinding.ensureInitialized()` in `main()`; while the
+   bridge stays initialized, repeated and concurrent calls converge on
+   the first one rather than re-initializing, so it is safe to call
+   from a shared bootstrap path. A call after a disposal starts a
+   fresh attempt instead.
 
    The underlying `NtsRustLib.init()` is exported too, for callers
    that need to drive the generated entrypoint directly (supplying

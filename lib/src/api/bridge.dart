@@ -93,8 +93,11 @@ abstract final class NtsBridge {
   ///
   /// Safe to call any number of times, from any number of code paths,
   /// concurrently. Concurrent callers await the same attempt rather
-  /// than racing into a second `NtsRustLib.init()`; later callers
-  /// return without re-initializing. An initialization performed
+  /// than racing into a second `NtsRustLib.init()`; while the
+  /// entrypoint stays initialized, later callers return without
+  /// re-initializing. A disposal ends that — [dispose] and the raw
+  /// `NtsRustLib.dispose()` both leave the next call to run a fresh
+  /// attempt, as the notes below describe. An initialization performed
   /// directly (`NtsRustLib.init()`, or `NtsRustLib.initMock()` in
   /// tests) is recognised, so this completes without throwing.
   ///
@@ -125,7 +128,9 @@ abstract final class NtsBridge {
   /// attempt. If the entrypoint is left holding the generated API — the
   /// Rust-side initializers threw after FRB installed its state — the
   /// same error is replayed to every later caller, because
-  /// `NtsRustLib.init()` can never succeed again from that point.
+  /// `NtsRustLib.init()` cannot succeed again while that state stays
+  /// installed. Only a disposal clears it, and the note on disposal
+  /// below drops the retained latch with it.
   /// Otherwise a later call retries: either nothing was installed (a
   /// codegen version mismatch, a library that failed to load), or a
   /// concurrent `NtsRustLib.initMock()` installed a hand-written double
@@ -164,11 +169,11 @@ abstract final class NtsBridge {
   ///
   /// One case survives even a completed direct call. A
   /// `NtsRustLib.init()` that threw from its Rust initializers leaves
-  /// the entrypoint installed and permanently unusable, and this method
-  /// then reports success over it: the entrypoint records no failure,
-  /// and the attempt was never latched here. A caller that drives
-  /// `init()` directly owns that error and must keep it — awaiting this
-  /// method afterwards will not resurface it.
+  /// the entrypoint installed and unusable until something disposes it,
+  /// and this method then reports success over it: the entrypoint
+  /// records no failure, and the attempt was never latched here. A
+  /// caller that drives `init()` directly owns that error and must keep
+  /// it — awaiting this method afterwards will not resurface it.
   ///
   /// A raw `NtsRustLib.dispose()` is supported once whatever attempt
   /// preceded it has been awaited. It de-initializes the entrypoint

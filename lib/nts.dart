@@ -22,13 +22,15 @@
 ///    Mandatory on every platform; the plugin layer cannot perform
 ///    this step because it runs on the Android platform thread before
 ///    the Dart isolate exists. Safe to call repeatedly and
-///    concurrently: after the first call it completes without
-///    re-initializing. The underlying `NtsRustLib.init()` rejects
-///    repeat calls by contrast — it throws a `StateError` whenever the
-///    entrypoint already holds state, which it does until either
-///    `NtsBridge.dispose()` or the raw `NtsRustLib.dispose()` clears
-///    it — so prefer the wrapper anywhere more than one code path can
-///    reach the bootstrap.
+///    concurrently: while the entrypoint stays initialized, every call
+///    after the first completes without re-initializing. A call made
+///    after a disposal starts a fresh attempt instead, since the state
+///    it would otherwise report over is gone. The underlying
+///    `NtsRustLib.init()` rejects repeat calls by contrast — it throws
+///    a `StateError` whenever the entrypoint already holds state, which
+///    it does until either `NtsBridge.dispose()` or the raw
+///    `NtsRustLib.dispose()` clears it — so prefer the wrapper anywhere
+///    more than one code path can reach the bootstrap.
 ///
 /// The hand-written wrapper in `src/api/nts.dart` is the package's
 /// stable public contract: the underlying Rust-side bindings live in
