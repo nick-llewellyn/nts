@@ -113,6 +113,14 @@ tarball.
   `doc-snippets` or `cargo-deny`. Count corrected, both rows written,
   and the doc-only skip list in the lead-in prose extended to
   `cargo-deny` and `android-kgp-gate`.
+- Bump the pinned Rust toolchain in `rust/rust-toolchain.toml` from
+  `1.97.1` to `1.98.0` (released 2026-08-20). The FRB bindings are
+  in sync under the new pin with no regeneration needed, and the MSRV
+  in `rust/Cargo.toml` is unchanged. `clippy::from_iter_instead_of_collect`
+  was dropped from the lint table in `rust/Cargo.toml` — 1.98.0 removes
+  the lint upstream, and leaving the key emits a
+  `renamed_and_removed_lints` warning that `-D warnings` cannot
+  suppress. `format_collect` already covers the remaining ground.
 
 ## 9.2.1
 
