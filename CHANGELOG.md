@@ -6,7 +6,7 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 9.3
+## 9.3.0
 
 ### Changed
 
@@ -96,6 +96,17 @@ tarball.
   the lint upstream, and leaving the key emits a
   `renamed_and_removed_lints` warning that `-D warnings` cannot
   suppress. `format_collect` already covers the remaining ground.
+
+### Documentation
+
+- Add a "Version compatibility" section to `README.md` recording why
+  the `flutter_rust_bridge` dependency is an exact pin — the generated
+  Dart and the Rust runtime crate share a wire format that upstream
+  does not guarantee across minors, and a mismatch corrupts memory
+  silently rather than failing loudly — plus the version mapping
+  (`nts` 9.3.x requires `2.13.0`; 9.2.x and earlier require `2.12.0`)
+  and the guidance to match the constraint rather than reach for
+  `dependency_overrides`.
 
 ## 9.2.1
 
