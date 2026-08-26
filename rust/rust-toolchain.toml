@@ -16,8 +16,8 @@
 # 1.85+ required so transitive deps pulling in edition2024 (e.g.
 # `security-framework 3.7.0`) compile cleanly. Tracking developer-host
 # rustc 1.98.0 keeps stable compatible with our `Cargo.lock`; it carries
-# forward the LLVM miscompilation fix (rust-lang/rust#159035) present
-# since at least 1.87.
+# forward the fix for an LLVM miscompilation (rust-lang/rust#159035)
+# that was present since at least 1.87 and shipped fixed in 1.97.1.
 channel = "1.98.0"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
