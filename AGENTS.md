@@ -999,12 +999,14 @@ artefact, not work-in-progress.
    - file an issue recording the deviation so the precedent is
      visible at the next release rather than inferred from history.
 
-   Precedent: `9.3.0` shipped the `flutter_rust_bridge` 2.13.0
-   `dispose()` semantics change as a minor because the same release
-   fixed a resolution failure (#320) for apps on
-   `flutter_rust_bridge: ^2.13.0`; cutting `10.0.0` would have left
-   every consumer on a `^9` constraint blocked by the bug the release
-   existed to fix.
+   Founding case (in flight at the time of writing; the latest
+   published release is `9.2.1`): `9.3.0` is being cut as a minor
+   despite the `flutter_rust_bridge` 2.13.0 `dispose()` semantics
+   change, because the same release fixes a resolution failure (#320)
+   for apps on `flutter_rust_bridge: ^2.13.0`; cutting `10.0.0` would
+   have left every consumer on a `^9` constraint blocked by the bug
+   the release existed to fix. Once it publishes, this is the
+   precedent to reason from.
 
 ### Rationale
 
