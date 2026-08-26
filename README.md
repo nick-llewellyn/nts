@@ -51,7 +51,7 @@ the underlying RFC 8915 layering and cryptographic specifics.
   Assets build hook the first time you run `flutter run` /
   `flutter build`. The hook reads `rust/rust-toolchain.toml` via
   rustup, which automatically installs the pinned toolchain
-  (currently Rust 1.97.1) and the cross-compile target for the
+  (currently Rust 1.98.0) and the cross-compile target for the
   platform being built. No manual `cargo` invocation, dylib
   copying, or build configuration is needed — but without rustup
   installed the build fails at the hook step.
