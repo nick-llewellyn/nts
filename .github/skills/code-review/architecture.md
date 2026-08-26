@@ -190,6 +190,19 @@ justifies it as a dependency-resolution constraint.
 The two versions are independent — a Dart-only release leaves the crate
 version alone.
 
+On a **release** PR, check the bump size against what changed. A
+runtime behaviour change to a public Dart API — an existing caller
+still compiles and still resolves, but gets a different return value,
+post-condition, error, or lifecycle outcome — requires a **major**
+bump. That an upstream dependency forced the change does not make it
+compatible, and a narrow affected surface does not exempt it. A minor
+bump carrying such a change is a finding unless the PR description
+states the deviation and its reasoning, per rule 6 of the policy.
+
+A tightened dependency constraint that only breaks resolution is
+**not** in scope here — it fails at solve time, before any code runs,
+and is ordinary for a minor.
+
 ### CHANGELOG
 
 Entries go under the **next intended release header** (e.g. `## 9.1`),

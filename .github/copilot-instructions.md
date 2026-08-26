@@ -54,6 +54,14 @@ and `docs` included, not only `feat`, `fix`, and `refactor`. Bumps land
 in a dedicated release commit. The Dart package and the Rust crate
 version independently.
 
+A runtime behaviour change to a public Dart API — existing callers
+still compile and resolve, but observe a different return value,
+post-condition, error, or lifecycle outcome — requires a **major**
+bump, even when an upstream dependency forced it and even when the
+affected surface is narrow. A tightened dependency constraint that
+only breaks resolution is not in scope; it fails loudly at solve time
+and is ordinary for a minor.
+
 CHANGELOG entries go under the next intended release header (e.g.
 `## 9.1`), never under `## Unreleased`.
 
