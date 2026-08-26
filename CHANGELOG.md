@@ -6,7 +6,7 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 9.3
+## 9.3.0
 
 ### Changed
 
@@ -99,6 +99,17 @@ tarball.
   `map(format!(..)).collect::<String>()`, not the explicit
   `FromIterator::from_iter(..)` calls the removed lint checked. The
   crate has no such call sites, so the removal costs no coverage here.
+
+### Documentation
+
+- Add a "Version compatibility" section to `README.md` recording why
+  the `flutter_rust_bridge` dependency is an exact pin — the generated
+  Dart and the Rust runtime crate share a wire format that upstream
+  does not guarantee across minors, and a mismatch corrupts memory
+  silently rather than failing loudly — plus the version mapping
+  (`nts` 9.3.x requires `2.13.0`; 9.2.x and earlier require `2.12.0`)
+  and the guidance to match the constraint rather than reach for
+  `dependency_overrides`.
 
 ## 9.2.1
 
