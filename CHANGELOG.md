@@ -21,9 +21,10 @@ tarball.
   issue. A tightened dependency constraint that only breaks resolution
   is excluded — it fails at solve time before any code runs. The
   `9.3.0` `dispose()` change is named in the policy as the founding
-  precedent for the deviation, since cutting `10.0.0` there would have
-  stranded every consumer on a `^9` constraint behind the resolution
-  bug that release fixed. The reviewer-facing mirrors in
+  case for the deviation — precedent once that release publishes — since
+  cutting `10.0.0` there would strand every consumer on a `^9`
+  constraint behind the resolution bug that release exists to fix. The
+  reviewer-facing mirrors in
   `.github/copilot-instructions.md` and
   `.github/skills/code-review/architecture.md` carry the check too, so
   it applies on release PRs rather than living only in the policy
