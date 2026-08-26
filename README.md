@@ -696,6 +696,31 @@ All surfaces share the same Rust-backed bridge and the same
 formatting helpers; see the [example README](example/README.md) for
 the internal wiring.
 
+## Version compatibility
+
+`nts` depends on `flutter_rust_bridge` with an **exact** pin rather
+than a caret range. The Dart code generated into `lib/src/ffi/` and
+the Rust runtime crate linked into `libnts_rust` share a wire format
+that upstream does not guarantee to be stable across minor versions.
+A mismatched pair does not fail to compile or throw — it misreads
+each other's memory layout, so the failure mode is silent memory
+corruption. The pin makes the mismatch a resolution error instead.
+
+The consequence is that your app's `flutter_rust_bridge` constraint
+must admit exactly the version `nts` pins:
+
+| `nts` version | Required `flutter_rust_bridge` |
+|---|---|
+| 9.3.x | `2.13.0` |
+| 9.2.x and earlier | `2.12.0` |
+
+If your app does not depend on `flutter_rust_bridge` directly there
+is nothing to do — pub resolves the transitive pin for you. If it
+does, and resolution fails, match the constraint to the row above
+rather than adding a `dependency_overrides` entry: an override
+silences the resolver but reintroduces the corruption the pin exists
+to prevent.
+
 ## Technical reference
 
 For internals, contribution workflow, and operational tuning:
