@@ -12,7 +12,7 @@ Contributor setup is the consumer setup — rustup plus Flutter, per
 the README's [Prerequisites](README.md#prerequisites) — with nothing
 else mandatory. The load-bearing facts:
 
-- **Rust is pinned to 1.97.1** by `rust/rust-toolchain.toml`. Both
+- **Rust is pinned to 1.98.0** by `rust/rust-toolchain.toml`. Both
   the Native Assets hook (`hook/build.dart`) and any `cargo`
   invocation from inside `rust/` resolve the pin through rustup,
   which auto-installs the toolchain and cross-compile targets on
