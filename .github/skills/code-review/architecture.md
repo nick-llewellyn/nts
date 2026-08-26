@@ -195,9 +195,19 @@ runtime behaviour change to a public Dart API — an existing caller
 still compiles and still resolves, but gets a different return value,
 post-condition, error, or lifecycle outcome — requires a **major**
 bump. That an upstream dependency forced the change does not make it
-compatible, and a narrow affected surface does not exempt it. A minor
-bump carrying such a change is a finding unless the PR description
-states the deviation and its reasoning, per rule 6 of the policy.
+compatible, and a narrow affected surface does not exempt it.
+
+A minor bump carrying such a change is a finding unless rule 6 of the
+policy is satisfied in full — all three of:
+
+- the PR description states the deviation and its reasoning,
+- the `CHANGELOG.md` entry describes the behaviour change and its
+  blast radius, not just the mechanism,
+- an issue records the deviation.
+
+A PR description alone does not waive the finding; an incomplete
+deviation is still a finding, and the reply should name which of the
+three is missing.
 
 A tightened dependency constraint that only breaks resolution is
 **not** in scope here — it fails at solve time, before any code runs,

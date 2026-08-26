@@ -62,6 +62,12 @@ affected surface is narrow. A tightened dependency constraint that
 only breaks resolution is not in scope; it fails loudly at solve time
 and is ordinary for a minor.
 
+Such a change may still ship in a minor as a documented deviation,
+but only when all three are present: the reasoning in the release PR
+description, the behaviour change and its blast radius in the
+CHANGELOG entry, and an issue recording the deviation. Anything less
+is an incomplete deviation, not an exception.
+
 CHANGELOG entries go under the next intended release header (e.g.
 `## 9.1`), never under `## Unreleased`.
 

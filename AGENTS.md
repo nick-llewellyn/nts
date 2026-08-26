@@ -1018,8 +1018,11 @@ purposes.
 Rules 5 and 6 exist because the compatible-looking case is the
 dangerous one. A tightened constraint announces itself: the resolver
 refuses, and the consumer reads an error before shipping. A changed
-post-condition does not — it resolves, compiles, passes a test suite
-written against the old behaviour, and surfaces in production. Making
+post-condition does not — it resolves, compiles, passes any suite that
+does not happen to cover the affected behaviour, and surfaces in
+production. A suite that *does* assert the old post-condition fails,
+which is the good case; the dangerous one is the consumer whose tests
+never pinned it. Making
 the major bump the default for that class, and the minor an exception
 that has to be written down, means the judgement is made deliberately
 each time instead of by whichever framing came to hand.
