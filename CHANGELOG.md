@@ -6,6 +6,31 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 9.4
+
+### Internal
+
+- Add two rules to the versioning policy in `AGENTS.md`. A runtime
+  behaviour change to a public Dart API — existing callers still
+  compile and still resolve, but observe a different return value,
+  post-condition, error, or lifecycle outcome — now requires a major
+  bump, and neither "an upstream dependency forced it" nor a narrow
+  affected surface is an exemption. Shipping one as a minor is still
+  permitted but becomes an explicit deviation: reasoned in the release
+  PR, described by blast radius in the changelog, and recorded in an
+  issue. A tightened dependency constraint that only breaks resolution
+  is excluded — it fails at solve time before any code runs. The
+  `9.3.0` `dispose()` change is named in the policy as the founding
+  case for the deviation — precedent once that release publishes — since
+  cutting `10.0.0` there would strand every consumer on a `^9`
+  constraint behind the resolution bug that release exists to fix. The
+  reviewer-facing mirrors in
+  `.github/copilot-instructions.md` and
+  `.github/skills/code-review/architecture.md` carry the check too, so
+  it applies on release PRs rather than living only in the policy
+  document.
+
+
 ## 9.3
 
 ### Changed

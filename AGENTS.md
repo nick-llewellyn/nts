@@ -971,6 +971,43 @@ artefact, not work-in-progress.
    way), the bump may land in the feature PR. Document the reason in
    the PR description. The default action is to revert.
 
+5. **A runtime behaviour change to a public Dart API forces a major
+   bump.** If an existing caller's code still compiles and still
+   resolves but *behaves differently* — a different return value, a
+   different post-condition, a different error or lifecycle outcome —
+   the release is major, not minor. This holds regardless of who
+   caused the change: "forced by an upstream dependency" explains why
+   the change is unavoidable, not why it is compatible. A consumer
+   with an automated minor-version bump has no way to distinguish the
+   two. Narrowness of the affected surface is likewise not an
+   exemption; it is an argument that few will be affected, not that
+   none will.
+
+   Changes that only make a previously-resolving `pubspec.yaml` fail
+   to resolve — most often a tightened dependency constraint — are
+   **not** covered by this rule. They fail loudly at solve time, before
+   any code runs, and are ordinary for a minor release.
+
+6. **Deviating from rule 5 requires an explicit, recorded decision.**
+   Shipping a runtime behaviour change as a minor may still be the
+   right call — typically when the same release carries a
+   resolution-blocking fix that a major would strand behind a
+   constraint most consumers will not cross. When that applies:
+   - state the reasoning in the release PR description,
+   - describe the behaviour change and its blast radius in the
+     `CHANGELOG.md` entry, not just the mechanism,
+   - file an issue recording the deviation so the precedent is
+     visible at the next release rather than inferred from history.
+
+   Founding case (in flight at the time of writing; the latest
+   published release is `9.2.1`): `9.3.0` is being cut as a minor
+   despite the `flutter_rust_bridge` 2.13.0 `dispose()` semantics
+   change, because the same release fixes a resolution failure (#320)
+   for apps on `flutter_rust_bridge: ^2.13.0`; cutting `10.0.0` would
+   have left every consumer on a `^9` constraint blocked by the bug
+   the release existed to fix. Once it publishes, this is the
+   precedent to reason from.
+
 ### Rationale
 
 Version drift across feature branches (each branch carrying its own
@@ -979,6 +1016,18 @@ the version field on `main` an unreliable indicator of what was
 actually shipped. Concentrating bumps in a release commit also gives
 the release a single, greppable handle for revert/cherry-pick
 purposes.
+
+Rules 5 and 6 exist because the compatible-looking case is the
+dangerous one. A tightened constraint announces itself: the resolver
+refuses, and the consumer reads an error before shipping. A changed
+post-condition does not — it resolves, compiles, passes any suite that
+does not happen to cover the affected behaviour, and surfaces in
+production. A suite that *does* assert the old post-condition fails,
+which is the good case; the dangerous one is the consumer whose tests
+never pinned it. Making
+the major bump the default for that class, and the minor an exception
+that has to be written down, means the judgement is made deliberately
+each time instead of by whichever framing came to hand.
 
 ## Security: Zeroization
 
