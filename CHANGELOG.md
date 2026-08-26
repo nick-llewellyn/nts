@@ -119,8 +119,11 @@ tarball.
   in `rust/Cargo.toml` is unchanged. `clippy::from_iter_instead_of_collect`
   was dropped from the lint table in `rust/Cargo.toml` — 1.98.0 removes
   the lint upstream, and leaving the key emits a
-  `renamed_and_removed_lints` warning that `-D warnings` cannot
-  suppress. Nothing replaces it — the retained `format_collect` flags
+  `renamed_and_removed_lints` warning that `-D warnings` promotes to a
+  hard error. Allowing that lint instead would silence the same
+  diagnostic for every future rename, so the stale key was removed
+  rather than muted. Nothing replaces it — the retained
+  `format_collect` flags
   `map(format!(..)).collect::<String>()`, not the explicit
   `FromIterator::from_iter(..)` calls the removed lint checked. The
   crate has no such call sites, so the removal costs no coverage here.
