@@ -120,7 +120,10 @@ tarball.
   was dropped from the lint table in `rust/Cargo.toml` — 1.98.0 removes
   the lint upstream, and leaving the key emits a
   `renamed_and_removed_lints` warning that `-D warnings` cannot
-  suppress. `format_collect` already covers the remaining ground.
+  suppress. Nothing replaces it — the retained `format_collect` flags
+  `map(format!(..)).collect::<String>()`, not the explicit
+  `FromIterator::from_iter(..)` calls the removed lint checked. The
+  crate has no such call sites, so the removal costs no coverage here.
 
 ## 9.2.1
 
