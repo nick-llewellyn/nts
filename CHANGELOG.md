@@ -36,6 +36,19 @@ tarball.
   the inconsistency. Example-only: the package ships no podspec — Apple
   support goes through Native Assets — so nothing in the published
   package declares or inherits these floors.
+- Declare `lib.name` explicitly in `rust/Cargo.toml`
+  ([NTS-167](https://linear.app/nick-llewellyn/issue/NTS-167)).
+  `native_toolchain_rust` 1.0.6 reads `lib.name` from the manifest and,
+  when it is absent, logs the failed lookup at SEVERE with a full stack
+  trace before falling back to `package.name`; the fallback itself logs
+  at FINE and is invisible, so every native-assets build printed one
+  `type 'Null' is not a subtype of type 'String'` trace per target
+  triple — six on an Android build — for a non-event. Cargo already
+  defaulted the library name to `package.name`, so the declared value is
+  identical and the emitted artefacts are unchanged: verified by
+  rebuilding the example with the hook cache cleared, which emits the
+  same `libnts_rust.so` for all three Android ABIs and the same
+  `nts_rust.framework` on macOS.
 - Add two rules to the versioning policy in `AGENTS.md`. A runtime
   behaviour change to a public Dart API — existing callers still
   compile and still resolve, but observe a different return value,
