@@ -13,6 +13,17 @@ analyzer:
     strict-casts: true
     strict-inference: true
     strict-raw-types: true
+  # Added by the Flutter 3.47 migrator, which re-applies it on every
+  # `pub get`. Distinct from the FFI note above: no Dart lives under
+  # these paths, so the analyzed file set is unchanged.
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
 
 linter:
   rules:

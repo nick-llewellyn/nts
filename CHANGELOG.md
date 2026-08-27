@@ -10,6 +10,19 @@ tarball.
 
 ### Internal
 
+- Accept the Flutter 3.47 analyzer migration in `analysis_options.yaml`
+  and `example/analysis_options.yaml`
+  ([NTS-165](https://linear.app/nick-llewellyn/issue/NTS-165)). Flutter
+  3.47's `pub get` inserts an `analyzer.exclude` block covering `build/`
+  and every platform directory, and re-applies it unconditionally on
+  every run — declining it leaves a permanently dirty working tree for
+  anyone who runs `pub get` before `analyze`. Once accepted it is
+  idempotent. No `.dart` files live under any excluded path in either
+  package, so the analyzed file set is unchanged and both packages still
+  report no issues. The generated blocks are repositioned so they do not
+  split the `include:` comment from `include:` in the example, or sit
+  directly beneath the root file's note about what is deliberately *not*
+  excluded.
 - Add two rules to the versioning policy in `AGENTS.md`. A runtime
   behaviour change to a public Dart API — existing callers still
   compile and still resolve, but observe a different return value,
