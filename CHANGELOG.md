@@ -43,7 +43,9 @@ tarball.
   module standalone without a Flutter SDK. The cost of the cap is that
   the Built-in Kotlin deprecation warning returns for `share_plus` on
   current stable; keeping the floor buildable takes priority, and the
-  cap lifts once the floor reaches `3.44`.
+  cap lifts once the floor reaches `3.44` — or sooner, if `share_plus`
+  corrects its declared `environment.flutter` so the incompatibility
+  becomes solver-visible rather than a Gradle-time failure.
   `shared_preferences_android` needed no cap — it raised its own floor
   to `3.44` in `2.4.24`, so pub correctly holds it at `2.4.23` on the
   old SDK and takes `2.4.27` on stable, which clears its half of the

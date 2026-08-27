@@ -28,7 +28,9 @@ dependencies:
   # Flutter's Built-in Kotlin whenever AGP >= 9 (this app pins AGP 9.2.1).
   # Built-in Kotlin arrived in Flutter 3.44, but share_plus still declares
   # `flutter: '>=3.38.1'`, so pub resolves it on our 3.38.x floor and the
-  # Gradle configuration then fails. Lift once the floor reaches 3.44.
+  # Gradle configuration then fails. Lift once the floor reaches 3.44, or
+  # sooner if share_plus corrects its declared `environment.flutter` so
+  # the incompatibility becomes solver-visible (NTS-164).
   share_plus: '>=13.1.0 <13.2.0'
   shared_preferences: ^2.5.5
   args: ^2.7.0
