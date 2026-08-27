@@ -29,6 +29,27 @@ tarball.
   `.github/skills/code-review/architecture.md` carry the check too, so
   it applies on release PRs rather than living only in the policy
   document.
+- Cap the example app's `share_plus` constraint at `>=13.1.0 <13.2.0`.
+  From `13.2.0` the plugin's Android build script configures
+  `KotlinAndroidProjectExtension` unconditionally and skips applying the
+  Kotlin Gradle Plugin whenever AGP is 9 or newer, so it depends on
+  Flutter's Built-in Kotlin to register that extension. The example pins
+  AGP `9.2.1`, and Built-in Kotlin only arrived in Flutter `3.44`, but
+  `share_plus` still declares `flutter: '>=3.38.1'` — so pub resolves it
+  on the example's `3.38.x` floor and Gradle then fails to configure
+  with `Extension of type 'KotlinAndroidProjectExtension' does not
+  exist`. CI never saw it: the `3.38.10` matrix leg runs only `pub get`,
+  `analyze`, and `test`, and `android-kgp-gate` configures the `:nts`
+  module standalone without a Flutter SDK. The cost of the cap is that
+  the Built-in Kotlin deprecation warning returns for `share_plus` on
+  current stable; keeping the floor buildable takes priority, and the
+  cap lifts once the floor reaches `3.44` — or sooner, if `share_plus`
+  corrects its declared `environment.flutter` so the incompatibility
+  becomes solver-visible rather than a Gradle-time failure.
+  `shared_preferences_android` needed no cap — it raised its own floor
+  to `3.44` in `2.4.24`, so pub correctly holds it at `2.4.23` on the
+  old SDK and takes `2.4.27` on stable, which clears its half of the
+  warning. Example app only; no package API change.
 
 
 ## 9.3.0
