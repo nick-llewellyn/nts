@@ -31,9 +31,9 @@ tarball.
   configurations, and adds the standard `Pods/Pods.xcodeproj` reference
   to the iOS workspace. The new floors are Flutter 3.47's own minimums,
   so declining them leaves the tree dirty after every Apple-platform
-  build. `example/macos/Podfile` already declared `platform :osx,
-  '12.0'`, so the `.pbxproj` files were the stale side of the
-  inconsistency. Example-only: the package ships no podspec — Apple
+  build, and the generated (gitignored) `example/macos/Podfile` already
+  carried the 12.0 floor, so the `.pbxproj` files were the stale side of
+  the inconsistency. Example-only: the package ships no podspec — Apple
   support goes through Native Assets — so nothing in the published
   package declares or inherits these floors.
 - Add two rules to the versioning policy in `AGENTS.md`. A runtime
