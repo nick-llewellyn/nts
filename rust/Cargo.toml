@@ -29,7 +29,19 @@ rust-version = "1.87"
 #                 does not change the `cdylib` / `staticlib` outputs the
 #                 Native Assets build hook reads, and is not published
 #                 to consumers (only the cdylib/staticlib are bundled).
+#
+# `name` is declared explicitly even though cargo defaults it to
+# `package.name`. `native_toolchain_rust` reads `lib.name` from this
+# manifest and, when it is absent, logs the failed lookup at SEVERE with
+# a full stack trace before falling back to `package.name` — the
+# recovery itself logs at FINE and is invisible, so every native-assets
+# build prints one `type 'Null' is not a subtype of type 'String'` trace
+# per target triple for a non-event (NTS-167). The value must stay equal
+# to `package.name`: the hook feeds it to `libraryFileName()`, so any
+# divergence renames the emitted cdylib/staticlib out from under the
+# Native Assets lookup.
 [lib]
+name = "nts_rust"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 # Compile-time logging-level strip is gated behind a default-on Cargo
