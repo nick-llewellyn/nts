@@ -23,6 +23,19 @@ tarball.
   split the `include:` comment from `include:` in the example, or sit
   directly beneath the root file's note about what is deliberately *not*
   excluded.
+- Accept the Flutter 3.47 Xcode project regeneration in the example app
+  ([NTS-168](https://linear.app/nick-llewellyn/issue/NTS-168)). Building
+  the example on a physical iOS device or on macOS under 3.47.1 raises
+  `IPHONEOS_DEPLOYMENT_TARGET` from 14.0 to 15.0 and
+  `MACOSX_DEPLOYMENT_TARGET` from 10.15 to 12.0 across all three build
+  configurations, and adds the standard `Pods/Pods.xcodeproj` reference
+  to the iOS workspace. The new floors are Flutter 3.47's own minimums,
+  so declining them leaves the tree dirty after every Apple-platform
+  build, and the generated (gitignored) `example/macos/Podfile` already
+  carried the 12.0 floor, so the `.pbxproj` files were the stale side of
+  the inconsistency. Example-only: the package ships no podspec — Apple
+  support goes through Native Assets — so nothing in the published
+  package declares or inherits these floors.
 - Add two rules to the versioning policy in `AGENTS.md`. A runtime
   behaviour change to a public Dart API — existing callers still
   compile and still resolve, but observe a different return value,
