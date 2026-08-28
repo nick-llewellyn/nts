@@ -1029,6 +1029,49 @@ the major bump the default for that class, and the minor an exception
 that has to be written down, means the judgement is made deliberately
 each time instead of by whichever framing came to hand.
 
+## Issue References in Shipped Files
+
+Anything that reaches a consumer must cite a reference that consumer
+can open. Internal tracker identifiers cannot be: `linear.app` URLs
+require workspace membership, and Beads IDs (`nts-abcd`) name rows in
+a database that is not part of the package.
+
+### Rules
+
+1. **`CHANGELOG.md` cites the GitHub PR, never a tracker ID.** Use the
+   linked form the file already uses —
+   `([#328](https://github.com/nick-llewellyn/nts/pull/328))` — rather
+   than a bare `#328`, because pub.dev renders the changelog outside
+   the repository context that auto-links it. Cite the issue instead
+   (`.../issues/320`) when the entry is better explained by the report
+   than by the change.
+
+2. **The same rule covers the rest of the consumer-facing prose**:
+   `README.md`, `example/example.md`, and dartdoc on public Dart API.
+   These are the surfaces pub.dev renders, or that a consumer reads to
+   use the package.
+
+3. **Everything else keeps its `NTS-` references**, including files
+   that happen to ship. `DEVELOPMENT.md`, `ARCHITECTURE.md`,
+   `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, CI workflows, Gradle
+   scripts, and `tool/` scripts are excluded from the tarball by
+   `.pubignore`; Rust sources under `rust/src/` do ship, as build
+   input for Native Assets, but their comments are not rendered
+   anywhere a consumer reads and are addressed to whoever next edits
+   the code. The tracker ID there carries provenance a PR number does
+   not, and that audience has access.
+
+4. **Internal identifiers stay in commit bodies, branch names, and PR
+   descriptions.** That is where the tracker linkage already lives —
+   the Linear GitHub app reads the identifier off the branch name —
+   so nothing is lost by keeping it out of the shipped text.
+
+5. **Already-published sections are not rewritten.** Entries under a
+   released version header are a historical record; correcting their
+   references churns the diff without helping anyone, since the
+   release they describe already shipped with the old text. The rule
+   applies from the next unreleased entry onwards.
+
 ## Security: Zeroization
 
 This project treats specific byte sequences as secrets that must not

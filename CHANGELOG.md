@@ -143,7 +143,7 @@ tarball.
   warning. Example app only; no package API change.
 - Accept the Flutter 3.47 analyzer migration in `analysis_options.yaml`
   and `example/analysis_options.yaml`
-  ([NTS-165](https://linear.app/nick-llewellyn/issue/NTS-165)). Flutter
+  ([#328](https://github.com/nick-llewellyn/nts/pull/328)). Flutter
   3.47's `pub get` inserts an `analyzer.exclude` block covering `build/`
   and every platform directory, and re-applies it unconditionally on
   every run — declining it leaves a permanently dirty working tree for
@@ -155,7 +155,7 @@ tarball.
   directly beneath the root file's note about what is deliberately *not*
   excluded.
 - Accept the Flutter 3.47 Xcode project regeneration in the example app
-  ([NTS-168](https://linear.app/nick-llewellyn/issue/NTS-168)). Building
+  ([#329](https://github.com/nick-llewellyn/nts/pull/329)). Building
   the example on a physical iOS device or on macOS under 3.47.1 raises
   `IPHONEOS_DEPLOYMENT_TARGET` from 14.0 to 15.0 and
   `MACOSX_DEPLOYMENT_TARGET` from 10.15 to 12.0 across all three build
@@ -168,7 +168,7 @@ tarball.
   support goes through Native Assets — so nothing in the published
   package declares or inherits these floors.
 - Declare `lib.name` explicitly in `rust/Cargo.toml`
-  ([NTS-167](https://linear.app/nick-llewellyn/issue/NTS-167)).
+  ([#330](https://github.com/nick-llewellyn/nts/pull/330)).
   `native_toolchain_rust` 1.0.6 reads `lib.name` from the manifest and,
   when it is absent, logs the failed lookup at SEVERE with a full stack
   trace before falling back to `package.name`; the fallback itself logs
@@ -181,7 +181,7 @@ tarball.
   same `libnts_rust.so` for all three Android ABIs and the same
   `nts_rust.framework` on macOS.
 - Raise the example app's Kotlin Gradle Plugin floor from 2.2.20 to
-  2.3.20 ([NTS-166](https://linear.app/nick-llewellyn/issue/NTS-166)).
+  2.3.20 ([#331](https://github.com/nick-llewellyn/nts/pull/331)).
   Flutter's `DependencyVersionChecker` pins `errorKGPVersion` at 2.2.20
   and `warnKGPVersion` at 2.3.20, so the example sat exactly on the
   error floor and every Android build printed "Flutter support for your
