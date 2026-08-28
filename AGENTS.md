@@ -1047,19 +1047,25 @@ a database that is not part of the package.
    than by the change.
 
 2. **The same rule covers the rest of the consumer-facing prose**:
-   `README.md`, `example/example.md`, and dartdoc on public Dart API.
-   These are the surfaces pub.dev renders, or that a consumer reads to
-   use the package.
+   `README.md`, `example/example.md`, the guides under `doc/` and
+   `example/`, and dartdoc on public Dart API. These are the surfaces
+   pub.dev renders, or that a consumer reads to use the package.
 
-3. **Everything else keeps its `NTS-` references**, including files
-   that happen to ship. `DEVELOPMENT.md`, `ARCHITECTURE.md`,
-   `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, CI workflows, Gradle
-   scripts, and `tool/` scripts are excluded from the tarball by
-   `.pubignore`; Rust sources under `rust/src/` do ship, as build
-   input for Native Assets, but their comments are not rendered
-   anywhere a consumer reads and are addressed to whoever next edits
-   the code. The tracker ID there carries provenance a PR number does
-   not, and that audience has access.
+3. **Everything else keeps its `NTS-` references.** The test is
+   whether a consumer *reads* the prose, not whether the file ships —
+   those are different sets, in both directions:
+
+   - Not shipped, and internal by audience too: `DEVELOPMENT.md`,
+     `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`,
+     `tool/` scripts, and CI workflows, all excluded by `.pubignore`
+     or by pub's own rules.
+   - **Shipped, but implementation-facing**: Rust sources under
+     `rust/src/`, `android/build.gradle.kts`, and the Kotlin under
+     `android/src/`. These are build inputs — Native Assets compiles
+     the Rust, Gradle consumes the script — and nothing renders their
+     comments. Their audience is whoever next edits the code, for whom
+     a tracker ID carries provenance a PR number does not, and who has
+     access to it.
 
 4. **Internal identifiers stay in commit bodies, branch names, and PR
    descriptions.** That is where the tracker linkage already lives —
