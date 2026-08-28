@@ -78,12 +78,14 @@ ARCHITECTURE.md
 CONTRIBUTING.md
 DEVELOPMENT.md
 
-# Archived release notes for 1.4.0 and earlier. pub.dev renders the
+# Archived release notes for 5.2.4 and earlier. pub.dev renders the
 # whole of CHANGELOG.md on the package page, and the combined history
 # had grown past 220 KB — the largest file in the tarball. The split
-# keeps 2.0.0 onwards on the package page and leaves the older entries
+# keeps 6.0.0 onwards on the package page and leaves the older entries
 # readable in the repository, which is where anyone still migrating off
-# a 1.x release is looking. CHANGELOG.md links to it.
+# an older release is looking. CHANGELOG.md links to it. The cutoff
+# moves as the history grows: 1.4.0 when the archive was introduced,
+# 5.2.4 from 9.3.0 onwards.
 CHANGELOG_ARCHIVE.md
 
 # Third-party attribution notice. Enumerates the direct Dart and Rust
