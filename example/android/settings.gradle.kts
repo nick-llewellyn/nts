@@ -32,7 +32,13 @@ plugins {
     // plugin to the classpath without applying it, so it's safe to
     // keep declared here even once built-in Kotlin is the norm. See
     // NTS-161.
-    id("org.jetbrains.kotlin.android") version "2.2.20" apply false
+    //
+    // The version tracks Flutter's `warnKGPVersion` floor
+    // (`DependencyVersionChecker.kt`), not the latest KGP release. 2.2.20
+    // sat exactly on `errorKGPVersion`, one step below the warn floor, so
+    // every Android build printed a "support will soon be dropped"
+    // notice. See NTS-166.
+    id("org.jetbrains.kotlin.android") version "2.3.20" apply false
 }
 
 include(":app")
