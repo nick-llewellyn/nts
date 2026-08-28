@@ -36,11 +36,13 @@ tarball.
   crate share a wire format whose stability across minors upstream does
   not guarantee, and a mismatch corrupts memory silently rather than
   failing loudly.
-- `NtsBridge.dispose()` is now a de-initialization. `flutter_rust_bridge`
-  2.13.0 clears the entrypoint's state before disposing it, where 2.12.0
-  disposed in place and kept it. So `NtsBridge.state` reads
-  `NtsBridgeState.uninitialized` after a disposal rather than being
-  unchanged. `NtsBridge.dispose()` now drops its own initialization
+- `NtsBridge.dispose()` is now a de-initialization
+  ([#321](https://github.com/nick-llewellyn/nts/pull/321)).
+  `flutter_rust_bridge` 2.13.0 clears the entrypoint's state before
+  disposing it, where 2.12.0 disposed in place and kept it. So
+  `NtsBridge.state` reads `NtsBridgeState.uninitialized` after a
+  disposal rather than being unchanged. `NtsBridge.dispose()` now drops
+  its own initialization
   latch to match: without that, a later
   `NtsBridge.ensureInitialized()` would hand back the latched completed
   future and report success over a bridge holding nothing. Callers that
@@ -53,10 +55,12 @@ tarball.
   disposing while an `ensureInitialized()` is in flight is unsupported,
   and names the two windows in which it misbehaves.
 - The raw `NtsRustLib.dispose()` is a de-initialization too, and
-  `NtsBridge.ensureInitialized()` now recovers from one. The entrypoint
-  is exported, so a caller can clear its state without going through
-  `NtsBridge.dispose()` — harmless under 2.12.0, where disposal kept the
-  state, but under 2.13.0 it strands the wrapper's latch over a bridge
+  `NtsBridge.ensureInitialized()` now recovers from one
+  ([#321](https://github.com/nick-llewellyn/nts/pull/321)). The
+  entrypoint is exported, so a caller can clear its state without going
+  through `NtsBridge.dispose()` — harmless under 2.12.0, where disposal
+  kept the state, but under 2.13.0 it strands the wrapper's latch over
+  a bridge
   holding nothing. The stale latch is detected and discarded, so the
   next call runs a fresh attempt. Disposal *during* an unawaited
   `ensureInitialized()` remains unsupported, as it is for
@@ -64,7 +68,8 @@ tarball.
 
 ### Internal
 
-- The generated bindings pick up two upstream codegen changes, both
+- The generated bindings pick up two upstream codegen changes
+  ([#321](https://github.com/nick-llewellyn/nts/pull/321)), both
   cosmetic: the `Result::<_, ()>::Ok(...)` construction is now written
   `Ok::<_, ()>(...)` with the return qualified as
   `std::result::Result::Ok`, and `frb_generated.rs` carries a new
@@ -73,19 +78,31 @@ tarball.
   derives it from the sorted bridged function names and nothing else,
   so it guards against a Dart/Rust function-set mismatch rather than
   against a signature, codec, or runtime-behaviour change.
-- `native_toolchain_rust` stays at `^1.0.4`. From 1.0.5 onward it
-  requires `hooks ^2.1.0`, which pulls `record_use ^1.0.0` and therefore
-  `meta ^1.19.0`; the Flutter SDK pins `meta` exactly, and neither the
+- `native_toolchain_rust` stays at `^1.0.4`
+  ([#321](https://github.com/nick-llewellyn/nts/pull/321)). From 1.0.5
+  onward it requires `hooks ^2.1.0`, which pulls `record_use ^1.0.0`
+  and therefore `meta ^1.19.0`; the Flutter SDK pins `meta` exactly,
+  and neither the
   oldest supported Flutter (3.38.0, `meta` 1.17.0) nor current stable
   (3.44.6, `meta` 1.18.0) satisfies that, so the bump makes version
   solving fail outright. The pubspec records the constraint inline.
+- `code_assets: ^1.2.1` is now a direct dependency
+  ([#335](https://github.com/nick-llewellyn/nts/pull/335)). It was
+  already in the graph transitively via `hooks` and
+  `native_toolchain_rust`, but `hook/build.dart` reads
+  `CodeConfig.targetOS` and `CodeConfig.cCompiler` from it for the
+  Android NDK floor check and neither of those packages re-exports it.
+  No new package enters a consumer's dependency graph.
 - `rust/fuzz/Cargo.lock` moved to 2.13.0 alongside the main workspace
-  lock. The fuzz workspace is standalone and depends on `nts_rust` by
-  path, so the new exact constraint would have failed the nightly
+  lock ([#321](https://github.com/nick-llewellyn/nts/pull/321)). The
+  fuzz workspace is standalone and depends on `nts_rust` by path, so
+  the new exact constraint would have failed the nightly
   `--locked` fuzz build against the stale 2.12.0 resolution.
-- Two CI gates needed adjusting for the bump. The `rust-bridge-sync`
-  codegen install now passes `--force`: its cache key is
-  version-scoped, but `Swatinem/rust-cache` restores `~/.cargo/bin`
+- Two CI gates needed adjusting for the bump
+  ([#321](https://github.com/nick-llewellyn/nts/pull/321)). The
+  `rust-bridge-sync` codegen install now passes `--force`: its cache
+  key is version-scoped, but `Swatinem/rust-cache` restores
+  `~/.cargo/bin`
   wholesale and can put the previous pin's binary back first, so cargo
   refused with "binary already exists in destination" on the first run
   after a bump. And `dependency-review` gained a
@@ -100,11 +117,14 @@ tarball.
   duplicate-casing entries in that list also went away: purl matching
   became case-insensitive in v4.9.0, which the pinned v5.0.0 includes.
 - `DEVELOPMENT.md`'s CI job inventory said `ci.yml` defines eight jobs
-  when it defines eleven, and the table below it had no rows for
-  `doc-snippets` or `cargo-deny`. Count corrected, both rows written,
-  and the doc-only skip list in the lead-in prose extended to
+  when it defines eleven
+  ([#319](https://github.com/nick-llewellyn/nts/pull/319)), and the
+  table below it had no rows for `doc-snippets` or `cargo-deny`. Count
+  corrected, both rows written, and the doc-only skip list in the
+  lead-in prose extended to
   `cargo-deny` and `android-kgp-gate`.
-- Add two rules to the versioning policy in `AGENTS.md`. A runtime
+- Add two rules to the versioning policy in `AGENTS.md`
+  ([#323](https://github.com/nick-llewellyn/nts/pull/323)). A runtime
   behaviour change to a public Dart API — existing callers still
   compile and still resolve, but observe a different return value,
   post-condition, error, or lifecycle outcome — now requires a major
@@ -123,9 +143,11 @@ tarball.
   it applies on release PRs rather than living only in the policy
   document.
 - Bump the pinned Rust toolchain in `rust/rust-toolchain.toml` from
-  `1.97.1` to `1.98.0` (released 2026-08-20). The FRB bindings are
-  in sync under the new pin with no regeneration needed, and the MSRV
-  in `rust/Cargo.toml` is unchanged. `clippy::from_iter_instead_of_collect`
+  `1.97.1` to `1.98.0` (released 2026-08-20)
+  ([#324](https://github.com/nick-llewellyn/nts/pull/324)). The FRB
+  bindings are in sync under the new pin with no regeneration needed,
+  and the MSRV in `rust/Cargo.toml` is unchanged.
+  `clippy::from_iter_instead_of_collect`
   was dropped from the lint table in `rust/Cargo.toml` — 1.98.0 removes
   the lint upstream, and leaving the key emits a
   `renamed_and_removed_lints` warning that `-D warnings` promotes to a
@@ -136,7 +158,8 @@ tarball.
   `map(format!(..)).collect::<String>()`, not the explicit
   `FromIterator::from_iter(..)` calls the removed lint checked. The
   crate has no such call sites, so the removal costs no coverage here.
-- Cap the example app's `share_plus` constraint at `>=13.1.0 <13.2.0`.
+- Cap the example app's `share_plus` constraint at `>=13.1.0 <13.2.0`
+  ([#327](https://github.com/nick-llewellyn/nts/pull/327)).
   From `13.2.0` the plugin's Android build script configures
   `KotlinAndroidProjectExtension` unconditionally and skips applying the
   Kotlin Gradle Plugin whenever AGP is 9 or newer, so it depends on
@@ -209,7 +232,8 @@ tarball.
   version off `example/android/settings.gradle.kts`, so the CI gate
   matrix follows without a second edit; all eight assertions still pass.
 - Move release notes for `5.2.4` and earlier into
-  `CHANGELOG_ARCHIVE.md`, leaving `6.0.0` onwards in `CHANGELOG.md`.
+  `CHANGELOG_ARCHIVE.md`, leaving `6.0.0` onwards in `CHANGELOG.md`
+  ([#333](https://github.com/nick-llewellyn/nts/pull/333)).
   The published changelog had grown back to 212 KB — pub.dev renders
   the whole of it on the package page, and it was again the largest
   file in the tarball. The cut halves it to 108 KB. This is the second
@@ -226,9 +250,11 @@ tarball.
 
 ### Documentation
 
-- Add a "Version compatibility" section to `README.md` recording why
-  the `flutter_rust_bridge` dependency is an exact pin — the generated
-  Dart and the Rust runtime crate share a wire format that upstream
+- Add a "Version compatibility" section to `README.md`
+  ([#326](https://github.com/nick-llewellyn/nts/pull/326)) recording
+  why the `flutter_rust_bridge` dependency is an exact pin — the
+  generated Dart and the Rust runtime crate share a wire format that
+  upstream
   does not guarantee across minors, and a mismatch corrupts memory
   silently rather than failing loudly — plus the version mapping
   (`nts` 9.3.x requires `2.13.0`; 9.2.x and earlier require `2.12.0`)
