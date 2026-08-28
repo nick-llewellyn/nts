@@ -36,6 +36,21 @@ void main() {
       );
     });
 
+    // The SDK passes the plain driver; `native_toolchain_rust` derives
+    // the triple-prefixed one from it. Both shapes reach this hook
+    // depending on which side of that derivation is being read.
+    test('resolves the root from an unprefixed clang path', () {
+      expect(
+        androidNdkRoot(
+          Uri.file(
+            '/opt/sdk/ndk/30.0.16138531/toolchains/llvm/prebuilt/'
+            'darwin-x86_64/bin/clang',
+          ),
+        ),
+        Uri.file('/opt/sdk/ndk/30.0.16138531/'),
+      );
+    });
+
     test('resolves the root from a Windows-suffixed clang path', () {
       expect(
         androidNdkRoot(

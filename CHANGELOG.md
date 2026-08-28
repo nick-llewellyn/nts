@@ -15,13 +15,14 @@ tarball.
   libraries to be 16 KB page aligned; that alignment comes entirely
   from the NDK clang driver's default `-z max-page-size`, which was
   4 KB through r27 and became 16 KB in r28. `native_toolchain_rust`
-  validates only to r27, so an app pinning `ndkVersion = "27.x"`
-  previously got a silently 4 KB-aligned `libnts_rust.so` that Google
-  Play rejects. Default setups are unaffected —
-  `ndkVersion = flutter.ndkVersion` resolves to r28 on every supported
-  Flutter. The check reads the revision from the toolchain the SDK
-  hands the hook and fails open when it cannot be identified, so an
-  unrecognised toolchain layout does not break the build.
+  validates only to r27, so an older toolchain previously produced a
+  silently 4 KB-aligned `libnts_rust.so` that Google Play rejects.
+  The revision checked is the one the Native Assets build resolves
+  from the Android SDK, which is not the `ndkVersion` the app's Gradle
+  script pins; current setups are unaffected, since every supported
+  Flutter installs an r28 NDK. The check fails open when the toolchain
+  cannot be identified, so an unrecognised layout does not break the
+  build.
 
 - Bump the exact `flutter_rust_bridge` pin from `2.12.0` to `2.13.0` in
   both `pubspec.yaml` and `rust/Cargo.toml`, and regenerate

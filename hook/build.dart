@@ -59,10 +59,20 @@
 // it comes entirely from the NDK clang driver's default `-z
 // max-page-size`, which was 4 KB through r27 and became 16 KB in r28.
 // `native_toolchain_rust` validates the NDK only to r27 (its probe is
-// for `<triple>35-clang`, introduced there), so a consumer app pinning
-// `ndkVersion = "27.x"` would otherwise get a silently 4 KB-aligned
-// `libnts_rust.so`. The check below reads the NDK revision out of the
-// toolchain the SDK handed us and refuses to build under r28.
+// for `<triple>35-clang`, introduced there), so an older toolchain
+// would otherwise produce a silently 4 KB-aligned `libnts_rust.so`.
+// The check below reads the revision out of the toolchain the SDK
+// handed us and refuses to build under r28.
+//
+// Which NDK that is, is not the app's `ndkVersion`. Measured against
+// the example app: with `ndkVersion = "27.0.12077973"` pinned in
+// `example/android/app/build.gradle.kts` and a clean build, the
+// compiler passed to this hook was still
+// `<sdk>/ndk/30.0.16138531/toolchains/llvm/prebuilt/<host>/bin/clang`
+// -- the newest NDK installed in the Android SDK. The Gradle-level pin
+// governs the app's own native compilation; the Native Assets
+// toolchain is resolved separately, so the floor enforced here is a
+// property of the installed SDK rather than of the app's build script.
 
 import 'dart:io';
 
@@ -131,11 +141,11 @@ void _checkAndroidNdkFloor(Uri? compiler) {
 /// Derives the NDK root from an NDK clang path, or `null` if [compiler]
 /// does not sit in the layout the NDK ships.
 ///
-/// `native_toolchain_rust` points the Rust linker at
-/// `<ndk>/toolchains/llvm/prebuilt/<host>/bin/<triple>35-clang`, so the
-/// root is five segments up. The intermediate segments are matched
-/// rather than assumed: a compiler from anywhere else is not an NDK and
-/// has no revision to read.
+/// Both the plain `<ndk>/toolchains/llvm/prebuilt/<host>/bin/clang` the
+/// SDK passes in and the `<triple>35-clang` that `native_toolchain_rust`
+/// derives from it sit five segments below the root. The intermediate
+/// segments are matched rather than assumed: a compiler from anywhere
+/// else is not an NDK and has no revision to read.
 @visibleForTesting
 Uri? androidNdkRoot(Uri? compiler) {
   if (compiler == null) return null;
@@ -170,7 +180,9 @@ String? androidNdkFloorFailure(String sourceProperties) {
       '`-z max-page-size` from r$minimumAndroidNdkMajor onwards. Building '
       '`libnts_rust.so` with NDK r$major would produce a 4 KB-aligned '
       'library that Google Play rejects.\n'
-      "Set `ndkVersion` in your app's `android/app/build.gradle.kts` to "
-      '`flutter.ndkVersion` (or to an installed r$minimumAndroidNdkMajor+ '
-      'revision) and re-run the build.';
+      'Install a newer NDK into your Android SDK -- through Android '
+      "Studio's SDK Manager, or `sdkmanager \"ndk;28.2.13676358\"` -- and "
+      're-run the build. The `ndkVersion` in your app\'s Gradle script '
+      'does not select this toolchain: the Native Assets build resolves '
+      'the NDK from the SDK independently.';
 }
