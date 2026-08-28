@@ -81,11 +81,14 @@ tarball.
 - `native_toolchain_rust` stays at `^1.0.4`
   ([#321](https://github.com/nick-llewellyn/nts/pull/321)). From 1.0.5
   onward it requires `hooks ^2.1.0`, which pulls `record_use ^1.0.0`
-  and therefore `meta ^1.19.0`; the Flutter SDK pins `meta` exactly,
-  and neither the
-  oldest supported Flutter (3.38.0, `meta` 1.17.0) nor current stable
-  (3.44.6, `meta` 1.18.0) satisfies that, so the bump makes version
-  solving fail outright. The pubspec records the constraint inline.
+  and therefore `meta ^1.19.0`. Flutter pinned `meta` exactly through
+  the 3.44 line — 3.38.0, the oldest release this package supports, at
+  1.17.0, and 3.44.6 at 1.18.0 — so on any of those the bump makes
+  version solving fail outright. Current stable 3.47.1 relaxed the pin
+  to `^1.18.3`, which does admit 1.19.0, and the bump resolves there;
+  the constraint stays because the `flutter: '>=3.38.0'` floor keeps
+  the exactly-pinned releases in scope. Revisit once that floor moves
+  past 3.44. The pubspec records the constraint inline.
 - `code_assets: ^1.2.1` is now a direct dependency
   ([#335](https://github.com/nick-llewellyn/nts/pull/335)). It was
   already in the graph transitively via `hooks` and
