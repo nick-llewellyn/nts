@@ -79,8 +79,8 @@ CONTRIBUTING.md
 DEVELOPMENT.md
 
 # Archived release notes for 5.2.4 and earlier. pub.dev renders the
-# whole of CHANGELOG.md on the package page, and the combined history
-# had grown past 220 KB — the largest file in the tarball. The split
+# whole of CHANGELOG.md on the package page, and the shipped file had
+# reached 212 KB — the largest in the tarball. The split
 # keeps 6.0.0 onwards on the package page and leaves the older entries
 # readable in the repository, which is where anyone still migrating off
 # an older release is looking. CHANGELOG.md links to it. The cutoff

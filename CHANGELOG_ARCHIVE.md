@@ -5,8 +5,8 @@ and later live in [CHANGELOG.md](CHANGELOG.md).
 
 This file is tracked in git but excluded from the published tarball —
 the pub.dev package page renders `CHANGELOG.md` in full, and the
-combined history had grown past 220 KB. Consumers arriving from an
-older release can read the migration notes here in the repository.
+shipped file had reached 212 KB, the largest in the tarball. Consumers
+arriving from an older release read the migration notes here instead.
 
 The cutoff moves as the history grows: it was `1.4.0` when the archive
 was introduced in `9.0.0`, and `5.2.4` from `9.3.0` onwards. Nothing is
