@@ -218,15 +218,6 @@ tarball.
   (`nts` 9.3.x requires `2.13.0`; 9.2.x and earlier require `2.12.0`)
   and the guidance to match the constraint rather than reach for
   `dependency_overrides`.
-- Reference the pull requests that carried the Flutter 3.47 toolchain
-  work rather than the internal tracker issues
-  ([#334](https://github.com/nick-llewellyn/nts/pull/334)). A
-  `linear.app` link requires workspace membership, so on the pub.dev
-  package page it named the work without letting anyone read it. The
-  convention is now recorded in `AGENTS.md` and summarised in
-  `CONTRIBUTING.md`: consumer-facing prose cites the public GitHub
-  pull request or issue, linked in full because pub.dev renders the
-  changelog outside the context that auto-links a bare `#N`.
 
 ## 9.2.1
 
