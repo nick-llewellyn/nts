@@ -5,11 +5,16 @@
 // from the NDK clang driver's default `-z max-page-size` (4 KB through
 // r27, 16 KB from r28). The two halves are tested separately: locating
 // the NDK root behind the compiler path the SDK hands the hook, and
-// deciding on the `Pkg.Revision` found there.
+// deciding on the `Pkg.Revision` found there. A third group drives the
+// two together against a real NDK directory layout on disk, so the
+// wiring between them -- and the fail-open behaviour when the file
+// cannot be read -- is covered rather than inferred.
 //
 // `@TestOn('vm')` matches the hook itself, which uses `dart:io`.
 @TestOn('vm')
 library;
+
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -116,6 +121,74 @@ void main() {
       expect(androidNdkFloorFailure('Pkg.Desc = Android NDK\n'), isNull);
       expect(androidNdkFloorFailure(''), isNull);
       expect(androidNdkFloorFailure(sourceProperties('r27')), isNull);
+    });
+  });
+
+  group('checkAndroidNdkFloor', () {
+    late Directory sdk;
+
+    setUp(() => sdk = Directory.systemTemp.createTempSync('nts_ndk_test'));
+    tearDown(() => sdk.deleteSync(recursive: true));
+
+    // Lays out `<ndk>/toolchains/llvm/prebuilt/<host>/bin/clang` and
+    // returns the compiler path, writing `source.properties` at the root
+    // only when [properties] is given.
+    Uri installNdk(String revision, {List<int>? properties}) {
+      final root = Directory('${sdk.path}/ndk/$revision');
+      final bin = Directory(
+        '${root.path}/toolchains/llvm/prebuilt/darwin-x86_64/bin',
+      )..createSync(recursive: true);
+      if (properties != null) {
+        File('${root.path}/source.properties').writeAsBytesSync(properties);
+      }
+      return Uri.file('${bin.path}/clang');
+    }
+
+    test('throws for an installed NDK below the floor', () {
+      final compiler = installNdk(
+        '27.0.12077973',
+        properties: sourceProperties('27.0.12077973').codeUnits,
+      );
+      expect(
+        () => checkAndroidNdkFloor(compiler),
+        throwsA(
+          isA<UnsupportedError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('27.0.12077973'), contains('16 KB')),
+          ),
+        ),
+      );
+    });
+
+    test('returns normally for an installed NDK at the floor', () {
+      final compiler = installNdk(
+        '28.2.13676358',
+        properties: sourceProperties('28.2.13676358').codeUnits,
+      );
+      expect(() => checkAndroidNdkFloor(compiler), returnsNormally);
+    });
+
+    // The three ways the probe can fail to reach a revision on disk.
+    // Each must skip the check rather than break the consumer's build.
+    test('returns normally when the revision cannot be read', () {
+      expect(
+        () => checkAndroidNdkFloor(installNdk('27.0.12077973')),
+        returnsNormally,
+        reason: 'no source.properties',
+      );
+      expect(
+        () => checkAndroidNdkFloor(
+          installNdk('27.1.12297006', properties: const [0xc3, 0x28]),
+        ),
+        returnsNormally,
+        reason: 'not UTF-8',
+      );
+      expect(
+        () => checkAndroidNdkFloor(Uri.file('/usr/bin/clang')),
+        returnsNormally,
+        reason: 'not an NDK layout',
+      );
     });
   });
 }

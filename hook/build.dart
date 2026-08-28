@@ -89,7 +89,7 @@ const minimumAndroidNdkMajor = 28;
 Future<void> main(List<String> args) async {
   await build(args, (input, output) async {
     if (input.config.code.targetOS == OS.android) {
-      _checkAndroidNdkFloor(input.config.code.cCompiler?.compiler);
+      checkAndroidNdkFloor(input.config.code.cCompiler?.compiler);
     }
 
     // The user-define is intentionally read with a permissive parser:
@@ -119,15 +119,16 @@ Future<void> main(List<String> args) async {
   });
 }
 
-// Resolves the NDK revision behind [compiler] and throws when it is
-// below [minimumAndroidNdkMajor].
-//
-// Fails open at every step where the toolchain cannot be identified --
-// a null compiler, an unrecognised directory layout, a missing or
-// unparseable `source.properties`. A probe that cannot answer must not
-// break builds on toolchain layouts we have not seen; the floor is
-// enforced only when the revision is known and known to be too low.
-void _checkAndroidNdkFloor(Uri? compiler) {
+/// Resolves the NDK revision behind [compiler] and throws when it is
+/// below [minimumAndroidNdkMajor].
+///
+/// Fails open at every step where the toolchain cannot be identified --
+/// a null compiler, an unrecognised directory layout, a missing or
+/// unparseable `source.properties`. A probe that cannot answer must not
+/// break builds on toolchain layouts we have not seen; the floor is
+/// enforced only when the revision is known and known to be too low.
+@visibleForTesting
+void checkAndroidNdkFloor(Uri? compiler) {
   final ndkRoot = androidNdkRoot(compiler);
   if (ndkRoot == null) return;
   final properties = File.fromUri(ndkRoot.resolve('source.properties'));
