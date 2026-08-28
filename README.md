@@ -77,6 +77,14 @@ the underlying RFC 8915 layering and cryptographic specifics.
   no `rustup update` or other manual step is needed. The superseded
   toolchain stays on disk; reclaim the space with
   `rustup toolchain uninstall <old-version>` if you like.
+- **Android NDK r28 or newer**, on Android only. Android 15+ requires
+  64-bit native libraries to be 16 KB page aligned, and the NDK clang
+  driver only defaults to that from r28 — r27 and earlier produce a
+  4 KB-aligned `libnts_rust.so` that Google Play rejects. Nothing to
+  do on a default setup: `ndkVersion = flutter.ndkVersion` resolves to
+  an r28 NDK on every Flutter this package supports. If your app pins
+  an older `ndkVersion` in `android/app/build.gradle.kts`, the build
+  hook fails with a message naming the revision it found.
 
 ### Install
 
