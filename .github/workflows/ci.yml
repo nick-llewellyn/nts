@@ -274,6 +274,41 @@ jobs:
         working-directory: example
         run: flutter test
 
+      # The three scripts under `example/bin/` are the package's only
+      # `dart run` (non-Flutter) consumers, and nothing else in the
+      # pipeline executes them -- `flutter test` above covers
+      # `example/lib/`, and `flutter analyze` covers `example/bin/`
+      # statically but never runs it. Deliberately invoked through
+      # `dart`, not `flutter`: running them under `flutter` would still
+      # pass with a `dart:ui` import leaked back into the library
+      # surface, which is the regression this step exists to catch.
+      #
+      # `--mock` binds the in-memory fake the example app uses, so no
+      # dylib and no network are needed; the runs are seconds each.
+      # `--help` covers the argument-parse path ahead of any bridge
+      # load. The final assertion pins the usage exit code at 64 so a
+      # refactor cannot turn a no-host invocation into a silent
+      # success. It stops short of the native-reuse latch regression
+      # (`nts_cli` once returned without awaiting the bridge, so a
+      # retained initialization failure exited 0): that arm needs a
+      # real dylib and a failing init, which neither `--mock` nor
+      # `--help` reaches, and is not covered here.
+      - name: Smoke-run example CLI scripts (dart run)
+        working-directory: example
+        run: |
+          set -euo pipefail
+          dart run bin/nts_cli.dart --help > /dev/null
+          dart run bin/nts_cli.dart --mock nts.example.test > /dev/null
+          dart run bin/nts_health.dart --mock assets/nts-sources.yml > /dev/null
+          dart run bin/nts_manifest.dart --mock \
+            -o "${RUNNER_TEMP}/nts-manifest.json" assets/nts-sources.yml > /dev/null
+          rc=0
+          dart run bin/nts_cli.dart --mock > /dev/null 2>&1 || rc=$?
+          if [ "$rc" -ne 64 ]; then
+            echo "nts_cli with no hosts exited $rc; expected the usage code 64" >&2
+            exit 1
+          fi
+
   build-gate:
     # Aggregator that resolves the matrix-skip naming gap. When the
     # `build` job's `if:` gate evaluates false, GitHub collapses both
