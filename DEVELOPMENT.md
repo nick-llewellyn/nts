@@ -430,7 +430,7 @@ that push events don't have:
 | Job | Cost | Purpose |
 |-----|------|---------|
 | `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, `docs`, `hooks`, and `android` flags consumed by the gates below (`docs` gates `doc-snippets`; `hooks` gates the two hook jobs; `android` gates the KGP gate matrix). Always runs. |
-| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the oldest buildable SDK (3.38.10 — above the declared `>=3.38.0` floor; see the comment on the `build` job) and the latest `stable` channel (matches `.fvmrc`). Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Stable-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
+| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the oldest buildable SDK (3.38.10 — above the declared `>=3.38.0` floor; see the comment on the `build` job) and the latest `stable` channel (matches `.fvmrc`). Also resolves, analyzes, and tests the example app, then smoke-runs the three `example/bin/` CLI scripts under `dart run` with `--mock` — those are the package's only non-Flutter consumers, so running them through `dart` rather than `flutter` is what catches a `dart:ui` import leaking back into the library surface, and the step also pins `nts_cli`'s usage exit code at 64 so a failing script cannot pass by exiting 0. Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Stable-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
 | `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: [changes, build]` + `if: always()` so it runs whether the matrix executed, was skipped, or failed. Passes when `needs.changes.result == 'success'` AND `needs.build.result` is `success` or `skipped`; fails otherwise. The `changes`-success precondition discriminates a legitimate doc-only matrix skip from a `changes`-failure cascade-skip — without it, a transient paths-filter failure would silently green-light branch protection. Required-status-check entry on `main` for the Dart side. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated on `rust`/`bindings`/`ci`. |
@@ -781,6 +781,14 @@ flutter test --coverage
 
 # Example app (any Dart change touching the public surface)
 (cd example && flutter pub get && flutter analyze && flutter test)
+
+# Example CLI scripts (any change to example/bin/ or the public
+# surface they consume); `dart`, not `flutter`, is the point
+(cd example \
+  && dart run bin/nts_cli.dart --mock nts.example.test \
+  && dart run bin/nts_health.dart --mock assets/nts-sources.yml \
+  && dart run bin/nts_manifest.dart --mock -o /tmp/nts-manifest.json \
+       assets/nts-sources.yml)
 
 # Rust side (any rust/** change)
 (cd rust && cargo build --locked && cargo test --lib --locked)
