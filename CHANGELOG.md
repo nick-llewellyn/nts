@@ -6,6 +6,24 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 9.4
+
+### Internal
+
+- CI now smoke-runs the three example CLI scripts under `example/bin/`
+  through `dart run` with `--mock`
+  ([#337](https://github.com/nick-llewellyn/nts/pull/337)). They had no
+  execution coverage: the root `dart analyze .` and `flutter test`
+  never reach `example/`, and the example app's own gates run its
+  tests, which cover `example/lib/`. `dart` rather than `flutter` is
+  the point — these scripts are the package's only non-Flutter
+  consumers, so this is the only place a `dart:ui` import leaking back
+  into the library surface would fail. `--mock` binds the in-memory
+  fake, so no dylib and no network are involved. The step also pins
+  `nts_cli`'s no-hosts exit code at 64, since a script that fails but
+  still exits 0 is the defect shape being guarded against.
+
+
 ## 9.3.0
 
 ### Changed
