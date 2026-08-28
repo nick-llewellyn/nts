@@ -20,8 +20,9 @@ tarball.
   consumers, so this is the only place a `dart:ui` import leaking back
   into the library surface would fail. `--mock` binds the in-memory
   fake, so no dylib and no network are involved. The step also pins
-  `nts_cli`'s no-hosts exit code at 64, since a script that fails but
-  still exits 0 is the defect shape being guarded against.
+  `nts_cli`'s no-host exit code at 64 so that invocation cannot become
+  a silent success; it does not reach the native-reuse bridge path,
+  which needs a real dylib and a failing initialization.
 
 
 ## 9.3.0

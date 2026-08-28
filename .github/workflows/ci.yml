@@ -286,11 +286,13 @@ jobs:
       # `--mock` binds the in-memory fake the example app uses, so no
       # dylib and no network are needed; the runs are seconds each.
       # `--help` covers the argument-parse path ahead of any bridge
-      # load. The final assertion pins the usage exit code: a script
-      # that fails but still exits 0 is the defect shape here (the
-      # `nts_cli` native-reuse arm once returned without awaiting the
-      # bridge latch, turning an initialization failure into a
-      # success), and only a non-zero expectation catches it.
+      # load. The final assertion pins the usage exit code at 64 so a
+      # refactor cannot turn a no-host invocation into a silent
+      # success. It stops short of the native-reuse latch regression
+      # (`nts_cli` once returned without awaiting the bridge, so a
+      # retained initialization failure exited 0): that arm needs a
+      # real dylib and a failing init, which neither `--mock` nor
+      # `--help` reaches, and is not covered here.
       - name: Smoke-run example CLI scripts (dart run)
         working-directory: example
         run: |
