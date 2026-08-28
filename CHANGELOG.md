@@ -88,6 +88,24 @@ tarball.
   `doc-snippets` or `cargo-deny`. Count corrected, both rows written,
   and the doc-only skip list in the lead-in prose extended to
   `cargo-deny` and `android-kgp-gate`.
+- Add two rules to the versioning policy in `AGENTS.md`. A runtime
+  behaviour change to a public Dart API — existing callers still
+  compile and still resolve, but observe a different return value,
+  post-condition, error, or lifecycle outcome — now requires a major
+  bump, and neither "an upstream dependency forced it" nor a narrow
+  affected surface is an exemption. Shipping one as a minor is still
+  permitted but becomes an explicit deviation: reasoned in the release
+  PR, described by blast radius in the changelog, and recorded in an
+  issue. A tightened dependency constraint that only breaks resolution
+  is excluded — it fails at solve time before any code runs. This
+  release's `dispose()` change is named in the policy as the founding
+  case for the deviation, since cutting `10.0.0` here would strand
+  every consumer on a `^9` constraint behind the resolution bug this
+  release exists to fix. The reviewer-facing mirrors in
+  `.github/copilot-instructions.md` and
+  `.github/skills/code-review/architecture.md` carry the check too, so
+  it applies on release PRs rather than living only in the policy
+  document.
 - Bump the pinned Rust toolchain in `rust/rust-toolchain.toml` from
   `1.97.1` to `1.98.0` (released 2026-08-20). The FRB bindings are
   in sync under the new pin with no regeneration needed, and the MSRV
@@ -174,24 +192,6 @@ tarball.
   puts on the classpath. `tool/test_android_kgp_gate.sh` reads the
   version off `example/android/settings.gradle.kts`, so the CI gate
   matrix follows without a second edit; all eight assertions still pass.
-- Add two rules to the versioning policy in `AGENTS.md`. A runtime
-  behaviour change to a public Dart API — existing callers still
-  compile and still resolve, but observe a different return value,
-  post-condition, error, or lifecycle outcome — now requires a major
-  bump, and neither "an upstream dependency forced it" nor a narrow
-  affected surface is an exemption. Shipping one as a minor is still
-  permitted but becomes an explicit deviation: reasoned in the release
-  PR, described by blast radius in the changelog, and recorded in an
-  issue. A tightened dependency constraint that only breaks resolution
-  is excluded — it fails at solve time before any code runs. This
-  release's `dispose()` change is named in the policy as the founding
-  case for the deviation, since cutting `10.0.0` here would strand
-  every consumer on a `^9` constraint behind the resolution bug this
-  release exists to fix. The reviewer-facing mirrors in
-  `.github/copilot-instructions.md` and
-  `.github/skills/code-review/architecture.md` carry the check too, so
-  it applies on release PRs rather than living only in the policy
-  document.
 
 ### Documentation
 
