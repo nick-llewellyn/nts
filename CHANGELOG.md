@@ -121,7 +121,7 @@ tarball.
   became case-insensitive in v4.9.0, which the pinned v5.0.0 includes.
 - `DEVELOPMENT.md`'s CI job inventory said `ci.yml` defines eight jobs
   when it defines eleven
-  ([#319](https://github.com/nick-llewellyn/nts/pull/319)), and the
+  ([#321](https://github.com/nick-llewellyn/nts/pull/321)), and the
   table below it had no rows for `doc-snippets` or `cargo-deny`. Count
   corrected, both rows written, and the doc-only skip list in the
   lead-in prose extended to
