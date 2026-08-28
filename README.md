@@ -77,6 +77,18 @@ the underlying RFC 8915 layering and cryptographic specifics.
   no `rustup update` or other manual step is needed. The superseded
   toolchain stays on disk; reclaim the space with
   `rustup toolchain uninstall <old-version>` if you like.
+- **Android NDK r28 or newer** in your Android SDK, on Android only.
+  Android 15+ requires 64-bit native libraries to be 16 KB page
+  aligned, and the NDK clang driver only defaults to that from r28 —
+  r27 and earlier produce a 4 KB-aligned `libnts_rust.so` that Google
+  Play rejects. Nothing to do on a current setup, since every Flutter
+  this package supports installs an r28 NDK; if the newest NDK in your
+  SDK is older, the build hook fails with a message naming the
+  revision it found. Note that this is the NDK *installed in the SDK*,
+  not the `ndkVersion` your app's Gradle script pins — the Native
+  Assets build resolves its toolchain from the SDK independently, so
+  raising or lowering `ndkVersion` does not change which NDK compiles
+  the Rust library.
 
 ### Install
 

@@ -678,24 +678,27 @@ jobs:
           # v4.9.0, so the pinned v5.0.0 above matches either casing.
           # Restore the duplicates if the pin is ever moved backwards.
           #
-          # flutter_rust_bridge is the one non-action entry, and the
-          # reason it is listed is narrower than what listing it does.
-          # The package is MIT, which `allow-licenses` above already
-          # permits; pub.dev publishes the field as the lowercase
-          # string `mit`, which is not a valid SPDX identifier, so the
-          # action cannot *validate* it and fails closed with "could
-          # not detect the validity of all licenses" rather than
-          # rejecting the licence itself. This input is the only lever
-          # for that, and it is package-scoped rather than
-          # error-scoped: a listed package is dropped from licence
-          # evaluation entirely, so *any* licence a future FRB release
-          # declares would pass here unexamined. That blind spot is the
-          # cost of the carve-out -- re-verify the licence by hand on
-          # every exact-pin bump, and drop the entry outright if
-          # pub.dev starts emitting canonical SPDX identifiers.
+          # flutter_rust_bridge and code_assets are the two non-action
+          # entries, and the reason they are listed is narrower than
+          # what listing them does. FRB is MIT and code_assets is
+          # BSD-3-Clause (the Dart project's standard header) -- both
+          # already permitted by `allow-licenses` above; pub.dev
+          # publishes the field lowercased (`mit`, `bsd-3-clause`),
+          # which is not a valid SPDX identifier, so the action cannot
+          # *validate* it and fails closed with "could not detect the
+          # validity of all licenses" rather than rejecting the licence
+          # itself. This input is the only lever for that, and it is
+          # package-scoped rather than error-scoped: a listed package
+          # is dropped from licence evaluation entirely, so *any*
+          # licence a future release declares would pass here
+          # unexamined. That blind spot is the cost of the carve-out --
+          # re-verify the licence by hand on every bump, and drop the
+          # entries outright if pub.dev starts emitting canonical SPDX
+          # identifiers.
           allow-dependencies-licenses: >-
             pkg:githubactions/Swatinem/rust-cache,
-            pkg:pub/flutter_rust_bridge
+            pkg:pub/flutter_rust_bridge,
+            pkg:pub/code_assets
 
   cargo-deny:
     # Rust supply-chain policy gate (NTS-72): runs the `bans`,

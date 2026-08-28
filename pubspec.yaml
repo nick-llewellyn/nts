@@ -90,6 +90,11 @@ dependencies:
   # version solving fail outright. Revisit once a supported Flutter ships
   # `meta` 1.19.0.
   native_toolchain_rust: ^1.0.4
+  # Already in the graph transitively via both packages above; declared
+  # directly because `hook/build.dart` reads `CodeConfig.targetOS` and
+  # `CodeConfig.cCompiler` from it for the Android NDK floor check, and
+  # neither `hooks` nor `native_toolchain_rust` re-exports it.
+  code_assets: ^1.2.1
 
 dev_dependencies:
   flutter_test:
