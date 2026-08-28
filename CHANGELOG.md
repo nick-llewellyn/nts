@@ -49,6 +49,18 @@ tarball.
   rebuilding the example with the hook cache cleared, which emits the
   same `libnts_rust.so` for all three Android ABIs and the same
   `nts_rust.framework` on macOS.
+- Raise the example app's Kotlin Gradle Plugin floor from 2.2.20 to
+  2.3.20 ([NTS-166](https://linear.app/nick-llewellyn/issue/NTS-166)).
+  Flutter's `DependencyVersionChecker` pins `errorKGPVersion` at 2.2.20
+  and `warnKGPVersion` at 2.3.20, so the example sat exactly on the
+  error floor and every Android build printed "Flutter support for your
+  project's Kotlin version (2.2.20) will soon be dropped". 2.3.20 clears
+  the warning and stays within Flutter's documented compatibility range
+  for AGP 9.2.1. Example-only: the published package pins no KGP
+  version — `android/build.gradle.kts` resolves whatever the host app
+  puts on the classpath. `tool/test_android_kgp_gate.sh` reads the
+  version off `example/android/settings.gradle.kts`, so the CI gate
+  matrix follows without a second edit; all eight assertions still pass.
 - Add two rules to the versioning policy in `AGENTS.md`. A runtime
   behaviour change to a public Dart API — existing callers still
   compile and still resolve, but observe a different return value,
