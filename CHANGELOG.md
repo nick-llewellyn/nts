@@ -11,7 +11,9 @@ tarball.
 ### Changed
 
 - The Native Assets build hook now refuses to build for Android
-  against an NDK below r28. Android 15+ requires 64-bit native
+  against an NDK below r28
+  ([#335](https://github.com/nick-llewellyn/nts/issues/335)).
+  Android 15+ requires 64-bit native
   libraries to be 16 KB page aligned; that alignment comes entirely
   from the NDK clang driver's default `-z max-page-size`, which was
   4 KB through r27 and became 16 KB in r28. `native_toolchain_rust`
