@@ -131,8 +131,17 @@ void _checkAndroidNdkFloor(Uri? compiler) {
   final ndkRoot = androidNdkRoot(compiler);
   if (ndkRoot == null) return;
   final properties = File.fromUri(ndkRoot.resolve('source.properties'));
-  if (!properties.existsSync()) return;
-  final failure = androidNdkFloorFailure(properties.readAsStringSync());
+  final String contents;
+  try {
+    contents = properties.readAsStringSync();
+  } on IOException {
+    // Absent, unreadable, or removed between here and the read.
+    return;
+  } on FormatException {
+    // Not UTF-8, so not a revision we can trust either way.
+    return;
+  }
+  final failure = androidNdkFloorFailure(contents);
   if (failure != null) {
     throw UnsupportedError(failure);
   }
