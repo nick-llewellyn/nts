@@ -6,103 +6,6 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 9.4
-
-### Internal
-
-- Accept the Flutter 3.47 analyzer migration in `analysis_options.yaml`
-  and `example/analysis_options.yaml`
-  ([NTS-165](https://linear.app/nick-llewellyn/issue/NTS-165)). Flutter
-  3.47's `pub get` inserts an `analyzer.exclude` block covering `build/`
-  and every platform directory, and re-applies it unconditionally on
-  every run — declining it leaves a permanently dirty working tree for
-  anyone who runs `pub get` before `analyze`. Once accepted it is
-  idempotent. No `.dart` files live under any excluded path in either
-  package, so the analyzed file set is unchanged and both packages still
-  report no issues. The generated blocks are repositioned so they do not
-  split the `include:` comment from `include:` in the example, or sit
-  directly beneath the root file's note about what is deliberately *not*
-  excluded.
-- Accept the Flutter 3.47 Xcode project regeneration in the example app
-  ([NTS-168](https://linear.app/nick-llewellyn/issue/NTS-168)). Building
-  the example on a physical iOS device or on macOS under 3.47.1 raises
-  `IPHONEOS_DEPLOYMENT_TARGET` from 14.0 to 15.0 and
-  `MACOSX_DEPLOYMENT_TARGET` from 10.15 to 12.0 across all three build
-  configurations, and adds the standard `Pods/Pods.xcodeproj` reference
-  to the iOS workspace. The new floors are Flutter 3.47's own minimums,
-  so declining them leaves the tree dirty after every Apple-platform
-  build, and the generated (gitignored) `example/macos/Podfile` already
-  carried the 12.0 floor, so the `.pbxproj` files were the stale side of
-  the inconsistency. Example-only: the package ships no podspec — Apple
-  support goes through Native Assets — so nothing in the published
-  package declares or inherits these floors.
-- Declare `lib.name` explicitly in `rust/Cargo.toml`
-  ([NTS-167](https://linear.app/nick-llewellyn/issue/NTS-167)).
-  `native_toolchain_rust` 1.0.6 reads `lib.name` from the manifest and,
-  when it is absent, logs the failed lookup at SEVERE with a full stack
-  trace before falling back to `package.name`; the fallback itself logs
-  at FINE and is invisible, so every native-assets build printed one
-  `type 'Null' is not a subtype of type 'String'` trace per target
-  triple — six on an Android build — for a non-event. Cargo already
-  defaulted the library name to `package.name`, so the declared value is
-  identical and the emitted artefacts are unchanged: verified by
-  rebuilding the example with the hook cache cleared, which emits the
-  same `libnts_rust.so` for all three Android ABIs and the same
-  `nts_rust.framework` on macOS.
-- Raise the example app's Kotlin Gradle Plugin floor from 2.2.20 to
-  2.3.20 ([NTS-166](https://linear.app/nick-llewellyn/issue/NTS-166)).
-  Flutter's `DependencyVersionChecker` pins `errorKGPVersion` at 2.2.20
-  and `warnKGPVersion` at 2.3.20, so the example sat exactly on the
-  error floor and every Android build printed "Flutter support for your
-  project's Kotlin version (2.2.20) will soon be dropped". 2.3.20 clears
-  the warning and stays within Flutter's documented compatibility range
-  for AGP 9.2.1. Example-only: the published package pins no KGP
-  version — `android/build.gradle.kts` resolves whatever the host app
-  puts on the classpath. `tool/test_android_kgp_gate.sh` reads the
-  version off `example/android/settings.gradle.kts`, so the CI gate
-  matrix follows without a second edit; all eight assertions still pass.
-- Add two rules to the versioning policy in `AGENTS.md`. A runtime
-  behaviour change to a public Dart API — existing callers still
-  compile and still resolve, but observe a different return value,
-  post-condition, error, or lifecycle outcome — now requires a major
-  bump, and neither "an upstream dependency forced it" nor a narrow
-  affected surface is an exemption. Shipping one as a minor is still
-  permitted but becomes an explicit deviation: reasoned in the release
-  PR, described by blast radius in the changelog, and recorded in an
-  issue. A tightened dependency constraint that only breaks resolution
-  is excluded — it fails at solve time before any code runs. The
-  `9.3.0` `dispose()` change is named in the policy as the founding
-  case for the deviation — precedent once that release publishes — since
-  cutting `10.0.0` there would strand every consumer on a `^9`
-  constraint behind the resolution bug that release exists to fix. The
-  reviewer-facing mirrors in
-  `.github/copilot-instructions.md` and
-  `.github/skills/code-review/architecture.md` carry the check too, so
-  it applies on release PRs rather than living only in the policy
-  document.
-- Cap the example app's `share_plus` constraint at `>=13.1.0 <13.2.0`.
-  From `13.2.0` the plugin's Android build script configures
-  `KotlinAndroidProjectExtension` unconditionally and skips applying the
-  Kotlin Gradle Plugin whenever AGP is 9 or newer, so it depends on
-  Flutter's Built-in Kotlin to register that extension. The example pins
-  AGP `9.2.1`, and Built-in Kotlin only arrived in Flutter `3.44`, but
-  `share_plus` still declares `flutter: '>=3.38.1'` — so pub resolves it
-  on the example's `3.38.x` floor and Gradle then fails to configure
-  with `Extension of type 'KotlinAndroidProjectExtension' does not
-  exist`. CI never saw it: the `3.38.10` matrix leg runs only `pub get`,
-  `analyze`, and `test`, and `android-kgp-gate` configures the `:nts`
-  module standalone without a Flutter SDK. The cost of the cap is that
-  the Built-in Kotlin deprecation warning returns for `share_plus` on
-  current stable; keeping the floor buildable takes priority, and the
-  cap lifts once the floor reaches `3.44` — or sooner, if `share_plus`
-  corrects its declared `environment.flutter` so the incompatibility
-  becomes solver-visible rather than a Gradle-time failure.
-  `shared_preferences_android` needed no cap — it raised its own floor
-  to `3.44` in `2.4.24`, so pub correctly holds it at `2.4.23` on the
-  old SDK and takes `2.4.27` on stable, which clears its half of the
-  warning. Example app only; no package API change.
-
-
 ## 9.3.0
 
 ### Changed
@@ -199,6 +102,96 @@ tarball.
   `map(format!(..)).collect::<String>()`, not the explicit
   `FromIterator::from_iter(..)` calls the removed lint checked. The
   crate has no such call sites, so the removal costs no coverage here.
+- Cap the example app's `share_plus` constraint at `>=13.1.0 <13.2.0`.
+  From `13.2.0` the plugin's Android build script configures
+  `KotlinAndroidProjectExtension` unconditionally and skips applying the
+  Kotlin Gradle Plugin whenever AGP is 9 or newer, so it depends on
+  Flutter's Built-in Kotlin to register that extension. The example pins
+  AGP `9.2.1`, and Built-in Kotlin only arrived in Flutter `3.44`, but
+  `share_plus` still declares `flutter: '>=3.38.1'` — so pub resolves it
+  on the example's `3.38.x` floor and Gradle then fails to configure
+  with `Extension of type 'KotlinAndroidProjectExtension' does not
+  exist`. CI never saw it: the `3.38.10` matrix leg runs only `pub get`,
+  `analyze`, and `test`, and `android-kgp-gate` configures the `:nts`
+  module standalone without a Flutter SDK. The cost of the cap is that
+  the Built-in Kotlin deprecation warning returns for `share_plus` on
+  current stable; keeping the floor buildable takes priority, and the
+  cap lifts once the floor reaches `3.44` — or sooner, if `share_plus`
+  corrects its declared `environment.flutter` so the incompatibility
+  becomes solver-visible rather than a Gradle-time failure.
+  `shared_preferences_android` needed no cap — it raised its own floor
+  to `3.44` in `2.4.24`, so pub correctly holds it at `2.4.23` on the
+  old SDK and takes `2.4.27` on stable, which clears its half of the
+  warning. Example app only; no package API change.
+- Accept the Flutter 3.47 analyzer migration in `analysis_options.yaml`
+  and `example/analysis_options.yaml`
+  ([NTS-165](https://linear.app/nick-llewellyn/issue/NTS-165)). Flutter
+  3.47's `pub get` inserts an `analyzer.exclude` block covering `build/`
+  and every platform directory, and re-applies it unconditionally on
+  every run — declining it leaves a permanently dirty working tree for
+  anyone who runs `pub get` before `analyze`. Once accepted it is
+  idempotent. No `.dart` files live under any excluded path in either
+  package, so the analyzed file set is unchanged and both packages still
+  report no issues. The generated blocks are repositioned so they do not
+  split the `include:` comment from `include:` in the example, or sit
+  directly beneath the root file's note about what is deliberately *not*
+  excluded.
+- Accept the Flutter 3.47 Xcode project regeneration in the example app
+  ([NTS-168](https://linear.app/nick-llewellyn/issue/NTS-168)). Building
+  the example on a physical iOS device or on macOS under 3.47.1 raises
+  `IPHONEOS_DEPLOYMENT_TARGET` from 14.0 to 15.0 and
+  `MACOSX_DEPLOYMENT_TARGET` from 10.15 to 12.0 across all three build
+  configurations, and adds the standard `Pods/Pods.xcodeproj` reference
+  to the iOS workspace. The new floors are Flutter 3.47's own minimums,
+  so declining them leaves the tree dirty after every Apple-platform
+  build, and the generated (gitignored) `example/macos/Podfile` already
+  carried the 12.0 floor, so the `.pbxproj` files were the stale side of
+  the inconsistency. Example-only: the package ships no podspec — Apple
+  support goes through Native Assets — so nothing in the published
+  package declares or inherits these floors.
+- Declare `lib.name` explicitly in `rust/Cargo.toml`
+  ([NTS-167](https://linear.app/nick-llewellyn/issue/NTS-167)).
+  `native_toolchain_rust` 1.0.6 reads `lib.name` from the manifest and,
+  when it is absent, logs the failed lookup at SEVERE with a full stack
+  trace before falling back to `package.name`; the fallback itself logs
+  at FINE and is invisible, so every native-assets build printed one
+  `type 'Null' is not a subtype of type 'String'` trace per target
+  triple — six on an Android build — for a non-event. Cargo already
+  defaulted the library name to `package.name`, so the declared value is
+  identical and the emitted artefacts are unchanged: verified by
+  rebuilding the example with the hook cache cleared, which emits the
+  same `libnts_rust.so` for all three Android ABIs and the same
+  `nts_rust.framework` on macOS.
+- Raise the example app's Kotlin Gradle Plugin floor from 2.2.20 to
+  2.3.20 ([NTS-166](https://linear.app/nick-llewellyn/issue/NTS-166)).
+  Flutter's `DependencyVersionChecker` pins `errorKGPVersion` at 2.2.20
+  and `warnKGPVersion` at 2.3.20, so the example sat exactly on the
+  error floor and every Android build printed "Flutter support for your
+  project's Kotlin version (2.2.20) will soon be dropped". 2.3.20 clears
+  the warning and stays within Flutter's documented compatibility range
+  for AGP 9.2.1. Example-only: the published package pins no KGP
+  version — `android/build.gradle.kts` resolves whatever the host app
+  puts on the classpath. `tool/test_android_kgp_gate.sh` reads the
+  version off `example/android/settings.gradle.kts`, so the CI gate
+  matrix follows without a second edit; all eight assertions still pass.
+- Add two rules to the versioning policy in `AGENTS.md`. A runtime
+  behaviour change to a public Dart API — existing callers still
+  compile and still resolve, but observe a different return value,
+  post-condition, error, or lifecycle outcome — now requires a major
+  bump, and neither "an upstream dependency forced it" nor a narrow
+  affected surface is an exemption. Shipping one as a minor is still
+  permitted but becomes an explicit deviation: reasoned in the release
+  PR, described by blast radius in the changelog, and recorded in an
+  issue. A tightened dependency constraint that only breaks resolution
+  is excluded — it fails at solve time before any code runs. This
+  release's `dispose()` change is named in the policy as the founding
+  case for the deviation, since cutting `10.0.0` here would strand
+  every consumer on a `^9` constraint behind the resolution bug this
+  release exists to fix. The reviewer-facing mirrors in
+  `.github/copilot-instructions.md` and
+  `.github/skills/code-review/architecture.md` carry the check too, so
+  it applies on release PRs rather than living only in the policy
+  document.
 
 ### Documentation
 
