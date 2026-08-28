@@ -181,7 +181,8 @@ Cite the pull request, linked in full — for example
 `([#328](https://github.com/nick-llewellyn/nts/pull/328))` — rather
 than a bare `#328`, which pub.dev does not auto-link. Cite the issue
 instead when the entry is better explained by the report than by the
-change. The same applies to `README.md` and to dartdoc on public API.
+change. The same applies to `README.md`, `example/example.md`, and
+dartdoc on public API.
 
 Do **not** bump the `version:` field in `pubspec.yaml` or the
 `version = ` field in `rust/Cargo.toml`. This project bumps versions
