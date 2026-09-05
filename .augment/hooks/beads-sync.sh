@@ -765,6 +765,23 @@ hand_back() {
   return 0
 }
 
+# True when $1, the output of a `bd dolt commit`, says only that there was
+# nothing to commit. Every non-blank line must be that message on its own --
+# `Nothing to commit.`, or Dolt's `nothing to commit, working tree clean` --
+# rather than the phrase appearing somewhere in a longer diagnostic. A lock
+# error that quotes it, or a failure that mentions it in passing, is a failure
+# still: taking it for a no-op would push, clear the marker, and lose the only
+# record that the store was owed a retry.
+commit_noop() {
+  local line seen=0
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    seen=1
+    [[ "$line" =~ ^[[:space:]]*([Nn]othing\ to\ commit\.?|nothing\ to\ commit,\ working\ tree\ clean\.?|[Nn]o\ changes\ to\ commit\.?)[[:space:]]*$ ]] || return 1
+  done <<<"$1"
+  [ "$seen" -eq 1 ]
+}
+
 # PostToolUse fires on every tool call, so narrow to shell commands touching
 # the bead store. Deciding which commands those are means reading shell
 # syntax, which is what the scanner does; see its header for why that is a
@@ -1050,8 +1067,10 @@ sync_root() {
     commit_rc=$?
     commit_out=$(cat "$run_out" 2>/dev/null)
 
-    # A no-op commit is the common case and is not an error.
-    if [ "$commit_rc" -ne 0 ] && ! grep -qiE 'nothing to commit|no changes' <<<"$commit_out"; then
+    # A no-op commit is the common case and is not an error. `bd` 1.2 says so
+    # with exit 0, and the reading below is for a version that says it with a
+    # non-zero exit instead.
+    if [ "$commit_rc" -ne 0 ] && ! commit_noop "$commit_out"; then
       # As with a failed push: hand the request back so it is retried.
       WARNINGS+=("beads: 'bd dolt commit' failed in ${root}, bead store not pushed to DoltHub. Output: ${commit_out}")
       hand_back "$root"

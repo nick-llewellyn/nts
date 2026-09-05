@@ -70,7 +70,15 @@ if grep -q push <<<"$*"; then
   echo "push-end $$" >>"$LOG.span"
 fi
 if grep -q commit <<<"$*"; then
-  [ -n "${BD_COMMIT_FAIL:-}" ] && { echo "commit refused"; exit 1; }
+  # BD_COMMIT_FAIL=1 fails with a generic message; any other value is printed
+  # as the diagnostic, so a case can choose what a failing commit says.
+  if [ -n "${BD_COMMIT_FAIL:-}" ]; then
+    [ "$BD_COMMIT_FAIL" = 1 ] && echo "commit refused" || echo "$BD_COMMIT_FAIL"
+    exit 1
+  fi
+  # A no-op said with a non-zero exit, as the hook reads it for a `bd` that
+  # does so; 1.2 exits 0 for the same case.
+  [ -n "${BD_COMMIT_NOOP:-}" ] && { echo "Nothing to commit."; exit 1; }
 fi
 exit 0
 STUB
@@ -83,7 +91,7 @@ STUB
 teardown() {
   rm -rf "$WS"
   PATH="$ORIG_PATH"
-  unset BD_PUSH_FAIL BD_PUSH_SLEEP BD_COMMIT_FAIL
+  unset BD_PUSH_FAIL BD_PUSH_SLEEP BD_COMMIT_FAIL BD_COMMIT_NOOP
 }
 
 # Feeds one event of type $1 carrying $2 as the command. Remaining
@@ -214,7 +222,33 @@ setup
 export BD_COMMIT_FAIL=1
 fire 'bd close CHR-1'
 pending && report ok || report bad "commit failure must leave marker set"
+[ "$(count push)" -eq 0 ] && report ok || report bad "commit failure must not push"
 teardown
+
+# --- a no-op commit said with a non-zero exit is not a failure ---------
+setup
+export BD_COMMIT_NOOP=1
+fire 'bd close CHR-1'
+[ "$(count push)" -eq 1 ] && report ok || report bad "no-op commit must still push (pushes=$(count push))"
+! pending && report ok || report bad "no-op commit must clear marker"
+teardown
+
+# --- a failure that merely mentions the no-op phrase is still a failure --
+# The old reading matched the phrase anywhere in the output, so a lock error
+# that quoted it, or any diagnostic that mentioned it in passing, was taken
+# for a no-op: the hook pushed, cleared the marker, and the only record that
+# the store was owed a retry went with it.
+for msg in \
+  'error: database is locked; nothing to commit until the other writer exits' \
+  'commit failed: no changes were staged because the working set is corrupt' \
+  $'Nothing to commit.\nerror: could not update working set'; do
+  setup
+  export BD_COMMIT_FAIL="$msg"
+  fire 'bd close CHR-1'
+  pending && report ok || report bad "failure quoting the no-op phrase must leave marker set: $msg"
+  [ "$(count push)" -eq 0 ] && report ok || report bad "failure quoting the no-op phrase must not push: $msg"
+  teardown
+done
 
 # --- a temporary directory that refuses a file is said so ---------------
 # The output of each `bd` is read back from a file under $TMPDIR, and a
