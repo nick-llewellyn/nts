@@ -973,14 +973,32 @@ def gives_value(arg):
 
     The forms that give no single value are excluded: `export X` names an
     existing value without changing it, which the parse marks `Naked`;
-    `A=(1 2)` is an array; `A[2]=x` sets one element of one; and `X+=`, having
-    nothing to append, leaves the value it had.
+    `A=(1 2)` is an array and `A[2]=x` sets one element of one, for which see
+    `replaces_value`; and `X+=`, having nothing to append, leaves the value it
+    had.
     """
     if not arg.get("Name") or arg.get("Naked"):
         return False
     if arg.get("Array") or arg.get("Index"):
         return False
     return bool(arg.get("Value")) or not arg.get("Append")
+
+
+def replaces_value(arg):
+    """Whether the assignment `arg` may give its name a value this scan does
+    not read.
+
+    `$X` is element zero of an array, so `X=(/tmp/a /tmp/b)` makes it /tmp/a,
+    `X[0]=/tmp/c` makes it /tmp/c, `X=()` empties it, `X+=(/tmp/d)` fills it
+    when it was unset, and `X[i]=/tmp/e` does any of these for an `i` this scan
+    does not evaluate. Left at the value from before, as the forms that assign
+    nothing are, `X=(/real); bd -C "$X" close X` named the old store while the
+    write landed in the new one. None of them is one value to record, so the
+    name is forgotten instead.
+    """
+    if not arg.get("Name") or arg.get("Naked"):
+        return False
+    return bool(arg.get("Array") or arg.get("Index"))
 
 
 class Scope:
@@ -2847,7 +2865,7 @@ class Scanner:
                 continue
             # `export OUT` exports a name without changing its value, so only
             # the operands that are assignments assign.
-            if gives_value(arg):
+            if gives_value(arg) or replaces_value(arg):
                 self.assign(arg, conditional)
             if state is not None:
                 self.scope.exported[name] = state
@@ -2867,6 +2885,9 @@ class Scanner:
         leaves the attribute as it was, which `is_exported` reads.
         """
         name = arg["Name"]["Value"]
+        if replaces_value(arg):
+            self.forget(name)
+            return
         self.scope.assigns[name] = (UNKNOWN if conditional
                                     else self.assign_value(arg))
         if self.scope.allexport is UNKNOWN:
@@ -2903,7 +2924,7 @@ class Scanner:
             # assignment therefore speaks for neither this command's arguments
             # nor any later command.
             for arg in assigns:
-                if gives_value(arg):
+                if gives_value(arg) or replaces_value(arg):
                     self.assign(arg, conditional)
             return
 

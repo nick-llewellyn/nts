@@ -794,11 +794,23 @@ scan_command 'CS_TEST_STORE=/old; true && CS_TEST_STORE=/real; bd -C "$CS_TEST_S
 }
 # A name the conditional path does not touch keeps its value.
 check_target '/tmp/store' 'OUT=/tmp/store; true && OTHER=/x; bd -C "$OUT" close CHR-1'
-# The forms that give a name no single value leave the one it had: `+=` with
-# nothing to append, an array, and one element of an array.
+# `+=` with nothing to append leaves the value it had.
 check_target '/tmp/inherited' 'CS_TEST_STORE+=; bd -C "$CS_TEST_STORE" close CHR-1'
-check_target '/tmp/inherited' 'CS_TEST_STORE=(/tmp/a /tmp/b); bd -C "$CS_TEST_STORE" close CHR-1'
-check_target '/tmp/inherited' 'CS_TEST_STORE[2]=/tmp/x; bd -C "$CS_TEST_STORE" close CHR-1'
+# An array assignment does not: `$X` is element zero, so `X=(/tmp/a /tmp/b)`
+# makes it /tmp/a, `X[0]=` replaces it, `X=()` empties it, and `X[i]=` may do
+# any of these for an `i` this scan does not evaluate. Left at the value from
+# before, the write was attributed to a store the command never opened. The
+# name is unknown after each rather than modelled.
+check_unresolved 'CS_TEST_STORE=(/tmp/a /tmp/b); bd -C "$CS_TEST_STORE" close CHR-1'
+check_unresolved 'CS_TEST_STORE[0]=/tmp/x; bd -C "$CS_TEST_STORE" close CHR-1'
+check_unresolved 'CS_TEST_STORE[2]=/tmp/x; bd -C "$CS_TEST_STORE" close CHR-1'
+check_unresolved 'CS_TEST_STORE[i]=/tmp/x; bd -C "$CS_TEST_STORE" close CHR-1'
+check_unresolved 'CS_TEST_STORE=(); bd -C "$CS_TEST_STORE" close CHR-1'
+check_unresolved 'CS_TEST_STORE+=(/tmp/x); bd -C "$CS_TEST_STORE" close CHR-1'
+check_unresolved 'declare -a CS_TEST_STORE=(/tmp/a); bd -C "$CS_TEST_STORE" close CHR-1'
+check_unresolved 'export CS_TEST_STORE=(/tmp/a); bd -C "$CS_TEST_STORE" close CHR-1'
+# Another name's array leaves this one alone.
+check_target '/tmp/inherited' 'CS_OTHER=(/tmp/a /tmp/b); bd -C "$CS_TEST_STORE" close CHR-1'
 # `+=` with something to append gives the name what it had with that after
 # it, so `OUT=/tmp/; OUT+=store` is /tmp/store. Recording the appended text
 # alone left OUT as `store`, a relative path resolved under the launch
