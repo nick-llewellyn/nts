@@ -832,7 +832,7 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # Saying `-C` of all of these pointed recovery at a flag the command need not
   # have carried.
   if [ "$SCAN_UNRESOLVED" -gt 0 ]; then
-    WARNINGS+=("beads: a bead store that was written could not be resolved to a path, so it was not synced or recorded; run 'bd dolt push' there if the write matters. This happens when a 'bd -C <dir>' or BEADS_DIR value depends on something only the running command knew, when a plain 'bd' ran in a directory the event did not report, or when the command ran script the hook could not read (eval \"\$X\", bash -c \"\$(...)\").")
+    WARNINGS+=("beads: a bead store that was written could not be resolved to a path, so it was not synced or recorded; run 'bd dolt push --remote origin' there if the write matters. This happens when a 'bd -C <dir>' or BEADS_DIR value depends on something only the running command knew, when a plain 'bd' ran in a directory the event did not report, or when the command ran script the hook could not read (eval \"\$X\", bash -c \"\$(...)\").")
   fi
 
   # `bd -C <dir>` can write a store outside every workspace root, which no
