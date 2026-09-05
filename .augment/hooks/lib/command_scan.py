@@ -1022,7 +1022,7 @@ class Scope:
     """
 
     def __init__(self, cwd, known, assigns, sealed=False, exported=None,
-                 allexport=False):
+                 allexport=False, lastpipe=False, monitor=False):
         self.cwd = cwd
         self.known = known
         # Whether anything in this frame acted on the cwd -- a `cd` taken or
@@ -1049,10 +1049,28 @@ class Scope:
         # `set -a` in force: every later assignment is exported. UNKNOWN when
         # a `set -a` may or may not have run.
         self.allexport = allexport
+        # `shopt -s lastpipe` in force: the last member of a pipeline runs in
+        # this shell rather than a subshell, so `true | cd /external; bd close
+        # X` writes /external's store -- as long as job control is off, which
+        # `monitor` says. Both UNKNOWN when the text may or may not have set
+        # them. Job control is off in the non-interactive shell the hook's
+        # commands run in until a `set -m` turns it on.
+        self.lastpipe = lastpipe
+        self.monitor = monitor
 
     def child(self):
         return Scope(self.cwd, self.known, dict(self.assigns), self.sealed,
-                     dict(self.exported), self.allexport)
+                     dict(self.exported), self.allexport, self.lastpipe,
+                     self.monitor)
+
+    def last_member_stays(self):
+        """Whether a pipeline's last member runs in this shell: True, False
+        or UNKNOWN."""
+        if self.lastpipe is False or self.monitor is True:
+            return False
+        if self.lastpipe is UNKNOWN or self.monitor is UNKNOWN:
+            return UNKNOWN
+        return True
 
 
 class Scanner:
@@ -2305,6 +2323,10 @@ class Scanner:
                 saved.exported[name] = UNKNOWN
         if saved.allexport != inner.allexport:
             saved.allexport = UNKNOWN
+        if saved.lastpipe != inner.lastpipe:
+            saved.lastpipe = UNKNOWN
+        if saved.monitor != inner.monitor:
+            saved.monitor = UNKNOWN
         if inner.moved:
             saved.known = False
             saved.moved = True
@@ -2355,6 +2377,8 @@ class Scanner:
                 self.scope.assigns = assigns
                 self.scope.exported = exported
                 self.scope.allexport = False
+                self.scope.lastpipe = False
+                self.scope.monitor = False
             if sealed:
                 self.scope.sealed = sealed
             if seed:
@@ -2598,9 +2622,20 @@ class Scanner:
                 # Every member of a pipeline runs in a subshell, either side of
                 # the operator: `cd /tmp/other | true; bd -C store ...` leaves
                 # the real shell where it was, and resolving the write under
-                # /tmp/other names a store the command never opened.
+                # /tmp/other names a store the command never opened. The
+                # exception is the last member under `shopt -s lastpipe`,
+                # which runs in this shell: `true | cd /external; bd close X`
+                # then writes /external's store, and a frame around it
+                # restored a cwd the shell had left. The tree nests a longer
+                # pipeline to the left, so `Y` is always the last member.
                 self.scoped(lambda: self.stmt(cmd["X"], conditional))
-                self.scoped(lambda: self.stmt(cmd["Y"], True))
+                stays = self.scope.last_member_stays()
+                if stays is UNKNOWN:
+                    self.tentative(lambda: self.stmt(cmd["Y"], True))
+                elif stays:
+                    self.stmt(cmd["Y"], conditional)
+                else:
+                    self.scoped(lambda: self.stmt(cmd["Y"], True))
             else:
                 self.stmt(cmd["X"], conditional, op)
                 self.stmt(cmd["Y"], True)
@@ -3010,6 +3045,10 @@ class Scanner:
 
         if name == "set":
             self.set_builtin(fields, start, conditional)
+            return
+
+        if name == "shopt":
+            self.shopt_builtin(fields, start, conditional)
             return
 
         if name in SHELL_WORDS:
@@ -3469,19 +3508,21 @@ class Scanner:
             i += 1
 
     def set_builtin(self, args, start, conditional):
-        """Records `set -a` and `set +a`, which decide what an assignment exports.
+        """Records `set -a`/`+a` and `set -m`/`+m`.
 
         Under `set -a` every assignment exports its name, so `set -a;
         BEADS_DIR=/x/.beads; bd close X` runs `bd` with that BEADS_DIR though
-        nothing said `export`. Only that option is read; the rest of `set`
-        says nothing about which store a command opens.
+        nothing said `export`. `set -m` turns job control on, which switches
+        `lastpipe` off again; see `Scope.last_member_stays`. Only those two
+        are read; the rest of `set` says nothing about which store a command
+        opens.
         """
-        state = None
+        state = {}
         i = start + 1
         while i < len(args):
             word = args[i].value
             if word is UNKNOWN:
-                state = UNKNOWN
+                state = {"a": UNKNOWN, "m": UNKNOWN}
                 i += 1
                 continue
             if word == "--" or not (word.startswith("-") or
@@ -3491,17 +3532,75 @@ class Scanner:
                 if i + 1 < len(args):
                     option = args[i + 1].value
                     if option is UNKNOWN:
-                        state = UNKNOWN
+                        state = {"a": UNKNOWN, "m": UNKNOWN}
                     elif option == "allexport":
-                        state = word == "-o"
+                        state["a"] = word == "-o"
+                    elif option == "monitor":
+                        state["m"] = word == "-o"
                 i += 2
                 continue
-            if "a" in word[1:]:
-                state = word.startswith("-")
+            for letter in "am":
+                if letter in word[1:]:
+                    state[letter] = word.startswith("-")
             i += 1
-        if state is None:
+        if "a" in state:
+            self.scope.allexport = UNKNOWN if conditional else state["a"]
+        if "m" in state:
+            self.scope.monitor = UNKNOWN if conditional else state["m"]
+
+    def shopt_builtin(self, args, start, conditional):
+        """Records `shopt -s lastpipe` and `shopt -u lastpipe`.
+
+        Under `lastpipe` the last member of a pipeline runs in this shell, so
+        `shopt -s lastpipe; true | cd /external; bd close X` writes
+        /external's store where a scan that put every member in a subshell
+        restored the old cwd. `-o` makes `shopt` a spelling of `set -o`, so
+        `shopt -so allexport` is `set -a`. Without `-s` or `-u` the builtin
+        only reports, and the rest of `shopt`'s options say nothing about
+        which store a command opens.
+        """
+        setting = None
+        set_o = False
+        names = []
+        i = start + 1
+        while i < len(args):
+            word = args[i].value
+            if word is UNKNOWN:
+                names.append(UNKNOWN)
+                i += 1
+                continue
+            if word == "--":
+                i += 1
+                break
+            if word.startswith("-") and len(word) > 1:
+                if "s" in word[1:]:
+                    setting = True
+                if "u" in word[1:]:
+                    setting = False
+                if "o" in word[1:]:
+                    set_o = True
+                i += 1
+                continue
+            break
+        while i < len(args):
+            names.append(args[i].value)
+            i += 1
+        if UNKNOWN in names:
+            # A word that cannot be read may have been the option, or the
+            # flag that set it, so whatever it could have named is unknown.
+            if set_o or "allexport" in names:
+                self.scope.allexport = UNKNOWN
+            if not set_o:
+                self.scope.lastpipe = UNKNOWN
             return
-        self.scope.allexport = UNKNOWN if conditional else state
+        if setting is None:
+            return
+        value = UNKNOWN if conditional else setting
+        if set_o:
+            if "allexport" in names:
+                self.scope.allexport = value
+        elif "lastpipe" in names:
+            self.scope.lastpipe = value
 
     def unreadable_script(self):
         """Records a script that runs and cannot be read.

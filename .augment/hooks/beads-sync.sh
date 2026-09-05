@@ -553,7 +553,14 @@ remember_external() {
       WARNINGS+=("beads: could not record the external bead store ${candidate}; a failed sync there will not be retried later in this session.")
     fi
   fi
-  : >"$candidate/.beads/.augment-sync.pending"
+  # The marker's failure is noticed as `mark_registry_owed` notices it: the
+  # entry then stands behind nothing, and this process's own settle of the
+  # store would drop it.
+  if ! : >"$candidate/.beads/.augment-sync.pending" 2>/dev/null &&
+    unrecorded "$candidate" && ! owed_unmarked "$candidate"; then
+    OWED_UNMARKED+=("$candidate")
+    WARNINGS+=("beads: could not mark the external bead store ${candidate} as owed a sync; its entry is kept so a later invocation syncs it, but run 'bd dolt push --remote origin' there if the write matters.")
+  fi
   drop_lock "$REGISTRY_GUARD"
   return 0
 }
@@ -594,14 +601,37 @@ registry_has() {
 # no-op commit there once. Whether the dead holder got as far as the entry is
 # not knowable from the guard, and this is done under it, so a caller that dies
 # part-way leaves it stale for the next taker to do again.
+#
+# A marker that cannot be written -- a full disk -- leaves the entry as the
+# dead holder left it: standing behind nothing. The settle this reclaim is
+# running ahead of would then read the missing marker as work already done and
+# drop the entry, for a write that landed after its commit. So the store is
+# remembered as owed in this process instead (`OWED_UNMARKED`), which is what
+# `forget_keep` consults beside the markers, and said out loud: a later
+# invocation has no such record, and only the entry -- kept here -- names the
+# store for it.
+OWED_UNMARKED=()
 mark_registry_owed() {
   local entry
   [ -n "$REGISTRY" ] && [ -r "$REGISTRY" ] || return 0
   while IFS= read -r -d '' entry; do
     [ -d "$entry/.beads" ] || continue
-    : >"$entry/.beads/.augment-sync.pending"
+    : >"$entry/.beads/.augment-sync.pending" 2>/dev/null && continue
+    unrecorded "$entry" || continue
+    owed_unmarked "$entry" && continue
+    OWED_UNMARKED+=("$entry")
+    WARNINGS+=("beads: could not mark the external bead store ${entry} as owed a sync while reclaiming its registry guard; its entry is kept so a later invocation syncs it, but run 'bd dolt push --remote origin' there if the write matters.")
   done <"$REGISTRY"
   return 0
+}
+
+# Whether $1 is a store whose marker this process could not raise.
+owed_unmarked() {
+  local entry
+  for entry in ${OWED_UNMARKED[@]:+"${OWED_UNMARKED[@]}"}; do
+    [ "$entry" = "$1" ] && return 0
+  done
+  return 1
 }
 
 # Rewrites the registry as every entry for which `$1 <entry>` succeeds.
@@ -688,12 +718,14 @@ filter_registry() {
 # read is the one that sees a marker raised by the guard's own reclaim -- a
 # `remember_external` that died between its entry and its marker is only known
 # by the guard it left held, and the marker stands in for the one it did not
-# write. Without it the entry was dropped on the first read's word.
+# write. Without it the entry was dropped on the first read's word. Where the
+# reclaim could not write that marker either, `OWED_UNMARKED` stands in for it.
 FORGET_TARGET=""
 forget_keep() {
   [ "$1" != "$FORGET_TARGET" ] ||
     [ -e "$1/.beads/.augment-sync.pending" ] ||
-    [ -e "$1/.beads/.augment-sync.inflight" ]
+    [ -e "$1/.beads/.augment-sync.inflight" ] ||
+    owed_unmarked "$1"
 }
 forget_external() {
   local root="$1"

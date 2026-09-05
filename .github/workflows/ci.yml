@@ -1045,13 +1045,26 @@ jobs:
           fi
           shfmt --version
 
+      # `.augment/settings.json` runs the two entrypoints directly rather
+      # than through `bash`, so a lost executable bit disables the hooks
+      # while a syntax check that invokes them through `bash` stays
+      # green. The bit is checked explicitly, as it is for the git
+      # hooks in the `hooks-syntax` job.
       - name: Check hook syntax
         run: |
+          rc=0
+          for f in .augment/hooks/beads-prime.sh .augment/hooks/beads-sync.sh; do
+            if [ ! -x "$f" ]; then
+              echo "ERROR: $f is not executable (settings.json runs it directly)" >&2
+              rc=1
+            fi
+          done
           for f in .augment/hooks/*.sh .augment/hooks/lib/*.sh \
             .augment/hooks/test/*.sh; do
-            bash -n "$f"
+            bash -n "$f" || rc=1
           done
-          python3 -m py_compile .augment/hooks/lib/command_scan.py
+          python3 -m py_compile .augment/hooks/lib/command_scan.py || rc=1
+          exit "$rc"
 
       # `/bin/bash` rather than `bash`: on macOS the former is 3.2, which
       # the hooks support. Naming it explicitly is what makes this leg a

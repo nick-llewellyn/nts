@@ -1165,6 +1165,57 @@ fire 'bd list'
 rm -rf "$OUT"
 teardown
 
+# --- ... even when the reclaim cannot raise the marker ------------------
+# The reclaim above stands in for the dead recorder by writing the marker it
+# did not. When that write fails too -- a full disk -- the settle that follows
+# it in the same invocation found no marker and dropped the entry, for a write
+# that landed after its commit: the store was then named by nothing, and the
+# only sign was a warning nothing had emitted. The reclaim must remember what
+# it could not mark, the settle must keep that entry, and the hook must say so.
+#
+# The failure is staged as a dangling symlink where the marker goes: the write
+# fails where the link points, and the marker tests as absent, which is what a
+# full disk leaves. Planted from the stub at the same moment as the dead guard,
+# after the pass has claimed the marker and before the settle.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+REG="$WS/.beads/.augment-sync.external"
+reg_write "$REG" "$OUT"
+(exit 0) &
+DEAD=$!
+wait "$DEAD" 2>/dev/null
+mv -f "$WS/bin/bd" "$WS/bin/bd.real"
+cat >"$WS/bin/bd" <<STUB
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && grep -q push <<<"\$*"; then
+  ln -sf "$DEAD" "$REG.guard"
+  ln -sf "$OUT/.beads/no-such-dir/pending" "$OUT/.beads/.augment-sync.pending"
+fi
+exec "$WS/bin/bd.real" "\$@"
+STUB
+chmod +x "$WS/bin/bd"
+event 'bd list' | "$BASH_UNDER_TEST" "$HOOK" >"$WS/out" 2>/dev/null
+! pending "$OUT" && report ok ||
+  report bad "precondition: the staged marker must test as absent"
+registered "$OUT" && report ok ||
+  report bad "a settle whose reclaim could not raise the marker must keep the entry (reg: $(reg_dump))"
+grep -qF "could not mark the external bead store $OUT as owed a sync" "$WS/out" && report ok ||
+  report bad "a marker the reclaim could not raise must be warned about (out: $(tr '\n' ',' <"$WS/out"))"
+! lock_exists "$REG.guard" && report ok ||
+  report bad "the reclaimed guard must be released"
+# ... and once the marker can be written again, the next invocation pushes the
+# entry and settles it.
+rm -f "$OUT/.beads/.augment-sync.pending"
+mv -f "$WS/bin/bd.real" "$WS/bin/bd"
+fire 'bd list'
+[ "$(grep -c "push $OUT" "$BD_LOG.dirs")" -eq 2 ] && report ok ||
+  report bad "the kept entry must be pushed again (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+! registered "$OUT" && report ok ||
+  report bad "a push covering the kept entry must settle it (reg: $(reg_dump))"
+rm -rf "$OUT"
+teardown
+
 # --- a target is resolved as of the bd that names it -------------------
 # Variables are read from the command text, and the text also holds
 # assignments that run after the `bd`. Taking the last one in the whole

@@ -1427,6 +1427,43 @@ check_target "$BASE/store" "true | cd $CD/other; bd -C store close CHR-1"
 # An assignment dies with the pipeline too, leaving the name with no value
 # anywhere, which is unresolvable rather than relative.
 check_unresolved 'CS_PIPE_STORE=/tmp/decoy | true; bd -C "$CS_PIPE_STORE" close CHR-1'
+# Under `shopt -s lastpipe` the last member runs in this shell -- job control
+# being off in the non-interactive shell the hook's commands run in -- so its
+# `cd` and assignments stand. A frame around it restored a cwd the shell had
+# left, and the write after it was resolved under the wrong store.
+check_target "$CD/other/store" "shopt -s lastpipe; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$CD/other/store" "shopt -s lastpipe; true |& cd $CD/other; bd -C store close CHR-1"
+check_target "$CD/other/store" "shopt -s lastpipe; true | true | cd $CD/other; bd -C store close CHR-1"
+check_target "$CD/other/store" "shopt -s lastpipe; cd $STORE | cd $CD/other; bd -C store close CHR-1"
+check_target "$CD/other/store" "shopt -s -- lastpipe; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$CD/other/store" "shopt -s extglob lastpipe; true | cd $CD/other; bd -C store close CHR-1"
+check_target '/tmp/store' 'shopt -s lastpipe; true | CS_PIPE_STORE=/tmp/store; bd -C "$CS_PIPE_STORE" close CHR-1'
+# The other members are still subshells, and so is the last one once the
+# option is off again, only reported on, or never named.
+check_target "$BASE/store" "shopt -s lastpipe; cd $CD/other | true; bd -C store close CHR-1"
+check_target "$BASE/store" "shopt -s lastpipe; true | cd $CD/other | true; bd -C store close CHR-1"
+check_target "$BASE/store" "shopt -s lastpipe; shopt -u lastpipe; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$BASE/store" "shopt -u lastpipe; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$BASE/store" "shopt -p lastpipe; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$BASE/store" "shopt -s extglob; true | cd $CD/other; bd -C store close CHR-1"
+# Job control switches `lastpipe` off again; `set -m` turns it on.
+check_target "$BASE/store" "shopt -s lastpipe; set -m; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$BASE/store" "shopt -s lastpipe; set -o monitor; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$CD/other/store" "shopt -s lastpipe; set -m; set +m; true | cd $CD/other; bd -C store close CHR-1"
+# A subshell's `lastpipe` dies with it, and a new shell starts without it.
+check_target "$BASE/store" "shopt -s lastpipe; (true | cd $CD/other); bd -C store close CHR-1"
+check_target "$BASE/store" "shopt -s lastpipe; bash -c 'true | cd $CD/other; bd -C store close CHR-1'"
+# Whether the option is in force may be unreadable -- set on a branch, named
+# by a word that cannot be read -- and then the cwd after the pipeline is
+# unknown rather than restored or kept.
+check_unresolved "t && shopt -s lastpipe; true | cd $CD/other; bd -C store close CHR-1"
+check_unresolved "shopt -s lastpipe; t && set -m; true | cd $CD/other; bd -C store close CHR-1"
+check_unresolved "shopt -s \$cs_opt; true | cd $CD/other; bd -C store close CHR-1"
+check_unresolved "shopt \$cs_flag lastpipe; true | cd $CD/other; bd -C store close CHR-1"
+# `shopt -o` is a spelling of `set -o`, so `shopt -so allexport` is `set -a`.
+check_target "$STORE/nested/inner" "cd $STORE; shopt -so allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$STORE/nested/inner" "cd $STORE; shopt -s -o allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$STORE" "cd $STORE; shopt -so allexport; shopt -uo allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
 # The write itself is still found inside one, under the cwd in force there.
 check sync "true | bd close CHR-1"
 check_target "$CD/other/store" "cd $CD/other; true | bd -C store close CHR-1"
