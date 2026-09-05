@@ -73,12 +73,18 @@ PREFIX_WORDS = {"exec", "builtin", "command", "env", "sudo", "doas", "nohup",
 # telling them apart means knowing that `-u` takes `nick` while `echo` takes
 # nothing. A wrapper with no such options still needs its entry, or it would
 # fall through to the default.
+#
+# The union of the GNU and BSD spellings, since the hook runs under both:
+# `env -P altpath` and `env -L user` are BSD's, `sudo -T timeout` is 1.9's.
+# A letter missing here is not merely unread -- it makes the bundle ambiguous
+# and abandons the invocation, and the write inside it with it.
 WRAPPER_OPT_ARGS = {
     "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string",
-            "-a", "--argv0"},
+            "-a", "--argv0", "-P", "-L", "-U"},
     "sudo": {"-u", "--user", "-g", "--group", "-p", "--prompt",
              "-C", "--close-from", "-h", "--host", "-r", "--role",
-             "-D", "--chdir"},
+             "-D", "--chdir", "-T", "--command-timeout", "-t", "--type",
+             "-U", "--other-user", "-R", "--chroot", "-c", "--login-class"},
     "doas": {"-u", "-C", "-a"},
     "nice": {"-n"},
     "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
@@ -128,7 +134,8 @@ WRAPPER_OPT_NOARG = {
     "sudo": {"-n", "--non-interactive", "-b", "--background", "-E",
              "--preserve-env", "-H", "--set-home", "-i", "--login", "-k",
              "--reset-timestamp", "-P", "--preserve-groups", "-S", "--stdin",
-             "-s", "--shell", "-A", "--askpass"},
+             "-s", "--shell", "-A", "--askpass", "-B", "--bell", "-N",
+             "--no-update"},
     "doas": {"-n", "-s", "-L"},
     "command": {"-p"},
     "setsid": {"-f", "--fork", "-w", "--wait", "-c", "--ctty"},
@@ -161,8 +168,21 @@ SHELL_WORDS = {"sh", "bash", "dash", "ksh", "mksh", "zsh"}
 # script two words later than `bash -x -c '...'` does. A letter in neither
 # list is ambiguous, and an ambiguous one abandons the invocation rather than
 # naming some other word as the script.
-SHELL_OPT_ARGS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
+#
+# The long options are read by name rather than by letter, since a letter read
+# out of `--noprofile` is not a flag of anything: `bash --noprofile --norc -c
+# '...'` runs its script, and reading the first `-` inside the word as an
+# unknown short flag abandoned the invocation. Only the ones that certainly
+# take nothing are listed; `--help` and `--version` run no script and are
+# left out, as is any long option not known here, so an unknown one still
+# abandons the invocation rather than misplacing the script.
+SHELL_OPT_ARGS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file",
+                  "--emulate"}
 SHELL_NOARG_LETTERS = set("abcefhiklmnprstuvxBCEHPT")
+SHELL_LONG_NOARG = {"--noprofile", "--norc", "--posix", "--login",
+                    "--noediting", "--restricted", "--verbose", "--debugger",
+                    "--pretty-print", "--protected", "--no-rcs",
+                    "--no-globalrcs", "--interactive"}
 
 # `bd`'s own global options that consume the word after them. The verb is the
 # first operand that is not an option, so an option's value must be stepped
@@ -196,9 +216,12 @@ WRAPPER_ENV_UNREADABLE = {"sudo", "doas"}
 
 # `env`'s options that remove one name from the environment, and those that
 # replace the environment outright. A name `env` unset is unset in the child
-# however the hook's own environment answers it.
+# however the hook's own environment answers it. A lone `-` is the historical
+# spelling of `-i`, which GNU `env` still honours; it is not a short bundle,
+# so it is named here rather than left to the bundle reader, which took it for
+# an option it did not know and abandoned the invocation.
 ENV_UNSET_OPTS = ("-u", "--unset")
-ENV_CLEAR_OPTS = {"-i", "--ignore-environment"}
+ENV_CLEAR_OPTS = {"-i", "--ignore-environment", "-"}
 
 # The options by which a wrapper runs the command somewhere other than here.
 # Which store a `bd` invocation writes turns on the directory it runs in, so
@@ -215,6 +238,14 @@ WRAPPER_CHDIR_OPTS = {
 # `cd`'s own options say nothing about where it lands, so they are stepped
 # over to find the operand.
 CD_OPT = re.compile(r"^-[LPe@]")
+
+# The builtins besides `cd` that move the shell. `pushd /external; bd close X`
+# writes /external's store, and a scan that knew only `cd` kept the old cwd and
+# named the workspace store instead. `pushd dir` lands where `cd dir` would;
+# the other forms -- a bare `pushd`, a rotation, any `popd` -- land on an entry
+# of a stack only the shell holds, so the cwd is unknown after them.
+CHDIR_WORDS = {"cd", "pushd", "popd"}
+DIR_STACK_ROTATE = re.compile(r"^[-+][0-9]+$")
 
 # A word that is an assignment.
 ASSIGN_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -754,7 +785,8 @@ class Scope:
     command rather than state of the shell running it.
     """
 
-    def __init__(self, cwd, known, assigns, sealed=False):
+    def __init__(self, cwd, known, assigns, sealed=False, exported=None,
+                 allexport=False):
         self.cwd = cwd
         self.known = known
         self.assigns = assigns
@@ -764,9 +796,22 @@ class Scope:
         # or unknowable rather than inherited, so the hook's own environment
         # must not answer for it either way.
         self.sealed = sealed
+        # Which names reach a child process, where the text has said: True
+        # after `export X`, False after `export -n X` or `unset X`, UNKNOWN
+        # when the text may or may not have said it. A name absent here is
+        # exported exactly when it was inherited from the environment, since
+        # an assignment keeps the attribute the name already had. A shell
+        # variable is not an environment variable: `BEADS_DIR=/x; bd close`
+        # runs `bd` with no BEADS_DIR at all unless something exported it, and
+        # reading every assignment as exported named a store `bd` never saw.
+        self.exported = {} if exported is None else exported
+        # `set -a` in force: every later assignment is exported. UNKNOWN when
+        # a `set -a` may or may not have run.
+        self.allexport = allexport
 
     def child(self):
-        return Scope(self.cwd, self.known, dict(self.assigns), self.sealed)
+        return Scope(self.cwd, self.known, dict(self.assigns), self.sealed,
+                     dict(self.exported), self.allexport)
 
 
 class Scanner:
@@ -815,6 +860,64 @@ class Scanner:
             self.targets.append(path)
 
     # --- assignment state -------------------------------------------------
+
+    def is_exported(self, name):
+        """Whether `name` reaches a child process: True, False or UNKNOWN.
+
+        What the text said wins; otherwise a name is exported exactly when it
+        was inherited, since assigning to an inherited name keeps its export
+        attribute. A cleared environment inherited nothing, and an opaque one
+        may have inherited anything.
+        """
+        if name in self.scope.exported:
+            return self.scope.exported[name]
+        if self.scope.sealed is OPAQUE:
+            return UNKNOWN
+        if self.scope.sealed is CLEARED:
+            return False
+        return name in os.environ
+
+    def environment_view(self, sealed):
+        """The names this scope hands a new process, as that process sees them.
+
+        A new process inherits the exported names and none of the rest, so a
+        name the text assigned without exporting is unset there whatever value
+        it holds here: `OUT=/real; bash -c 'bd -C "$OUT" close X'` runs `bd -C
+        /store`, since the child's `$OUT` is empty. Copying the scope whole
+        into the child resolved that against /real -- and did so even through
+        `env -i`, which hands the child nothing at all. Under `sealed` every
+        name is unset (CLEARED) or unknowable (OPAQUE), as the wrapper made it.
+
+        Returns `(assigns, exported)` for the child scope. A name unset in the
+        child is recorded as not exported there too, so a later plain
+        assignment to it stays a shell variable: `unset` dropped the attribute
+        with the value.
+        """
+        assigns = {}
+        exported = {}
+        missing = object()
+        for name in set(self.scope.assigns) | set(self.scope.exported):
+            value = self.scope.assigns.get(name, missing)
+            if sealed is CLEARED:
+                state = False
+            elif sealed is OPAQUE:
+                state = UNKNOWN
+            elif value is UNSET:
+                state = False
+            else:
+                state = self.is_exported(name)
+            if state is UNKNOWN:
+                assigns[name] = UNKNOWN
+                exported[name] = UNKNOWN
+            elif not state:
+                assigns[name] = UNSET
+                exported[name] = False
+            elif value is not missing:
+                assigns[name] = value
+                exported[name] = True
+            else:
+                exported[name] = True
+        return assigns, exported
 
     def get(self, name):
         """The value of `name` here, or UNKNOWN when nothing names it.
@@ -1009,6 +1112,40 @@ class Scanner:
         if not field.tilde:
             return field.value
         return self.expand_tilde(field.value)
+
+    def prior_value(self, name):
+        """The value `name` holds before an append to it, or UNKNOWN.
+
+        An unset name appends onto the empty string, which `get` cannot say:
+        it answers UNKNOWN for unset and unknowable alike, since a word
+        expanding an unset name is unknowable either way. An append is not --
+        `X+=b` on an unset X is `b` -- so the two are told apart here.
+        """
+        if name in self.scope.assigns:
+            value = self.scope.assigns[name]
+            return "" if value is UNSET else value
+        if name in ("PWD", "OLDPWD"):
+            return self.get(name)
+        if self.scope.sealed is OPAQUE:
+            return UNKNOWN
+        if self.scope.sealed is CLEARED:
+            return ""
+        return os.environ.get(name, "")
+
+    def assign_value(self, arg):
+        """The value the assignment node `arg` leaves its name holding.
+
+        `X+=store` appends: the name holds what it held with `store` after it,
+        so `OUT=/tmp/; OUT+=store; bd -C "$OUT" close X` opens /tmp/store.
+        Recording the appended text alone left OUT as `store`, a relative path
+        that resolved under the launch directory -- a store the command never
+        opened, while /tmp/store went unregistered.
+        """
+        value = self.assigned_value(arg.get("Value"))
+        if not arg.get("Append") or value is UNKNOWN:
+            return value
+        prior = self.prior_value(arg["Name"]["Value"])
+        return UNKNOWN if prior is UNKNOWN else prior + value
 
     def expand_tilde(self, value):
         """`value` with its leading unquoted tilde expanded, or UNKNOWN.
@@ -1287,6 +1424,11 @@ class Scanner:
                 return i
             if word == "--":
                 return min(i + 1 + operands, len(args))
+            # `env -` is `env -i` in its historical spelling: an option, not
+            # the command word, and not a bundle either.
+            if wrapper == "env" and word in ENV_CLEAR_OPTS:
+                i += 1
+                continue
             if not word.startswith("-"):
                 # An assignment among a wrapper's arguments, as `env FOO=bar
                 # cmd`, is neither an option nor the command word.
@@ -1355,6 +1497,9 @@ class Scanner:
                 if word == "--":
                     i += 1
                     break
+                if name == "env" and word in ENV_CLEAR_OPTS:
+                    i += 1
+                    continue
                 if not word.startswith("-"):
                     if not ASSIGN_WORD.match(word):
                         break
@@ -1750,6 +1895,17 @@ class Scanner:
             if word in SHELL_OPT_ARGS:
                 i += 2
                 continue
+            if word.startswith("--"):
+                # A long option is one name, not a bundle of letters. One
+                # that carries its value -- `--rcfile=FILE` -- takes no word
+                # after it; one not known here may take one, so the
+                # invocation is abandoned as for an unknown letter.
+                opt = word.partition("=")[0]
+                if opt in SHELL_LONG_NOARG or \
+                        (opt in SHELL_OPT_ARGS and "=" in word):
+                    i += 1
+                    continue
+                return None
             for ch in word[1:]:
                 if ch not in SHELL_NOARG_LETTERS:
                     return None
@@ -1789,14 +1945,25 @@ class Scanner:
             fn()
         finally:
             self.scope = saved
+        # A name the frame touched -- assigned, exported, unset, or dropped as
+        # `cd` drops an explicit PWD -- is unknown afterwards, in value and in
+        # export state alike.
         missing = object()
-        for name, value in inner.assigns.items():
-            if saved.assigns.get(name, missing) != value:
+        for name in set(inner.assigns) | set(saved.assigns):
+            if saved.assigns.get(name, missing) != \
+                    inner.assigns.get(name, missing):
                 saved.assigns[name] = UNKNOWN
+        for name in set(inner.exported) | set(saved.exported):
+            if saved.exported.get(name, missing) != \
+                    inner.exported.get(name, missing):
+                saved.exported[name] = UNKNOWN
+        if saved.allexport != inner.allexport:
+            saved.allexport = UNKNOWN
         saved.known = False
 
     def sub_scan(self, stmts, cwd=None, known=None, seed=None, text=None,
-                 sealed=False, conditional=False, frame="subshell"):
+                 sealed=False, conditional=False, frame="subshell",
+                 process=False):
         """Scans `stmts` as a subshell: its writes count, its state does not.
 
         `text` is the source those statements were parsed from, needed when they
@@ -1809,6 +1976,13 @@ class Scanner:
         -- OPAQUE. The innermost wrapper's kind stands: `sudo bash -c 'env -i
         bash -c ...'` is cleared inside, whatever the policy outside let
         through.
+
+        `process` says the text runs in a process of its own rather than a
+        subshell of this one, as a `bash -c` operand does. A subshell is a copy
+        of this shell, variables and all; a new process gets the environment,
+        which is the exported names alone -- see `environment_view`. `seed` is
+        what the command line handed the process on top of that, and is
+        exported there, having arrived as environment.
 
         `frame` is "tentative" for text that runs in this shell rather than a
         subshell, as `eval`'s does; see `tentative`. `conditional` is then what
@@ -1826,10 +2000,17 @@ class Scanner:
                 self.scope.cwd = cwd
             if known is not None:
                 self.scope.known = known
+            if process:
+                assigns, exported = self.environment_view(sealed)
+                self.scope.assigns = assigns
+                self.scope.exported = exported
+                self.scope.allexport = False
             if sealed:
                 self.scope.sealed = sealed
             if seed:
                 self.scope.assigns.update(seed)
+                for name, value in seed.items():
+                    self.scope.exported[name] = value is not UNSET
             outer = self.text
             outer_raw = self.raw
             if text is not None:
@@ -2184,27 +2365,70 @@ class Scanner:
         # before that is consulted.
         for arg in args:
             self.node_subs(arg)
+        # What the builtin says about export. `export` and `declare -x` give
+        # the attribute to every name they are handed, assigned or bare;
+        # `export -n` and `declare +x` take it away; `local` makes a fresh
+        # variable that has it only with `-x`. The flags come first, as words
+        # the parse marks naked with no name.
+        variant = (cmd.get("Variant") or {}).get("Value")
+        state = None
+        if variant == "export":
+            state = True
+        elif variant == "local":
+            state = False
         for arg in args:
-            # Only the operands that are assignments count. `export OUT`
-            # exports a name without changing its value, and a flag such as
-            # `declare -x` is neither.
+            if arg.get("Name") or not arg.get("Naked"):
+                continue
+            flag = self.assigned_value(arg.get("Value"))
+            if flag is UNKNOWN:
+                # A flag this scan cannot read may be `-x` or `-n`, so what
+                # the builtin did to the attribute is unknown.
+                state = UNKNOWN
+            elif flag == "--":
+                break
+            elif variant == "export" and flag.startswith("-") and \
+                    "n" in flag[1:]:
+                state = False
+            elif variant != "export" and flag.startswith("-") and \
+                    "x" in flag[1:]:
+                state = True
+            elif variant != "export" and flag.startswith("+") and \
+                    "x" in flag[1:]:
+                state = False
+        if conditional and state is not None:
+            state = UNKNOWN
+        for arg in args:
+            name = (arg.get("Name") or {}).get("Value")
+            if not name:
+                continue
+            # `export OUT` exports a name without changing its value, so only
+            # the operands that are assignments assign.
             if gives_value(arg):
-                self.assign(arg["Name"]["Value"], arg.get("Value"),
-                            conditional)
+                self.assign(arg, conditional)
+            if state is not None:
+                self.scope.exported[name] = state
 
-    def assign(self, name, word, conditional):
-        """Records `name` as holding the value of `word` in this scope.
+    def assign(self, arg, conditional):
+        """Records the assignment node `arg` in this scope.
 
-        `word` is None for `X=`, whose value is the empty string. Its
-        substitutions have already been visited by the caller.
+        Its substitutions have already been visited by the caller. `X=` has no
+        value node at all, and assigns the empty string.
 
         An assignment the shell may never reach leaves the name unknown: kept,
         the value from before it spoke for `OUT=/old; t && OUT=/real; bd -C
         "$OUT" ...` and resolved the write against /old, a store the command
         may never have opened, while /real went unsynced.
+
+        Under `set -a` the assignment exports the name as well. Otherwise it
+        leaves the attribute as it was, which `is_exported` reads.
         """
+        name = arg["Name"]["Value"]
         self.scope.assigns[name] = (UNKNOWN if conditional
-                                    else self.assigned_value(word))
+                                    else self.assign_value(arg))
+        if self.scope.allexport is UNKNOWN:
+            self.scope.exported[name] = UNKNOWN
+        elif self.scope.allexport:
+            self.scope.exported[name] = UNKNOWN if conditional else True
 
     def call(self, cmd, conditional, follows):
         """Handles one simple command.
@@ -2236,8 +2460,7 @@ class Scanner:
             # nor any later command.
             for arg in assigns:
                 if gives_value(arg):
-                    self.assign(arg["Name"]["Value"], arg.get("Value"),
-                                conditional)
+                    self.assign(arg, conditional)
             return
 
         # The words become the argument list the command receives before any of
@@ -2276,10 +2499,9 @@ class Scanner:
                 # rather than the launch directory's: `bd` runs where the wrapper
                 # put it, and the walk up from here would name a store the
                 # command never opened.
-                self.scope.known = False
+                self.leave_cwd()
             else:
-                self.scope.cwd = cwd
-                self.scope.known = True
+                self.enter_cwd(cwd)
 
         if split is not None:
             self.split_wrapper(cmd, fields, start, split)
@@ -2291,8 +2513,16 @@ class Scanner:
             return
         name = word.rsplit("/", 1)[-1]
 
-        if name == "cd":
-            self.cd(fields, start, conditional, follows)
+        if name in CHDIR_WORDS:
+            self.cd(fields, start, conditional, follows, name)
+            return
+
+        if name == "unset":
+            self.unset_builtin(fields, start, conditional)
+            return
+
+        if name == "set":
+            self.set_builtin(fields, start, conditional)
             return
 
         if name in SHELL_WORDS:
@@ -2409,6 +2639,15 @@ class Scanner:
         bd` runs with /b too, and one that clears or filters the environment
         drops the prefix's value with the rest. Answering from the first prefix
         assignment named a store the command never opened in each of those.
+
+        Only what the child can see is consulted. A shell variable the text
+        assigned reaches the child only if it is exported -- by `export`, by
+        `set -a`, or by having been inherited -- so `cd /external; BEADS_DIR=
+        /decoy/.beads; bd close X`, with no BEADS_DIR in the environment,
+        writes /external's store while the decoy stays a shell variable `bd`
+        never sees. And a name `unset` since is gone however it was set.
+        Reading every assignment as exported named the decoy in the first
+        case and the stale value in the second, stranding the store written.
         """
         wrapper_assigns, sealed = self.prefix_env(args, start)
         if name in wrapper_assigns:
@@ -2425,16 +2664,30 @@ class Scanner:
         value = None
         for arg in cmd.get("Assigns") or ():
             if gives_value(arg) and arg["Name"]["Value"] == name:
-                value = self.assigned_value(arg.get("Value"))
+                value = self.assign_value(arg)
         if value is not None:
             return value
         if name in self.scope.assigns:
-            return self.env_value(self.scope.assigns[name])
+            value = self.scope.assigns[name]
+            if value is UNSET:
+                return None
+            exported = self.is_exported(name)
+            if exported is UNKNOWN:
+                return UNKNOWN
+            return value if exported else None
+        exported = self.is_exported(name)
+        if exported is UNKNOWN:
+            return UNKNOWN
+        if not exported:
+            return None
+        # Exported and not assigned by the text: the value is the inherited
+        # one, where there was one to inherit. `export X` of a name that has
+        # no value exports nothing.
         if self.scope.sealed is OPAQUE:
             return UNKNOWN
-        if self.scope.sealed is CLEARED or name not in os.environ:
+        if self.scope.sealed is CLEARED:
             return None
-        return os.environ[name]
+        return os.environ.get(name)
 
     @staticmethod
     def env_value(value):
@@ -2446,7 +2699,26 @@ class Scanner:
         """
         return None if value is UNSET else value
 
-    def cd(self, args, start, conditional, follows):
+    def enter_cwd(self, path):
+        """Moves this scope to `path`, as a `cd` that succeeded does.
+
+        A successful `cd` overwrites the shell's PWD and OLDPWD, so an explicit
+        assignment to either no longer speaks: `PWD=/decoy; cd /external; bd -C
+        "$PWD" close X` writes /external's store. Left standing, the assignment
+        won over the tracked cwd in `get` and named the decoy.
+        """
+        self.scope.cwd = path
+        self.scope.known = True
+        self.scope.assigns.pop("PWD", None)
+        self.scope.assigns.pop("OLDPWD", None)
+
+    def leave_cwd(self):
+        """Records that this scope's cwd is no longer known, PWD with it."""
+        self.scope.known = False
+        self.scope.assigns.pop("PWD", None)
+        self.scope.assigns.pop("OLDPWD", None)
+
+    def cd(self, args, start, conditional, follows, name="cd"):
         """Replays a `cd` that certainly runs, and gives up on one that may not.
 
         `false && cd /tmp/other; bd -C store ...` does not run in /tmp/other.
@@ -2454,6 +2726,11 @@ class Scanner:
         directory the command never entered. Unknown beats guessed: a `cd` that
         may or may not have run leaves the cwd unknown, and a relative target
         under an unknown cwd is reported as unresolvable.
+
+        `pushd dir` lands where `cd dir` would, and is read the same way. The
+        forms that land on an entry of the directory stack -- a bare `pushd`, a
+        rotation, `popd` -- leave the cwd unknown, since the stack is the
+        shell's alone; `-n` on either changes the stack and not the cwd.
         """
         # A `cd` followed by `||` is the same case read the other way: what
         # comes after runs precisely when the `cd` failed, so applying it names
@@ -2462,21 +2739,34 @@ class Scanner:
         # in fact knowable -- reasoning about which commands abort the list is
         # the kind of inference this scanner exists to avoid.
         if conditional or follows == "||":
-            self.scope.known = False
+            self.leave_cwd()
             return
         i = start + 1
-        while i < len(args):
-            word = args[i].value
-            if word is not UNKNOWN and word == "--":
+        if name != "cd":
+            words = [arg.value for arg in args[i:]]
+            if any(word is UNKNOWN for word in words):
+                self.leave_cwd()
+                return
+            if "-n" in words:
+                return
+            words = [word for word in words if word != "--"]
+            if name == "popd" or not words or DIR_STACK_ROTATE.match(words[0]):
+                self.leave_cwd()
+                return
+            i = next(j for j in range(i, len(args)) if args[j].value != "--")
+        else:
+            while i < len(args):
+                word = args[i].value
+                if word is not UNKNOWN and word == "--":
+                    i += 1
+                    break
+                if word is UNKNOWN or not CD_OPT.match(word):
+                    break
                 i += 1
-                break
-            if word is UNKNOWN or not CD_OPT.match(word):
-                break
-            i += 1
         # `cd` with no operand goes to $HOME, and `cd -` to a directory only the
         # shell's history knows.
         if i >= len(args) or args[i].value == "-":
-            self.scope.known = False
+            self.leave_cwd()
             return
         target = self.resolve_field(args[i])
         # A `cd` that fails leaves the shell where it was, and the command after
@@ -2487,10 +2777,87 @@ class Scanner:
         # is whatever it already was. A path that cannot be resolved at all
         # leaves the cwd unknown, as before.
         if target is None:
-            self.scope.known = False
+            self.leave_cwd()
         elif os.path.isdir(target):
-            self.scope.cwd = target
-            self.scope.known = True
+            self.enter_cwd(target)
+
+    def unset_builtin(self, args, start, conditional):
+        """Records what `unset` removes.
+
+        `export BEADS_DIR=/a/.beads; unset BEADS_DIR; bd close X` runs `bd` with
+        no BEADS_DIR, so it walks up from its directory; reading the export as
+        still standing named /a, a store the command never opened. The name is
+        recorded as unset, and as no longer exported: a later plain assignment
+        to it makes a fresh shell variable, whatever attribute the old one had.
+
+        `unset -f` removes functions, which the scan then no longer calls. A
+        name this scan cannot read may be any name, so every value and every
+        attribute is in doubt after it -- the scope is sealed opaque, as under
+        a wrapper whose effect cannot be read. On a path the shell may not
+        take, what was unset is unknown rather than gone.
+        """
+        functions = False
+        names = []
+        for arg in args[start + 1:]:
+            word = arg.value
+            if word is UNKNOWN:
+                self.scope.assigns = {}
+                self.scope.exported = {}
+                self.scope.sealed = OPAQUE
+                self.functions = {}
+                return
+            if word == "--":
+                continue
+            if word.startswith("-") and len(word) > 1:
+                if "f" in word[1:]:
+                    functions = True
+                continue
+            names.append(word)
+        for name in names:
+            if functions:
+                self.functions.pop(name, None)
+                continue
+            if conditional:
+                self.scope.assigns[name] = UNKNOWN
+                self.scope.exported[name] = UNKNOWN
+            else:
+                self.scope.assigns[name] = UNSET
+                self.scope.exported[name] = False
+
+    def set_builtin(self, args, start, conditional):
+        """Records `set -a` and `set +a`, which decide what an assignment exports.
+
+        Under `set -a` every assignment exports its name, so `set -a;
+        BEADS_DIR=/x/.beads; bd close X` runs `bd` with that BEADS_DIR though
+        nothing said `export`. Only that option is read; the rest of `set`
+        says nothing about which store a command opens.
+        """
+        state = None
+        i = start + 1
+        while i < len(args):
+            word = args[i].value
+            if word is UNKNOWN:
+                state = UNKNOWN
+                i += 1
+                continue
+            if word == "--" or not (word.startswith("-") or
+                                    word.startswith("+")):
+                break
+            if word in ("-o", "+o"):
+                if i + 1 < len(args):
+                    option = args[i + 1].value
+                    if option is UNKNOWN:
+                        state = UNKNOWN
+                    elif option == "allexport":
+                        state = word == "-o"
+                i += 2
+                continue
+            if "a" in word[1:]:
+                state = word.startswith("-")
+            i += 1
+        if state is None:
+            return
+        self.scope.allexport = UNKNOWN if conditional else state
 
     def unreadable_script(self):
         """Records a script that runs and cannot be read.
@@ -2526,8 +2893,7 @@ class Scanner:
         seed = {}
         for arg in cmd.get("Assigns") or ():
             if gives_value(arg):
-                seed[arg["Name"]["Value"]] = \
-                    self.assigned_value(arg.get("Value"))
+                seed[arg["Name"]["Value"]] = self.assign_value(arg)
         return seed
 
     def shell_wrapper(self, cmd, args, start):
@@ -2558,7 +2924,7 @@ class Scanner:
         wrapper_assigns, sealed = self.prefix_env(args, start)
         seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
-        self.scan_script(script, seed=seed, sealed=sealed)
+        self.scan_script(script, seed=seed, sealed=sealed, process=True)
 
     def split_wrapper(self, cmd, args, start, split):
         """Scans what `env -S <string>` runs, the string naming the command.
@@ -2606,7 +2972,7 @@ class Scanner:
         wrapper_assigns, sealed = self.prefix_env(args, prefix_end)
         seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
-        self.scan_script(string, seed=seed, sealed=sealed)
+        self.scan_script(string, seed=seed, sealed=sealed, process=True)
 
     def eval_builtin(self, cmd, args, start, conditional):
         """Scans what `eval` runs, which is script and not an argument list.
@@ -2654,7 +3020,8 @@ class Scanner:
                          conditional=conditional, frame="tentative")
 
     def scan_script(self, script, seed=None, sealed=False, cwd=None,
-                    known=None, conditional=False, frame="subshell"):
+                    known=None, conditional=False, frame="subshell",
+                    process=False):
         """Scans `script` as shell text, in a scope of its own.
 
         The text is parsed afresh, so its offsets index it and not the command
@@ -2675,7 +3042,8 @@ class Scanner:
         try:
             self.sub_scan(tree.get("Stmts") or (), seed=seed, text=parsed,
                           sealed=sealed, cwd=cwd, known=known,
-                          conditional=conditional, frame=frame)
+                          conditional=conditional, frame=frame,
+                          process=process)
         finally:
             self.scripts.discard(script)
 
