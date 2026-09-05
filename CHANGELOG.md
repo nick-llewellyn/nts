@@ -10,6 +10,23 @@ tarball.
 
 ### Internal
 
+- The Dolt bead store now syncs to DoltHub automatically in Auggie
+  sessions ([#344](https://github.com/nick-llewellyn/nts/pull/344)).
+  Hooks under `.augment/hooks/` run `bd dolt commit` + `bd dolt push`
+  after any command the scanner classifies as a bead write, and again
+  at session end, under a lock with a pending-marker so concurrent
+  invocations and the hook timeout cannot lose a write or double-push;
+  `bd prime` is injected at session start. The scanner parses each
+  command with `shfmt --to-json` rather than pattern-matching its text.
+  A new `auggie-hooks` CI matrix (ubuntu + macOS `/bin/bash` 3.2) runs
+  the three test suites behind a separate `auggie_hooks` path filter,
+  with an `Auggie hook tests gate` aggregator as the eighth required
+  status check. `core.hooksPath` stays `tool/hooks`; the manual
+  pull-then-push sequence remains the fallback and the session-close
+  verification, since the hook has no `pull` step. Ported verbatim from
+  `chronoshield`; no package surface is affected and `.augment/` is
+  not in the published tarball.
+
 - CI now smoke-runs the three example CLI scripts under `example/bin/`
   through `dart run` with `--mock`
   ([#337](https://github.com/nick-llewellyn/nts/pull/337)). They had no
