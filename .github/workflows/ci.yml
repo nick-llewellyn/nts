@@ -126,11 +126,11 @@ jobs:
     # longer in trigger-level `paths-ignore` (so required status checks
     # can resolve on doc PRs), but there's nothing for `dart analyze` or
     # `flutter test` to validate when only Markdown moved. Skipped jobs
-    # count as passing for branch protection, so the seven required
+    # count as passing for branch protection, so the eight required
     # checks (`Detect changed paths`, `Dart tests gate`, `Verify FRB
     # bindings are in sync`, `Rust build + tests + coverage`, `Hooks
     # shell-syntax check`, `Hooks behaviour check`, `Android KGP gate
-    # matrix`) all report green.
+    # matrix`, `Auggie hook tests gate`) all report green.
     name: Format / analyze / Dart tests (Flutter ${{ matrix.flutter }})
     runs-on: ubuntu-latest
     needs: changes
