@@ -1044,6 +1044,17 @@ b' close CHR-1"
 # wrong, and the external store is never registered.
 check_target '/tmp/store' 'bd -C /tmp/store close CHR-1 ))))'
 check_target '/tmp/store' 'bd -C /tmp/store close CHR-1 ;;;;'
+# The position shfmt reports counts bytes. Cut by character count, a
+# non-ASCII character before the fault left the offending token in the text,
+# or put the cut past its end -- either way the prefix was abandoned and the
+# write in it read as no write. One case per shape: a two-byte character, a
+# run of three-byte ones, and a fault on a later line, whose cut carries the
+# byte length of every line before it as well as of its own.
+check sync 'echo é ; bd close CHR-1 ; )'
+check sync 'echo 日本語 ; bd close CHR-1 ; )'
+check sync $'echo é\necho é ; bd close CHR-1 ; )'
+check_target '/tmp/store' 'echo é ; bd -C /tmp/store close CHR-1 ))))'
+check skip 'echo é ; )'
 check skip 'echo )))'
 check skip ''
 check skip '   '

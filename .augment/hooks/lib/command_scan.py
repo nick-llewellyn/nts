@@ -298,16 +298,25 @@ def truncate(text, line):
     outside a case. What precedes the offending token is still shell the
     scanner can read, and a write in it is still a write, so the prefix is
     parsed rather than the whole command abandoned.
+
+    The column counts bytes, as every offset shfmt reports does, so the cut
+    is found in the encoded text. Counted in characters, a non-ASCII
+    character before the fault put the cut past the offending token, which
+    then failed the same way again -- or past the end of the text, where the
+    prefix was abandoned and the write in it with it.
     """
     match = _AT.match(line)
     if not match:
         return None
     row, col = int(match.group(1)), int(match.group(2))
-    lines = text.splitlines(True)
+    raw = text.encode("utf-8")
+    lines = raw.splitlines(True)
     if row < 1 or row > len(lines):
         return None
     cut = sum(len(one) for one in lines[:row - 1]) + col - 1
-    return text[:cut] if 0 < cut < len(text) else None
+    if not 0 < cut < len(raw):
+        return None
+    return raw[:cut].decode("utf-8", "ignore")
 
 
 def parse(text):

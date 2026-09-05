@@ -1741,14 +1741,17 @@ teardown
 # An entry is settled by a sync that finds neither marker standing, so an entry
 # without one reads as work already done: another invocation removes it, and if
 # this one is then killed the only record of an external store is gone, with
-# nothing else naming its path. So the marker is written first, and this asserts
-# the state that ordering maintains -- a store that is registered is a store that
-# looks owed.
+# nothing else naming its path. `remember_external` writes the entry first even
+# so, as the case above describes, because the other window is worse -- a marker
+# with no entry is a file outside every root that nothing names -- and it closes
+# this one by writing both under the registry guard, which a `forget_external`
+# racing it also takes. This asserts the state that discipline maintains: a
+# store that is registered is a store that looks owed.
 #
 # The ordering itself is not what is asserted here, and it cannot be: the two
 # writes are consecutive filesystem calls with no invocation of anything between
 # them, so no stub can observe the window from outside. What is checked is the
-# invariant either order is meant to produce.
+# invariant the guard is meant to produce.
 setup
 REG="$WS/.beads/.augment-sync.external"
 OUT=$(mktemp -d)
