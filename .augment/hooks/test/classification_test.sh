@@ -274,8 +274,9 @@ check_target '/tmp/store' 'exec -c bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'exec -lc bd -C /tmp/store close CHR-1'
 check skip 'exec -a worker bd list'
 # A letter neither table knows may take the word after it, so the command word
-# cannot be placed and the invocation is left alone, as for any wrapper.
-check skip 'exec -Z bd -C /tmp/store close CHR-1'
+# cannot be placed -- but the `bd` after it may be it, so the invocation is a
+# write whose store is unknown, as for any wrapper.
+check_unresolved 'exec -Z bd -C /tmp/store close CHR-1'
 # `xargs` runs the command it is given, once per batch of its input, so it
 # stands in front of the real command as the wrappers above do. Read as the
 # command itself, the `bd` behind it was an argument nothing looked at: the
@@ -331,7 +332,7 @@ check skip 'xargs -I{} {} close CHR-1'
 # With no command `xargs` runs `echo`, and a letter neither table knows leaves
 # the command word unplaceable, as for any wrapper.
 check skip 'xargs'
-check skip 'xargs -Z bd close CHR-1'
+check_unresolved 'xargs -Z bd close CHR-1'
 # The word `xargs` as an argument is a string, not a wrapper.
 check skip 'echo xargs bd close CHR-1'
 
@@ -843,6 +844,17 @@ check_target '/tmp/store' 'sudo -u nick bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'command bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'env FOO=bar bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'nice -n 10 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'nice -n -5 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'nice --adjustment 10 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'nice --adjustment=10 bd -C /tmp/store close CHR-1'
+# The historic spelling takes no letter: `nice -10 cmd` is `nice -n 10 cmd`,
+# and GNU takes `--10` and `-+10` as well. Read as a bundle it held no letter
+# either table knew, and the write behind it was missed outright.
+check_target '/tmp/store' 'nice -10 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'nice --10 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'nice -+5 bd -C /tmp/store close CHR-1'
+check sync 'nice -10 bd close CHR-1'
+check skip 'nice -10 bd list'
 check_target '/tmp/store' 'env -- bd -C /tmp/store close CHR-1'
 # `--` ends `env`'s options and not its assignments: `env -- NAME=value cmd`
 # still sets NAME and runs cmd. Taking the word after it as the command read
@@ -866,11 +878,28 @@ check sync 'sudo -n bd close CHR-1'
 check_target '/tmp/store' 'sudo -nE bd -C /tmp/store close CHR-1'
 # One unknown letter makes the whole bundle ambiguous: it may be the one
 # that consumes the next word, which would put the command word elsewhere.
-check_target '' 'sudo -nZ bd -C /tmp/store close CHR-1'
-check_target '' 'sudo -Z bd -C /tmp/store close CHR-1'
+# The `bd` after it may still be the command, so the invocation is a write
+# whose store is unknown. Given up in silence, it was a write nothing
+# reported: no sync, no warning, and a store no later event would find.
+check_unresolved 'sudo -nZ bd -C /tmp/store close CHR-1'
+check_unresolved 'sudo -Z bd -C /tmp/store close CHR-1'
+# ... wherever it stands among the words after, since the unknown letter may
+# have taken the ones before it; and whatever the verb, since the words may
+# not be `bd`'s own arguments at all.
+check_unresolved 'sudo -Z echo bd close CHR-1'
+check_unresolved 'sudo -Z bd list'
+check_unresolved 'sudo -Z /usr/local/bin/bd close CHR-1'
+# No later word names `bd`, a shell or `eval`, so nothing here can write; a
+# computed command name is left alone here as everywhere else.
+check skip 'sudo -Z ls -l'
+check skip 'sudo -Z $CMD close CHR-1'
 # `command -v` prints a path instead of running anything, so there is no
 # invocation here to attribute a write to.
 check skip 'command -v bd'
+check skip 'command -V bd'
+check skip 'command -pv bd close CHR-1'
+# ... which is not the same as an unknown letter with a `bd` after it.
+check_unresolved 'command -Z bd close CHR-1'
 # A wrapper named by path runs the same program, and its options are its own.
 # Looked up by full path the option tables had no entry for it, so the flag
 # after it was read as the command word and the write was missed outright.
@@ -967,14 +996,13 @@ check skip 'timeout 30 echo bd close CHR-1'
 check skip 'timeout bd close CHR-1'
 check skip 'timeout 30'
 # An unknown letter is ambiguous here as for any wrapper.
-check skip 'timeout -Z 30 bd close CHR-1'
+check_unresolved 'timeout -Z 30 bd close CHR-1'
 
 # An unknown letter is still ambiguous, whether it stands alone or opens a
 # bundle: it may be the one that takes the value, which would put the command
-# word elsewhere. `nice -10` is the historic form for a niceness, and no letter
-# at all.
-check_target '' 'stdbuf -Zx bd -C /tmp/store close CHR-1'
-check_target '' 'nice -10 bd -C /tmp/store close CHR-1'
+# word elsewhere.
+check_unresolved 'stdbuf -Zx bd -C /tmp/store close CHR-1'
+check_unresolved 'nice -Z bd -C /tmp/store close CHR-1'
 # `env -u` names the variable to unset, attached as readily as separated. Read
 # as a whole word it matched no unset at all, so an inherited value answered for
 # a name the command does not have -- naming a store it never opened, while the
@@ -1127,8 +1155,9 @@ check skip 'env -S "bd list"'
 check sync 'env -S "$CMD"'
 check sync 'env -S'
 # A bundle holding a letter that may take a value cannot say where `-S` is,
-# so the invocation is abandoned as any ambiguous wrapper is.
-check_target '' 'env -zS "bd -C /tmp/store close CHR-1"'
+# so the invocation is abandoned as any ambiguous wrapper is -- and the string
+# opens with `bd`, so it is a write whose store is unknown.
+check_unresolved 'env -zS "bd -C /tmp/store close CHR-1"'
 # The arguments after the string are the command's too: `env` appends them to
 # the words the split made. Scanning the string alone found `bd -C` with nothing
 # after it, so the write was reported without its target -- the roots synced
@@ -1483,10 +1512,10 @@ check_target '/tmp/store' 'env -i bash -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'sudo -nE bash -c "bd -C /tmp/store close CHR-1"'
 # A flag neither option table knows may or may not take the word after it,
 # so where the wrapper's arguments stop is unknown and so is the command
-# word. The walk stops at the wrapper rather than guessing, which is the
-# answer `bd_index` already gives the same text: the `bd` here is inside a
-# string no shell was recognised to run, so nothing reports it.
-check skip 'sudo -Z bash -c "bd -C /tmp/store close CHR-1"'
+# word. The walk stops at the wrapper rather than guessing -- but a shell
+# among the words after may run the string, so the invocation is a write
+# whose store is unknown rather than nothing.
+check_unresolved 'sudo -Z bash -c "bd -C /tmp/store close CHR-1"'
 # The word `bash` as an argument is a string, not a shell.
 check skip 'echo bash -c "bd close CHR-1"'
 # A temporary assignment in front of the shell speaks for none of this
@@ -1583,13 +1612,45 @@ check skip 'cs_f() { bd list; }; cs_f'
 check_target '/tmp/store' 'cs_f() { bd -C /tmp/store close CHR-1; }; cs_f'
 check_target '/tmp/store' 'cs_f() { bd -C /tmp/store close CHR-1; }; cs_f; cs_f'
 # Whether a body ran to the end, and which of its branches it took, is not
-# inferred, so the cwd after a call is unknown -- as it is after any compound
-# command. This gives up the case where the body changes nothing, to avoid
-# naming the caller's directory for one that did `cd` somewhere unknowable.
-check_unresolved "cs_f() { :; }
+# inferred, so the cwd after a call whose body acts on it is unknown -- as it
+# is after any compound command that does. A `cd` anywhere in the body counts,
+# reached or not, since where the body stopped is what is not inferred.
+check_unresolved "cs_f() { cd $CD/other; }
 cd $CD/base
 cs_f
 bd -C store close CHR-1"
+check_unresolved "cs_f() { return; cd $CD/other; }
+cd $CD/base
+cs_f
+bd -C store close CHR-1"
+check_unresolved "cs_f() { cd $CD/base; }
+cd $CD/base
+cs_f
+bd -C store close CHR-1"
+# A body that never touches the cwd leaves the caller's standing. Giving it
+# up regardless left a write launched from an external store unregistered
+# for a call that could not have moved the shell.
+check_target "$CD/base/store" "cs_f() { :; }
+cd $CD/base
+cs_f
+bd -C store close CHR-1"
+check_target "$CD/base/store" "cs_f() { CS_X=1; }
+cd $CD/base
+cs_f
+bd -C store close CHR-1"
+check_target "$CD/base/store" "cd $CD/base; if true; then CS_X=1; fi; bd -C store close CHR-1"
+check_target "$STORE" "cd $STORE; if true; then CS_X=1; fi; bd close CHR-1"
+check_target "$CD/base/store" "cd $CD/base; for CS_X in 1 2; do :; done; bd -C store close CHR-1"
+check_target "$CD/base/store" "cd $CD/base; case x in x) CS_X=1 ;; esac; bd -C store close CHR-1"
+check_target "$CD/base/store" "cd $CD/base; eval 'CS_X=1'; bd -C store close CHR-1"
+# One that does act on it, on any of its paths, gives it up as before -- and a
+# body's `cd` in a subshell of its own does not count, having moved nothing.
+check_unresolved "cd $CD/base; if true; then cd $CD/other; fi; bd -C store close CHR-1"
+check_unresolved "cd $CD/base; if false; then cd $CD/other; else CS_X=1; fi; bd -C store close CHR-1"
+check_unresolved "cd $CD/base; eval 'cd $CD/other'; bd -C store close CHR-1"
+check_unresolved "cd $CD/base; if true; then cd \$(pick); fi; bd -C store close CHR-1"
+check_target "$CD/base/store" "cd $CD/base; if true; then (cd $CD/other); fi; bd -C store close CHR-1"
+check_target "$CD/base/store" "cd $CD/base; if true; then env -C $CD/other true; fi; bd -C store close CHR-1"
 # A body that calls itself names no further store on the second pass.
 check sync 'cs_f() { cs_f; bd close CHR-1; }; cs_f'
 # A word that names no function defined here is an ordinary command.

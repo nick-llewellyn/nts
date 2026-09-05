@@ -86,7 +86,7 @@ WRAPPER_OPT_ARGS = {
              "-D", "--chdir", "-T", "--command-timeout", "-t", "--type",
              "-U", "--other-user", "-R", "--chroot", "-c", "--login-class"},
     "doas": {"-u", "-C", "-a"},
-    "nice": {"-n"},
+    "nice": {"-n", "--adjustment"},
     "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
     "exec": {"-a"},
     "timeout": {"-k", "--kill-after", "-s", "--signal"},
@@ -122,13 +122,14 @@ WRAPPER_OPERANDS = {"timeout": 1, "gtimeout": 1}
 # Options of those wrappers that stand alone. Without them every short flag
 # the table above does not list is ambiguous, and an ambiguous flag abandons
 # the whole invocation: `sudo -n bd close CHR-1` runs bd, and giving up on it
-# misses the write itself, not merely its target.
+# would have missed the write itself, not merely its target. (An abandoned
+# invocation with a `bd` still among its words is now a write whose store is
+# unknown rather than silence -- see `abandoned` -- so the cost of a missing
+# letter is a warning and a root sync, not a lost write.)
 #
 # Only flags that certainly take nothing belong here. One whose argument is
 # optional -- `env --block-signal[=SIG]` -- is left out on purpose: it is
-# genuinely ambiguous, and the ambiguous path is the safe one. So are the
-# lookup flags such as `command -v`, which print a path instead of running the
-# command and so name no invocation to attribute a write to.
+# genuinely ambiguous, and the ambiguous path is the safe one.
 WRAPPER_OPT_NOARG = {
     "env": {"-i", "--ignore-environment", "-0", "--null", "-v", "--debug"},
     "sudo": {"-n", "--non-interactive", "-b", "--background", "-E",
@@ -155,12 +156,31 @@ WRAPPER_OPT_NOARG = {
 # $OUT from the inherited value, naming a store the command never opened.
 EXEC_CLEAR_OPTS = {"-c"}
 
+# `command -v name` and `command -V name` print what the name would run and
+# run nothing, so there is no invocation to attribute a write to -- and none
+# to give up on: read as an unknown letter with a `bd` after it, the lookup
+# was reported as a write whose store is unknown.
+COMMAND_LOOKUP_LETTERS = set("vV")
+
 # Shells that run their `-c` operand as script rather than running a command
 # of their own. `bash -c 'bd -C /tmp/store close CHR-1'` writes that store,
 # and reading `bash` as an ordinary command loses the write entirely --
 # nothing else in the invocation says a store was touched, so SessionEnd
 # builds its list without it and the write sits local indefinitely.
 SHELL_WORDS = {"sh", "bash", "dash", "ksh", "mksh", "zsh"}
+
+# The words after a wrapper this scan gave up on that say a write may still be
+# in it: `bd` itself, a shell, or `eval`, each of which runs what follows.
+# `nice -Z bd -C /external close X` names no command word this scan can place,
+# but the `bd` is still there, and giving up in silence made it a write nothing
+# reported -- no sync, no warning, and a store no later event would find.
+ABANDONED_RUNNERS = {"bd", "eval"} | SHELL_WORDS
+
+# The historic spelling of a niceness, which `nice` takes without a letter:
+# `nice -10 cmd` is `nice -n 10 cmd`, and GNU takes `--10` and `-+10` too. Read
+# as a bundle it held no letter either table knew, so the invocation was
+# abandoned and the write behind it missed.
+NICE_ADJUST = re.compile(r"^-[-+]?[0-9]+$")
 
 # Options of those shells that consume the word after them, and the short
 # letters that certainly do not. The script is the first operand past the
@@ -977,6 +997,11 @@ class Scope:
                  allexport=False):
         self.cwd = cwd
         self.known = known
+        # Whether anything in this frame acted on the cwd -- a `cd` taken or
+        # given up on, a wrapper's directory, a sealed scope. A tentative
+        # frame that never did leaves its caller's cwd standing; see
+        # `tentative`.
+        self.moved = False
         self.assigns = assigns
         # False, CLEARED or OPAQUE: whether this scope's environment was
         # replaced rather than added to, as `env -i` does, and if so whether
@@ -1462,6 +1487,8 @@ class Scanner:
             if name not in WRAPPER_OPT_ARGS:
                 i += 1
                 continue
+            if name == "command" and self.command_lookup(args, i):
+                return None, None
             if name in WRAPPER_ENV_WORDS:
                 split = self.split_string(args, i)
                 if split is not None:
@@ -1469,14 +1496,55 @@ class Scanner:
             if name == "xargs":
                 nxt = self.xargs_opts(args, i)
                 if nxt is None:
+                    self.abandoned(args, i)
                     return None, None
                 i = nxt
                 continue
             nxt = self.skip_wrapper_opts(args, i, name)
             if nxt is None:
+                self.abandoned(args, i)
                 return None, None
             i = nxt
         return None, None
+
+    def command_lookup(self, args, start):
+        """Whether the `command` at `args[start]` looks a name up and runs nothing.
+
+        `-v` or `-V` anywhere among its leading flags makes it a lookup. A flag
+        this scan cannot read may be either, and is left to the ambiguous path.
+        """
+        for arg in args[start + 1:]:
+            word = arg.value
+            if word is UNKNOWN or not SHORT_BUNDLE.match(word):
+                return False
+            if COMMAND_LOOKUP_LETTERS & set(word[1:]):
+                return True
+        return False
+
+    def abandoned(self, args, start):
+        """Records what the wrapper given up on at `args[start]` may still run.
+
+        Its options could not be delimited, so no command word can be placed
+        -- but the words after it are still there, and one of them is the
+        command. Where one opens with `bd`, a shell or `eval`, the invocation
+        counts as a write whose store is unknown: the roots sync and the hook
+        says a store may have been missed, which is what every other write it
+        cannot read gets. Given up in silence instead, `nice -10 bd -C
+        /external close X` was reported by nothing.
+
+        The first word of each is what is looked at, since an `env -S` string
+        among them is a command line of its own. A word this scan cannot read
+        is left alone, as a computed command name is everywhere else.
+        """
+        for arg in args[start + 1:]:
+            value = arg.value
+            if value is UNKNOWN or not value.split():
+                continue
+            head = value.split()[0].rsplit("/", 1)[-1]
+            if head in ABANDONED_RUNNERS:
+                self.mutates = True
+                self.unresolved += 1
+                return
 
     def xargs_opts(self, args, start):
         """The index of the command word past the `xargs` at `args[start]`.
@@ -1655,6 +1723,9 @@ class Scanner:
             # `env -` is `env -i` in its historical spelling: an option, not
             # the command word, and not a bundle either.
             if wrapper == "env" and word in ENV_CLEAR_OPTS:
+                i += 1
+                continue
+            if wrapper == "nice" and NICE_ADJUST.match(word):
                 i += 1
                 continue
             if not word.startswith("-"):
@@ -2180,7 +2251,10 @@ class Scanner:
         the values from before it: `OUT=/old; if t; then OUT=/real; fi; bd -C
         "$OUT" ...` was resolved against /old, a store the command may never
         have opened, while /real went unsynced. So every name the frame assigned
-        is unknown afterwards instead, and the cwd with it.
+        is unknown afterwards instead -- and the cwd, when the frame acted on
+        it. One that never did leaves the cwd standing: `if t; then X=1; fi; bd
+        close X`, launched from an external store, gave the cwd up and the
+        store went unregistered for a branch that could not have moved it.
         """
         saved = self.scope
         inner = saved.child()
@@ -2203,7 +2277,9 @@ class Scanner:
                 saved.exported[name] = UNKNOWN
         if saved.allexport != inner.allexport:
             saved.allexport = UNKNOWN
-        saved.known = False
+        if inner.moved:
+            saved.known = False
+            saved.moved = True
 
     def sub_scan(self, stmts, cwd=None, known=None, seed=None, text=None,
                  sealed=False, conditional=False, frame="subshell",
@@ -2240,10 +2316,12 @@ class Scanner:
             raise Unavailable("nesting deeper than %d" % MAX_DEPTH)
 
         def run():
-            if cwd is not None:
+            if cwd is not None and cwd != self.scope.cwd:
                 self.scope.cwd = cwd
-            if known is not None:
+                self.scope.moved = True
+            if known is not None and known != self.scope.known:
                 self.scope.known = known
+                self.scope.moved = True
             if process:
                 assigns, exported = self.environment_view(sealed)
                 self.scope.assigns = assigns
@@ -2681,6 +2759,7 @@ class Scanner:
             # names no directory knowable from here, while an absolute `cd`
             # inside it does say where the write after it lands.
             self.scope.known = False
+            self.scope.moved = True
             self.stmt(body)
 
         self.scoped(run)
@@ -3103,12 +3182,14 @@ class Scanner:
         """
         self.scope.cwd = path
         self.scope.known = True
+        self.scope.moved = True
         self.scope.assigns.pop("PWD", None)
         self.scope.assigns.pop("OLDPWD", None)
 
     def leave_cwd(self):
         """Records that this scope's cwd is no longer known, PWD with it."""
         self.scope.known = False
+        self.scope.moved = True
         self.scope.assigns.pop("PWD", None)
         self.scope.assigns.pop("OLDPWD", None)
 
