@@ -410,6 +410,25 @@ def parse(text):
 # written.
 UNKNOWN = object()
 
+# A name a wrapper unset, as `env -u NAME` does. Distinct from UNKNOWN because
+# the two answer differently where the environment is read: an unset
+# `BEADS_DIR` leaves `bd` walking up from its directory, which this scan can
+# follow, where one that cannot be read leaves the store in doubt. Expanded in
+# a word it is as unknowable as any other unset name, since `get` does not
+# answer for those either.
+UNSET = object()
+
+# How a wrapper sealed the child's environment against the names it did not
+# carry. CLEARED is `env -i` and `exec -c`: a name not carried is certainly
+# unset in the child. OPAQUE is a wrapper whose effect cannot be read -- `sudo`,
+# `doas`, a prefix word this scan cannot resolve: a name not carried may hold
+# anything. Both are true, and both leave the scope's own lookups unanswered;
+# they differ only where a name's absence has a meaning of its own, as
+# `BEADS_DIR`'s does. Reading CLEARED as OPAQUE left `cd /external/repo && env
+# -i bd close X` unresolved, and the store the walk would have found unsynced.
+CLEARED = "cleared"
+OPAQUE = "opaque"
+
 
 def unescape(text):
     """A literal's value with the shell's backslash escapes applied.
@@ -733,9 +752,11 @@ class Scope:
         self.cwd = cwd
         self.known = known
         self.assigns = assigns
-        # Whether this scope's environment was replaced rather than added to, as
-        # `env -i` does. A name not assigned here is then unset rather than
-        # inherited, so the hook's own environment must not answer for it.
+        # False, CLEARED or OPAQUE: whether this scope's environment was
+        # replaced rather than added to, as `env -i` does, and if so whether
+        # what replaced it can be read. A name not assigned here is then unset
+        # or unknowable rather than inherited, so the hook's own environment
+        # must not answer for it either way.
         self.sealed = sealed
 
     def child(self):
@@ -799,7 +820,8 @@ class Scanner:
         text -- which the walk has recorded, in order -- or inherited.
         """
         if name in self.scope.assigns:
-            return self.scope.assigns[name]
+            value = self.scope.assigns[name]
+            return UNKNOWN if value is UNSET else value
         # `PWD` is the one name the inherited environment answers wrongly. The
         # hook runs in its own process, whose cwd is not the launch directory
         # the command runs in and does not follow the `cd`s the command makes,
@@ -1427,13 +1449,25 @@ class Scanner:
         naming some other store, or none, and leaving the one that was written
         unregistered.
 
-        `sealed` says a name this does not carry is unset in the child rather
-        than inherited. That is what `env -i` does, and it is also the answer for
-        a prefix whose effect on the environment cannot be read: `sudo` and
-        `doas` decide what passes by a policy on disk, and a word this scan
-        cannot resolve may be an assignment or an unset. Sealing reports those
-        names unknowable while leaving the write itself found, which is what
-        matters -- the roots still sync, and only the `-C` target is in doubt.
+        `sealed` is False, CLEARED or OPAQUE, and says what a name this does not
+        carry is in the child. CLEARED is `env -i` and `exec -c`: such a name is
+        unset rather than inherited. OPAQUE is a prefix whose effect on the
+        environment cannot be read: `sudo` and `doas` decide what passes by a
+        policy on disk, and a word this scan cannot resolve may be an
+        assignment or an unset, so such a name may hold anything. Either way
+        the write itself is still found, which is what matters -- the roots
+        still sync, and only the store's identity is in question. The two are
+        told apart because an unset `BEADS_DIR` has a meaning of its own: `bd`
+        walks up from its directory, which this scan can follow, where an
+        unreadable one leaves the store in doubt.
+
+        Read in the order the shell applies them, since each wrapper acts on
+        the environment the one before it built: `env -i` and `sudo` drop the
+        assignments read before them, and a name unset by `-u` is carried as
+        UNSET rather than dropped, so `env -u X env X=/b bd` runs with /b.
+        `env` takes its options before its assignments and its assignments
+        before the command, without permuting, so the order in the text is the
+        order applied.
         """
         assigns = {}
         sealed = False
@@ -1441,12 +1475,14 @@ class Scanner:
         while i < start:
             word = args[i].value
             if word is UNKNOWN:
-                sealed = True
+                assigns = {}
+                sealed = OPAQUE
                 i += 1
                 continue
             name = word.rsplit("/", 1)[-1]
             if name in WRAPPER_ENV_UNREADABLE:
-                sealed = True
+                assigns = {}
+                sealed = OPAQUE
                 i += 1
                 continue
             # `exec -c` clears the environment as `env -i` does, so a name the
@@ -1454,7 +1490,8 @@ class Scanner:
             # assignments of its own, so the flag is all there is to read.
             if name == "exec":
                 if self.exec_clears(args, i, start):
-                    sealed = True
+                    assigns = {}
+                    sealed = CLEARED
                 i += 1
                 continue
             if name not in WRAPPER_ENV_WORDS:
@@ -1464,7 +1501,10 @@ class Scanner:
             while i < start:
                 word = args[i].value
                 if word is UNKNOWN:
-                    sealed = True
+                    # An option, an unset or an assignment this scan cannot
+                    # read, so every name read so far is in doubt.
+                    assigns = {}
+                    sealed = OPAQUE
                     i += 1
                     continue
                 if word == "--":
@@ -1478,22 +1518,24 @@ class Scanner:
                     i += 1
                     continue
                 if word in ENV_CLEAR_OPTS:
-                    sealed = True
+                    assigns = {}
+                    sealed = CLEARED
                     i += 1
                     continue
                 opt, sep, inline = word.partition("=")
                 if opt in ENV_UNSET_OPTS:
                     if sep:
-                        assigns[inline] = UNKNOWN
+                        assigns[inline] = UNSET
                         i += 1
                     elif i + 1 < start:
                         nxt = args[i + 1].value
                         if nxt is UNKNOWN:
                             # Which name was unset is itself unreadable, so
                             # every name is in doubt.
-                            sealed = True
+                            assigns = {}
+                            sealed = OPAQUE
                         else:
-                            assigns[nxt] = UNKNOWN
+                            assigns[nxt] = UNSET
                         i += 2
                     else:
                         i += 1
@@ -1510,21 +1552,24 @@ class Scanner:
                     if bundle is None:
                         # A letter this scan does not know may be an unset whose
                         # name cannot be identified, so every name is in doubt.
-                        sealed = True
+                        assigns = {}
+                        sealed = OPAQUE
                         i += 1
                         continue
                     letters, bopt, binline = bundle
                     if any("-" + ch in ENV_CLEAR_OPTS for ch in letters):
-                        sealed = True
+                        assigns = {}
+                        sealed = CLEARED
                     if bopt in ENV_UNSET_OPTS:
                         if binline is not None:
-                            assigns[binline] = UNKNOWN
+                            assigns[binline] = UNSET
                         elif i + 1 < start:
                             nxt = args[i + 1].value
                             if nxt is UNKNOWN:
-                                sealed = True
+                                assigns = {}
+                                sealed = OPAQUE
                             else:
-                                assigns[nxt] = UNKNOWN
+                                assigns[nxt] = UNSET
                     i += 1 if bopt is None or binline is not None else 2
                     continue
                 if opt in WRAPPER_OPT_ARGS["env"] and not sep:
@@ -1753,7 +1798,11 @@ class Scanner:
         offsets index that string and not the command this scan started with.
 
         `sealed` says the child's environment was replaced rather than inherited,
-        as under `env -i`, so a name `seed` does not carry is unset there.
+        as under `env -i`, so a name `seed` does not carry is unset there --
+        CLEARED -- or, under a wrapper whose effect cannot be read, unknowable
+        -- OPAQUE. The innermost wrapper's kind stands: `sudo bash -c 'env -i
+        bash -c ...'` is cleared inside, whatever the policy outside let
+        through.
 
         `frame` is "tentative" for text that runs in this shell rather than a
         subshell, as `eval`'s does; see `tentative`. `conditional` is then what
@@ -1772,7 +1821,7 @@ class Scanner:
             if known is not None:
                 self.scope.known = known
             if sealed:
-                self.scope.sealed = True
+                self.scope.sealed = sealed
             if seed:
                 self.scope.assigns.update(seed)
             outer = self.text
@@ -2306,18 +2355,39 @@ class Scanner:
         """
         wrapper_assigns, sealed = self.prefix_env(args, start)
         if name in wrapper_assigns:
-            return wrapper_assigns[name]
-        if sealed:
+            return self.env_value(wrapper_assigns[name])
+        # A cleared environment is a known one: the name is unset, and what
+        # follows from that -- for `BEADS_DIR`, the walk up from the directory
+        # -- can be read. Only an opaque wrapper leaves it in doubt. Reading
+        # the two alike left `cd /external/repo && env -i bd close X`
+        # unresolved, with the store the walk names unsynced and unregistered.
+        if sealed is OPAQUE:
             return UNKNOWN
+        if sealed is CLEARED:
+            return None
         value = None
         for arg in cmd.get("Assigns") or ():
             if gives_value(arg) and arg["Name"]["Value"] == name:
                 value = self.assigned_value(arg.get("Value"))
         if value is not None:
             return value
-        if name not in self.scope.assigns and name not in os.environ:
+        if name in self.scope.assigns:
+            return self.env_value(self.scope.assigns[name])
+        if self.scope.sealed is OPAQUE:
+            return UNKNOWN
+        if self.scope.sealed is CLEARED or name not in os.environ:
             return None
-        return self.get(name)
+        return os.environ[name]
+
+    @staticmethod
+    def env_value(value):
+        """A recorded environment value as `command_env` reports it.
+
+        A name a wrapper unset is recorded as UNSET so that a word expanding it
+        stays unknowable, as any unset name is to `get`; read as the
+        environment, it is simply absent.
+        """
+        return None if value is UNSET else value
 
     def cd(self, args, start, conditional, follows):
         """Replays a `cd` that certainly runs, and gives up on one that may not.

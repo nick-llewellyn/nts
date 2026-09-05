@@ -430,11 +430,53 @@ check_target "$STORE" "BEADS_DIR=$CD/other/.beads BEADS_DIR=$STORE/.beads bd clo
 check_target "$STORE" "BEADS_DIR=$CD/other/.beads env BEADS_DIR=$STORE/.beads bd close CHR-1"
 check_target "$STORE" "BEADS_DIR=$CD/other/.beads env A=1 env BEADS_DIR=$STORE/.beads bd close CHR-1"
 check_target "$STORE" "BEADS_DIR=$CD/other/.beads nohup env BEADS_DIR=$STORE/.beads bd close CHR-1"
-check_target '' "BEADS_DIR=$CD/other/.beads env -i bd close CHR-1"
-check_target '' "BEADS_DIR=$CD/other/.beads env -u BEADS_DIR bd close CHR-1"
 check_target '' "BEADS_DIR=$CD/other/.beads sudo bd close CHR-1"
 # A wrapper assignment of another name leaves the prefix's in force.
 check_target "$STORE" "BEADS_DIR=$STORE/.beads env A=1 bd close CHR-1"
+# A cleared environment is a known one, not an unreadable one. Under `env -i`,
+# `exec -c` or `env -u BEADS_DIR` the name is certainly unset, so `bd` walks up
+# from its directory as it does when nothing ever set it -- and that walk can
+# be followed. Reading the clear as opaque left `cd /external/repo && env -i
+# bd close X` unresolved: the write was found, but the store the walk names
+# was neither synced nor registered, and the warning pointed at a value the
+# command never depended on.
+check_target "$STORE" "cd $STORE && BEADS_DIR=$CD/other/.beads env -i bd close CHR-1"
+check_target "$STORE" "cd $STORE && BEADS_DIR=$CD/other/.beads env -u BEADS_DIR bd close CHR-1"
+check_target "$STORE" "cd $STORE && BEADS_DIR=$CD/other/.beads env --unset=BEADS_DIR bd close CHR-1"
+check_target "$STORE" "cd $STORE && BEADS_DIR=$CD/other/.beads env -uBEADS_DIR bd close CHR-1"
+check_target "$STORE" "cd $STORE && BEADS_DIR=$CD/other/.beads exec -c bd close CHR-1"
+check_target "$STORE" "cd $STORE && env BEADS_DIR=$CD/other/.beads env -i bd close CHR-1"
+check_target "$STORE" "cd $STORE && env -i bash -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE && BEADS_DIR=$CD/other/.beads env -u BEADS_DIR bash -c 'bd close CHR-1'"
+scan_command "cd $STORE && BEADS_DIR=$CD/other/.beads env -i bd close CHR-1" "$BASE"
+[ "$SCAN_UNRESOLVED" -eq 0 ] && PASS=$((PASS + 1)) || {
+  FAIL=$((FAIL + 1))
+  printf 'FAIL unresolved want=0 got=%s cleared BEADS_DIR\n' "$SCAN_UNRESOLVED"
+}
+# ... while an unreadable one still leaves the store in doubt: what `sudo`
+# passes is decided by a policy this scan cannot read, and a prefix word it
+# cannot resolve may be an assignment of the name. An assignment read before
+# such a word is in doubt with the rest.
+check_target '' "cd $STORE && BEADS_DIR=$CD/other/.beads sudo bd close CHR-1"
+check_target '' "cd $STORE && env -i sudo bd close CHR-1"
+check_target '' "cd $STORE && env -i \$(w) bd close CHR-1"
+check_target '' "cd $STORE && env -i BEADS_DIR=$STORE/.beads \$(w) bd close CHR-1"
+check_target '' "cd $STORE && env -i -u \$(w) bd close CHR-1"
+check_target '' "cd $STORE && sudo bash -c 'bd close CHR-1'"
+scan_command "cd $STORE && env -i sudo bd close CHR-1" "$BASE"
+[ "$SCAN_UNRESOLVED" -eq 1 ] && PASS=$((PASS + 1)) || {
+  FAIL=$((FAIL + 1))
+  printf 'FAIL unresolved want=1 got=%s opaque after cleared\n' "$SCAN_UNRESOLVED"
+}
+# The innermost wrapper decides: a clear under `sudo` is a clear, and a
+# `sudo` under a clear is opaque. An assignment `env -i` carries itself, or
+# one made after the clear, is the environment.
+check_target "$STORE" "cd $STORE && sudo env -i bd close CHR-1"
+check_target "$STORE" "cd $STORE && sudo bash -c 'env -i bd close CHR-1'"
+check_target "$STORE" "cd $STORE && env -i BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "cd $STORE && env -i env BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "cd $STORE && env -u BEADS_DIR env BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "cd $CD/other && BEADS_DIR=$CD/other/.beads env -u BEADS_DIR bd -C $STORE close CHR-1"
 # A quoted target keeps every character of the path, including ones a text
 # split would have cut it at.
 check_target '/tmp/a;b' 'bd -C "/tmp/a;b" close CHR-1'
@@ -761,10 +803,11 @@ check_target "$STORE" "sudo -D $STORE bd -C sub/deeper close CHR-1"
 check_target "$STORE" "sudo --chdir=$STORE bd -C sub/deeper close CHR-1"
 check_target '' "sudo -D $STORE bd close CHR-1"
 # The directory may end a bundle whose other letters take nothing. `-i` among
-# them seals the environment as `sudo` does, leaving the store in doubt for the
-# same reason, so a letter that does not is used to assert the directory itself.
+# them clears the environment, which unsets BEADS_DIR rather than putting it in
+# doubt as `sudo` does: the walk from the directory answers, and it answers
+# with the same store either way.
 check_target "$STORE" "env -vC$STORE bd close CHR-1"
-check_target '' "env -iC$STORE bd close CHR-1"
+check_target "$STORE" "env -iC$STORE bd close CHR-1"
 check_target "$STORE" "sudo -nD$STORE bd -C sub/deeper close CHR-1"
 # A relative `-C` resolves against the cwd in force before it, and a second
 # against the first: the wrapper's chdir calls run in order.

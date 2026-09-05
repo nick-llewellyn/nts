@@ -1086,6 +1086,51 @@ registered "$OUT" && report ok ||
 rm -rf "$OUT"
 teardown
 
+# --- a recorder killed before its marker cannot be settled over --------
+# `remember_external` writes the entry and then the marker, under the guard.
+# Killed between them it leaves the entry with no marker and the guard held by
+# a dead pid. If another invocation had already committed that store and is
+# mid-push, its `forget_external` reclaims the guard, sees no marker, and drops
+# the entry -- for a write that landed after its commit. The store is then
+# named by nothing.
+#
+# Staged from the stub: when the push aimed at the external store begins --
+# after its commit, before its settle -- the guard is planted with a dead
+# owner, which is all the dead recorder left behind.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+REG="$WS/.beads/.augment-sync.external"
+reg_write "$REG" "$OUT"
+(exit 0) &
+DEAD=$!
+wait "$DEAD" 2>/dev/null
+mv -f "$WS/bin/bd" "$WS/bin/bd.real"
+cat >"$WS/bin/bd" <<STUB
+#!/usr/bin/env bash
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && grep -q push <<<"\$*"; then
+  ln -sf "$DEAD" "$REG.guard"
+fi
+exec "$WS/bin/bd.real" "\$@"
+STUB
+chmod +x "$WS/bin/bd"
+fire 'bd list'
+registered "$OUT" && report ok ||
+  report bad "a settle that reclaimed the guard must not drop the entry (reg: $(reg_dump))"
+pending "$OUT" && report ok ||
+  report bad "the reclaim must leave the store marked as owed"
+! lock_exists "$REG.guard" && report ok ||
+  report bad "the reclaimed guard must be released"
+# ... and the next invocation serves the marker and settles the entry.
+mv -f "$WS/bin/bd.real" "$WS/bin/bd"
+fire 'bd list'
+[ "$(grep -c "push $OUT" "$BD_LOG.dirs")" -eq 2 ] && report ok ||
+  report bad "the marked store must be pushed again (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+! registered "$OUT" && report ok ||
+  report bad "a push covering the request must settle the entry (reg: $(reg_dump))"
+rm -rf "$OUT"
+teardown
+
 # --- a target is resolved as of the bd that names it -------------------
 # Variables are read from the command text, and the text also holds
 # assignments that run after the `bd`. Taking the last one in the whole

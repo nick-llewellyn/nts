@@ -366,8 +366,14 @@ child_running() {
 # leftover election therefore costs one `readlink`, not the store's ability
 # to recover. The walk terminates because each step consumes one election
 # that already existed, and attempts only ever move upward.
+#
+# `GUARD_RECLAIMED` says how the guard was taken: 0 free, 1 reclaimed from a
+# holder that had died. The registry callers read it, since a holder that died
+# under the registry guard may have died between the two writes it makes.
+GUARD_RECLAIMED=0
 take_guard() {
   local guard="$1" holder election elector attempt won=1
+  GUARD_RECLAIMED=0
   take_lock "$guard" && return 0
   holder=$(lock_owner "$guard")
   # An empty owner no longer means "caught mid-creation" -- it means the
@@ -395,6 +401,7 @@ take_guard() {
     take_lock "$guard" && won=0
   fi
   drop_lock "$election"
+  [ "$won" -eq 0 ] && GUARD_RECLAIMED=1
   return "$won"
 }
 
@@ -495,6 +502,17 @@ for_each_registry read_registry
 # an entry alone is enough for every later invocation to sync the store. A
 # `forget_external` racing this cannot see the entry without its marker, since it
 # rewrites the registry under the same guard and re-reads the marker after.
+#
+# That holds while the writer lives. Killed between the two writes, it leaves the
+# guard held by a dead owner, and the next taker reclaims it -- which for a
+# `forget_external` settling a push that ran before this request means dropping
+# the entry with no marker to stop it: the store is then named by nothing. So
+# the guard it died holding is read as the record it could not finish. Whoever
+# reclaims the registry guard raises the marker on every store the registry
+# names before doing anything else (`mark_registry_owed`), and a settle that
+# follows finds the marker. Every entry rather than the one, since the dead
+# holder's candidate is not recoverable from the guard; the cost is a no-op
+# commit per entry, once.
 remember_external() {
   local candidate="$1" existing
   [ -n "$REGISTRY" ] && [ -d "$candidate/.beads" ] || return 0
@@ -510,6 +528,7 @@ remember_external() {
     WARNINGS+=("beads: could not record the external bead store ${candidate}; a failed sync there will not be retried later in this session.")
     return 0
   fi
+  [ "$GUARD_RECLAIMED" -eq 1 ] && mark_registry_owed
   # Deduplicated by path, which is sound only because an entry is no longer
   # settled by a push alone: what settles it is a push followed by no request
   # left outstanding, and the marker raised below is what says one is. So
@@ -563,6 +582,28 @@ registry_has() {
   return 1
 }
 
+# Raises the marker on every store the registry being written names. Called by
+# whoever takes the registry guard from a holder that died, before anything
+# else is done under it: the holder may have been `remember_external`, killed
+# after writing the entry and before the marker, and a settle that ran on
+# without the marker would drop the entry -- see the note there. A store
+# without a `.beads` is left alone, as `bd` could not have written it and the
+# prune is about to drop it.
+#
+# The marker is raised for a store that may already be pushed, which costs a
+# no-op commit there once. Whether the dead holder got as far as the entry is
+# not knowable from the guard, and this is done under it, so a caller that dies
+# part-way leaves it stale for the next taker to do again.
+mark_registry_owed() {
+  local entry
+  [ -n "$REGISTRY" ] && [ -r "$REGISTRY" ] || return 0
+  while IFS= read -r -d '' entry; do
+    [ -d "$entry/.beads" ] || continue
+    : >"$entry/.beads/.augment-sync.pending"
+  done <"$REGISTRY"
+  return 0
+}
+
 # Rewrites the registry as every entry for which `$1 <entry>` succeeds.
 #
 # Replaced whole rather than edited in place, so a hook killed mid-write leaves
@@ -570,10 +611,16 @@ registry_has() {
 # no-op commit; dropping a live one strands a write, so a guard this cannot
 # take means stand down rather than rewrite from a snapshot someone else has
 # moved on from.
+#
+# The keep function runs under the guard, after a reclaimed guard has raised its
+# markers, so a decision that turns on a marker -- `forget_keep`'s does -- is
+# made against the state the dead holder left rather than the one read before
+# the guard was taken.
 filter_registry() {
   local keep="$1" entry tmp any=0 failed=0
   [ -n "$REGISTRY" ] && [ -r "$REGISTRY" ] || return 0
   take_guard "$REGISTRY_GUARD" || return 0
+  [ "$GUARD_RECLAIMED" -eq 1 ] && mark_registry_owed
   tmp="$REGISTRY.$$"
   : >"$tmp" || {
     drop_lock "$REGISTRY_GUARD"
@@ -635,8 +682,19 @@ filter_registry() {
 # entry being settled may have been recorded by a session whose first root was
 # another of them, and one left behind means this store is committed by every
 # later invocation with nothing able to settle it.
+#
+# The markers are read twice: once before the guard, which is what saves the
+# rewrite in the common case, and once by `forget_keep` under it. The second
+# read is the one that sees a marker raised by the guard's own reclaim -- a
+# `remember_external` that died between its entry and its marker is only known
+# by the guard it left held, and the marker stands in for the one it did not
+# write. Without it the entry was dropped on the first read's word.
 FORGET_TARGET=""
-forget_keep() { [ "$1" != "$FORGET_TARGET" ]; }
+forget_keep() {
+  [ "$1" != "$FORGET_TARGET" ] ||
+    [ -e "$1/.beads/.augment-sync.pending" ] ||
+    [ -e "$1/.beads/.augment-sync.inflight" ]
+}
 forget_external() {
   local root="$1"
   [ -e "$root/.beads/.augment-sync.pending" ] && return 0
