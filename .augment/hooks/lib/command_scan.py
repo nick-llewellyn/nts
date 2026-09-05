@@ -258,6 +258,16 @@ IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ARITH_ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=",
                     "^=", "|="}
 ARITH_STEP_OPS = {"++", "--"}
+# Every operator arithmetic has, longest first, so the one at a node's `OpPos`
+# is read whole: `<<=` before `<<` before `<`, `==` before `=`. Read out of the
+# source for the same reason `JOIN_OPS` is -- the node's `Op` is a string in
+# one installed shfmt and a table index in another, and under the latter no
+# assignment matched, so `((OUT=1))` left OUT standing with no warning.
+ARITH_OPS = sorted(
+    ARITH_ASSIGN_OPS | ARITH_STEP_OPS |
+    {"**", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "+", "-", "*",
+     "/", "%", "<", ">", "&", "|", "^", "!", "~", "?", ":", ","},
+    key=len, reverse=True)
 # The assignments in arithmetic that reached the scan as text rather than as a
 # tree: `let "OUT=1"` is a quoted word, which the parser leaves whole. Each
 # alternative names the variable an assignment or a step acts on; an `=` that
@@ -2327,12 +2337,12 @@ class Scanner:
             return
         kind = expr.get("Type")
         if kind == "BinaryArithm":
-            if expr.get("Op") in ARITH_ASSIGN_OPS:
+            if self.arith_op(expr) in ARITH_ASSIGN_OPS:
                 self.arith_target(expr.get("X"))
             self.arith_assigns(expr.get("X"))
             self.arith_assigns(expr.get("Y"))
         elif kind == "UnaryArithm":
-            if expr.get("Op") in ARITH_STEP_OPS:
+            if self.arith_op(expr) in ARITH_STEP_OPS:
                 self.arith_target(expr.get("X"))
             self.arith_assigns(expr.get("X"))
         elif kind == "ParenArithm":
@@ -2344,6 +2354,24 @@ class Scanner:
             for field in fields:
                 for match in ARITH_TEXT_ASSIGN.finditer(field.value):
                     self.forget(match.group(1) or match.group(2))
+
+    def arith_op(self, expr):
+        """An arithmetic node's operator, as text.
+
+        Read out of the source at `OpPos` for the reason `join_op` gives: the
+        node's `Op` is a string under one installed shfmt and an index into the
+        operator table under another, and an index matches no operator name,
+        so every assignment read as none. None when no operator this scan
+        knows stands there, which no node of the kinds asked about produces.
+        """
+        try:
+            at = expr["OpPos"]["Offset"]
+        except (KeyError, TypeError):
+            return None
+        for op in ARITH_OPS:
+            if self.raw.startswith(op.encode("utf-8"), at):
+                return op
+        return None
 
     def arith_target(self, word):
         """Marks unknown the name the arithmetic assignment to `word` sets."""
