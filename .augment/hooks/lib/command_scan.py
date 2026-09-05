@@ -261,6 +261,12 @@ PIPE_OPS = ("|", "|&")
 # roots and warning -- the same standing it gives a broken `shfmt`.
 MAX_DEPTH = 64
 
+# How many items a word-iterating `for` may have for its body to be scanned
+# once per value. Past this the name is left unknown for the body instead, so a
+# `-C` through it is reported unresolved rather than the scan running long: a
+# body nested in another such loop is scanned the product of the two counts.
+FOR_ITEMS_MAX = 16
+
 # How many closers may be appended to unbalanced text before it is abandoned.
 MAX_REPAIRS = 8
 
@@ -1983,14 +1989,20 @@ class Scanner:
             self.branch(cmd.get("Cond"))
             self.branch(cmd.get("Do"))
         elif kind == "ForClause":
-            loop = cmd.get("Loop") or {}
-            for item in loop.get("Items") or ():
-                self.word_subs(item)
-            self.branch(cmd.get("Do"))
+            self.for_clause(cmd)
         elif kind == "CaseClause":
             if cmd.get("Word"):
                 self.word_subs(cmd["Word"])
             for item in cmd.get("Items") or ():
+                # A pattern is a word the shell expands before matching it, so
+                # a substitution in one runs: `case x in "$(bd -C /tmp/store
+                # close X)") ;; esac` writes that store. Scanning only the
+                # arms found nothing to sync. Every arm's patterns are
+                # visited though matching stops at the first that matches --
+                # a write scanned that did not run costs a no-op commit, where
+                # one skipped that did run leaves the store unsynced.
+                for pattern in item.get("Patterns") or ():
+                    self.word_subs(pattern)
                 self.branch(item.get("Stmts"))
         elif kind == "FuncDecl":
             self.func_decl(cmd)
@@ -2024,6 +2036,49 @@ class Scanner:
         if not stmts:
             return
         self.tentative(lambda: self.stmts(stmts, True))
+
+    def for_clause(self, cmd):
+        """Scans a `for`, with the name its header assigns.
+
+        The header runs before the body and whether or not the body ever does,
+        so its substitutions are scanned first, wherever the form puts them:
+        `for x in $(bd close X)` and `for ((i = $(bd close X); ...))` both run
+        the write, and visiting only a word list missed the arithmetic form.
+
+        A word-iterating `for` assigns its name on every pass, which is an
+        assignment the tree does not spell as one: `OUT=/old; for OUT in
+        /real; do bd -C "$OUT" close X; done` writes /real, and reading the
+        body against the value from before the loop named a store the command
+        never opened while the one it wrote went unregistered. When every item
+        is known the body is scanned once per value, which is what runs; a
+        list that cannot be read, or none at all -- `for x; do` iterates the
+        positional parameters, which the scan does not have -- leaves the name
+        unknown for the body. It is unknown after the loop either way: which
+        pass was the last is what the scan declines to infer.
+        """
+        loop = cmd.get("Loop") or {}
+        self.node_subs(loop)
+        body = cmd.get("Do")
+        if loop.get("Type") != "WordIter" or not loop.get("Name"):
+            self.branch(body)
+            return
+        name = loop["Name"]["Value"]
+        values = None
+        items = loop.get("Items") or ()
+        if items:
+            fields = self.expand_args(items)
+            if 0 < len(fields) <= FOR_ITEMS_MAX and \
+                    all(field.value is not UNKNOWN for field in fields):
+                values = [self.expand_tilde(field.value) if field.tilde
+                          else field.value for field in fields]
+        if values is None:
+            self.scope.assigns[name] = UNKNOWN
+            self.branch(body)
+            return
+        for value in values:
+            self.scope.assigns[name] = value
+            self.branch(body)
+        self.scope.assigns[name] = UNKNOWN
 
     def if_clause(self, cmd):
         """Scans an `if`, including the `elif`s nested in its else arm.
@@ -2162,10 +2217,12 @@ class Scanner:
 
         # A substitution runs before the command whose word carries it, and
         # runs whatever the command's own reachability is, so every word is
-        # visited for them first, prefix assignments included.
+        # visited for them first, prefix assignments included. An assignment
+        # is walked whole rather than by its value: an index and an array
+        # literal are expanded too, so `A[$(bd close X)]=v` and `B=($(bd close
+        # X))` both run the write, and visiting the value alone found neither.
         for arg in assigns:
-            if arg.get("Value"):
-                self.word_subs(arg["Value"])
+            self.node_subs(arg)
         for arg in args:
             self.word_subs(arg)
 

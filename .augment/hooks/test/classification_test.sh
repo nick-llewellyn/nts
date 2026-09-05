@@ -1409,6 +1409,65 @@ check sync 'echo $(echo $(echo $(echo $(echo $(bd close CHR-1)))))'
 check_target '/tmp/store' 'until bd -C /tmp/store close CHR-1; do :; done'
 check_target '/tmp/store' 'case x in *) bd -C /tmp/store close CHR-1 ;; esac'
 check_target '/tmp/store' 'for i in 1; do bd -C /tmp/store close CHR-1; done'
+# A `for` header runs before the body and whether or not the body does, in
+# either of its forms. Visiting only a word list missed the arithmetic one.
+check_target '/tmp/store' 'for ((i = $(bd -C /tmp/store close CHR-1); i < 2; i++)); do :; done'
+check_target '/tmp/store' 'for ((i = 0; i < $(bd -C /tmp/store close CHR-1); i++)); do :; done'
+check_target '/tmp/store' 'for ((i = 0; i < 2; i += $(bd -C /tmp/store close CHR-1))); do :; done'
+check_target '/tmp/store' 'for i in $(bd -C /tmp/store close CHR-1); do :; done'
+check_target '/tmp/store' 'for ((i = 0; i < 2; i++)); do bd -C /tmp/store close CHR-1; done'
+# A word-iterating `for` assigns its name on every pass, though the tree spells
+# no assignment. Reading the body against the value from before the loop named
+# a store the command never opened, while the one it wrote went unregistered.
+# With every item known the body is read once per value, which is what runs.
+check_target '/real' 'OUT=/old; for OUT in /real; do bd -C "$OUT" close CHR-1; done'
+check_target '/tmp/a /tmp/b' 'for d in /tmp/a /tmp/b; do bd -C "$d" close CHR-1; done'
+check_target '/tmp/a b /tmp/c' 'for d in "/tmp/a b" /tmp/c; do bd -C "$d" close CHR-1; done'
+check_target "$HOME/store" 'for d in ~/store; do bd -C "$d" close CHR-1; done'
+check_target '/tmp/a/x /tmp/b/x' 'for d in /tmp/a /tmp/b; do bd -C "$d/x" close CHR-1; done'
+check_target '/tmp/a/one /tmp/a/two /tmp/b/one /tmp/b/two' \
+  'for d in /tmp/a /tmp/b; do for e in one two; do bd -C "$d/$e" close CHR-1; done; done'
+check_target '/tmp/a /tmp/b' 'cs_l=/tmp/a; for d in "$cs_l" /tmp/b; do bd -C "$d" close CHR-1; done'
+# A list that cannot be read leaves the name unknown, and so does no list at
+# all: `for x; do` iterates the positional parameters, which the scan does not
+# have. The write is still found, and the target reported as unresolved rather
+# than as the value from before the loop.
+check_target '' 'OUT=/old; for OUT in $(ls); do bd -C "$OUT" close CHR-1; done'
+check_target '' 'OUT=/old; for OUT; do bd -C "$OUT" close CHR-1; done'
+check_target '' 'OUT=/old; for OUT in /real "$(x)"; do bd -C "$OUT" close CHR-1; done'
+scan_command 'OUT=/old; for OUT in $(ls); do bd -C "$OUT" close CHR-1; done' "$BASE"
+[ "$SCAN_MUTATES" -eq 1 ] && [ "$SCAN_UNRESOLVED" -eq 1 ] && PASS=$((PASS + 1)) || {
+  FAIL=$((FAIL + 1))
+  printf 'FAIL want mutates=1 unresolved=1 got mutates=%s unresolved=%s for over unknown list\n' \
+    "$SCAN_MUTATES" "$SCAN_UNRESOLVED"
+}
+# After the loop the name is unknown either way: which pass ran last is not
+# inferred, and neither is whether any did.
+check_target '' 'OUT=/old; for OUT in /real; do :; done; bd -C "$OUT" close CHR-1'
+check_target '/real' 'OUT=/old; for OUT in /real; do bd -C "$OUT" close CHR-1; done; bd -C "$OUT" close CHR-2'
+# Past the per-value bound the name is unknown for the body rather than the
+# scan running long.
+check_target '/tmp/a/1 /tmp/a/2 /tmp/a/3 /tmp/a/4 /tmp/a/5 /tmp/a/6 /tmp/a/7 /tmp/a/8 /tmp/a/9 /tmp/a/10 /tmp/a/11 /tmp/a/12 /tmp/a/13 /tmp/a/14 /tmp/a/15 /tmp/a/16' \
+  'for d in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do bd -C "/tmp/a/$d" close CHR-1; done'
+check_target '' 'for d in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do bd -C "/tmp/a/$d" close CHR-1; done'
+check_target '/tmp/a/x' 'for d in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do bd -C /tmp/a/x close CHR-1; done'
+# A case pattern is a word the shell expands before matching it, so a
+# substitution in one runs. Scanning the arms alone found nothing to sync.
+check_target '/tmp/store' 'case x in "$(bd -C /tmp/store close CHR-1)") :;; esac'
+check_target '/tmp/store' 'case x in a|"$(bd -C /tmp/store close CHR-1)") :;; esac'
+check_target '/tmp/store' 'case x in a) :;; "$(bd -C /tmp/store close CHR-1)") :;; esac'
+check sync 'case x in $(bd close CHR-1)) :;; esac'
+# An assignment's index and array literal are expanded too, so a substitution
+# in either runs. Visiting the value alone found neither.
+check_target '/tmp/store' 'A[$(bd -C /tmp/store close CHR-1)]=v'
+check_target '/tmp/store' 'A[$(bd -C /tmp/store close CHR-1 >/dev/null; echo 0)]=v'
+check_target '/tmp/store' 'B=($(bd -C /tmp/store close CHR-1))'
+check_target '/tmp/store' 'B=(a "$(bd -C /tmp/store close CHR-1)" c)'
+check_target '/tmp/store' 'B=([$(bd -C /tmp/store close CHR-1)]=v)'
+check_target '/tmp/store' 'A[$(bd -C /tmp/store close CHR-1)]+=v'
+check sync 'A[$(bd close CHR-1)]=v'
+check sync 'B=($(bd close CHR-1))'
+check sync 'declare -a B=($(bd close CHR-1))'
 
 # --- the parser's own version ---------------------------------------------
 # Two things the scanner reads out of shfmt are not part of its output format
