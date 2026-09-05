@@ -666,18 +666,48 @@ def split_fields(segments, separators):
     segments rather than within each: `a$X` with X=` b` is two fields, since
     the separator the expansion supplied ends the field the literal began,
     while `"a$X"` is one.
+
+    The two kinds of separator split differently. IFS whitespace -- the space,
+    tab and newline in IFS -- is skipped at either end and any run of it is
+    one split. Any other IFS character is a delimiter each time it occurs,
+    with the IFS whitespace around it absorbed, so two in a row bound an empty
+    field and one at the start opens with one; only one at the end closes
+    nothing. Reading every separator as whitespace dropped the empty fields,
+    and with `IFS=:` and `OPTS='-p::bd'`, `sudo $OPTS -C /external close X`
+    -- which runs `sudo -p '' bd ...` -- lost the empty prompt, took `bd` for
+    the prompt and missed the write.
     """
+    whitespace = {char for char in separators if char in DEFAULT_IFS}
     fields = []
     current = None
+    # Whether a delimiter that is not whitespace would bound an empty field
+    # here: at the start, and after another such delimiter, it does; after a
+    # field closed by whitespace it is the whitespace's own split.
+    empty_next = True
+    # Whether anything has been read yet. A quoted null -- `""` -- opens a
+    # field of its own only before anything else has: `$X""` with X unset is
+    # one empty argument, and with X=` ` or X=`a:` it is none and one.
+    seen = False
     for text, splittable in segments:
         if not splittable:
-            current = (current or "") + text
+            if text or current is not None or not seen:
+                current = (current or "") + text
+            seen = seen or bool(text)
             continue
         for char in text:
-            if char in separators:
+            seen = True
+            if char in whitespace:
                 if current is not None:
                     fields.append(current)
                     current = None
+                    empty_next = False
+            elif char in separators:
+                if current is not None:
+                    fields.append(current)
+                    current = None
+                elif empty_next:
+                    fields.append("")
+                empty_next = True
             else:
                 current = (current or "") + char
     if current is not None:
@@ -1423,7 +1453,21 @@ class Scanner:
             if word is UNKNOWN:
                 return i
             if word == "--":
-                return min(i + 1 + operands, len(args))
+                i += 1
+                if wrapper == "env":
+                    # `--` ends `env`'s options, not its assignments: `env --
+                    # NAME=value cmd` still sets NAME and runs cmd. Taking the
+                    # word after it as the command read the assignment as one,
+                    # and `env -- BEADS_DIR=/external/.beads bd close X` was
+                    # a read of something that was not `bd`.
+                    while i < len(args):
+                        word = args[i].value
+                        if word is UNKNOWN:
+                            return i
+                        if not ASSIGN_WORD.match(word):
+                            break
+                        i += 1
+                return min(i + operands, len(args))
             # `env -` is `env -i` in its historical spelling: an option, not
             # the command word, and not a bundle either.
             if wrapper == "env" and word in ENV_CLEAR_OPTS:
@@ -1659,7 +1703,23 @@ class Scanner:
                     i += 1
                     continue
                 if word == "--":
+                    # The options end here and the assignments do not: `env
+                    # -- BEADS_DIR=/x/.beads bd close X` runs `bd` with that
+                    # BEADS_DIR. Stopping at the `--` left it unread, and the
+                    # store `bd` opened was neither pushed nor registered.
                     i += 1
+                    while i < start:
+                        word = args[i].value
+                        if word is UNKNOWN:
+                            assigns = {}
+                            sealed = OPAQUE
+                            i += 1
+                            continue
+                        if not ASSIGN_WORD.match(word):
+                            break
+                        key, _, value = word.partition("=")
+                        assigns[key] = value
+                        i += 1
                     break
                 if not word.startswith("-"):
                     if not ASSIGN_WORD.match(word):

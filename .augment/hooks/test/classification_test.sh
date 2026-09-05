@@ -612,6 +612,23 @@ check skip 'V=list; bd $V'
 check sync 'V="close CHR-1"; bd $V'
 # Splitting is on IFS, which an assignment in the same text can change.
 check_target '/tmp/a' 'IFS=:; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
+# A separator that is not whitespace delimits each time it occurs, so two in
+# a row bound an empty field where whitespace would bound none: `-p::bd` is
+# `-p '' bd`, and the empty prompt is an argument `-p` takes. Dropping it
+# handed `bd` to `-p` and lost the write.
+check_target '/tmp/store' 'IFS=:; OPTS="-p::bd"; sudo $OPTS -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'IFS=:; OPTS="-C:/tmp/store"; bd $OPTS close CHR-1'
+# The empty field is `-C`'s value and the path is the verb, so the store is
+# not named; dropping the field would have named it.
+check_unresolved 'IFS=:; OPTS="-C::/tmp/store"; bd $OPTS close CHR-1'
+# One at the end closes nothing.
+check skip 'IFS=:; V="list:"; bd $V'
+# IFS whitespace around such a delimiter is absorbed into it: one delimiter
+# with whitespace either side is one split, two are still an empty field.
+check_target '' 'IFS=": "; OPTS="-p : bd"; sudo $OPTS -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'IFS=": "; OPTS="-p :: bd"; sudo $OPTS -C /tmp/store close CHR-1'
+# A run of whitespace alone is one split with no empty field.
+check skip 'IFS=": "; V="  list  "; bd $V'
 # An IFS whose value this scan cannot read leaves splitting unknowable, so no
 # store is named rather than the wrong one.
 check_unresolved 'IFS=$(printf x); OUT="/tmp/a b"; bd -C $OUT close CHR-1'
@@ -787,7 +804,15 @@ check_target '/tmp/store' 'command bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'env FOO=bar bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'nice -n 10 bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'env -- bd -C /tmp/store close CHR-1'
-check_target '' 'env echo bd -C /tmp/store close CHR-1'
+# `--` ends `env`'s options and not its assignments: `env -- NAME=value cmd`
+# still sets NAME and runs cmd. Taking the word after it as the command read
+# the assignment as one, and a `bd` behind it as an argument nothing ran.
+check_target '/tmp/store' 'env -- FOO=bar bd -C /tmp/store close CHR-1'
+check_target "$STORE" "env -- BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "env -i -- A=1 BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "BEADS_DIR=$CD/other/.beads env -- BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target '/tmp/store' 'env -- OUT=/tmp/store bash -c '"'"'bd -C "$OUT" close CHR-1'"'"''
+check_target '' 'env -- FOO=bar echo bd -C /tmp/store close CHR-1'
 check_target '' 'sudo echo bd -C /tmp/store close CHR-1'
 # A flag that takes nothing is stepped over rather than treated as ambiguous.
 # Giving up on one loses the write itself, not merely its target: nothing
