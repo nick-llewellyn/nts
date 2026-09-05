@@ -254,6 +254,19 @@ check sync 'sudo bd close CHR-1'
 check sync 'exec bd close CHR-1'
 check sync 'nohup bd close CHR-1'
 check sync 'time bd close CHR-1'
+# The reserved word is the parser's; the external `time` is a wrapper like
+# the others, with options of its own. Read as an ordinary command, the `bd`
+# behind it was an argument nothing looked at and the write was missed.
+check sync '/usr/bin/time bd close CHR-1'
+check sync 'command time bd close CHR-1'
+check_target '/tmp/store' '/usr/bin/time -p bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' '/usr/bin/time -o /tmp/log bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' '/usr/bin/time -f %e -a -o /tmp/log bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' '/usr/bin/time --output=/tmp/log bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' '/usr/bin/time -l bd -C /tmp/store close CHR-1'
+check skip '/usr/bin/time bd list'
+check skip '/usr/bin/time -o bd close CHR-1'
+check_unresolved '/usr/bin/time -Z bd close CHR-1'
 check sync '/usr/local/bin/bd close CHR-1'
 # The prefix is transparent in both directions, so a read-only behind one
 # is still read-only. Under text matching the keyword defeated the `^` in

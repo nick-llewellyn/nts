@@ -64,7 +64,8 @@ READONLY_PAIRS = {
 # the old text scanner also had to list are structural in the tree and never
 # reach an argument list, so only the wrappers remain.
 PREFIX_WORDS = {"exec", "builtin", "command", "env", "sudo", "doas", "nohup",
-                "nice", "setsid", "stdbuf", "timeout", "gtimeout", "xargs"}
+                "nice", "setsid", "stdbuf", "timeout", "gtimeout", "xargs",
+                "time"}
 
 # The subset of the above that takes its own options and environment
 # assignments before the command word, with the options that consume the word
@@ -87,6 +88,10 @@ WRAPPER_OPT_ARGS = {
              "-U", "--other-user", "-R", "--chroot", "-c", "--login-class"},
     "doas": {"-u", "-C", "-a"},
     "nice": {"-n", "--adjustment"},
+    # The external `time` -- `/usr/bin/time`, `command time` -- rather than
+    # the shell's reserved word, which the parser gives its own node. GNU's
+    # `-f`/`-o` take a value; the rest, BSD's `-l` and `-h` included, do not.
+    "time": {"-f", "--format", "-o", "--output"},
     "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
     "exec": {"-a"},
     "timeout": {"-k", "--kill-after", "-s", "--signal"},
@@ -146,6 +151,8 @@ WRAPPER_OPT_NOARG = {
     "xargs": {"-0", "--null", "-o", "--open-tty", "-p", "--interactive",
               "-r", "--no-run-if-empty", "-t", "--verbose", "-x", "--exit",
               "--show-limits"},
+    "time": {"-a", "--append", "-v", "--verbose", "-p", "--portability",
+             "-q", "--quiet", "-l", "-h"},
     "nice": set(), "nohup": set(), "stdbuf": set(),
 }
 
