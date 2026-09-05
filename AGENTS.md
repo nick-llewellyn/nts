@@ -54,8 +54,8 @@ self-merge once the required status checks pass; **agents must
 not** self-merge — see [Agent merge policy](#agent-merge-policy-read-this-before-any-gh-pr-merge)
 below. Every PR triggers the CI workflow (including doc-only
 ones); the `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`,
-`hooks-behaviour`, and `android-kgp-gate` jobs all skip the heavy
-work on doc-only diffs but still report a status, so branch
+`hooks-behaviour`, `android-kgp-gate`, and `auggie-hooks` jobs all
+skip the heavy work on doc-only diffs but still report a status, so branch
 protection resolves without manual intervention. See
 [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow) for the
 authoritative branch-protection table.
@@ -289,11 +289,12 @@ consumes:
        maintainer-bypass path that otherwise would let a single
        `git push` skip every required check (re-apply with
        `gh api -X POST /repos/<owner>/<repo>/branches/main/protection/enforce_admins`).
-     - `required_status_checks` refuses the PR merge until the seven
+     - `required_status_checks` refuses the PR merge until the eight
        listed contexts (`Detect changed paths`, `Dart tests gate`,
        `Verify FRB bindings are in sync`, `Rust build + tests +
        coverage`, `Hooks shell-syntax check`, `Hooks behaviour
-       check`, `Android KGP gate matrix`) report success.
+       check`, `Android KGP gate matrix`, `Auggie hook tests gate`)
+       report success.
 
 CI is not a separate enforcement layer — it does not gate the
 merge. It runs the workflows that publish the status checks
@@ -379,16 +380,87 @@ bd init   # automatically configures the DoltHub remote via sync.git-remote
 # public key at https://www.dolthub.com/settings/credentials
 ```
 
-**Mandatory session-close order:**
+### Automatic push via the Auggie hooks
+
+In an Auggie session the push is automated: `.augment/settings.json` runs
+`.augment/hooks/beads-sync.sh` on `PostToolUse` (matcher `launch-process`)
+and on `SessionEnd`. After any command the scanner classifies as a bead
+write (`bd create` / `close` / `update` / `config set` / … — anything not on
+its read-only allow-list), the hook runs `bd dolt commit` followed by
+`bd dolt push --remote origin` in the store that was written, under a lock
+with a pending-marker so concurrent invocations and the 60 s hook timeout
+cannot lose a write or double-push. `bd prime` is injected at
+`SessionStart` by `.augment/hooks/beads-prime.sh`.
+
+The hooks need `bd`, `jq`, `shfmt` and `python3` on `PATH` — `shfmt` and
+`python3` are the command scanner, which parses each command's syntax tree
+rather than pattern-matching its text. Without `jq` the hook cannot read its
+event at all, so it reports that and stands down, leaving bead writes local.
+Without the scanner it keeps going: it reports the failed scan and syncs the
+workspace roots anyway, so only a store outside them can be missed — one
+named by `bd -C <dir>` or `BEADS_DIR`, or found by walking up from wherever
+the command ran. `HOMEBREW_NO_AUTO_UPDATE=1 brew install jq shfmt` if either
+warning appears.
+
+The scan is static. It follows assignments, `cd`, wrappers (`sudo`, `env`,
+`timeout`, `xargs` and the like — so the `xargs -I{} bd assign …` audit
+under "Assignee Convention" syncs), substitutions and `-c` scripts, but a
+`bd` whose *command name* is only known at run time — `"$BD" close X`,
+`$(printf bd) close X`, `${CMD:-bd} close X` — is indistinguishable from
+`"$EDITOR" file`, and syncing on every computed command name would cost a
+DoltHub round-trip each. Write `bd` literally, or
+run `bd dolt push --remote origin` yourself afterwards. A target the scan
+cannot name (a `-C` path built from a substitution, a pattern such as
+`-C /tmp/store-*`, or a variable last assigned on a path that may not
+have run) is reported as unresolved rather than guessed, and so is script
+the scan cannot read at all (`eval "$X"`, `bash -c "$(…)"`); act on that
+warning the same way.
+
+**Act on hook warnings.** Failures are prefixed `beads:` — e.g. `beads:
+'bd dolt push' failed in <root>, local bead writes are NOT on DoltHub.` —
+and reach you on two channels: a `PostToolUse` failure is delivered as
+`additionalContext` on the tool result, while a `SessionEnd` failure and
+the missing-`jq` case (`beads: jq not found, …`, on every event) go to
+the hook's stderr, since `SessionEnd` has no tool result to attach to.
+Treat any such line, on either channel, as the blocking error below and
+fall back to the manual sequence; do not assume the next invocation will
+retry successfully.
+
+The hook does `commit` + `push`, **not** `pull`. The pull-before-push
+ordering below is therefore still on the agent: run `bd dolt pull` at
+session start (before the first bead write) and again at session close so
+conflicts surface locally rather than in a hook-driven push.
+
+`core.hooksPath` stays `tool/hooks` (branch protection). The `bd` git shims
+under `.beads/hooks/` are untracked and intentionally **not** activated —
+git supports one hooks path, and the Auggie hooks cover the standalone `bd`
+writes the shims would only catch on a git operation.
+
+Their test suites stub `bd` and run against scratch workspaces, so they
+never touch the real bead store. CI runs all three on ubuntu and macOS
+whenever `.augment/**` changes (`Auggie hook tests gate`); run them locally
+after editing a hook, under `/bin/bash` so macOS exercises bash 3.2:
+
+```bash
+/bin/bash .augment/hooks/test/classification_test.sh   # which commands count as writes
+/bin/bash .augment/hooks/test/prime_test.sh            # session-start context injection
+/bin/bash .augment/hooks/test/lock_test.sh             # lock and pending-marker handoff (~7 min)
+```
+
+### Manual sequence (fallback, and the session-close order)
+
+Required outside Auggie (Claude Code, Codex, a plain shell), whenever a
+hook reported a `beads:` warning, and at every session close regardless —
+the hook has no `pull` step and cannot verify the store is up to date.
 
 1. `git pull --rebase` — catch up code changes from `origin/main`.
 2. `bd dolt pull` — pull Beads commits from DoltHub **before** pushing local
    changes. Surfaces merge conflicts here, not on push. Resolve any conflicts
    with `bd dolt status` before proceeding.
 3. `bd dolt push --remote origin` — **blocking requirement**. Work is not
-   complete until this succeeds. A failed push means the session's issue
-   changes are not on DoltHub; fix auth / connectivity and retry until it
-   succeeds.
+   complete until this succeeds (a no-op when the hook already pushed
+   everything). A failed push means the session's issue changes are not on
+   DoltHub; fix auth / connectivity and retry until it succeeds.
 4. Commit and push the code branch via the standard
    [Pull Request Workflow](#pull-request-workflow-mandatory).
 
@@ -403,8 +475,9 @@ gh pr create --fill
 git status  # MUST show "up to date with origin"
 ```
 
-**CRITICAL:** `bd dolt push --remote origin` failing is a blocking error.
-Do not open the PR, do not stop the session — fix the push first.
+**CRITICAL:** `bd dolt push --remote origin` failing — whether reported by
+the hook or by the manual command — is a blocking error. Do not open the
+PR, do not stop the session — fix the push first.
 
 > **Maintainer-only.** The auto-generated block below — "Beads Issue
 > Tracker" and "Session Completion" — requires `bd` and a credentialed
@@ -513,6 +586,15 @@ bd linear sync --push          # then export local changes
 to the local Dolt database. They do **not** notify Linear. Until an explicit
 push is performed, Linear still shows the issue as "Todo" or whatever state it
 was in before the claim.
+
+> **Auggie sessions.** The `PostToolUse` hook pushes to DoltHub immediately
+> after each `bd` write — before the `bd dolt pull` in the recipes below
+> and in "Closing an issue". That ordering is what the manual recipes were
+> written to avoid, so run `bd dolt pull` **once at session start**, before
+> the first bead write, to keep the local store current; the trailing
+> `bd dolt pull` / `bd dolt push --remote origin` pairs then remain
+> correct as the fallback and as the session-close verification. See
+> "Automatic push via the Auggie hooks" above.
 
 The correct sequence for claiming an issue is:
 

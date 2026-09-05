@@ -32,6 +32,15 @@ bd init   # automatically configures the DoltHub remote via sync.git-remote
 # public key at https://www.dolthub.com/settings/credentials
 ```
 
+Auggie sessions push automatically: `.augment/hooks/beads-sync.sh` runs
+`bd dolt commit` + `bd dolt push --remote origin` after every bead write
+and at `SessionEnd`, and reports failures as `beads:` warnings in the tool
+result. Claude Code has no equivalent hook — `.claude/settings.json` only
+injects `bd prime` — so in a Claude Code session the manual sequence below
+is the *only* push path, not a fallback. The full description, including
+prerequisites and the note that `core.hooksPath` stays `tool/hooks`, is
+under "Automatic push via the Auggie hooks" in `AGENTS.md`.
+
 **Mandatory session-close order:**
 
 1. `git pull --rebase` — catch up code changes from `origin/main`.
