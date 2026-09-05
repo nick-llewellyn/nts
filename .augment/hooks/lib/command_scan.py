@@ -64,7 +64,7 @@ READONLY_PAIRS = {
 # the old text scanner also had to list are structural in the tree and never
 # reach an argument list, so only the wrappers remain.
 PREFIX_WORDS = {"exec", "builtin", "command", "env", "sudo", "doas", "nohup",
-                "nice", "setsid", "stdbuf", "timeout", "gtimeout"}
+                "nice", "setsid", "stdbuf", "timeout", "gtimeout", "xargs"}
 
 # The subset of the above that takes its own options and environment
 # assignments before the command word, with the options that consume the word
@@ -85,8 +85,27 @@ WRAPPER_OPT_ARGS = {
     "exec": {"-a"},
     "timeout": {"-k", "--kill-after", "-s", "--signal"},
     "gtimeout": {"-k", "--kill-after", "-s", "--signal"},
+    "xargs": {"-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-J",
+              "-L", "-n", "--max-args", "-P", "--max-procs", "-R", "-S",
+              "-s", "--max-chars", "--process-slot-var"},
     "command": set(), "nohup": set(), "setsid": set(),
 }
+
+# `xargs` builds the command from its arguments and its input, so it stands in
+# front of the real command as the other wrappers do: `... | xargs -I{} bd
+# assign {} user` runs `bd` once per input line, and reading `xargs` as the
+# command left the write as an argument nothing looked at. The union of the
+# GNU and BSD option sets, since the hook runs under both.
+#
+# `-i`, `-e` and `-l` take their value only when it is attached -- `-i{}` is
+# `-I {}`, while a bare `-i` is `-I {}` too and the word after it is the
+# command -- so they are neither in the table above nor value-less, and are
+# read on their own. `-I`'s value is the replacement string: every later
+# argument holding it is rewritten from the input, so what such an argument
+# says here is not what the command receives.
+XARGS_OPT_OPTIONAL = {"-i", "-e", "-l"}
+XARGS_REPLACE_OPTS = {"-I", "-J"}
+XARGS_DEFAULT_REPLACE = "{}"
 
 # Operands a wrapper takes between its options and the command word. `timeout
 # 30 bd -C /tmp/store close X` runs bd: the duration is neither an option nor
@@ -116,6 +135,9 @@ WRAPPER_OPT_NOARG = {
     "exec": {"-c", "-l"},
     "timeout": {"--foreground", "-p", "--preserve-status", "-v", "--verbose"},
     "gtimeout": {"--foreground", "-p", "--preserve-status", "-v", "--verbose"},
+    "xargs": {"-0", "--null", "-o", "--open-tty", "-p", "--interactive",
+              "-r", "--no-run-if-empty", "-t", "--verbose", "-x", "--exit",
+              "--show-limits"},
     "nice": set(), "nohup": set(), "stdbuf": set(),
 }
 
@@ -1065,11 +1087,94 @@ class Scanner:
                 split = self.split_string(args, i)
                 if split is not None:
                     return i, split
+            if name == "xargs":
+                nxt = self.xargs_opts(args, i)
+                if nxt is None:
+                    return None, None
+                i = nxt
+                continue
             nxt = self.skip_wrapper_opts(args, i, name)
             if nxt is None:
                 return None, None
             i = nxt
         return None, None
+
+    def xargs_opts(self, args, start):
+        """The index of the command word past the `xargs` at `args[start]`.
+
+        None when its options cannot be delimited, as for the other wrappers.
+        `xargs` runs the command it is given with arguments read from its
+        input, so `... | xargs -I{} bd assign {} user` runs `bd`; reading
+        `xargs` as the command word left that write as an argument nothing
+        looked at, and the writes it made stayed local until SessionEnd.
+
+        With a replacement string in force -- `-I str`, `-J str`, `-i[str]`,
+        `--replace[=str]` -- every later argument holding it is rewritten from
+        the input before the command sees it, so `args` is edited in place to
+        make those arguments unreadable: `xargs -I{} bd -C {} close X` names
+        no store this scan can read, where the literal `{}` resolved to a
+        directory of that name under the launch directory. A replacement
+        string that cannot itself be read leaves the arguments as they are:
+        the words it would match are the ones carrying the same expansion,
+        which are unreadable already, and blanking every literal word would
+        lose a `-C` the input never touches.
+        """
+        takes = WRAPPER_OPT_ARGS["xargs"]
+        alone = WRAPPER_OPT_NOARG["xargs"]
+        repl = None
+        i = start + 1
+        while i < len(args):
+            word = args[i].value
+            if word is UNKNOWN:
+                return i
+            if word == "--":
+                i += 1
+                break
+            if not word.startswith("-") or word == "-":
+                break
+            if word.startswith("--"):
+                opt, sep, inline = word.partition("=")
+                if opt == "--replace":
+                    repl = inline if sep else XARGS_DEFAULT_REPLACE
+                    i += 1
+                    continue
+                # `--max-lines[=N]` and `--eof[=E]` take a value only when it
+                # is attached, so the bare form is value-less, as is any long
+                # flag the table does not list.
+                i += 1 if sep or opt not in takes else 2
+                continue
+            # A bundle, read letter by letter rather than by `short_opts`, since
+            # the three optional-value flags fit neither of its tables: their
+            # value is whatever is attached and nothing when nothing is.
+            letters = word[1:]
+            consumed = 1
+            j = 0
+            while j < len(letters):
+                opt = "-" + letters[j]
+                rest = letters[j + 1:]
+                if opt in takes:
+                    if rest:
+                        value = rest
+                    else:
+                        value = self.opt_value(args, i)
+                        consumed = 2
+                    if opt in XARGS_REPLACE_OPTS:
+                        repl = value
+                    break
+                if opt in XARGS_OPT_OPTIONAL:
+                    if opt == "-i":
+                        repl = rest or XARGS_DEFAULT_REPLACE
+                    break
+                if opt not in alone:
+                    return None
+                j += 1
+            i += consumed
+        if repl is not None and repl is not UNKNOWN and repl:
+            for j in range(i, len(args)):
+                value = args[j].value
+                if value is not UNKNOWN and repl in value:
+                    args[j] = Field(UNKNOWN)
+        return i
 
     def split_string(self, args, start):
         """The `env -S` string of the `env` at `args[start]`.

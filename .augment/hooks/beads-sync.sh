@@ -684,6 +684,29 @@ any_outstanding() {
   return 1
 }
 
+# Whether $1 carries no record that a sync is owed it: neither marker exists.
+# The markers are written with their failure ignored, since what fails them --
+# a full disk, a `.beads` made read-only -- is nothing a retry mends. What can
+# be done is to notice, at each point where the record was the only thing
+# standing behind the request, and say so.
+unrecorded() {
+  [ ! -e "$1/.beads/.augment-sync.pending" ] &&
+    [ ! -e "$1/.beads/.augment-sync.inflight" ]
+}
+
+# Hands the request in $1 back for retry after a failed pass, by returning the
+# claimed marker to `.pending`, and says so when neither marker can be made to
+# stand. A failed sync is already warned about by the caller; what this adds is
+# that the next invocation will not find it, which the failure warning on its
+# own let the reader assume it would.
+hand_back() {
+  mv -f "$1/.beads/.augment-sync.inflight" "$1/.beads/.augment-sync.pending" 2>/dev/null ||
+    : >"$1/.beads/.augment-sync.pending"
+  unrecorded "$1" || return 0
+  WARNINGS+=("beads: the failed sync in ${1} could not be recorded for retry either, so nothing marks that store as owed one; run 'bd dolt push --remote origin' there once the cause is fixed.")
+  return 0
+}
+
 # PostToolUse fires on every tool call, so narrow to shell commands touching
 # the bead store. Deciding which commands those are means reading shell
 # syntax, which is what the scanner does; see its header for why that is a
@@ -919,7 +942,21 @@ sync_root() {
 
   # Timing out is not a dropped request: the marker is still set, so the
   # holder picks the write up on its next pass, or the next invocation does.
-  [ "$locked" -eq 1 ] || return 0
+  #
+  # That holds only while the marker could be written. The write above ignores
+  # its failure -- a full disk, a `.beads` made read-only -- because there is
+  # nothing to retry it into, but a request with no marker has no record at
+  # all: the holder's pass finds no `.pending` and stops, and for a store
+  # outside the roots nothing later revisits the path. Returning in silence
+  # then left the write with neither a push nor a record that one was owed. The
+  # warning stands in for the record, as it does for a store that could not be
+  # named.
+  if [ "$locked" -ne 1 ]; then
+    if unrecorded "$root"; then
+      WARNINGS+=("beads: could not record that ${root} is owed a sync, and its lock was held past the deadline; the write there stands behind no record, so run 'bd dolt push --remote origin' there if it matters.")
+    fi
+    return 0
+  fi
 
   # The request is claimed by moving the marker, not deleting it. Deleting it
   # up front means the 60s hook timeout landing inside a commit or push
@@ -946,8 +983,8 @@ sync_root() {
     # A no-op commit is the common case and is not an error.
     if [ "$commit_rc" -ne 0 ] && ! grep -qiE 'nothing to commit|no changes' <<<"$commit_out"; then
       # As with a failed push: hand the request back so it is retried.
-      mv -f "$inflight" "$pending" 2>/dev/null || : >"$pending"
       WARNINGS+=("beads: 'bd dolt commit' failed in ${root}, bead store not pushed to DoltHub. Output: ${commit_out}")
+      hand_back "$root"
       rm -f "$run_out"
       return 0
     fi
@@ -958,8 +995,8 @@ sync_root() {
 
     if [ "$push_rc" -ne 0 ]; then
       rm -f "$run_out"
-      mv -f "$inflight" "$pending" 2>/dev/null || : >"$pending"
       WARNINGS+=("beads: 'bd dolt push' failed in ${root}, local bead writes are NOT on DoltHub. Output: ${push_out}")
+      hand_back "$root"
       return 0
     fi
 

@@ -402,11 +402,13 @@ named by `bd -C <dir>` or `BEADS_DIR`, or found by walking up from wherever
 the command ran. `HOMEBREW_NO_AUTO_UPDATE=1 brew install jq shfmt` if either
 warning appears.
 
-The scan is static. It follows assignments, `cd`, wrappers, substitutions
-and `-c` scripts, but a `bd` whose *command name* is only known at run time
-— `"$BD" close X`, `$(printf bd) close X`, `${CMD:-bd} close X` — is
-indistinguishable from `"$EDITOR" file`, and syncing on every computed
-command name would cost a DoltHub round-trip each. Write `bd` literally, or
+The scan is static. It follows assignments, `cd`, wrappers (`sudo`, `env`,
+`timeout`, `xargs` and the like — so the `xargs -I{} bd assign …` audit
+under "Assignee Convention" syncs), substitutions and `-c` scripts, but a
+`bd` whose *command name* is only known at run time — `"$BD" close X`,
+`$(printf bd) close X`, `${CMD:-bd} close X` — is indistinguishable from
+`"$EDITOR" file`, and syncing on every computed command name would cost a
+DoltHub round-trip each. Write `bd` literally, or
 run `bd dolt push --remote origin` yourself afterwards. A target the scan
 cannot name (a `-C` path built from a substitution, a pattern such as
 `-C /tmp/store-*`, or a variable last assigned on a path that may not

@@ -258,6 +258,64 @@ check skip 'exec -a worker bd list'
 # A letter neither table knows may take the word after it, so the command word
 # cannot be placed and the invocation is left alone, as for any wrapper.
 check skip 'exec -Z bd -C /tmp/store close CHR-1'
+# `xargs` runs the command it is given, once per batch of its input, so it
+# stands in front of the real command as the wrappers above do. Read as the
+# command itself, the `bd` behind it was an argument nothing looked at: the
+# assignee audit AGENTS.md prescribes -- `bd list --json | ... | xargs -I{} bd
+# assign {} user` -- wrote the store and the hook reported nothing, so the
+# writes sat local until SessionEnd.
+check sync 'bd list --json | grep -v x | xargs -I{} bd assign {} nllewelln@gmail.com'
+check sync 'xargs bd close'
+check sync 'xargs -n1 -P4 bd close'
+check sync 'xargs -0rt bd close CHR-1'
+check sync 'xargs -n 1 -- bd close CHR-1'
+check sync 'xargs -d "\n" -a ids bd close'
+check sync 'xargs --max-args=1 --no-run-if-empty bd close'
+check_target '/tmp/store' 'xargs -I{} bd -C /tmp/store assign {} user'
+check_target '/tmp/store' 'cat ids | xargs -I {} bd -C /tmp/store close {}'
+# The prefix is transparent in both directions here too.
+check skip 'xargs -n1 bd show'
+check skip 'xargs -I{} bd show {}'
+# The replacement string names an argument the input supplies, so what stands
+# in its place here is not what the command receives: a `-C {}` names a store
+# per input line that this scan cannot read, where the literal `{}` resolved to
+# a directory of that name under the launch directory. Every spelling of the
+# option -- `-I`, BSD `-J`, `-i[str]`, `--replace[=str]` -- sets it.
+check_target '' 'xargs -I{} bd -C {} close CHR-1'
+check_target '' 'xargs -I{} bd -C /tmp/store-{} close CHR-1'
+check_target '' 'xargs -J % bd -C % close CHR-1'
+check_target '' 'xargs -i bd -C {} close CHR-1'
+check_target '' 'xargs -i@@ bd -C @@ close CHR-1'
+check_target '' 'xargs --replace bd -C {} close CHR-1'
+check_target '' 'xargs --replace=@@ bd -C @@ close CHR-1'
+for spelling in 'xargs -I{} bd -C {} close CHR-1' 'xargs -J % bd -C % close CHR-1' \
+  'xargs -i bd -C {} close CHR-1' 'xargs --replace bd -C {} close CHR-1'; do
+  scan_command "$spelling" "$BASE"
+  [ "$SCAN_MUTATES" -eq 1 ] && [ "$SCAN_UNRESOLVED" -eq 1 ] && PASS=$((PASS + 1)) || {
+    FAIL=$((FAIL + 1))
+    printf 'FAIL want mutates=1 unresolved=1 got mutates=%s unresolved=%s %s\n' \
+      "$SCAN_MUTATES" "$SCAN_UNRESOLVED" "$spelling"
+  }
+done
+# A bare `-i` is `-I {}` and takes no word of its own, so the word after it is
+# the command; reading it as the value named `bd` as the string and `assign`
+# as the command.
+check sync 'xargs -i bd assign {} user'
+check skip 'xargs -i bd show {}'
+# An argument that does not hold the string is what it says.
+check_target '/tmp/store' 'xargs -I{} bd -C /tmp/store close {}'
+# A replacement string this scan cannot read leaves the arguments as they are:
+# the words it would match carry the same expansion and are unreadable already.
+check_target '/tmp/store' 'xargs -I "$CS_SOMETHING_UNSET" bd -C /tmp/store close "$CS_SOMETHING_UNSET"'
+# The command word itself may come from the input, in which case nothing here
+# names it.
+check skip 'xargs -I{} {} close CHR-1'
+# With no command `xargs` runs `echo`, and a letter neither table knows leaves
+# the command word unplaceable, as for any wrapper.
+check skip 'xargs'
+check skip 'xargs -Z bd close CHR-1'
+# The word `xargs` as an argument is a string, not a wrapper.
+check skip 'echo xargs bd close CHR-1'
 
 # --- quoting -----------------------------------------------------------
 # An operator inside quotes is a character in a word, not a boundary.

@@ -223,11 +223,41 @@ HOLDER=$!
 hold_lock "$WS/.beads/.augment-sync.lock" "$HOLDER"
 # The lock loop bounds itself at ~30s, so no external timeout is needed
 # (and macOS has no `timeout`). Run it in the background and reap it.
-fire 'bd close CHR-1' &
+event 'bd close CHR-1' | "$BASH_UNDER_TEST" "$HOOK" >"$WS/out" 2>&1 &
 wait $! 2>/dev/null
 [ "$(count commit)" -eq 0 ] && report ok ||
   report bad "must not sync while a live holder has the lock"
 pending && report ok || report bad "deferred request must leave marker set"
+# A deferral the marker records is not a stranded write, so it is not warned
+# about as one.
+! grep -q "could not record" "$WS/out" && report ok ||
+  report bad "a recorded deferral must not be reported as unrecorded (out: $(tr '\n' ',' <"$WS/out"))"
+kill "$HOLDER" 2>/dev/null
+wait "$HOLDER" 2>/dev/null
+teardown
+
+# --- a marker that cannot be written is said so, not returned over -------
+# Timing out on the lock is safe only because the marker stands: the holder's
+# next pass finds it, or the next invocation does. When the marker cannot be
+# written -- a full disk; here, a `.beads` made read-only -- and the lock is
+# then held past the deadline, the write has neither a push nor a record that
+# one is owed, and returning in silence left the agent nothing to act on. The
+# `.beads` is made read-only after the holder's lock is planted, since the lock
+# lives in the same directory.
+setup
+sleep 300 &
+HOLDER=$!
+hold_lock "$WS/.beads/.augment-sync.lock" "$HOLDER"
+chmod 0555 "$WS/.beads"
+event 'bd close CHR-1' | "$BASH_UNDER_TEST" "$HOOK" >"$WS/out" 2>/dev/null &
+wait $! 2>/dev/null
+chmod 0755 "$WS/.beads"
+! pending && report ok ||
+  report bad "precondition: a read-only .beads must refuse the marker (running as root?)"
+grep -qF "could not record that $WS is owed a sync" "$WS/out" && report ok ||
+  report bad "an unrecorded deferral must be warned about (out: $(tr '\n' ',' <"$WS/out"))"
+[ "$(count commit)" -eq 0 ] && report ok ||
+  report bad "must not sync while a live holder has the lock"
 kill "$HOLDER" 2>/dev/null
 wait "$HOLDER" 2>/dev/null
 teardown
