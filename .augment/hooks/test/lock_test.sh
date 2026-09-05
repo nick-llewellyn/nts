@@ -216,6 +216,28 @@ fire 'bd close CHR-1'
 pending && report ok || report bad "commit failure must leave marker set"
 teardown
 
+# --- a temporary directory that refuses a file is said so ---------------
+# The output of each `bd` is read back from a file under $TMPDIR, and a
+# directory that refuses one refuses the next invocation's too: returning in
+# silence disabled every sync for as long as the condition lasted, the marker
+# holding each request only for a retry that met the same refusal. So it is
+# warned about, the marker left standing, and the lock released.
+setup
+TMPDIR="$WS/nowhere" event 'bd close CHR-1' | TMPDIR="$WS/nowhere" "$BASH_UNDER_TEST" "$HOOK" >"$WS/out" 2>/dev/null
+grep -q "could not create a temporary file" "$WS/out" && report ok ||
+  report bad "a refused temporary file must be warned about (out: $(tr '\n' ',' <"$WS/out"))"
+[ "$(count commit)" -eq 0 ] && report ok ||
+  report bad "no sync can run without the output file (commits=$(count commit))"
+pending && report ok || report bad "the request must stay marked"
+! lock_exists "$WS/.beads/.augment-sync.lock" && report ok ||
+  report bad "the lock must be released for the next invocation"
+# ... and the next invocation, with a working directory, serves it on the
+# marker alone.
+fire 'bd list'
+[ "$(count commit)" -eq 1 ] && report ok ||
+  report bad "the marked request must be served once the directory works (commits=$(count commit))"
+teardown
+
 # --- lock held by a live process: the invocation defers, not drops -----
 setup
 sleep 300 &

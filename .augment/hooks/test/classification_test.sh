@@ -384,6 +384,19 @@ check_target '' "cd $STORE && bd list"
 # from: `bd` refuses such a path outright, so walking would name an ancestor's
 # store this command never opened.
 check_target "$STORE/sub/nosuch" "bd -C $STORE/sub/nosuch close CHR-1"
+# The directory flag is one scalar option however it is spelled, so a repeated
+# one takes its last value: `bd -C /a -C /b close X` writes /b. Keeping the
+# first pushed and registered /a while the store that was written went
+# unrecorded -- and an external one named by nothing else stayed local for good.
+check_target "$STORE" "bd -C $CD/other -C $STORE close CHR-1"
+check_target "$CD/other" "bd -C $STORE -C $CD/other close CHR-1"
+check_target "$STORE" "bd --dir=$CD/other -C $STORE close CHR-1"
+check_target "$STORE" "bd -C $CD/other --directory $STORE close CHR-1"
+check_target "$STORE" "bd -C$CD/other -qC$STORE close CHR-1"
+check_target "$STORE" "bd -C $CD/other --dir $STORE close CHR-1"
+# A later one this scan cannot read leaves the store in doubt rather than
+# falling back to the earlier one, which the command did not use.
+check_target '' "bd -C $CD/other -C \$(pwd) close CHR-1"
 
 # BEADS_DIR names the store outright when no `-C` overrides it, and points at
 # the `.beads` directory itself where every other path names the root above it.
@@ -407,6 +420,21 @@ check_target "$STORE" "cd $STORE && BEADS_DIR= bd close CHR-1"
 # the write went to neither the push set nor the registry.
 check_target "$STORE" "BEADS_DIR=$STORE/.beads/ bd close CHR-1"
 check_target "$STORE" "BEADS_DIR=$STORE/.beads/// bd close CHR-1"
+# The environment is built in the shell's order, innermost last. A name
+# repeated in the prefix takes its last value; a wrapper's own assignment
+# lands on top of the prefix, however many wrappers deep; and a wrapper that
+# clears or unsets drops the prefix's value with the rest. Answering from the
+# first prefix assignment named a store the command never opened in each
+# case, pushing and registering it while the one written stayed local.
+check_target "$STORE" "BEADS_DIR=$CD/other/.beads BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "BEADS_DIR=$CD/other/.beads env BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "BEADS_DIR=$CD/other/.beads env A=1 env BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "BEADS_DIR=$CD/other/.beads nohup env BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target '' "BEADS_DIR=$CD/other/.beads env -i bd close CHR-1"
+check_target '' "BEADS_DIR=$CD/other/.beads env -u BEADS_DIR bd close CHR-1"
+check_target '' "BEADS_DIR=$CD/other/.beads sudo bd close CHR-1"
+# A wrapper assignment of another name leaves the prefix's in force.
+check_target "$STORE" "BEADS_DIR=$STORE/.beads env A=1 bd close CHR-1"
 # A quoted target keeps every character of the path, including ones a text
 # split would have cut it at.
 check_target '/tmp/a;b' 'bd -C "/tmp/a;b" close CHR-1'
@@ -1119,7 +1147,20 @@ check skip 'echo bash -c "bd close CHR-1"'
 # child expands its script with it in place. Discarding it read the hook's
 # own inherited value and left the store the write opened unregistered.
 check_target '/tmp/store' 'CS_W_STORE=/tmp/store bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
-check_target '/tmp/store' 'CS_W_STORE=/tmp/store sudo bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '/tmp/store' 'CS_W_STORE=/tmp/store nohup bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+# It reaches the child through the wrappers in the shell's order: a wrapper's
+# own assignment lands on top of it, and a wrapper that clears the
+# environment -- or filters it by a policy this scan cannot read, as `sudo`
+# does -- drops it with the rest. Seeded through regardless, the script read
+# a value the child never had and named a store the command never opened.
+check_target '/tmp/store' 'CS_W_STORE=/old env CS_W_STORE=/tmp/store bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '/tmp/store' 'CS_W_STORE=/old env CS_W_STORE=/tmp/store -S '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '' 'CS_W_STORE=/tmp/store env -i bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '' 'CS_W_STORE=/tmp/store env -u CS_W_STORE bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '' 'CS_W_STORE=/tmp/store sudo bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check sync 'CS_W_STORE=/tmp/store sudo bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+# ... while an assignment `env -i` carries itself is the environment.
+check_target '/tmp/store' 'CS_W_STORE=/old env -i CS_W_STORE=/tmp/store bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
 # It reaches that shell only. The value dies with the child, so a later
 # command sees the name with no value anywhere.
 check_target '' 'CS_W_STORE=/tmp/store bash -c '"'"'true'"'"'; bd -C "$CS_W_STORE" close CHR-1'

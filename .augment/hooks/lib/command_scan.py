@@ -1551,6 +1551,11 @@ class Scanner:
         is spelled: `bd create -- --help` gives the issue the title `--help` and
         writes the store, where reading that as the help flag suppresses the
         sync.
+
+        A repeated directory flag takes its last value -- `-C`, `--dir` and
+        `--directory` all set one scalar option, and `bd -C /a -C /b close X`
+        writes /b. Keeping the first pushed and registered /a while the store
+        that was written went unrecorded.
         """
         operands = []
         target = None
@@ -1594,11 +1599,10 @@ class Scanner:
                 name, sep, inline = word.partition("=")
                 if sep:
                     # `--opt=value` carries its value, so nothing follows it.
-                    if name in BD_DIR_OPTS and target is None:
+                    if name in BD_DIR_OPTS:
                         target = Field(inline)
                 elif name in BD_OPT_ARGS:
-                    if name in BD_DIR_OPTS and target is None and \
-                            i + 1 < len(args):
+                    if name in BD_DIR_OPTS and i + 1 < len(args):
                         target = args[i + 1]
                     i += 1
                 else:
@@ -1629,7 +1633,7 @@ class Scanner:
                 if opt is None:
                     i += 1
                     continue
-                if opt in BD_DIR_OPTS and target is None:
+                if opt in BD_DIR_OPTS:
                     if inline is not None:
                         # `bd -C=/tmp/store` opens /tmp/store: `bd`'s option
                         # parser drops one leading `=` from a value attached to
@@ -2292,15 +2296,25 @@ class Scanner:
         is simply unset leaves the default behaviour in force, where one whose
         value cannot be read leaves the store in doubt. Conflating the two makes
         every command carrying neither report an unresolvable store.
+
+        Read in the order the shell applies them, innermost last. The prefix is
+        applied first and a repeated name takes its last value, so `X=/a X=/b
+        bd` runs with /b; a wrapper then sets its own on top, so `X=/a env X=/b
+        bd` runs with /b too, and one that clears or filters the environment
+        drops the prefix's value with the rest. Answering from the first prefix
+        assignment named a store the command never opened in each of those.
         """
-        for arg in cmd.get("Assigns") or ():
-            if gives_value(arg) and arg["Name"]["Value"] == name:
-                return self.assigned_value(arg.get("Value"))
         wrapper_assigns, sealed = self.prefix_env(args, start)
         if name in wrapper_assigns:
             return wrapper_assigns[name]
         if sealed:
             return UNKNOWN
+        value = None
+        for arg in cmd.get("Assigns") or ():
+            if gives_value(arg) and arg["Name"]["Value"] == name:
+                value = self.assigned_value(arg.get("Value"))
+        if value is not None:
+            return value
         if name not in self.scope.assigns and name not in os.environ:
             return None
         return self.get(name)
@@ -2404,12 +2418,18 @@ class Scanner:
         if script is UNKNOWN:
             self.unreadable_script()
             return
-        # The prefix's assignments are seeded into the child's scope only.
-        seed = self.prefix_seed(cmd)
-        # A wrapper's own assignments reach the child the same way, and were
+        # The prefix's assignments are seeded into the child's scope only. A
+        # wrapper's own assignments reach the child the same way, and were
         # stepped over rather than read while the command word was being found:
         # `env OUT=/tmp/store bash -c ...` is the syntactic prefix's twin.
+        # Applied in the shell's order, the prefix first and the wrapper on top
+        # of it -- so `OUT=/a env OUT=/b bash -c ...` sees /b, and a wrapper
+        # that clears or filters the environment drops the prefix's value with
+        # the rest, leaving the name as unknowable as any other it did not
+        # carry. Seeding the prefix through `env -i` read a value the child
+        # never had.
         wrapper_assigns, sealed = self.prefix_env(args, start)
+        seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
         self.scan_script(script, seed=seed, sealed=sealed)
 
@@ -2452,11 +2472,12 @@ class Scanner:
                 self.unreadable_script()
                 return
             string += " " + shlex.quote(arg.value)
-        seed = self.prefix_seed(cmd)
         # The assignments `env` was given itself reach the command the string
         # names, and were stepped over rather than read while the string was
         # being found: `env A=/tmp/store -S 'bd -C "$A" ...'` writes /tmp/store.
+        # Layered over the prefix as in `shell_wrapper`, for the same reason.
         wrapper_assigns, sealed = self.prefix_env(args, prefix_end)
+        seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
         self.scan_script(string, seed=seed, sealed=sealed)
 

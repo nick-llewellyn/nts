@@ -967,7 +967,19 @@ sync_root() {
   # which is what earns the next pass. The bound stops a steady stream of
   # writes from holding the lock indefinitely; whatever is left over stays
   # marked for the next invocation.
-  run_out=$(mktemp "${TMPDIR:-/tmp}/cs-bd.XXXXXX") || return 0
+  #
+  # The output file is where `bd`'s own words are read from for the warnings
+  # below, and a temporary directory that refuses one is a condition that
+  # persists: returning in silence here disabled every sync for as long as it
+  # lasted while the hook reported nothing, the marker keeping each request
+  # only for a retry that met the same refusal. The marker is left standing
+  # -- it is the record -- and the lock released, so a later invocation with
+  # a working directory takes both up.
+  if ! run_out=$(mktemp "${TMPDIR:-/tmp}/cs-bd.XXXXXX"); then
+    WARNINGS+=("beads: could not create a temporary file under ${TMPDIR:-/tmp}, so ${root} was not synced; the request stays marked, but until the directory is writable no invocation can serve it -- run 'bd dolt push --remote origin' there if the write matters.")
+    drop_lock "$lock_dir"
+    return 0
+  fi
   for ((pass = 1; pass <= 3; pass++)); do
     mv -f "$pending" "$inflight" 2>/dev/null || : >"$inflight"
 
