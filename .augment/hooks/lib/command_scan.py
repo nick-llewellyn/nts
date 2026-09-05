@@ -249,6 +249,49 @@ DIR_STACK_ROTATE = re.compile(r"^[-+][0-9]+$")
 
 # A word that is an assignment.
 ASSIGN_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# The arithmetic operators that assign to their left operand, and the unary
+# ones that assign to their only operand. `((OUT=1)); bd -C "$OUT" close X`
+# runs `bd -C 1`, and a scan that read `((...))` for its substitutions alone
+# kept the value from before it and named a store the command never opened.
+ARITH_ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=",
+                    "^=", "|="}
+ARITH_STEP_OPS = {"++", "--"}
+# The assignments in arithmetic that reached the scan as text rather than as a
+# tree: `let "OUT=1"` is a quoted word, which the parser leaves whole. Each
+# alternative names the variable an assignment or a step acts on; an `=` that
+# is half of `==`, `<=`, `>=` or `!=` is not one.
+ARITH_TEXT_ASSIGN = re.compile(
+    r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*"
+    r"(?:(?<![<>!=])(?:[-+*/%&^|]|<<|>>)?=(?!=)|\+\+|--)"
+    r"|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+# The builtins that read into shell variables, with the options of each that
+# take a value -- so the value is not read as a name -- and what it assigns
+# when no name is given. `read OUT; bd -C "$OUT" close X` writes wherever the
+# input said, and a scan that knew nothing of `read` kept the value from
+# before it.
+READ_WORDS = {
+    "read": ("adinNptu", ["REPLY"]),
+    "mapfile": ("cCdnOsu", ["MAPFILE"]),
+    "readarray": ("cCdnOsu", ["MAPFILE"]),
+}
+# `source` runs a file in this shell, and the file may assign, `unset`, `cd`
+# or define anything: every value, attribute, function and the cwd are in
+# doubt after it.
+SOURCE_WORDS = {"source", "."}
+
+# What `env -S` splits its string on, and the escapes it decodes. Outside
+# single quotes `\_` is a separator too, and inside double quotes it is a
+# space; the string is argv and not shell text, so nothing else is syntax.
+SPLIT_STRING_BLANKS = " \t\n\r\v\f"
+SPLIT_STRING_ESCAPES = {"f": "\f", "n": "\n", "r": "\r", "t": "\t",
+                        "v": "\v", "#": "#", "$": "$", '"': '"', "'": "'",
+                        "\\": "\\"}
+# A word the scan cannot read, as shell text: an expansion with an operator
+# is unknowable to `expand` whatever `_` holds.
+UNREADABLE_WORD = '"${_:-}"'
 
 # A word in the short-option form, whose letters may be followed by a value
 # attached to the last of them: `-oL`, `-n10`, `-C/tmp/store`. `--` and the long
@@ -715,6 +758,111 @@ def split_fields(segments, separators):
     return fields
 
 
+def split_string_words(text):
+    """The words `env -S text` makes, or None when `env` rejects the string.
+
+    `-S` is not a shell. The string is split on unquoted blanks and on `\\_`,
+    quotes group, `\\_` inside double quotes is a space, `#` opening a word
+    comments out the rest, `\\c` ends the string, and the escapes in
+    `SPLIT_STRING_ESCAPES` are decoded -- inside single quotes only `\\'` and
+    `\\\\`. Nothing else is syntax: `env -S 'cd /x && bd close X'` runs a
+    program called `cd`, and `env -S 'bd\\_-C\\_/external\\_close\\_X'` runs
+    `bd`. Read as shell text, the first was a `cd` and the second one word
+    that was not `bd`, so a write was missed with no warning.
+
+    `${NAME}` is the one expansion, and comes back as `("var", NAME)` for the
+    caller to answer from the environment `env` itself has. An escape `env`
+    does not know, a `$` not opening one, or an unclosed quote is an error on
+    which `env` runs nothing; None says so. GNU's manual documents all of
+    this and BSD `env` behaves the same, checked on macOS.
+
+    Each word is a list of literal strings and `("var", NAME)` pairs.
+    """
+    words = []
+    parts = []
+    buf = ""
+    in_word = False
+    quote = None
+    i = 0
+    n = len(text)
+
+    def end_word():
+        nonlocal parts, buf, in_word
+        if buf:
+            parts.append(buf)
+            buf = ""
+        if in_word:
+            words.append(parts)
+            parts = []
+            in_word = False
+
+    while i < n:
+        char = text[i]
+        if quote is None:
+            if char in SPLIT_STRING_BLANKS:
+                end_word()
+                i += 1
+                continue
+            if char == "#" and not in_word:
+                break
+            if char in "'\"":
+                quote = char
+                in_word = True
+                i += 1
+                continue
+        elif char == quote:
+            quote = None
+            i += 1
+            continue
+        if char == "\\":
+            i += 1
+            if i >= n:
+                return None
+            esc = text[i]
+            i += 1
+            if quote == "'":
+                buf += esc if esc in "'\\" else "\\" + esc
+                in_word = True
+                continue
+            if esc == "c":
+                if quote is not None:
+                    return None
+                end_word()
+                return words
+            if esc == "_":
+                if quote is None:
+                    end_word()
+                else:
+                    buf += " "
+                continue
+            if esc not in SPLIT_STRING_ESCAPES:
+                return None
+            buf += SPLIT_STRING_ESCAPES[esc]
+            in_word = True
+            continue
+        if char == "$" and quote != "'":
+            if i + 1 >= n or text[i + 1] != "{":
+                return None
+            close = text.find("}", i + 2)
+            name = text[i + 2:close] if close >= 0 else ""
+            if not IDENTIFIER.match(name):
+                return None
+            if buf:
+                parts.append(buf)
+                buf = ""
+            parts.append(("var", name))
+            in_word = True
+            i = close + 1
+            continue
+        buf += char
+        in_word = True
+        i += 1
+    if quote is not None:
+        return None
+    end_word()
+    return words
+
+
 def opens_tilde(word):
     """Whether `word` began with an unquoted `~`, which names $HOME."""
     parts = word.get("Parts") or ()
@@ -996,11 +1144,37 @@ class Scanner:
         unknowable, which `expand` reports rather than guesses: assuming the
         default would split a field the command kept whole, and assuming none
         would keep one the command split.
+
+        An IFS that is unset splits as the default does -- that is the shell's
+        rule for it -- so `unset IFS` is not an unreadable one. Read as a
+        value, the sentinel broke the scan, and the roots synced by the
+        fallback while an external target went unregistered.
         """
         if "IFS" in self.scope.assigns:
             got = self.scope.assigns["IFS"]
-            return UNKNOWN if got is UNKNOWN else set(got)
+            if got is UNKNOWN:
+                return UNKNOWN
+            if got is UNSET:
+                return set(DEFAULT_IFS)
+            return set(got)
         return set(DEFAULT_IFS)
+
+    def shell_var(self, name):
+        """The shell variable `name` here: its value, None if unset, UNKNOWN.
+
+        Unlike `get`, which answers for a word and so reads "unset" as a value
+        it cannot supply, this tells unset from unreadable: `CDPATH` unset
+        means `cd` searches nothing, where an unreadable one means it may
+        search anywhere.
+        """
+        if name in self.scope.assigns:
+            value = self.scope.assigns[name]
+            return None if value is UNSET else value
+        if self.scope.sealed is OPAQUE:
+            return UNKNOWN
+        if self.scope.sealed is CLEARED:
+            return None
+        return os.environ.get(name)
 
     def expand(self, word, split=True):
         """The fields `word` expands to, or UNKNOWN if any part is unknowable.
@@ -2109,14 +2283,103 @@ class Scanner:
 
     def node_subs(self, node):
         if isinstance(node, dict):
-            if node.get("Type") in ("CmdSubst", "ProcSubst"):
+            kind = node.get("Type")
+            if kind in ("CmdSubst", "ProcSubst"):
                 self.sub_scan(node.get("Stmts") or ())
                 return
+            # Arithmetic in a word assigns in this shell as `((...))` does:
+            # `echo $((OUT=1))` and `${a[OUT=1]}` both set OUT.
+            if kind == "ArithmExp":
+                self.arith_assigns(node.get("X"))
+            else:
+                # An assignment's or a parameter expansion's index, and a
+                # slice's bounds; the assignment node carries no `Type`.
+                self.arith_assigns(node.get("Index"))
+                if isinstance(node.get("Slice"), dict):
+                    self.arith_assigns(node["Slice"].get("Offset"))
+                    self.arith_assigns(node["Slice"].get("Length"))
             for value in node.values():
                 self.node_subs(value)
         elif isinstance(node, list):
             for item in node:
                 self.node_subs(item)
+
+    def arith_assigns(self, expr):
+        """Marks unknown every name the arithmetic `expr` assigns.
+
+        Arithmetic is not evaluated here, so what a name holds after it is
+        not known -- but that it no longer holds what it did is: `OUT=/decoy;
+        ((OUT=1)); bd -C "$OUT" close X` runs `bd -C 1`, and keeping /decoy
+        named a store the command never opened, with no warning. The targets
+        of `=` and its compound forms and of `++`/`--` are marked, wherever
+        they sit in the expression.
+
+        A word the parser left whole -- `let "OUT=1"`, `(( "$E" ))` -- is
+        read as text for the same shapes once expanded. A target spelled by an
+        expansion this scan cannot read may be any name, so every name is in
+        doubt after it, as after an `unset` it cannot read. An operand that
+        cannot be read is left alone: the shell would evaluate its value as an
+        expression too, so `E='OUT=1'; ((E))` assigns OUT, but nearly every
+        such operand is a number, and marking every name on each would leave
+        nothing resolvable after any `(( $(...) ))`.
+        """
+        if not isinstance(expr, dict):
+            return
+        kind = expr.get("Type")
+        if kind == "BinaryArithm":
+            if expr.get("Op") in ARITH_ASSIGN_OPS:
+                self.arith_target(expr.get("X"))
+            self.arith_assigns(expr.get("X"))
+            self.arith_assigns(expr.get("Y"))
+        elif kind == "UnaryArithm":
+            if expr.get("Op") in ARITH_STEP_OPS:
+                self.arith_target(expr.get("X"))
+            self.arith_assigns(expr.get("X"))
+        elif kind == "ParenArithm":
+            self.arith_assigns(expr.get("X"))
+        elif kind == "Word":
+            fields = self.expand(expr, split=False)
+            if fields is UNKNOWN:
+                return
+            for field in fields:
+                for match in ARITH_TEXT_ASSIGN.finditer(field.value):
+                    self.forget(match.group(1) or match.group(2))
+
+    def arith_target(self, word):
+        """Marks unknown the name the arithmetic assignment to `word` sets."""
+        if not isinstance(word, dict):
+            return
+        fields = self.expand(word, split=False)
+        if fields is UNKNOWN or len(fields) != 1:
+            self.seal_opaque()
+            return
+        name = fields[0].value.split("[", 1)[0].strip()
+        if IDENTIFIER.match(name):
+            self.forget(name)
+
+    def forget(self, name):
+        """Records that `name` now holds a value this scan did not read.
+
+        Under `set -a` the assignment exported it as well, so whether it is
+        in a child's environment is in doubt too.
+        """
+        self.scope.assigns[name] = UNKNOWN
+        if self.scope.allexport:
+            self.scope.exported[name] = UNKNOWN
+
+    def seal_opaque(self, cwd=False):
+        """Puts every name, attribute and function in this scope in doubt.
+
+        The state after something this scan cannot read acts on the shell
+        itself: an `unset` of a name it cannot read, an arithmetic assignment
+        to one, a `source`d file. With `cwd`, the directory is in doubt too.
+        """
+        self.scope.assigns = {}
+        self.scope.exported = {}
+        self.scope.sealed = OPAQUE
+        self.functions = {}
+        if cwd:
+            self.leave_cwd()
 
     def stmts(self, stmts, conditional):
         """Scans a list of statements in order.
@@ -2263,8 +2526,15 @@ class Scanner:
             # `[[ ]]` runs no command and writes no store, but a substitution
             # inside one still runs.
             self.walk_words(cmd)
-        elif kind in ("LetClause", "ArithmCmd"):
+        elif kind == "ArithmCmd":
+            # `((...))` runs in this shell, so what it assigns is assigned
+            # here; see `arith_assigns`.
             self.walk_words(cmd)
+            self.arith_assigns(cmd.get("X"))
+        elif kind == "LetClause":
+            self.walk_words(cmd)
+            for expr in cmd.get("Exprs") or ():
+                self.arith_assigns(expr)
 
     def branch(self, stmts):
         """Scans statements that may or may not run.
@@ -2300,6 +2570,13 @@ class Scanner:
         loop = cmd.get("Loop") or {}
         self.node_subs(loop)
         body = cmd.get("Do")
+        if loop.get("Type") == "CStyleLoop":
+            # The header's three expressions assign in this shell: `for
+            # ((OUT=1; OUT<2; OUT++))` leaves OUT changed for the body and
+            # after it, and reading the body against the value from before
+            # the loop named a store the command never opened.
+            for key in ("Init", "Cond", "Post"):
+                self.arith_assigns(loop.get(key))
         if loop.get("Type") != "WordIter" or not loop.get("Name"):
             self.branch(body)
             return
@@ -2593,6 +2870,35 @@ class Scanner:
             self.eval_builtin(cmd, fields, start, conditional)
             return
 
+        # `source` runs a file this scan does not read, in this shell: what
+        # it assigns, unsets, exports, defines or `cd`s to is unknowable, so
+        # nothing known before it speaks for the commands after it. `.
+        # ./select-store.sh; bd close X` may have moved the shell or set
+        # BEADS_DIR, and reading on with the old state named a store the
+        # command never opened, with no warning.
+        if word in SOURCE_WORDS:
+            self.seal_opaque(cwd=True)
+            return
+
+        if name in READ_WORDS:
+            self.read_builtin(fields, start, name)
+            return
+
+        if name == "getopts":
+            for each in ("OPTIND", "OPTARG"):
+                self.forget(each)
+            if start + 2 < len(fields):
+                target = fields[start + 2].value
+                if target is UNKNOWN:
+                    self.seal_opaque()
+                elif IDENTIFIER.match(target):
+                    self.forget(target)
+            return
+
+        if name == "printf":
+            self.printf_builtin(fields, start)
+            return
+
         # A call runs the body defined earlier in this text, and runs it here,
         # where the cwd is known. Without this a relative store named inside a
         # function was reported by nothing: the definition cannot resolve it and
@@ -2828,7 +3134,12 @@ class Scanner:
         if i >= len(args) or args[i].value == "-":
             self.leave_cwd()
             return
-        target = self.resolve_field(args[i])
+        target = self.cdpath_target(args[i])
+        if target is UNKNOWN:
+            self.leave_cwd()
+            return
+        if target is None:
+            target = self.resolve_field(args[i])
         # A `cd` that fails leaves the shell where it was, and the command after
         # it runs there: `cd /missing; bd -C store ...` writes under the launch
         # directory, not under /missing. The scan cannot know the exit status,
@@ -2840,6 +3151,48 @@ class Scanner:
             self.leave_cwd()
         elif os.path.isdir(target):
             self.enter_cwd(target)
+
+    def cdpath_target(self, field):
+        """Where `CDPATH` sends a `cd` to `field`, if it sends it anywhere.
+
+        A relative operand that does not open with `.` or `..` is looked for
+        under each entry of CDPATH before the cwd -- an empty entry or `.`
+        being the cwd -- and the first that is a directory wins, as `cd` in
+        bash does it. With `CDPATH=/external`, `cd repo; bd close X` writes
+        /external/repo's store, and resolving `repo` under the tracked cwd
+        registered and pushed a different store with no warning.
+
+        None when CDPATH does not apply or names nothing that exists, so the
+        operand resolves against the cwd as before. UNKNOWN when it may send
+        the shell somewhere this scan cannot see: a CDPATH it cannot read, or
+        an entry it cannot resolve before the one that would have matched.
+        """
+        value = field.value
+        if value is UNKNOWN or not value or field.tilde:
+            return None
+        if value.startswith("/") or value == "." or value == ".." or \
+                value.startswith("./") or value.startswith("../"):
+            return None
+        cdpath = self.shell_var("CDPATH")
+        if cdpath is None:
+            return None
+        if cdpath is UNKNOWN:
+            return UNKNOWN
+        for entry in cdpath.split(":"):
+            if entry in ("", "."):
+                base = self.scope.cwd if self.scope.known else None
+            elif entry.startswith("/"):
+                base = entry
+            elif self.scope.known:
+                base = self.scope.cwd.rstrip("/") + "/" + entry
+            else:
+                base = None
+            if base is None:
+                return UNKNOWN
+            candidate = base.rstrip("/") + "/" + value
+            if os.path.isdir(candidate):
+                return candidate
+        return None
 
     def unset_builtin(self, args, start, conditional):
         """Records what `unset` removes.
@@ -2861,10 +3214,7 @@ class Scanner:
         for arg in args[start + 1:]:
             word = arg.value
             if word is UNKNOWN:
-                self.scope.assigns = {}
-                self.scope.exported = {}
-                self.scope.sealed = OPAQUE
-                self.functions = {}
+                self.seal_opaque()
                 return
             if word == "--":
                 continue
@@ -2883,6 +3233,88 @@ class Scanner:
             else:
                 self.scope.assigns[name] = UNSET
                 self.scope.exported[name] = False
+
+    def read_builtin(self, args, start, name):
+        """Records what `read`, `mapfile` and `readarray` assign.
+
+        Each names the variables it fills as operands, after options some of
+        which take a value that is not a name: `read -p 'Store: ' OUT` fills
+        OUT and not `Store: `. With no operand each fills a default. What is
+        read is input this scan does not have, so the names are unknown after
+        it rather than kept: `read OUT; bd -C "$OUT" close X` wrote wherever
+        the input said, while the value from before it named another store.
+
+        An operand this scan cannot read may be any name, so every name is in
+        doubt after it, as after an `unset` it cannot read.
+        """
+        takes, defaults = READ_WORDS[name]
+        names = []
+        i = start + 1
+        while i < len(args):
+            word = args[i].value
+            if word is UNKNOWN:
+                self.seal_opaque()
+                return
+            if word == "--":
+                i += 1
+                break
+            if not word.startswith("-") or word == "-":
+                break
+            letters = word[1:]
+            i += 1
+            for j, letter in enumerate(letters):
+                if letter not in takes:
+                    continue
+                value = letters[j + 1:]
+                if not value and i < len(args):
+                    value = args[i].value
+                    i += 1
+                # `read -a NAME` fills an array, which is a name too.
+                if letter == "a" and name == "read":
+                    if value is UNKNOWN:
+                        self.seal_opaque()
+                        return
+                    names.append(value)
+                break
+        for arg in args[i:]:
+            word = arg.value
+            if word is UNKNOWN:
+                self.seal_opaque()
+                return
+            names.append(word)
+        for each in names or defaults:
+            if IDENTIFIER.match(each):
+                self.forget(each)
+
+    def printf_builtin(self, args, start):
+        """Records what `printf -v` assigns.
+
+        `printf -v OUT '%s' /external; bd -C "$OUT" close X` writes /external,
+        and the formatted value is not read here, so OUT is unknown after it.
+        The name may be attached to the flag or follow it, and `-v` may follow
+        `--` only as a word to print.
+        """
+        i = start + 1
+        while i < len(args):
+            word = args[i].value
+            if word is UNKNOWN:
+                self.seal_opaque()
+                return
+            if word == "--" or not word.startswith("-") or word == "-":
+                return
+            if word.startswith("-v"):
+                if len(word) > 2:
+                    target = word[2:]
+                elif i + 1 < len(args):
+                    target = args[i + 1].value
+                else:
+                    return
+                if target is UNKNOWN:
+                    self.seal_opaque()
+                elif IDENTIFIER.match(target.split("[", 1)[0]):
+                    self.forget(target.split("[", 1)[0])
+                return
+            i += 1
 
     def set_builtin(self, args, start, conditional):
         """Records `set -a` and `set +a`, which decide what an assignment exports.
@@ -2996,10 +3428,22 @@ class Scanner:
         external target that is the worst outcome -- the roots sync, nothing
         looks wrong, and the store is never registered.
 
-        The string is scanned as script, which is a superset of the splitting
-        `env` itself does: what it can add is a write this scan reports where
-        `env` would have passed the text along as one argument, and reporting a
-        write that did not happen costs a no-op commit.
+        The string is split as `env` splits it -- see `split_string_words` --
+        and not read as shell text. A shell parse is not a superset of that
+        splitting: `env -S 'bd\\_-C\\_/external\\_close\\_X'` runs `bd` with
+        four arguments, where the parse saw one word that was not `bd` and
+        the write was missed with no warning. The words `env` makes are its
+        own arguments again -- `-S` on a shebang line is how a script passes
+        `env` several -- so they are scanned as the argument list of an `env`
+        carrying them, each quoted so that it stays one argument: an option
+        or assignment among them is `env`'s, and the command word is found
+        past them as for any `env`.
+
+        `${NAME}` in the string is expanded by `env` from its own
+        environment, which is this command's before `env` applies its own
+        assignments and unsets on GNU and after on BSD. Where `env` itself
+        touches the name the two disagree, so the word is unknowable; where
+        it does not, the environment the command would see answers.
 
         The arguments after the string are the command's too. `env -S 'bd -C'
         /external close CHR-1` runs `bd -C /external close CHR-1`: `-S` splits
@@ -3008,31 +3452,56 @@ class Scanner:
         reported without its target -- the roots synced while the external store
         went unregistered, which nothing later can recover.
 
-        They are appended quoted, since they are argv words and not script: an
-        operand holding a `;` or a `$(` is one argument to the command, and
-        splicing it in raw would make it syntax of the text being scanned.
-
-        A string that cannot be read is the fail-safe case, as it is for `eval`;
-        see `unreadable_script`. An operand that cannot be read is the same
-        case, the command's words being incomplete without it.
+        A string `env` rejects -- an escape it does not know, a `$` not
+        opening `${NAME}`, an unclosed quote -- runs nothing, as does one
+        holding no word. A string that cannot be read at all is the fail-safe
+        case, as it is for `eval`; see `unreadable_script`. An operand that
+        cannot be read is the same case, the command's words being incomplete
+        without it.
         """
         string, prefix_end = split
         if string is UNKNOWN:
             self.unreadable_script()
             return
+        words = split_string_words(string)
+        if words is None:
+            return
+        own_assigns, own_sealed = self.prefix_env(
+            args[start:prefix_end], prefix_end - start)
+        rendered = []
+        for word in words:
+            text = ""
+            for part in word:
+                if isinstance(part, str):
+                    text += part
+                    continue
+                name = part[1]
+                if own_sealed or name in own_assigns:
+                    value = UNKNOWN
+                else:
+                    value = self.command_env(cmd, args, start, name)
+                if value is UNKNOWN:
+                    text = UNKNOWN
+                    break
+                text += value or ""
+            rendered.append(UNREADABLE_WORD if text is UNKNOWN
+                            else shlex.quote(text))
         for arg in args[prefix_end:]:
             if arg.value is UNKNOWN:
                 self.unreadable_script()
                 return
-            string += " " + shlex.quote(arg.value)
-        # The assignments `env` was given itself reach the command the string
-        # names, and were stepped over rather than read while the string was
-        # being found: `env A=/tmp/store -S 'bd -C "$A" ...'` writes /tmp/store.
-        # Layered over the prefix as in `shell_wrapper`, for the same reason.
+            rendered.append(shlex.quote(arg.value))
+        if not rendered:
+            return
+        # The assignments `env` was given before the string reach the command
+        # the string names, and were stepped over rather than read while the
+        # string was being found. Layered over the prefix as in
+        # `shell_wrapper`, for the same reason.
         wrapper_assigns, sealed = self.prefix_env(args, prefix_end)
         seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
-        self.scan_script(string, seed=seed, sealed=sealed, process=True)
+        self.scan_script("env " + " ".join(rendered), seed=seed,
+                         sealed=sealed, process=True)
 
     def eval_builtin(self, cmd, args, start, conditional):
         """Scans what `eval` runs, which is script and not an argument list.

@@ -633,6 +633,18 @@ check skip 'IFS=": "; V="  list  "; bd $V'
 # store is named rather than the wrong one.
 check_unresolved 'IFS=$(printf x); OUT="/tmp/a b"; bd -C $OUT close CHR-1'
 check sync 'IFS=$(printf x); OUT="/tmp/a b"; bd -C $OUT close CHR-1'
+# An IFS `unset` splits on the default whitespace again, whatever it held
+# before. Keeping the old value split `/tmp/a:b` where the shell did not.
+check_target '/tmp/a:b' 'IFS=:; unset IFS; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
+check_target '/tmp/a' 'IFS=:; unset IFS; OUT="/tmp/a b"; bd -C $OUT close CHR-1'
+check_target '/tmp/a:b' 'IFS=:; unset -v IFS; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
+# A function `unset` leaves the variable alone.
+check_target '/tmp/a' 'IFS=:; unset -f IFS; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
+# An `unset` that may not have run leaves IFS unknowable either way.
+check_unresolved 'IFS=:; false && unset IFS; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
+# A body that touches IFS leaves it unknown after the call, as it does any
+# name it assigns: which of its paths ran is not inferred.
+check_unresolved 'IFS=:; f() { local IFS=" "; unset IFS; }; f; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
 # An expansion that is all separators supplies no argument at all, so what
 # follows it is still the verb.
 check sync 'E=""; bd $E close CHR-1'
@@ -703,6 +715,34 @@ check_unresolved "pushd \$(pick); bd -C store close CHR-1"
 check_unresolved "false && pushd $CD/base; bd -C store close CHR-1"
 check_unresolved "pushd $CD/base || bd -C store close CHR-1"
 check_target '/tmp/store' "pushd $CD/base; popd; bd -C /tmp/store close CHR-1"
+# A relative operand is looked for under each entry of CDPATH before the cwd,
+# the first that is a directory winning, so `CDPATH=/external; cd repo` lands
+# in /external/repo. Resolving `repo` under the tracked cwd registered and
+# pushed a different store with no warning. An empty entry is the cwd, and
+# an operand opening with `.` or `..`, or an absolute one, is not searched.
+check_target "$CD/one/two/store" "CDPATH=$CD/one; cd two; bd -C store close CHR-1"
+check_target "$CD/one/two/store" "CDPATH=/nonexistent-cs-classify:$CD/one; cd two; bd -C store close CHR-1"
+check_target "$CD/one/two/store" "CDPATH=$CD/one; pushd two; bd -C store close CHR-1"
+check_target "$CD/one/two/store" "cd $CD; CDPATH=one; cd two; bd -C store close CHR-1"
+check_target "$CD/base/store" "cd $CD; CDPATH=:$CD/one; cd base; bd -C store close CHR-1"
+mkdir -p "$CD/base/two/.beads"
+check_target "$CD/base/two" "cd $CD/base; CDPATH=$CD/one; cd ./two; bd close CHR-1"
+check_target "$CD/base/two" "cd $CD/base/two; CDPATH=$CD/one; cd ../two; bd close CHR-1"
+check_target "$CD/base/store" "CDPATH=$CD/one; cd $CD/base; bd -C store close CHR-1"
+# Nothing under CDPATH matches, so the operand resolves against the cwd.
+check_target "$CD/one/two/store" "cd $CD/one; CDPATH=$CD/other; cd two; bd -C store close CHR-1"
+# An unset CDPATH searches nothing; one this scan cannot read may send the
+# shell anywhere, and so may a relative entry under a cwd it does not know.
+check_target "$CD/one/two/store" "cd $CD/one; unset CDPATH; cd two; bd -C store close CHR-1"
+check_unresolved "CDPATH=\$(pick); cd two; bd -C store close CHR-1"
+check_unresolved "false && CDPATH=$CD/one; cd two; bd -C store close CHR-1"
+check_unresolved "cd \$(pick); CDPATH=one:$CD/one; cd two; bd -C store close CHR-1"
+check_target "$CD/one/two/store" "cd \$(pick); CDPATH=$CD/one; cd two; bd -C store close CHR-1"
+# The hook's own environment answers when the text says nothing.
+export CDPATH="$CD/one"
+check_target "$CD/one/two/store" "cd two; bd -C store close CHR-1"
+check_target "$CD/store" "env -i bash -c 'cd $CD; cd two; bd -C store close CHR-1'"
+unset CDPATH
 
 # --- variable targets --------------------------------------------------
 # Resolved from the assignments the list has made where it has them, and
@@ -1034,13 +1074,51 @@ check_target '/tmp/store' 'env -S"bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' '/usr/bin/env -S "bd -C /tmp/store close CHR-1"'
 # `-S` may end a bundle whose other letters take nothing.
 check_target '/tmp/store' 'env -iS "bd -C /tmp/store close CHR-1"'
-# The options before it are still its own, and the assignments among them
-# reach the command the string names.
+# The options before it are still its own.
 check_target '/tmp/store' 'env -u FOO -S "bd -C /tmp/store close CHR-1"'
-check_target '/tmp/store' 'env OUT=/tmp/store -S "bd -C \"\$OUT\" close CHR-1"'
 check sync 'env -S "bd close CHR-1"'
-# The string is script, so what it says about the cwd applies inside it.
-check_target "$CD/other/store" "env -S \"cd $CD/other && bd -C store close CHR-1\""
+# The string is argv and not shell text: `-S` splits it as `env` does, and
+# nothing in it is syntax. `cd` names a program that does not exist, so
+# nothing runs; and a `$OUT` without braces is an error `env` stops on, on
+# GNU and BSD alike. Read as script, the first entered a directory and the
+# second read a variable, and the scan reported writes `env` never ran.
+check_target '' "env -S \"cd $CD/other && bd -C store close CHR-1\""
+check skip 'env OUT=/tmp/store -S "bd -C \"\$OUT\" close CHR-1"'
+# `\_` is a separator, and inside double quotes a space; `#` opening a word
+# comments out the rest; `\c` ends the string. Read as script, `\_` was
+# part of one word that was not `bd`, and the write was missed outright.
+check_target '/tmp/store' 'env -S '"'"'bd\_-C\_/tmp/store\_close\_CHR-1'"'"''
+check_target '/tmp/a b' 'env -S '"'"'bd -C "/tmp/a\_b" close CHR-1'"'"''
+check_target '/tmp/store' 'env -S "bd -C /tmp/store close CHR-1 # a note"'
+check_target "$STORE" "cd $STORE; env -S 'bd close CHR-1 #-C /tmp/other'"
+check_target '/tmp/store#x' 'env -S "bd -C /tmp/store#x close CHR-1"'
+check_target '/tmp/store' 'env -S '"'"'bd -C /tmp/store close CHR-1\c list'"'"''
+# Quotes group and the escapes `env` knows are decoded; single quotes keep
+# everything but `\'"'"'` and `\\`.
+check_target '/tmp/a b' 'env -S "bd -C '"'"'/tmp/a b'"'"' close CHR-1"'
+check_target '/tmp/a b' 'env -S '"'"'bd -C "/tmp/a b" close CHR-1'"'"''
+check_target "/tmp/a'b" 'env -S "bd -C '"'"'/tmp/a\\'"'"'b'"'"' close CHR-1"'
+check_target '/tmp/a#b' 'env -S "bd -C /tmp/a\\#b close CHR-1"'
+# An escape `env` does not know, or an unclosed quote, is an error on which
+# it runs nothing.
+check skip 'env -S "bd -C /tmp/store close CHR-1 \\q"'
+check skip 'env -S "bd -C /tmp/store close '"'"'CHR-1"'
+# `${NAME}` is expanded by `env` from the environment it was given, so an
+# exported name or a temporary prefix answers, and a shell variable that
+# was never exported does not. Where `env`'s own options touch the name,
+# GNU expands the value from before them and BSD from after, so it is
+# unknowable rather than either.
+check_target '/tmp/store' 'CS_W_STORE=/tmp/store env -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
+check_target '/tmp/store' 'export CS_W_STORE=/tmp/store; env -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
+check_unresolved 'CS_W_STORE=/tmp/store; env -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
+check_unresolved 'CS_W_STORE=/old env CS_W_STORE=/tmp/store -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
+check_unresolved 'CS_W_STORE=/tmp/store env -u CS_W_STORE -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
+check_unresolved 'CS_W_STORE=/tmp/store env -i -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
+# The words are `env`'s own arguments again, so an option or assignment
+# among them is read as one.
+check_target "$STORE" "env -S 'BEADS_DIR=$STORE/.beads bd close CHR-1'"
+check_target "$STORE" "env -S '-C $STORE bd close CHR-1'"
+check skip 'env -S "-u BEADS_DIR echo bd close CHR-1"'
 # A read-only verb inside the string is still read-only.
 check skip 'env -S "bd list"'
 # A string this scan cannot read may write and there is no way to learn
@@ -1183,6 +1261,41 @@ check_target '/tmp/inherited' 'echo export CS_TEST_STORE=/tmp/store; bd -C "$CS_
 # once it has been through a variable than it was in the word.
 check_unresolved 'export CS_TEST_STORE=$(pwd)/store; bd -C "$CS_TEST_STORE" close CHR-1'
 unset CS_TEST_STORE CS_OTHER
+
+# --- builtins that assign without an `=` --------------------------------
+# An arithmetic assignment, `let`, `read`, `printf -v`, `getopts`, `mapfile`
+# and a `source` all write a name with no `NAME=value` in the text. Reading
+# past them kept the value from before, and `X=/tmp/a; read X; bd -C "$X"`
+# named a store the shell was never told. The name is unknown after each,
+# not gone -- what it holds is something this scan cannot read.
+check_unresolved 'CS_V=/tmp/a; ((CS_V=1)); bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; : $((CS_V=1)); bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; : $((CS_V += 1)); bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; : $((CS_V++)); bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; let CS_V=1; bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; for ((CS_V=0; CS_V<1; CS_V++)); do :; done; bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; read CS_V; bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; read -r CS_W CS_V </dev/null; bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; printf -v CS_V %s /tmp/b; bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; getopts a: CS_V; bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; mapfile CS_V; bd -C "$CS_V" close CHR-1'
+# A sourced file may assign anything, so every name is in doubt after it.
+check_unresolved 'CS_V=/tmp/a; source ./lib.sh; bd -C "$CS_V" close CHR-1'
+check_unresolved 'CS_V=/tmp/a; . ./lib.sh; bd -C "$CS_V" close CHR-1'
+# Only the name written is touched: an arithmetic read, another name, or a
+# `printf` to stdout leaves the value standing.
+check_target '/tmp/a' 'CS_V=/tmp/a; : $((CS_W = 1)); bd -C "$CS_V" close CHR-1'
+check_target '/tmp/a' 'CS_V=/tmp/a; ((CS_W=1)); bd -C "$CS_V" close CHR-1'
+check_target '/tmp/a' 'CS_V=/tmp/a; echo $((1 + 2)); bd -C "$CS_V" close CHR-1'
+check_target '/tmp/a' 'CS_V=/tmp/a; read CS_W; bd -C "$CS_V" close CHR-1'
+check_target '/tmp/a' 'CS_V=/tmp/a; printf %s CS_V; bd -C "$CS_V" close CHR-1'
+# One that may not have run leaves the name unknown as any conditional
+# assignment does.
+check_unresolved 'CS_V=/tmp/a; false && ((CS_V=1)); bd -C "$CS_V" close CHR-1'
+# The write inside any of them still runs.
+check sync 'read CS_V < <(bd close CHR-1)'
+check sync '(( $(bd close CHR-1 | wc -c) ))'
+check sync 'let CS_V=$(bd close CHR-1 | wc -c)'
 
 # --- bd's own global options --------------------------------------------
 # A global option's value is not the verb. Reading it as one lets a value
@@ -1388,7 +1501,11 @@ check_target '/tmp/store' 'CS_W_STORE=/tmp/store nohup bash -c '"'"'bd -C "$CS_W
 # does -- drops it with the rest. Seeded through regardless, the script read
 # a value the child never had and named a store the command never opened.
 check_target '/tmp/store' 'CS_W_STORE=/old env CS_W_STORE=/tmp/store bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
-check_target '/tmp/store' 'CS_W_STORE=/old env CS_W_STORE=/tmp/store -S '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+# `env -S` expands `${NAME}` itself, from the environment it was given --
+# so the prefix answers -- while a `bash -c` among the words it made sees
+# the assignment `env` was given on top of it, as any child of `env` does.
+check_target '/old' 'CS_W_STORE=/old env -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
+check_target '/tmp/store' 'CS_W_STORE=/old env -S '"'"'CS_W_STORE=/tmp/store bash -c "bd -C \"\$CS_W_STORE\" close CHR-1"'"'"''
 check_unresolved 'CS_W_STORE=/tmp/store env -i bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
 check_unresolved 'CS_W_STORE=/tmp/store env -u CS_W_STORE bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
 check_unresolved 'CS_W_STORE=/tmp/store sudo bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
@@ -1407,7 +1524,7 @@ check_unresolved 'CS_W_STORE=/tmp/decoy bd -C "$CS_W_STORE" close CHR-1'
 # opened.
 check_target '/tmp/store' 'true && CS_W_STORE=/tmp/store bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
 check_target '/tmp/store' 'CS_W_STORE=/old; true && CS_W_STORE=/tmp/store bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
-check_target '/tmp/store' 'true && CS_W_STORE=/tmp/store env -S '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '/tmp/store' 'true && CS_W_STORE=/tmp/store env -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
 check_target '/tmp/store' 'if true; then CS_W_STORE=/tmp/store sh -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"'; fi'
 
 # --- function definitions -------------------------------------------------

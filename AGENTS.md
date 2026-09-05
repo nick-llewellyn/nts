@@ -416,11 +416,15 @@ have run) is reported as unresolved rather than guessed, and so is script
 the scan cannot read at all (`eval "$X"`, `bash -c "$(…)"`); act on that
 warning the same way.
 
-**Act on hook warnings.** Failures surface as `additionalContext` on the
-tool result, prefixed `beads:` — e.g. `beads: 'bd dolt push' failed in
-<root>, local bead writes are NOT on DoltHub.` Treat any such line as the
-blocking error below and fall back to the manual sequence; do not assume
-the next invocation will retry successfully.
+**Act on hook warnings.** Failures are prefixed `beads:` — e.g. `beads:
+'bd dolt push' failed in <root>, local bead writes are NOT on DoltHub.` —
+and reach you on two channels: a `PostToolUse` failure is delivered as
+`additionalContext` on the tool result, while a `SessionEnd` failure and
+the missing-`jq` case (`beads: jq not found, …`, on every event) go to
+the hook's stderr, since `SessionEnd` has no tool result to attach to.
+Treat any such line, on either channel, as the blocking error below and
+fall back to the manual sequence; do not assume the next invocation will
+retry successfully.
 
 The hook does `commit` + `push`, **not** `pull`. The pull-before-push
 ordering below is therefore still on the agent: run `bd dolt pull` at
