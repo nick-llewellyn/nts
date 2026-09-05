@@ -874,6 +874,15 @@ check_target '/tmp/store' 'env -- bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'env -- FOO=bar bd -C /tmp/store close CHR-1'
 check_target "$STORE" "env -- BEADS_DIR=$STORE/.beads bd close CHR-1"
 check_target "$STORE" "env -i -- A=1 BEADS_DIR=$STORE/.beads bd close CHR-1"
+# `env` and `sudo` take any non-empty name before the `=`, not only a shell
+# identifier. Matched against the identifier shape, `X-Y=1` was read as the
+# command and the `bd` behind it as an argument nothing ran.
+check_target '/tmp/store' "env 'X-Y=1' bd -C /tmp/store close CHR-1"
+check_target '/tmp/store' "env -- 'X-Y=1' bd -C /tmp/store close CHR-1"
+check_target '/tmp/store' "env -i 'a.b=1' bd -C /tmp/store close CHR-1"
+check_target '/tmp/store' "sudo 'X-Y=1' bd -C /tmp/store close CHR-1"
+check_target '/tmp/store' "env 'X-Y=1' -S 'bd -C /tmp/store close CHR-1'"
+check skip "env 'X-Y=1' bd list"
 check_target "$STORE" "BEADS_DIR=$CD/other/.beads env -- BEADS_DIR=$STORE/.beads bd close CHR-1"
 check_target '/tmp/store' 'env -- OUT=/tmp/store bash -c '"'"'bd -C "$OUT" close CHR-1'"'"''
 check_target '' 'env -- FOO=bar echo bd -C /tmp/store close CHR-1'
@@ -1822,9 +1831,17 @@ scan_command 'OUT=/old; for OUT in $(ls); do bd -C "$OUT" close CHR-1; done' "$B
   printf 'FAIL want mutates=1 unresolved=1 got mutates=%s unresolved=%s for over unknown list\n' \
     "$SCAN_MUTATES" "$SCAN_UNRESOLVED"
 }
+# The name is bound as an assignment is, export state included: under `set
+# -a` the loop variable is exported, and `bd` in the body sees it. Written as
+# a shell variable alone, the body read the cwd's store instead.
+check_target "$STORE/nested/inner" "cd $STORE; set -a; for BEADS_DIR in $STORE/nested/inner/.beads; do bd close CHR-1; done"
+check_target "$STORE" "cd $STORE; for BEADS_DIR in $STORE/nested/inner/.beads; do bd close CHR-1; done"
+check_unresolved "cd $STORE; set -a; for BEADS_DIR in \$(pick); do bd close CHR-1; done"
+check_unresolved "cd $STORE; true && set -a; for BEADS_DIR in $STORE/nested/inner/.beads; do bd close CHR-1; done"
 # After the loop the name is unknown either way: which pass ran last is not
 # inferred, and neither is whether any did.
 check_unresolved 'OUT=/old; for OUT in /real; do :; done; bd -C "$OUT" close CHR-1'
+check_unresolved "cd $STORE; set -a; for BEADS_DIR in $STORE/nested/inner/.beads; do :; done; bd close CHR-1"
 check_target '/real' 'OUT=/old; for OUT in /real; do bd -C "$OUT" close CHR-1; done; bd -C "$OUT" close CHR-2'
 # Past the per-value bound the name is unknown for the body rather than the
 # scan running long.

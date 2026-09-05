@@ -267,8 +267,11 @@ CD_OPT = re.compile(r"^-[LPe@]")
 CHDIR_WORDS = {"cd", "pushd", "popd"}
 DIR_STACK_ROTATE = re.compile(r"^[-+][0-9]+$")
 
-# A word that is an assignment.
-ASSIGN_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# A word among a wrapper's arguments that is an assignment. `env` and `sudo`
+# take any non-empty name before the `=`, not only a shell identifier: `env
+# 'X-Y=1' bd -C /external close X` runs `bd`. Matched against the identifier
+# shape, the word was read as the command and the write was missed.
+ASSIGN_WORD = re.compile(r"^[^=]+=")
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # The arithmetic operators that assign to their left operand, and the unary
@@ -2713,14 +2716,26 @@ class Scanner:
                     all(field.value is not UNKNOWN for field in fields):
                 values = [self.expand_tilde(field.value) if field.tilde
                           else field.value for field in fields]
+        # Bound as an assignment is, export state included: under `set -a` the
+        # loop variable is exported, so `set -a; for BEADS_DIR in /ext/.beads;
+        # do bd close X; done` opens /ext's store. Written into `assigns`
+        # alone it read as a shell variable `bd` never saw.
         if values is None:
-            self.scope.assigns[name] = UNKNOWN
+            self.forget(name)
             self.branch(body)
             return
         for value in values:
-            self.scope.assigns[name] = value
+            self.bind(name, value)
             self.branch(body)
-        self.scope.assigns[name] = UNKNOWN
+        self.forget(name)
+
+    def bind(self, name, value):
+        """Gives `name` the `value` a `for` binds, exported under `set -a`."""
+        self.scope.assigns[name] = value
+        if self.scope.allexport is UNKNOWN:
+            self.scope.exported[name] = UNKNOWN
+        elif self.scope.allexport:
+            self.scope.exported[name] = True
 
     def if_clause(self, cmd):
         """Scans an `if`, including the `elif`s nested in its else arm.
