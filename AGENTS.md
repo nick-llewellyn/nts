@@ -402,6 +402,16 @@ named by `bd -C <dir>` or `BEADS_DIR`, or found by walking up from wherever
 the command ran. `HOMEBREW_NO_AUTO_UPDATE=1 brew install jq shfmt` if either
 warning appears.
 
+The scan is static. It follows assignments, `cd`, wrappers, substitutions
+and `-c` scripts, but a `bd` whose *command name* is only known at run time
+— `"$BD" close X`, `$(printf bd) close X`, `${CMD:-bd} close X` — is
+indistinguishable from `"$EDITOR" file`, and syncing on every computed
+command name would cost a DoltHub round-trip each. Write `bd` literally, or
+run `bd dolt push --remote origin` yourself afterwards. A target the scan
+cannot name (a `-C` path built from a substitution, or a pattern such as
+`-C /tmp/store-*`) is reported as unresolved rather than guessed; act on
+that warning the same way.
+
 **Act on hook warnings.** Failures surface as `additionalContext` on the
 tool result, prefixed `beads:` — e.g. `beads: 'bd dolt push' failed in
 <root>, local bead writes are NOT on DoltHub.` Treat any such line as the

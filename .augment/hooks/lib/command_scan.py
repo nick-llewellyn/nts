@@ -429,6 +429,28 @@ def unescape_dquoted(text):
     return "".join(out)
 
 
+def is_pattern(text):
+    """Whether the unquoted literal `text` is one the shell matches on paths.
+
+    `*` and `?` always are. `[` is only with a `]` later in the same word to
+    close it -- a lone `[` is the test command, and `a[1]` is a pattern while
+    `a[` is not. A backslash takes the character after it out of
+    consideration, as `unescape` will later take the backslash out.
+    """
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\":
+            i += 2
+            continue
+        if char in "*?":
+            return True
+        if char == "[" and "]" in text[i + 2:]:
+            return True
+        i += 1
+    return False
+
+
 def word_parts(word, quoted=False):
     """The parts of `word`, each with whether quoting protects it.
 
@@ -722,6 +744,17 @@ class Scanner:
             kind = part["Type"]
             if kind == "Lit":
                 text = part.get("Value", "")
+                # An unquoted pattern is answered by the filesystem when the
+                # command runs, and the argument it becomes is not the text:
+                # `bd -C /tmp/store-* close X` opens whichever directory
+                # matches. Passed through as written, the target was a path
+                # naming no store, which the hook dropped without a word --
+                # the write was found, the store it went to was not. Unknown
+                # instead, so it is reported as a target that could not be
+                # named. Not applied to an assignment's value, where the
+                # shell does not expand patterns either.
+                if split and not quoted and is_pattern(text):
+                    return UNKNOWN
                 segments.append(
                     (unescape_dquoted(text) if quoted else unescape(text),
                      False))
@@ -736,6 +769,12 @@ class Scanner:
                     return UNKNOWN
                 got = self.get(part["Param"]["Value"])
                 if got is UNKNOWN:
+                    return UNKNOWN
+                # The value of an unquoted expansion is matched on paths as
+                # a literal would be, so `OUT=/tmp/store-*; bd -C $OUT` is the
+                # pattern case by another route. Quoting suppresses it here as
+                # it does above.
+                if split and not quoted and is_pattern(got):
                     return UNKNOWN
                 segments.append((got, not quoted))
             elif kind in ("CmdSubst", "ProcSubst"):
@@ -1504,20 +1543,33 @@ class Scanner:
         self.scoped(run)
 
     def word_subs(self, word):
-        """Scans the substitutions in `word`.
+        """Scans the substitutions in `word`, wherever in it they sit.
 
         One runs before the command whose word carries it, and runs whatever
         that command's own reachability is, so it is scanned where it is found
         rather than deferred. It runs in a subshell, so a `cd` or assignment
         inside it dies with it -- but its writes are real and must be kept.
+
+        The word is walked as a tree rather than by the kinds of part it
+        holds. A substitution can sit under any node of one -- inside an
+        arithmetic expansion, a parameter expansion's operator word or
+        replacement, a slice bound, an index -- and naming the places to look
+        missed the ones not named: `$(( $(bd close X) + 1 ))` ran the write
+        and reported nothing. Every statement list below a word belongs to one
+        of the two substitution kinds, so descending everything is exact.
         """
-        for part, _ in word_parts(word):
-            if part["Type"] in ("CmdSubst", "ProcSubst"):
-                self.sub_scan(part.get("Stmts") or ())
-            elif part["Type"] == "ParamExp":
-                exp = part.get("Exp") or {}
-                if exp.get("Word"):
-                    self.word_subs(exp["Word"])
+        self.node_subs(word)
+
+    def node_subs(self, node):
+        if isinstance(node, dict):
+            if node.get("Type") in ("CmdSubst", "ProcSubst"):
+                self.sub_scan(node.get("Stmts") or ())
+                return
+            for value in node.values():
+                self.node_subs(value)
+        elif isinstance(node, list):
+            for item in node:
+                self.node_subs(item)
 
     def stmts(self, stmts, conditional):
         """Scans a list of statements in order.

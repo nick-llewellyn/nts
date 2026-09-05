@@ -179,6 +179,19 @@ check sync 'bd update CHR-1 --notes "$(bd show CHR-2)"'
 check skip 'echo "$(bd list)"'
 check skip '(bd show CHR-1)'
 check skip 'count=$(bd list --json | jq length)'
+# A substitution runs wherever in the word it sits -- under an arithmetic
+# expansion, a parameter expansion's operator word or replacement, a slice
+# bound -- and the word is walked whole so none of those places is a blind
+# spot. Listing the places to look left `$(( $(bd close X) + 1 ))` running
+# the write and reporting nothing.
+check sync 'echo $(( $(bd close CHR-1) + 1 ))'
+check sync 'echo "$(( $(bd close CHR-1) + 1 ))"'
+check sync 'echo ${X:-$(bd close CHR-1)}'
+check sync 'echo ${X/a/$(bd close CHR-1)}'
+check sync 'echo ${X:$(bd close CHR-1):1}'
+check sync 'n=$(( $(bd create "x" | wc -c) ))'
+check_target '/tmp/store' 'echo "$(( $(bd -C /tmp/store close CHR-1) + 1 ))"'
+check skip 'echo $(( $(bd list | wc -l) + 1 ))'
 
 # --- help flags --------------------------------------------------------
 check skip 'bd --help'
@@ -1226,6 +1239,42 @@ scan_command 'bd -C ~-/store close CHR-1' "$BASE"
 }
 # The write itself is still found, so the roots sync either way.
 check sync 'bd -C ~-/store close CHR-1'
+
+# --- patterns in the target -----------------------------------------------
+# An unquoted `*`, `?` or `[...]` is matched on paths when the command runs,
+# and the store `bd` opens is whichever directory matched -- not the text.
+# Reported as written, the target named no store and the hook dropped it in
+# silence: the write was found, the store it went to was not. Unknown
+# instead, and counted, so the hook says a store went unsynced.
+check_target '' 'bd -C /tmp/store-* close CHR-1'
+check_target '' 'bd -C /tmp/store-? close CHR-1'
+check_target '' 'bd -C /tmp/store-[12] close CHR-1'
+check_target '' "bd -C $STORE/nest* close CHR-1"
+scan_command 'bd -C /tmp/store-* close CHR-1' "$BASE"
+[ "$SCAN_UNRESOLVED" -eq 1 ] && PASS=$((PASS + 1)) || {
+  FAIL=$((FAIL + 1))
+  printf 'FAIL unresolved want=1 got=%s /tmp/store-*\n' "$SCAN_UNRESOLVED"
+}
+check sync 'bd -C /tmp/store-* close CHR-1'
+# The value of an unquoted expansion is matched the same way.
+check_target '' 'OUT=/tmp/store-*; bd -C $OUT close CHR-1'
+# Quoting or escaping the character makes it a character again, and the path
+# is taken as written. So does a `[` with nothing to close it.
+check_target '/tmp/store-*' 'bd -C "/tmp/store-*" close CHR-1'
+check_target '/tmp/store-*' "bd -C '/tmp/store-*' close CHR-1"
+check_target '/tmp/store-*' 'bd -C /tmp/store-\* close CHR-1'
+check_target '/tmp/store-[' 'bd -C /tmp/store-[ close CHR-1'
+# A `cd` to a pattern lands wherever it matched, so the cwd is unknown from
+# there and a plain `bd` after it is reported as unresolved rather than
+# against the directory the shell left.
+check_target '' 'cd /tmp/store-* && bd close CHR-1'
+# A pattern in an assignment's value is not expanded there, so it is kept.
+check_target '/tmp/store-*' 'OUT=/tmp/store-*; bd -C "$OUT" close CHR-1'
+# A pattern elsewhere in the command leaves a literal target alone, and a
+# read-only verb stays read-only whatever its operands look like.
+check_target '/tmp/store' 'ls *.md; bd -C /tmp/store close CHR-1'
+check skip 'bd search foo*'
+check skip 'bd list --json | jq .[]'
 
 # --- byte offsets ---------------------------------------------------------
 # shfmt reports an operator's position as a byte offset, and a character index
