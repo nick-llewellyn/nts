@@ -372,6 +372,38 @@ check_target '/tmp/a"b' 'bd -C "/tmp/a\"b" close CHR-1'
 check_target '/tmp/a\b' 'bd -C "/tmp/a\\b" close CHR-1'
 # Single quotes honour no escape at all.
 check_target '/tmp/a\q' "bd -C '/tmp/a\\q' close CHR-1"
+# `$'...'` is single-quoted in the tree and not in the shell: its escapes are
+# decoded, so `$'/tmp/store\x31'` names /tmp/store1. Read as plain single
+# quotes the body was the target, a path that does not exist, which the hook
+# dropped in silence -- the write was found, the store it went to was not.
+check_target '/tmp/store1' "bd -C \$'/tmp/store\\x31' close CHR-1"
+check_target '/tmp/store1' "bd -C \$'/tmp/store\\061' close CHR-1"
+check_target $'/tmp/a\tb' "bd -C \$'/tmp/a\\tb' close CHR-1"
+check_target '/tmp/café' "bd -C \$'/tmp/caf\\u00e9' close CHR-1"
+check_target "/tmp/a\\b'c" "bd -C \$'/tmp/a\\\\b\\'c' close CHR-1"
+check_target '/tmp/store' "bd -C \$'/tmp/store' close CHR-1"
+# An escape bash does not know keeps its backslash, and a pattern character is
+# quoted here as it is in plain single quotes.
+check_target '/tmp/a\qb' "bd -C \$'/tmp/a\\qb' close CHR-1"
+check_target '/tmp/store-*' "bd -C \$'/tmp/store-*' close CHR-1"
+# The bytes are a C string, so a NUL ends the value. Bytes that are not UTF-8
+# name nothing this scan can carry as text: unknown, and counted, rather than
+# the body as written.
+check_target '/tmp/store' "bd -C \$'/tmp/store\\0junk' close CHR-1"
+check_target '' "bd -C \$'/tmp/\\xff' close CHR-1"
+scan_command "bd -C \$'/tmp/\\xff' close CHR-1" "$BASE"
+[ "$SCAN_UNRESOLVED" -eq 1 ] && PASS=$((PASS + 1)) || {
+  FAIL=$((FAIL + 1))
+  printf 'FAIL unresolved want=1 got=%s $'"'"'/tmp/\\xff'"'"'\n' "$SCAN_UNRESOLVED"
+}
+check sync "bd -C \$'/tmp/\\xff' close CHR-1"
+# The command word and the verb are decoded the same way, and so is an
+# assignment's value.
+check_target '/tmp/store' "\$'b\\x64' -C /tmp/store close CHR-1"
+check sync "bd \$'clo\\x73e' CHR-1"
+check skip "bd \$'li\\x73t'"
+check skip "\$'bd\\x78' close CHR-1"
+check_target '/tmp/a1' "OUT=\$'/tmp/a\\x31'; bd -C \"\$OUT\" close CHR-1"
 
 # --- an unquoted expansion is split into fields ------------------------
 # A word is not an argument. Bash splits an unquoted expansion on IFS, so a
@@ -563,6 +595,30 @@ check sync 'env -a worker bd close CHR-1'
 check_target '' 'env -a bd echo -C /tmp/store close CHR-1'
 check skip 'env -a bd echo close CHR-1'
 check_target '' 'env -a worker echo bd -C /tmp/store close CHR-1'
+# `timeout` takes a duration between its options and the command: `timeout 30
+# bd ...` runs bd. Not a wrapper at all, it was read as the command itself and
+# the write was missed outright -- nothing else in the invocation says a store
+# was written. `gtimeout` is the same program as Homebrew installs it.
+check_target '/tmp/store' 'timeout 30 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'timeout 1.5s bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'gtimeout 30 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' '/usr/bin/timeout 30 bd -C /tmp/store close CHR-1'
+check sync 'timeout 30 bd close CHR-1'
+check sync 'sudo -n timeout 30 bd close CHR-1'
+# Its options come before the duration, valued and value-less alike.
+check_target '/tmp/store' 'timeout -k 5 30 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'timeout -k5 -s KILL 30 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'timeout --signal=KILL --foreground 30 bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'timeout -v -p -- 30 bd -C /tmp/store close CHR-1'
+# The word after the duration is the command, whatever else follows it.
+check_target '' 'timeout 30 echo bd -C /tmp/store close CHR-1'
+check skip 'timeout 30 echo bd close CHR-1'
+# With no duration `timeout` runs nothing, and with nothing after the duration
+# there is nothing to run.
+check skip 'timeout bd close CHR-1'
+check skip 'timeout 30'
+# An unknown letter is ambiguous here as for any wrapper.
+check skip 'timeout -Z 30 bd close CHR-1'
 
 # An unknown letter is still ambiguous, whether it stands alone or opens a
 # bundle: it may be the one that takes the value, which would put the command

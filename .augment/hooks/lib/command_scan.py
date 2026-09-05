@@ -64,7 +64,7 @@ READONLY_PAIRS = {
 # the old text scanner also had to list are structural in the tree and never
 # reach an argument list, so only the wrappers remain.
 PREFIX_WORDS = {"exec", "builtin", "command", "env", "sudo", "doas", "nohup",
-                "nice", "setsid", "stdbuf"}
+                "nice", "setsid", "stdbuf", "timeout", "gtimeout"}
 
 # The subset of the above that takes its own options and environment
 # assignments before the command word, with the options that consume the word
@@ -83,8 +83,16 @@ WRAPPER_OPT_ARGS = {
     "nice": {"-n"},
     "stdbuf": {"-i", "--input", "-o", "--output", "-e", "--error"},
     "exec": {"-a"},
+    "timeout": {"-k", "--kill-after", "-s", "--signal"},
+    "gtimeout": {"-k", "--kill-after", "-s", "--signal"},
     "command": set(), "nohup": set(), "setsid": set(),
 }
+
+# Operands a wrapper takes between its options and the command word. `timeout
+# 30 bd -C /tmp/store close X` runs bd: the duration is neither an option nor
+# the command, and reading it as the command word lost the write outright --
+# nothing else in the invocation says a store was written.
+WRAPPER_OPERANDS = {"timeout": 1, "gtimeout": 1}
 
 # Options of those wrappers that stand alone. Without them every short flag
 # the table above does not list is ambiguous, and an ambiguous flag abandons
@@ -106,6 +114,8 @@ WRAPPER_OPT_NOARG = {
     "command": {"-p"},
     "setsid": {"-f", "--fork", "-w", "--wait", "-c", "--ctty"},
     "exec": {"-c", "-l"},
+    "timeout": {"--foreground", "-p", "--preserve-status", "-v", "--verbose"},
+    "gtimeout": {"--foreground", "-p", "--preserve-status", "-v", "--verbose"},
     "nice": set(), "nohup": set(), "stdbuf": set(),
 }
 
@@ -428,6 +438,90 @@ def unescape_dquoted(text):
         out.append(text[i])
         i += 1
     return "".join(out)
+
+
+# The single-character escapes of `$'...'`, and the digits its numeric ones
+# are made of.
+ANSI_C_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f",
+                  "n": "\n", "r": "\r", "t": "\t", "v": "\v", "\\": "\\",
+                  "'": "'", '"': '"', "?": "?"}
+OCTAL_DIGITS = "01234567"
+HEX_DIGITS = "0123456789abcdefABCDEF"
+
+
+def take_digits(text, at, digits, most):
+    """The run of `digits` in `text` from `at`, at most `most` long."""
+    end = at
+    while end < len(text) and end - at < most and text[end] in digits:
+        end += 1
+    return text[at:end]
+
+
+def unescape_ansi_c(text):
+    """The value of a `$'...'` word, or UNKNOWN when it is not text.
+
+    shfmt reports the quoted body as written, and single quotes it is not:
+    `$'/tmp/store\\x31'` names /tmp/store1, and the literal body names a path
+    that does not exist, which the hook dropped in silence -- the write was
+    found, the store it went to was not. The escapes are bash's: the single
+    characters above, `\\nnn` octal and `\\xHH` hex bytes, `\\uHHHH` and
+    `\\UHHHHHHHH` code points, and `\\cX` for a control character. Any other
+    backslash is kept, as bash keeps it. The bytes are a C string, so a NUL
+    ends the value; bytes that are not UTF-8 name nothing this scan can carry
+    as text and are reported unknowable.
+    """
+    out = bytearray()
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char != "\\" or i + 1 >= len(text):
+            out += char.encode("utf-8")
+            i += 1
+            continue
+        nxt = text[i + 1]
+        if nxt in ANSI_C_ESCAPES:
+            out += ANSI_C_ESCAPES[nxt].encode("utf-8")
+            i += 2
+            continue
+        if nxt in OCTAL_DIGITS:
+            digits = take_digits(text, i + 1, OCTAL_DIGITS, 3)
+            out.append(int(digits, 8) & 0xFF)
+            i += 1 + len(digits)
+            continue
+        if nxt == "x":
+            digits = take_digits(text, i + 2, HEX_DIGITS, 2)
+            if digits:
+                out.append(int(digits, 16))
+                i += 2 + len(digits)
+                continue
+        elif nxt in "uU":
+            digits = take_digits(text, i + 2, HEX_DIGITS,
+                                 4 if nxt == "u" else 8)
+            if digits:
+                try:
+                    out += chr(int(digits, 16)).encode("utf-8")
+                except (ValueError, UnicodeEncodeError):
+                    return UNKNOWN
+                i += 2 + len(digits)
+                continue
+        elif nxt == "c" and i + 2 < len(text):
+            ctrl = text[i + 2]
+            width = 3
+            # The backslash itself is written `\\c\\\\`.
+            if ctrl == "\\" and text[i + 3:i + 4] == "\\":
+                width = 4
+            if ord(ctrl) >= 0x80:
+                return UNKNOWN
+            out.append(ord(ctrl.upper()) ^ 0x40)
+            i += width
+            continue
+        out += ("\\" + nxt).encode("utf-8")
+        i += 2
+    raw = bytes(out).split(b"\0", 1)[0]
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return UNKNOWN
 
 
 def is_pattern(text):
@@ -760,7 +854,14 @@ class Scanner:
                     (unescape_dquoted(text) if quoted else unescape(text),
                      False))
             elif kind == "SglQuoted":
-                segments.append((part.get("Value", ""), False))
+                text = part.get("Value", "")
+                # `$'...'` is single-quoted in the tree and not in the shell:
+                # its escapes are decoded, so the body is not the value.
+                if part.get("Dollar"):
+                    text = unescape_ansi_c(text)
+                    if text is UNKNOWN:
+                        return UNKNOWN
+                segments.append((text, False))
             elif kind == "ParamExp":
                 # Only a plain reference is answered. An expansion with an
                 # operator -- `${X:-/d}`, `${X#p}` -- names a value that
@@ -1035,23 +1136,29 @@ class Scanner:
         knowing which of a wrapper's options take a value: `sudo -u nick bd
         ...` runs bd, and telling that from `env echo bd ...` means knowing
         that `-u` takes `nick` while `echo` takes nothing.
+
+        A wrapper with operands of its own -- `timeout 30 bd ...` -- names the
+        command that many words past its options. An unreadable word among the
+        options may be an option or an operand, so the command word is unknown
+        from there, as it is for `env $FLAGS bd ...`.
         """
         takes = WRAPPER_OPT_ARGS[wrapper]
         alone = WRAPPER_OPT_NOARG[wrapper]
+        operands = WRAPPER_OPERANDS.get(wrapper, 0)
         i = start + 1
         while i < len(args):
             word = args[i].value
             if word is UNKNOWN:
                 return i
             if word == "--":
-                return i + 1
+                return min(i + 1 + operands, len(args))
             if not word.startswith("-"):
                 # An assignment among a wrapper's arguments, as `env FOO=bar
                 # cmd`, is neither an option nor the command word.
                 if ASSIGN_WORD.match(word):
                     i += 1
                     continue
-                return i
+                return min(i + operands, len(args))
             if word.startswith("--"):
                 # `--opt=value` carries its value, so nothing follows it. A
                 # long flag neither table knows is taken to be value-less,
