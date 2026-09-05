@@ -726,10 +726,12 @@ class Scanner:
     def __init__(self, launch_cwd, text=""):
         self.mutates = False
         self.targets = []
-        # How many `-C` targets were named and could not be resolved to a path.
-        # Reported separately from the targets themselves because it is the one
-        # thing a later invocation cannot rediscover: the roots sync, but the
-        # store named here is not among them and nothing else names its path.
+        # How many `-C` targets were named and could not be resolved to a path,
+        # plus the scripts that could not be read at all -- an `eval "$X"` may
+        # carry such a target. Reported separately from the targets themselves
+        # because it is the one thing a later invocation cannot rediscover: the
+        # roots sync, but the store named here is not among them and nothing
+        # else names its path.
         self.unresolved = 0
         self.launch_cwd = launch_cwd
         # The text the tree was parsed from, so a node can be read back where
@@ -1609,8 +1611,32 @@ class Scanner:
         finally:
             self.scope = saved
 
+    def tentative(self, fn):
+        """Runs `fn` in a frame whose effects may or may not have happened.
+
+        The body of a branch, a function call, or an `eval` runs in this shell,
+        not a subshell -- but whether it ran to the end, and which of its paths
+        it took, is what the scan declines to infer. Dropping its frame restored
+        the values from before it: `OUT=/old; if t; then OUT=/real; fi; bd -C
+        "$OUT" ...` was resolved against /old, a store the command may never
+        have opened, while /real went unsynced. So every name the frame assigned
+        is unknown afterwards instead, and the cwd with it.
+        """
+        saved = self.scope
+        inner = saved.child()
+        self.scope = inner
+        try:
+            fn()
+        finally:
+            self.scope = saved
+        missing = object()
+        for name, value in inner.assigns.items():
+            if saved.assigns.get(name, missing) != value:
+                saved.assigns[name] = UNKNOWN
+        saved.known = False
+
     def sub_scan(self, stmts, cwd=None, known=None, seed=None, text=None,
-                 sealed=False):
+                 sealed=False, conditional=False, frame="subshell"):
         """Scans `stmts` as a subshell: its writes count, its state does not.
 
         `text` is the source those statements were parsed from, needed when they
@@ -1619,6 +1645,11 @@ class Scanner:
 
         `sealed` says the child's environment was replaced rather than inherited,
         as under `env -i`, so a name `seed` does not carry is unset there.
+
+        `frame` is "tentative" for text that runs in this shell rather than a
+        subshell, as `eval`'s does; see `tentative`. `conditional` is then what
+        it is for any statement: whether something before the text made it
+        depend on an exit status.
         """
         # Exhausting the depth is this scan failing, not the command writing
         # nothing, so it is raised rather than returned. Returning quietly is
@@ -1642,13 +1673,16 @@ class Scanner:
                 self.raw = text.encode("utf-8")
             self.depth += 1
             try:
-                self.stmts(stmts, conditional=False)
+                self.stmts(stmts, conditional)
             finally:
                 self.depth -= 1
                 self.text = outer
                 self.raw = outer_raw
 
-        self.scoped(run)
+        if frame == "tentative":
+            self.tentative(run)
+        else:
+            self.scoped(run)
 
     def word_subs(self, word):
         """Scans the substitutions in `word`, wherever in it they sit.
@@ -1774,15 +1808,17 @@ class Scanner:
             # ...` leaves the real shell where it was.
             self.scoped(lambda: self.stmts(cmd.get("Stmts"), False))
         elif kind == "Block":
-            # A brace group runs in this shell, and its `cd` does reach the
-            # command after it -- but the commands in one are not always
-            # certain to run, and the group is scanned in a frame so what it
-            # changes does not leak. This gives up the certain case to keep the
-            # conditional one, leaving the cwd unknown rather than guessed.
-            def block():
-                self.stmts(cmd.get("Stmts"), conditional)
-            self.scoped(block)
-            self.scope.known = False
+            # A brace group runs in this shell, and its `cd` and assignments
+            # do reach the command after it. One nothing made conditional is
+            # as certain as the statements around it, so it is walked in
+            # place: scanned in a frame, `OUT=/old; { OUT=/real; }; bd -C
+            # "$OUT" ...` was resolved against /old, a store the command never
+            # opened. A conditional one may not have run at all, so what it
+            # changes is unknown afterwards rather than restored or kept.
+            if conditional:
+                self.tentative(lambda: self.stmts(cmd.get("Stmts"), True))
+            else:
+                self.stmts(cmd.get("Stmts"), False)
         elif kind == "IfClause":
             self.if_clause(cmd)
         elif kind == "WhileClause":
@@ -1824,12 +1860,12 @@ class Scanner:
 
         Their writes count -- a `bd` inside a loop is a write if the loop runs
         once -- but what they change must not speak for the commands after
-        them, and neither must the cwd they left behind.
+        them: a name they assign is unknown from there, and so is the cwd they
+        left behind.
         """
         if not stmts:
             return
-        self.scoped(lambda: self.stmts(stmts, True))
-        self.scope.known = False
+        self.tentative(lambda: self.stmts(stmts, True))
 
     def if_clause(self, cmd):
         """Scans an `if`, including the `elif`s nested in its else arm.
@@ -1909,13 +1945,12 @@ class Scanner:
         self.calling.add(name)
         self.depth += 1
         try:
-            # A call is not a subshell: a `cd` inside a function does reach the
-            # command after the call. But whether the body ran to the end, and
-            # which of its branches it took, is exactly what the scan declines
-            # to infer -- so the frame is dropped and the cwd after it is
-            # unknown, as it is after any compound command.
-            self.scoped(lambda: self.stmt(body))
-            self.scope.known = False
+            # A call is not a subshell: a `cd` or assignment inside a function
+            # does reach the command after the call. But whether the body ran
+            # to the end, and which of its branches it took, is exactly what
+            # the scan declines to infer -- so what it changed is unknown
+            # afterwards, as it is after any compound command.
+            self.tentative(lambda: self.stmt(body))
         finally:
             self.depth -= 1
             self.calling.discard(name)
@@ -1929,26 +1964,34 @@ class Scanner:
         that store. Ignoring it read the hook's own inherited OUT instead, and
         the store the write actually opened went unpushed and unregistered.
         """
-        # One the shell may never reach must not speak for the value in effect
-        # when it does not.
-        if conditional:
-            return
-        for arg in cmd.get("Args") or ():
+        args = cmd.get("Args") or ()
+        # A substitution in any operand runs, the ones that assign nothing
+        # included: `export $(bd close X)` runs the write. It runs whatever the
+        # command's own reachability is, so the operands are visited for them
+        # before that is consulted.
+        for arg in args:
+            self.node_subs(arg)
+        for arg in args:
             # Only the operands that are assignments count. `export OUT`
             # exports a name without changing its value, and a flag such as
             # `declare -x` is neither.
-            if not gives_value(arg):
-                continue
-            self.assign(arg["Name"]["Value"], arg.get("Value"))
+            if gives_value(arg):
+                self.assign(arg["Name"]["Value"], arg.get("Value"),
+                            conditional)
 
-    def assign(self, name, word):
+    def assign(self, name, word, conditional):
         """Records `name` as holding the value of `word` in this scope.
 
-        `word` is None for `X=`, whose value is the empty string.
+        `word` is None for `X=`, whose value is the empty string. Its
+        substitutions have already been visited by the caller.
+
+        An assignment the shell may never reach leaves the name unknown: kept,
+        the value from before it spoke for `OUT=/old; t && OUT=/real; bd -C
+        "$OUT" ...` and resolved the write against /old, a store the command
+        may never have opened, while /real went unsynced.
         """
-        if word is not None:
-            self.word_subs(word)
-        self.scope.assigns[name] = self.assigned_value(word)
+        self.scope.assigns[name] = (UNKNOWN if conditional
+                                    else self.assigned_value(word))
 
     def call(self, cmd, conditional, follows):
         """Handles one simple command.
@@ -1976,10 +2019,10 @@ class Scanner:
             # `OUT=/tmp/decoy bd -C "$OUT"` is the inherited value. A temporary
             # assignment therefore speaks for neither this command's arguments
             # nor any later command.
-            if not conditional:
-                for arg in assigns:
-                    if gives_value(arg):
-                        self.assign(arg["Name"]["Value"], arg.get("Value"))
+            for arg in assigns:
+                if gives_value(arg):
+                    self.assign(arg["Name"]["Value"], arg.get("Value"),
+                                conditional)
             return
 
         # The words become the argument list the command receives before any of
@@ -2024,7 +2067,7 @@ class Scanner:
                 self.scope.known = True
 
         if split is not None:
-            self.split_wrapper(cmd, fields, start, split, conditional)
+            self.split_wrapper(cmd, fields, start, split)
             return
         if start is None or start >= len(fields):
             return
@@ -2038,11 +2081,11 @@ class Scanner:
             return
 
         if name in SHELL_WORDS:
-            self.shell_wrapper(cmd, fields, start, conditional)
+            self.shell_wrapper(cmd, fields, start)
             return
 
         if name == "eval":
-            self.eval_builtin(fields, start)
+            self.eval_builtin(cmd, fields, start, conditional)
             return
 
         # A call runs the body defined earlier in this text, and runs it here,
@@ -2203,7 +2246,45 @@ class Scanner:
             self.scope.cwd = target
             self.scope.known = True
 
-    def shell_wrapper(self, cmd, args, start, conditional):
+    def unreadable_script(self):
+        """Records a script that runs and cannot be read.
+
+        The fail-safe case for `bash -c`, `eval` and `env -S` alike: the shell
+        runs that text whatever it says, and there is no way to learn whether
+        it writes. Read as no write, `bash -c "$(gen)"` holding a `bd -C
+        /external ...` left the roots unsynced as well as the store, and
+        neither the marker retry nor SessionEnd could find it. It counts as a
+        write, so the roots sync -- and as a target that could not be named,
+        so the hook says a store may have gone unsynced: the text may carry a
+        `-C` nothing later can rediscover, and counting the write alone synced
+        the roots in silence.
+        """
+        self.mutates = True
+        self.unresolved += 1
+
+    def prefix_seed(self, cmd):
+        """The assignments a command's temporary prefix gives a script it runs.
+
+        A temporary prefix speaks for no word of this command's own argv, which
+        the shell expanded before applying it -- but it does reach the child's
+        environment, and the child expands its script with it in place. So
+        `OUT=/tmp/store bash -c 'bd -C "$OUT" ...'` writes /tmp/store, while
+        discarding the prefix read the hook's own inherited OUT and left that
+        store out of both the push set and the registry.
+
+        Seeded whatever the command's own reachability: the prefix is part of
+        the command, so if the command runs at all it runs with it. Skipped on a
+        conditional path, `t && OUT=/real bash -c 'bd -C "$OUT" ...'` was read
+        against the value before it, a store the command never opened.
+        """
+        seed = {}
+        for arg in cmd.get("Assigns") or ():
+            if gives_value(arg):
+                seed[arg["Name"]["Value"]] = \
+                    self.assigned_value(arg.get("Value"))
+        return seed
+
+    def shell_wrapper(self, cmd, args, start):
         """Scans the `-c` operand of a shell as the script it is.
 
         A shell runs that operand as script, so the write inside it is a write
@@ -2216,28 +2297,10 @@ class Scanner:
             return
         script = args[idx].value
         if script is UNKNOWN:
-            # The fail-safe case, as it is for `eval` and for `env -S`: the
-            # shell runs that text whatever it says, and there is no way to
-            # learn whether it writes. Read as no write, `bash -c "$(gen)"`
-            # holding a `bd -C /external ...` left the roots unsynced as well
-            # as the store, and neither the marker retry nor SessionEnd could
-            # find it. It counts as a write with no target instead, so the
-            # roots sync -- the answer every other unreadable write gets.
-            self.mutates = True
+            self.unreadable_script()
             return
-        # A temporary prefix speaks for no word of this command's own argv,
-        # which the shell expanded before applying it -- but it does reach the
-        # child's environment, and the child expands its script with it in
-        # place. So `OUT=/tmp/store bash -c 'bd -C "$OUT" ...'` writes
-        # /tmp/store, while discarding the prefix read the hook's own inherited
-        # OUT and left that store out of both the push set and the registry.
-        # The assignments are seeded into the child's scope only.
-        seed = {}
-        if not conditional:
-            for arg in cmd.get("Assigns") or ():
-                if gives_value(arg):
-                    seed[arg["Name"]["Value"]] = \
-                        self.assigned_value(arg.get("Value"))
+        # The prefix's assignments are seeded into the child's scope only.
+        seed = self.prefix_seed(cmd)
         # A wrapper's own assignments reach the child the same way, and were
         # stepped over rather than read while the command word was being found:
         # `env OUT=/tmp/store bash -c ...` is the syntactic prefix's twin.
@@ -2245,7 +2308,7 @@ class Scanner:
         seed.update(wrapper_assigns)
         self.scan_script(script, seed=seed, sealed=sealed)
 
-    def split_wrapper(self, cmd, args, start, split, conditional):
+    def split_wrapper(self, cmd, args, start, split):
         """Scans what `env -S <string>` runs, the string naming the command.
 
         `env -S 'bd -C /tmp/store close CHR-1'` writes that store: `-S` splits
@@ -2271,26 +2334,20 @@ class Scanner:
         operand holding a `;` or a `$(` is one argument to the command, and
         splicing it in raw would make it syntax of the text being scanned.
 
-        A string that cannot be read is the fail-safe case, as it is for `eval`:
-        the text may write and there is no way to learn whether it does, so the
-        invocation counts as a write with no target. An operand that cannot be
-        read is the same case, the command's words being incomplete without it.
+        A string that cannot be read is the fail-safe case, as it is for `eval`;
+        see `unreadable_script`. An operand that cannot be read is the same
+        case, the command's words being incomplete without it.
         """
         string, prefix_end = split
         if string is UNKNOWN:
-            self.mutates = True
+            self.unreadable_script()
             return
         for arg in args[prefix_end:]:
             if arg.value is UNKNOWN:
-                self.mutates = True
+                self.unreadable_script()
                 return
             string += " " + shlex.quote(arg.value)
-        seed = {}
-        if not conditional:
-            for arg in cmd.get("Assigns") or ():
-                if gives_value(arg):
-                    seed[arg["Name"]["Value"]] = \
-                        self.assigned_value(arg.get("Value"))
+        seed = self.prefix_seed(cmd)
         # The assignments `env` was given itself reach the command the string
         # names, and were stepped over rather than read while the string was
         # being found: `env A=/tmp/store -S 'bd -C "$A" ...'` writes /tmp/store.
@@ -2298,7 +2355,7 @@ class Scanner:
         seed.update(wrapper_assigns)
         self.scan_script(string, seed=seed, sealed=sealed)
 
-    def eval_builtin(self, args, start):
+    def eval_builtin(self, cmd, args, start, conditional):
         """Scans what `eval` runs, which is script and not an argument list.
 
         `eval "bd -C /tmp/store close CHR-1"` writes that store. Reading the
@@ -2312,11 +2369,9 @@ class Scanner:
         before parsing them, so `eval bd -C /tmp/store close CHR-1` is the same
         script as the quoted spelling.
 
-        An operand this scan cannot read is the fail-safe case: the text may
-        write and there is no way to learn whether it does, so the invocation
-        counts as a write with no target. The roots then sync, which is the
-        answer already given to every other unreadable write; a `-C` inside such
-        a string is beyond recovery either way.
+        An operand this scan cannot read is the fail-safe case; see
+        `unreadable_script`. A `-C` inside such a string is beyond recovery
+        either way, which is why it is counted as one that could not be named.
         """
         parts = []
         i = start + 1
@@ -2325,22 +2380,28 @@ class Scanner:
         while i < len(args):
             word = args[i].value
             if word is UNKNOWN:
-                self.mutates = True
+                self.unreadable_script()
                 return
             parts.append(word)
             i += 1
         if not parts:
             return
-        # Not a subshell: `eval` runs in the shell that called it, so a `cd`
-        # inside it does reach the command after. Which branch of it ran is the
-        # inference this scan declines to make, so the cwd afterwards is left
-        # unknown rather than guessed -- as it is after any compound command.
-        self.scan_script(" ".join(parts), cwd=self.scope.cwd,
-                         known=self.scope.known)
-        self.scope.known = False
+        # Not a subshell: `eval` runs in the shell that called it, so the text
+        # is expanded with this shell's state -- the cwd, the assignments, and
+        # the command's own temporary prefix, which `eval` sees as `bash -c`
+        # does: `OUT=/real eval 'bd -C "$OUT" ...'` writes /real, and scanning
+        # the text without the prefix read the value from before it. What the
+        # text changes may reach the command after it, but which branch of it
+        # ran is the inference this scan declines to make, and whether the
+        # prefix outlives the call turns on the shell's POSIX mode -- so the
+        # frame is tentative: every name it touched is unknown afterwards, as
+        # is the cwd, rather than restored or guessed.
+        self.scan_script(" ".join(parts), seed=self.prefix_seed(cmd),
+                         cwd=self.scope.cwd, known=self.scope.known,
+                         conditional=conditional, frame="tentative")
 
     def scan_script(self, script, seed=None, sealed=False, cwd=None,
-                    known=None):
+                    known=None, conditional=False, frame="subshell"):
         """Scans `script` as shell text, in a scope of its own.
 
         The text is parsed afresh, so its offsets index it and not the command
@@ -2360,7 +2421,8 @@ class Scanner:
         self.scripts.add(script)
         try:
             self.sub_scan(tree.get("Stmts") or (), seed=seed, text=parsed,
-                          sealed=sealed, cwd=cwd, known=known)
+                          sealed=sealed, cwd=cwd, known=known,
+                          conditional=conditional, frame=frame)
         finally:
             self.scripts.discard(script)
 

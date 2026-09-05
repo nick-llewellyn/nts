@@ -508,8 +508,18 @@ check_target '' 'CS_TEST_STORE=; bd -C "$CS_TEST_STORE" close CHR-1'
 check_target '/tmp/store' 'export CS_TEST_STORE=; bd -C "$CS_TEST_STORE/tmp/store" close CHR-1'
 check_target '/tmp/store' 'declare CS_TEST_STORE=; bd -C "$CS_TEST_STORE/tmp/store" close CHR-1'
 check_target '/tmp/store' 'CS_TEST_EMPTY=; bd -C "$CS_TEST_EMPTY/tmp/store" close CHR-1'
-# One the shell may never reach still does not speak for the value in effect.
-check_target '/tmp/inherited/tmp/store' 'false && CS_TEST_STORE=; bd -C "$CS_TEST_STORE/tmp/store" close CHR-1'
+# One the shell may never reach leaves the name unknown: neither it nor the
+# value before it speaks for what is in effect afterwards. Keeping the earlier
+# value resolved the write against a store the command may never have opened.
+check_target '' 'false && CS_TEST_STORE=; bd -C "$CS_TEST_STORE/tmp/store" close CHR-1'
+check_target '' 'CS_TEST_STORE=/old; true && CS_TEST_STORE=/real; bd -C "$CS_TEST_STORE" close CHR-1'
+scan_command 'CS_TEST_STORE=/old; true && CS_TEST_STORE=/real; bd -C "$CS_TEST_STORE" close CHR-1' "$BASE"
+[ "$SCAN_UNRESOLVED" -eq 1 ] && PASS=$((PASS + 1)) || {
+  FAIL=$((FAIL + 1))
+  printf 'FAIL unresolved want=1 got=%s conditional assignment\n' "$SCAN_UNRESOLVED"
+}
+# A name the conditional path does not touch keeps its value.
+check_target '/tmp/store' 'OUT=/tmp/store; true && OTHER=/x; bd -C "$OUT" close CHR-1'
 # The forms that give a name no single value leave the one it had: `+=` with
 # nothing to append, an array, and one element of an array.
 check_target '/tmp/inherited' 'CS_TEST_STORE+=; bd -C "$CS_TEST_STORE" close CHR-1'
@@ -856,9 +866,17 @@ check_target '/tmp/y' 'export CS_TEST_STORE=/tmp/x CS_OTHER=/tmp/y; bd -C "$CS_O
 # without changing its value, and a flag is neither.
 check_target '/tmp/inherited' 'export CS_TEST_STORE; bd -C "$CS_TEST_STORE" close CHR-1'
 check_target '/tmp/store' 'export -p CS_TEST_STORE=/tmp/store; bd -C "$CS_TEST_STORE" close CHR-1'
-# One the shell may never reach must not speak for the value in effect when
-# it does not.
-check_target '/tmp/inherited' 'false && export CS_TEST_STORE=/tmp/store; bd -C "$CS_TEST_STORE" close CHR-1'
+# One the shell may never reach leaves the name unknown, as a plain conditional
+# assignment does: neither it nor the earlier value speaks for what is in
+# effect afterwards.
+check_target '' 'false && export CS_TEST_STORE=/tmp/store; bd -C "$CS_TEST_STORE" close CHR-1'
+check_target '' 'true && declare CS_TEST_STORE=/tmp/store; bd -C "$CS_TEST_STORE" close CHR-1'
+check_target '/tmp/inherited' 'true && export CS_OTHER=/tmp/store; bd -C "$CS_TEST_STORE" close CHR-1'
+# A substitution in any operand runs whatever the reachability, the operands
+# that assign nothing included: `export $(bd close X)` runs the write.
+check sync 'export $(bd close CHR-1)'
+check sync 'false && export CS_TEST_STORE=$(bd close CHR-1)'
+check sync 'declare -x $(bd close CHR-1)'
 # The word `export` in an argument is a string, not a builtin.
 check_target '/tmp/inherited' 'echo export CS_TEST_STORE=/tmp/store; bd -C "$CS_TEST_STORE" close CHR-1'
 # A substitution in the value travels with it: the path is no more knowable
@@ -936,12 +954,34 @@ check_target '' 'CS_PIPE_STORE=/tmp/decoy | true; bd -C "$CS_PIPE_STORE" close C
 # The write itself is still found inside one, under the cwd in force there.
 check sync "true | bd close CHR-1"
 check_target "$CD/other/store" "cd $CD/other; true | bd -C store close CHR-1"
-# A brace group is not a subshell -- it runs in this shell, and its `cd`
-# does reach the command after it -- but `{` also opens the body of an `if`
-# or a loop, whose commands are not certain to run. The cwd is left unknown
-# rather than guessed, which gives up this case to keep the conditional one.
-check_target '' "{ cd $CD/other; }
+# A brace group is not a subshell: it runs in this shell, and its `cd` and
+# assignments reach the command after it. One nothing made conditional is as
+# certain as the statements around it. Scanned in a frame, its assignment was
+# restored on the way out and `OUT=/old; { OUT=/real; }; bd -C "$OUT"` named
+# a store the command never opened.
+check_target "$CD/other/store" "{ cd $CD/other; }
 bd -C store close CHR-1"
+check_target '/real' 'OUT=/old; { OUT=/real; }; bd -C "$OUT" close CHR-1'
+check_target '/real' 'OUT=/old; { { OUT=/real; }; }; bd -C "$OUT" close CHR-1'
+# A conditional group may not have run at all, so what it changes is unknown
+# afterwards -- neither restored nor kept -- and so is its cwd.
+check_target '' 'OUT=/old; true && { OUT=/real; }; bd -C "$OUT" close CHR-1'
+check_target '' "true && { cd $CD/other; }
+bd -C store close CHR-1"
+# The body of an `if`, a loop or a function is the same case: a name it
+# assigns is unknown after it, where it used to read as the value from before.
+check_target '' 'OUT=/old; if true; then OUT=/real; fi; bd -C "$OUT" close CHR-1'
+check_target '' 'OUT=/old; for x in 1; do OUT=/real; done; bd -C "$OUT" close CHR-1'
+check_target '' 'OUT=/old; cs_f() { OUT=/real; }; cs_f; bd -C "$OUT" close CHR-1'
+check_target '' 'OUT=/old; eval "OUT=/real"; bd -C "$OUT" close CHR-1'
+scan_command 'OUT=/old; if true; then OUT=/real; fi; bd -C "$OUT" close CHR-1' "$BASE"
+[ "$SCAN_UNRESOLVED" -eq 1 ] && PASS=$((PASS + 1)) || {
+  FAIL=$((FAIL + 1))
+  printf 'FAIL unresolved want=1 got=%s branch assignment\n' "$SCAN_UNRESOLVED"
+}
+# A name the body leaves alone keeps its value across it.
+check_target '/tmp/store' 'OUT=/tmp/store; if true; then OTHER=/x; fi; bd -C "$OUT" close CHR-1'
+check_target '/tmp/store' 'OUT=/tmp/store; cs_f() { OTHER=/x; }; cs_f; bd -C "$OUT" close CHR-1'
 
 # --- shell wrappers ------------------------------------------------------
 # A shell runs its `-c` operand as script, so the write inside it is a write
@@ -967,11 +1007,29 @@ check skip 'bash -Q "bd -C /tmp/store close CHR-1"'
 # An operand this scan cannot read is the fail-safe case, as it is for `eval`
 # and `env -S`: the shell runs that text whatever it says. Read as no write,
 # a `bd -C /external ...` inside it left the roots unsynced as well as the
-# store, and nothing later could find either.
+# store, and nothing later could find either. It is a write, and it is also
+# counted as a target that could not be named: the text may carry a `-C`, and
+# counting the write alone synced the roots in silence where every other
+# unreadable target makes the hook say a store may have gone unsynced.
 check sync 'bash -c "$CS_SOMETHING_UNSET"'
 check sync 'sh -c "$(generate-command)"'
 check sync 'bash -c -x "$CS_SOMETHING_UNSET"'
 check_target '' 'bash -c "$CS_SOMETHING_UNSET"'
+for unreadable in 'bash -c "$CS_SOMETHING_UNSET"' 'sh -c "$(generate-command)"' \
+  'eval "$CS_SOMETHING_UNSET"' 'env -S "$CS_SOMETHING_UNSET"' \
+  'env -S "bd -C" "$CS_SOMETHING_UNSET" close CHR-1'; do
+  scan_command "$unreadable" "$BASE"
+  [ "$SCAN_UNRESOLVED" -eq 1 ] && PASS=$((PASS + 1)) || {
+    FAIL=$((FAIL + 1))
+    printf 'FAIL unresolved want=1 got=%s %s\n' "$SCAN_UNRESOLVED" "$unreadable"
+  }
+done
+# A readable script is not: its targets are named or counted on their own.
+scan_command 'bash -c "bd -C /tmp/store close CHR-1"' "$BASE"
+[ "$SCAN_UNRESOLVED" -eq 0 ] && PASS=$((PASS + 1)) || {
+  FAIL=$((FAIL + 1))
+  printf 'FAIL unresolved want=0 got=%s readable script\n' "$SCAN_UNRESOLVED"
+}
 # Without `-c` the operand is a file this scan cannot read.
 check skip 'bash script.sh'
 check skip 'bash -x script.sh'
@@ -1010,6 +1068,14 @@ check_target '' 'CS_W_STORE=/tmp/store bash -c '"'"'true'"'"'; bd -C "$CS_W_STOR
 # And it still says nothing about the argv of the command carrying it, which
 # the shell expanded before applying it.
 check_target '' 'CS_W_STORE=/tmp/decoy bd -C "$CS_W_STORE" close CHR-1'
+# The prefix is part of the command: if the command runs at all it runs with
+# it, whatever made the command conditional. Skipped on a conditional path, the
+# script was read against the value from before it -- a store the command never
+# opened.
+check_target '/tmp/store' 'true && CS_W_STORE=/tmp/store bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '/tmp/store' 'CS_W_STORE=/old; true && CS_W_STORE=/tmp/store bash -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '/tmp/store' 'true && CS_W_STORE=/tmp/store env -S '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"''
+check_target '/tmp/store' 'if true; then CS_W_STORE=/tmp/store sh -c '"'"'bd -C "$CS_W_STORE" close CHR-1'"'"'; fi'
 
 # --- function definitions -------------------------------------------------
 # A definition stores its body rather than running it, so a `cd` in one has
@@ -1162,7 +1228,8 @@ check_target '/tmp/store' 'eval "bd -C" /tmp/store "close CHR-1"'
 check skip 'eval "bd list"'
 check skip 'eval "echo bd close CHR-1"'
 # An operand this scan cannot read may write and there is no way to learn
-# whether it does, so it counts as a write with no target -- the roots sync.
+# whether it does, so it counts as a write with no target -- the roots sync --
+# and as a target that could not be named, so the hook says so.
 check sync 'eval "$SOMETHING_UNSET_BY_ANY_TEST"'
 check_target '' 'eval "$SOMETHING_UNSET_BY_ANY_TEST"'
 check sync 'eval "$(printf %s bd\ close\ CHR-1)"'
@@ -1171,6 +1238,20 @@ check_target "$CD/other/store" "cd $CD/other && eval 'bd -C store close CHR-1'"
 # ... and a `cd` inside it reaches what follows, but which branch ran is not
 # inferred, so the cwd after is unknown rather than guessed.
 check_target '' "eval 'cd $CD/other'; bd -C store close CHR-1"
+# The command's temporary prefix is in place while `eval` expands its text, as
+# it is for `bash -c`: `OUT=/real eval 'bd -C "$OUT" ...'` writes /real, and
+# scanning the text without it read the value from before -- here none, so a
+# real target was reported as one that could not be named.
+check_target '/tmp/store' 'CS_E_STORE=/tmp/store eval '"'"'bd -C "$CS_E_STORE" close CHR-1'"'"''
+check_target '/tmp/store' 'CS_E_STORE=/old; CS_E_STORE=/tmp/store eval '"'"'bd -C "$CS_E_STORE" close CHR-1'"'"''
+check_target '/tmp/store' 'true && CS_E_STORE=/tmp/store eval '"'"'bd -C "$CS_E_STORE" close CHR-1'"'"''
+# Whether the prefix outlives the call turns on the shell's POSIX mode, so the
+# name is unknown afterwards rather than either value.
+check_target '' 'CS_E_STORE=/old; CS_E_STORE=/tmp/store eval true; bd -C "$CS_E_STORE" close CHR-1'
+# A conditional `eval` is scanned as the conditional text it is: a `cd` inside
+# it is not applied to what follows inside it either.
+check_target '' "true && eval 'cd $CD/other; bd -C store close CHR-1'"
+check sync "true && eval 'cd $CD/other; bd -C store close CHR-1'"
 # Text that contains itself terminates by being refused on second sight, rather
 # than by a depth cap -- which is what used to lose a legitimately nested write.
 # It names no store at any level, so the answer is `skip`; what is asserted is
