@@ -548,6 +548,22 @@ check_target '/tmp/store' 'sudo -nunick bd -C /tmp/store close CHR-1'
 # Past those options the command word is still read as it was, so a `bd` that
 # is an argument rather than the command is not a write.
 check_target '' 'stdbuf -oL echo bd -C /tmp/store close CHR-1'
+# `env -a` / `--argv0` (coreutils 9.5) names what the command sees as its own
+# argv[0]; the command itself is the word after that. Absent from the table,
+# the short form was an unknown letter that abandoned the invocation and the
+# separated long form named the value as the command, so neither the write nor
+# its store was found. Only `--argv0=worker` happened to read correctly.
+check_target '/tmp/store' 'env -a worker bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'env -aworker bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'env --argv0 worker bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'env --argv0=worker bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'env -i -a worker bd -C /tmp/store close CHR-1'
+check sync 'env -a worker bd close CHR-1'
+# The value is argv[0], not the command: a `bd` there names nothing that runs.
+check_target '' 'env -a bd echo -C /tmp/store close CHR-1'
+check skip 'env -a bd echo close CHR-1'
+check_target '' 'env -a worker echo bd -C /tmp/store close CHR-1'
+
 # An unknown letter is still ambiguous, whether it stands alone or opens a
 # bundle: it may be the one that takes the value, which would put the command
 # word elsewhere. `nice -10` is the historic form for a niceness, and no letter

@@ -74,7 +74,8 @@ PREFIX_WORDS = {"exec", "builtin", "command", "env", "sudo", "doas", "nohup",
 # nothing. A wrapper with no such options still needs its entry, or it would
 # fall through to the default.
 WRAPPER_OPT_ARGS = {
-    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string",
+            "-a", "--argv0"},
     "sudo": {"-u", "--user", "-g", "--group", "-p", "--prompt",
              "-C", "--close-from", "-h", "--host", "-r", "--role",
              "-D", "--chdir"},
