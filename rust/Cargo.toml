@@ -171,7 +171,7 @@ libc = "0.2.186"
 # suspend-frozen `mach_absolute_time`; libc deprecated its mach time
 # bindings in favour of this crate.
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-mach2 = "0.6.0"
+mach2 = "0.7.0"
 
 [lints.rust]
 # `frb_expand` is set by flutter_rust_bridge_codegen during macro expansion.
