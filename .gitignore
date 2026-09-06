@@ -72,3 +72,7 @@ tmp/
 
 # macOS Finder metadata
 .DS_Store
+
+# Python bytecode from the Auggie hook scanner (py_compile / imports)
+__pycache__/
+*.pyc
