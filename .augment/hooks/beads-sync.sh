@@ -857,13 +857,14 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # warning is the only thing that can stand in for it.
   #
   # Every route to such a store goes down with the scan, not `-C` alone: the
-  # scanner also reads `BEADS_DIR`, and a `bd` with neither selects its store by
-  # walking up from the directory the command ran in. Naming only `-C` sent the
-  # reader looking for a flag their command need never have carried, which for
-  # the one store this warning stands in place of is the wrong place to look.
+  # scanner also reads `--db`, `BEADS_DIR` and `BEADS_DB`, and a `bd` with none
+  # of them selects its store by walking up from the directory the command ran
+  # in. Naming only `-C` sent the reader looking for a flag their command need
+  # never have carried, which for the one store this warning stands in place
+  # of is the wrong place to look.
   if [ "$SCAN_FAILED" -eq 1 ]; then
     MUTATES=1
-    WARNINGS+=("beads: could not scan the command for bead writes; syncing the workspace roots as a precaution. A store outside them -- named by 'bd -C <dir>' or BEADS_DIR, or found by walking up from where the command ran -- may be left unsynced. Check that shfmt and python3 are installed.")
+    WARNINGS+=("beads: could not scan the command for bead writes; syncing the workspace roots as a precaution. A store outside them -- named by 'bd -C <dir>', 'bd --db <path>', BEADS_DIR or BEADS_DB, or found by walking up from where the command ran -- may be left unsynced. Check that shfmt and python3 are installed.")
   fi
 
   # A store that was seen to be written and could not be named is the one write
@@ -873,15 +874,16 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # sync, which is why it is said even though the write itself was found.
   #
   # The counter covers every way the path can go unread, not a `-C` that failed:
-  # a `BEADS_DIR` whose value this scan cannot work out, a `bd` carrying
-  # neither when the event did not say which directory the tool call ran in --
+  # a `--db`, `BEADS_DIR` or `BEADS_DB` whose value this scan cannot work out,
+  # a `bd` carrying none when the event did not say which directory the tool
+  # call ran in --
   # the walk up has no place to start, so the store it would have found cannot
   # be named -- and script the scan could not read at all, as `eval "$X"` or
   # `bash -c "$(gen)"` runs, which may carry a `-C` nothing later can find.
   # Saying `-C` of all of these pointed recovery at a flag the command need not
   # have carried.
   if [ "$SCAN_UNRESOLVED" -gt 0 ]; then
-    WARNINGS+=("beads: a bead store that was written could not be resolved to a path, so it was not synced or recorded; run 'bd dolt push --remote origin' there if the write matters. This happens when a 'bd -C <dir>' or BEADS_DIR value depends on something only the running command knew, when a plain 'bd' ran in a directory the event did not report, or when the command ran script the hook could not read (eval \"\$X\", bash -c \"\$(...)\").")
+    WARNINGS+=("beads: a bead store that was written could not be resolved to a path, so it was not synced or recorded; run 'bd dolt push --remote origin' there if the write matters. This happens when a 'bd -C <dir>', 'bd --db <path>', BEADS_DIR or BEADS_DB value depends on something only the running command knew, when a plain 'bd' ran in a directory the event did not report, or when the command ran script the hook could not read (eval \"\$X\", bash -c \"\$(...)\").")
   fi
 
   # `bd -C <dir>` can write a store outside every workspace root, which no

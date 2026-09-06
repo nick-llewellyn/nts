@@ -398,9 +398,9 @@ rather than pattern-matching its text. Without `jq` the hook cannot read its
 event at all, so it reports that and stands down, leaving bead writes local.
 Without the scanner it keeps going: it reports the failed scan and syncs the
 workspace roots anyway, so only a store outside them can be missed — one
-named by `bd -C <dir>` or `BEADS_DIR`, or found by walking up from wherever
-the command ran. `HOMEBREW_NO_AUTO_UPDATE=1 brew install jq shfmt` if either
-warning appears.
+named by `bd -C <dir>`, `bd --db <path>`, `BEADS_DIR` or `BEADS_DB`, or
+found by walking up from wherever the command ran.
+`HOMEBREW_NO_AUTO_UPDATE=1 brew install jq shfmt` if either warning appears.
 
 The scan is static. It follows assignments, `cd`, wrappers (`sudo`, `env`,
 `timeout`, `xargs` and the like — so the `xargs -I{} bd assign …` audit

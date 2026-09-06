@@ -452,6 +452,66 @@ check_target "$STORE" "cd $STORE && BEADS_DIR= bd close CHR-1"
 # the write went to neither the push set nor the registry.
 check_target "$STORE" "BEADS_DIR=$STORE/.beads/ bd close CHR-1"
 check_target "$STORE" "BEADS_DIR=$STORE/.beads/// bd close CHR-1"
+
+# `--db` names the store ahead of everything else. `-C` still has to name a
+# workspace, but the store written is the one `--db` names, so `bd -C /repo
+# --db /other/.beads close X` synced /repo while /other's write sat local.
+check_target "$STORE" "bd --db $STORE/.beads close CHR-1"
+check_target "$STORE" "bd --db=$STORE/.beads close CHR-1"
+check_target "$STORE" "bd -C $CD/other --db $STORE/.beads close CHR-1"
+check_target "$STORE" "bd --db $STORE/.beads -C $CD/other close CHR-1"
+check_target "$STORE" "BEADS_DIR=$CD/other/.beads bd --db $STORE/.beads close CHR-1"
+check_target "$STORE" "cd $CD/other && bd --db $STORE/.beads close CHR-1"
+# It takes the directory or a file inside it -- `bd` takes the value's parent
+# and looks for the store from there -- so the root is two components up from
+# a file and one from the directory, trailing separators aside.
+check_target "$STORE" "bd --db $STORE/.beads/beads.db close CHR-1"
+check_target "$STORE" "bd --db $STORE/.beads/ close CHR-1"
+check_target "$STORE" "bd --db $STORE/.beads/dolt close CHR-1"
+# From a parent that is no `.beads`, `bd` walks up looking for one, so a file
+# below the root opens the root's store -- and the nearest, not the first.
+check_target "$STORE" "bd --db $STORE/sub/deeper/x.db close CHR-1"
+check_target "$STORE/nested/inner" "bd --db $STORE/nested/inner/sub/x.db close CHR-1"
+# Where the walk finds nothing `bd` bootstraps a store at the parent, and the
+# parent's own parent stands for a root -- one holding no `.beads`, which the
+# hook drops, as it should for a store that did not exist before the write.
+check_target "$CD" "bd --db $CD/other/x.db close CHR-1"
+# A relative value resolves from where the command ran, not from `-C`.
+check_target "$STORE" "cd $CD && bd -C $STORE/nested/inner --db repo/.beads close CHR-1"
+# A repeated `--db` takes its last value, like `-C`.
+check_target "$STORE" "bd --db $CD/other/.beads --db $STORE/.beads close CHR-1"
+# One this scan cannot read leaves the store in doubt rather than falling back
+# to `-C` or the walk, which would name a store the command did not open.
+check_unresolved "bd -C $STORE --db \$(pwd)/.beads close CHR-1"
+# Its value is not the verb: `bd --db <path> list` reads and `bd --db <path>
+# close` writes, and stepping over only the flag read the path as the verb.
+check skip "bd --db $STORE/.beads list"
+check skip "bd --db=$STORE/.beads show CHR-1"
+
+# BEADS_DB names the store too, and is consulted only when BEADS_DIR is unset.
+# `-C` sets BEADS_DIR before either is read, so `-C` and BEADS_DIR both win
+# over it -- the precedence `bd` itself applies, and what keeps a BEADS_DB the
+# hook inherits from redirecting its own `bd -C <root>` calls.
+check_target "$STORE" "BEADS_DB=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "env BEADS_DB=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "BEADS_DB=$STORE/.beads/beads.db bd close CHR-1"
+check_target "$STORE" "BEADS_DB=$STORE/.beads/ bd close CHR-1"
+check_target "$STORE" "BEADS_DB=$CD/other/.beads bd -C $STORE close CHR-1"
+check_target "$STORE" "BEADS_DB=$CD/other/.beads BEADS_DIR=$STORE/.beads bd close CHR-1"
+check_target "$STORE" "BEADS_DB=$CD/other/.beads bd --db $STORE/.beads close CHR-1"
+check_target "$STORE/nested/inner" \
+  "cd $STORE && BEADS_DB=$STORE/nested/inner/.beads bd close CHR-1"
+check_unresolved "cd $STORE && BEADS_DB=\$(pwd) bd close CHR-1"
+check_target "$STORE" "cd $STORE && BEADS_DB= bd close CHR-1"
+check_target "$STORE" "cd $STORE && BEADS_DB=$CD/other/.beads env -u BEADS_DB bd close CHR-1"
+check_target "$STORE" "cd $STORE; BEADS_DB=$CD/other/.beads; bd close CHR-1"
+check_target "$STORE/nested/inner" "cd $STORE; export BEADS_DB=$STORE/nested/inner/.beads; bd close CHR-1"
+# A BEADS_DIR that cannot be read is in doubt whatever BEADS_DB says, since it
+# is the one `bd` consults first.
+check_unresolved "BEADS_DB=$STORE/.beads BEADS_DIR=\$(pwd) bd close CHR-1"
+# BD_DB is not read on the path that opens a store, so it names nothing here.
+check_target "$STORE" "cd $STORE && BD_DB=$CD/other/.beads bd close CHR-1"
+
 # The environment is built in the shell's order, innermost last. A name
 # repeated in the prefix takes its last value; a wrapper's own assignment
 # lands on top of the prefix, however many wrappers deep; and a wrapper that
@@ -1375,9 +1435,9 @@ check skip 'bd --quiet --readonly list'
 check sync 'bd --json close CHR-1'
 # Nor does the value hide the store.
 check_target '/tmp/store' 'bd --actor list -C /tmp/store close CHR-1'
-check_target '/tmp/store' 'bd --db /tmp/x.db -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'bd --actor /tmp/x -C /tmp/store close CHR-1'
 # A value that looks like a path is not a `-C` target: it names no store.
-check_target '' 'bd --db /tmp/store close CHR-1'
+check_target '' 'bd --actor /tmp/store close CHR-1'
 check_target '/tmp/store' 'bd --directory /tmp/store close CHR-1'
 
 # --- redirections --------------------------------------------------------

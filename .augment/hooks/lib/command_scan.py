@@ -222,6 +222,17 @@ BD_OPT_ARGS = {"-C", "--dir", "--directory", "--db", "--actor",
 
 BD_DIR_OPTS = ("-C", "--dir", "--directory")
 
+# The one global that names the store itself rather than a directory to look
+# from. It has no short form, so only the two long spellings are read.
+BD_DB_OPT = "--db"
+
+# The environment `bd` reads its store from, in the order it consults them
+# when no `--db` is given. `-C` sets BEADS_DIR before either is read, so a
+# BEADS_DB inherited by the hook's own `bd -C <root>` calls does not redirect
+# them; it is only consulted with neither `-C` nor BEADS_DIR in force. BD_DB
+# is not read at all on the path that opens a store, so it is not listed.
+BD_STORE_ENV = ("BEADS_DIR", "BEADS_DB")
+
 # `bd`'s own short flags that take nothing, which its option parser lets stand
 # in a bundle before one that does: `bd -qC/tmp/store close X` writes that
 # store. Needed to read the attached form of `-C`, since the letters before it
@@ -939,6 +950,36 @@ def bead_root(start):
         if parent == path:
             return None
         path = parent
+
+
+def store_root(path):
+    """The root holding the store a `--db` or BEADS_DB value names.
+
+    Either takes the `.beads` directory or a file inside it, and `bd` reads
+    the value the same way for both: it takes the parent, opens that if it is
+    itself a `.beads`, and otherwise walks up from it looking for one -- so
+    `/repo/.beads`, `/repo/.beads/` and `/repo/.beads/beads.db` all open
+    /repo's store, and `/repo/sub/x.db` opens it too. Every other path this
+    scan reports names the root holding a `.beads`, which is what the hook
+    syncs and records, so the value is brought to that shape by the same
+    steps.
+
+    When the walk finds nothing, `bd` treats the parent as the store and
+    bootstraps one there, so the parent's own parent is what stands for the
+    root. It holds no `.beads`, and the hook drops it as no root -- which is
+    the right end for a store that did not exist before the command ran.
+
+    The trailing separator comes off first: `/repo/.beads/` is the same
+    directory written with one after it, and taking the empty component for
+    the file left `/repo/.beads` as the parent, whose own `.beads` does not
+    exist.
+    """
+    trimmed = path.rstrip("/") or "/"
+    parent = trimmed.rpartition("/")[0] or "/"
+    above = parent.rpartition("/")[0] or "/"
+    if parent.rpartition("/")[2] == ".beads":
+        return above
+    return bead_root(parent) or above
 
 
 def short_opts(word, takes, alone):
@@ -2091,11 +2132,17 @@ class Scanner:
         return assigns, sealed
 
     def bd_operands(self, args, start):
-        """What the `bd` at `args[start]` says: operands, `-C` target, help.
+        """What the `bd` at `args[start]` says: operands, `-C`, `--db`, help.
 
-        The target comes back as a `Field`, since both `-C dir` and `-C=dir`
-        name one and only the first carries its own argument -- and only an
-        argument of its own can have begun with a tilde.
+        The target and the store come back as `Field`s, since both `-C dir`
+        and `-C=dir` name one and only the first carries its own argument --
+        and only an argument of its own can have begun with a tilde.
+
+        `--db` is read apart from `-C` because it names the store outright
+        where `-C` names where the walk up starts, and `bd` opens the store
+        `--db` names whatever `-C` says: `bd -C /repo --db /other/.beads close
+        X` writes /other's store. Stepped over as a bare value, that write was
+        reported against /repo, which then synced while /other sat local.
 
         A global option's value is stepped over before an operand is read.
         Skipping only the option itself lets its value stand in for the verb,
@@ -2116,6 +2163,7 @@ class Scanner:
         """
         operands = []
         target = None
+        store = None
         helped = False
         i = start + 1
         end_of_opts = False
@@ -2158,9 +2206,13 @@ class Scanner:
                     # `--opt=value` carries its value, so nothing follows it.
                     if name in BD_DIR_OPTS:
                         target = Field(inline)
+                    elif name == BD_DB_OPT:
+                        store = Field(inline)
                 elif name in BD_OPT_ARGS:
                     if name in BD_DIR_OPTS and i + 1 < len(args):
                         target = args[i + 1]
+                    elif name == BD_DB_OPT and i + 1 < len(args):
+                        store = args[i + 1]
                     i += 1
                 else:
                     # A long flag neither table knows may still take the word
@@ -2204,7 +2256,7 @@ class Scanner:
                 continue
             operands.append(word)
             i += 1
-        return operands, target, helped
+        return operands, target, store, helped
 
     @staticmethod
     def readonly(operands, helped):
@@ -3099,7 +3151,7 @@ class Scanner:
         if name != "bd":
             return
 
-        operands, target, helped = self.bd_operands(fields, start)
+        operands, target, store, helped = self.bd_operands(fields, start)
         if self.readonly(operands, helped):
             return
         self.mutates = True
@@ -3108,6 +3160,20 @@ class Scanner:
         # revisit: SessionEnd builds its list the same way, so that write would
         # sit local indefinitely. Which store this invocation opens is therefore
         # reported for every mutating `bd`, not only for one carrying `-C`.
+        #
+        # `--db` names the store ahead of everything else. `-C` still has to
+        # name a workspace -- `bd` refuses one holding no store -- but the
+        # store written is the one `--db` names, so `bd -C /repo --db
+        # /other/.beads close X` synced /repo while /other's write sat local.
+        # A relative value resolves from where the command ran, not from the
+        # `-C` directory, which is how `bd` reads it.
+        if store is not None:
+            resolved = self.resolve_field(store)
+            if not resolved:
+                self.unresolved += 1
+                return
+            self.found_target(store_root(resolved))
+            return
         if target is None:
             # Without `-C`, `bd` selects its store by walking up from the
             # directory it runs in -- so `cd /other/repo && bd close X` writes
@@ -3116,21 +3182,28 @@ class Scanner:
             # and silently wrong of that one.
             #
             # BEADS_DIR names the store outright, and only when no `-C` overrides
-            # it. It points at the `.beads` directory itself, where every other
-            # path here names the root holding one.
-            named = self.command_env(cmd, fields, start, "BEADS_DIR")
+            # it; BEADS_DB does the same and is consulted only when BEADS_DIR is
+            # unset. Both point at the store rather than the root holding it.
+            named = None
+            for env_name in BD_STORE_ENV:
+                named = self.command_env(cmd, fields, start, env_name)
+                if named is not None:
+                    break
             if named is None:
                 named = ""
             elif named is UNKNOWN:
                 # A BEADS_DIR this scan cannot read may name any store, so the
                 # walk-up below would be a guess rather than an answer -- and
                 # would name the store the walk finds while the write went to
-                # the one BEADS_DIR pointed at.
+                # the one BEADS_DIR pointed at. The same holds of a BEADS_DB
+                # that cannot be read once BEADS_DIR is known to be unset.
                 self.unresolved += 1
                 return
             if named:
                 resolved = self.resolve_value(named, False)
-                if resolved:
+                if not resolved:
+                    self.unresolved += 1
+                elif env_name == "BEADS_DIR":
                     # The root is what holds the `.beads` the value names, so
                     # the last component comes off -- but only once it is the
                     # last. `BEADS_DIR=/repo/.beads/` is the same directory
@@ -3141,7 +3214,9 @@ class Scanner:
                     trimmed = resolved.rstrip("/") or "/"
                     self.found_target(trimmed.rsplit("/", 1)[0] or "/")
                 else:
-                    self.unresolved += 1
+                    # BEADS_DB is read as `--db` is: the directory or a file
+                    # inside it, with the store found from the value's parent.
+                    self.found_target(store_root(resolved))
                 return
             if not self.scope.known:
                 self.unresolved += 1
