@@ -100,6 +100,13 @@ trap 'exit 130' INT
 trap 'exit 129' HUP
 
 # Adds $1 to the sync set if it holds a bead store and is not already in it.
+#
+# Every array here is expanded as `${A[@]:+"${A[@]}"}`, which is not an
+# unquoted expansion: the word after `:+` is `"${A[@]}"` with its own quotes,
+# and those are honoured, so each element comes through whole -- spaces,
+# newlines and glob characters included -- and an empty array expands to
+# nothing. A plain `"${A[@]}"` is what bash 3.2, the /bin/bash the hook runs
+# under on macOS, rejects as unbound under `set -u` when the array is empty.
 add_root() {
   local candidate="$1" existing
   [ -n "$candidate" ] && [ -d "$candidate/.beads" ] || return 0
