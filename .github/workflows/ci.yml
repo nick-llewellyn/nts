@@ -56,6 +56,7 @@ jobs:
       ci: ${{ steps.filter.outputs.ci }}
       docs: ${{ steps.filter.outputs.docs }}
       hooks: ${{ steps.filter.outputs.hooks }}
+      auggie_hooks: ${{ steps.filter.outputs.auggie_hooks }}
       android: ${{ steps.filter.outputs.android }}
     steps:
       - name: Checkout code
@@ -92,6 +93,11 @@ jobs:
               - 'tool/check_doc_snippets.dart'
             hooks:
               - 'tool/hooks/**'
+            # Kept separate from `hooks`: the Auggie suites take minutes
+            # (the lock suite alone is ~7 min) and run on macOS, so a
+            # `tool/hooks/**` diff should not pay for them, nor vice versa.
+            auggie_hooks:
+              - '.augment/**'
             android:
               - 'android/**'
               - 'example/android/**'
@@ -120,11 +126,11 @@ jobs:
     # longer in trigger-level `paths-ignore` (so required status checks
     # can resolve on doc PRs), but there's nothing for `dart analyze` or
     # `flutter test` to validate when only Markdown moved. Skipped jobs
-    # count as passing for branch protection, so the seven required
+    # count as passing for branch protection, so the eight required
     # checks (`Detect changed paths`, `Dart tests gate`, `Verify FRB
     # bindings are in sync`, `Rust build + tests + coverage`, `Hooks
     # shell-syntax check`, `Hooks behaviour check`, `Android KGP gate
-    # matrix`) all report green.
+    # matrix`, `Auggie hook tests gate`) all report green.
     name: Format / analyze / Dart tests (Flutter ${{ matrix.flutter }})
     runs-on: ubuntu-latest
     needs: changes
@@ -986,3 +992,120 @@ jobs:
 
       - name: Run KGP gate matrix
         run: sh tool/test_android_kgp_gate.sh
+
+  auggie-hooks:
+    # The Auggie bead hooks under `.augment/hooks/` are shell, not Dart,
+    # and are not git hooks, so neither the `build` matrix nor the
+    # `hooks-*` jobs above exercise them. Every suite stubs `bd` and
+    # runs against scratch workspaces under $TMPDIR, so nothing here
+    # touches a bead store.
+    #
+    # Both platforms run, because the hooks claim two things Linux alone
+    # cannot check: bash 3.2 compatibility, which is what macOS ships as
+    # /bin/bash, and the macOS branches of the boot-time and
+    # process-liveness probes. A Linux-only job leaves both to be
+    # discovered in use.
+    #
+    # This job's name is folded into `auggie-hooks-gate` below rather
+    # than required directly, for the same matrix-skip naming reason as
+    # `build` / `build-gate`: a skip collapses the per-leg names into
+    # the unexpanded template, so branch protection cannot name them.
+    name: Auggie hook tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: changes
+    if: >-
+      needs.changes.outputs.auggie_hooks == 'true'
+      || needs.changes.outputs.ci == 'true'
+      || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The scanner parses commands with `shfmt --to-json`, so the suites
+      # need it present. `jq` and `python3` are already on both runner
+      # images.
+      #
+      # Deliberately unpinned, and deliberately a different installer
+      # per platform: apt gives 3.8 and brew gives current, so the two
+      # legs read the parser's output through both spellings of the
+      # things that changed between them -- the operator table's
+      # numbering and the quoting of tokens in error messages. Pinning
+      # one version would make the suite agree with itself and stop
+      # covering the version the other install actually has.
+      - name: Install shfmt
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install shfmt
+          else
+            sudo apt-get update -y && sudo apt-get install -y shfmt
+          fi
+          shfmt --version
+
+      # `.augment/settings.json` runs the two entrypoints directly rather
+      # than through `bash`, so a lost executable bit disables the hooks
+      # while a syntax check that invokes them through `bash` stays
+      # green. The bit is checked explicitly, as it is for the git
+      # hooks in the `hooks-syntax` job.
+      - name: Check hook syntax
+        run: |
+          rc=0
+          for f in .augment/hooks/beads-prime.sh .augment/hooks/beads-sync.sh; do
+            if [ ! -x "$f" ]; then
+              echo "ERROR: $f is not executable (settings.json runs it directly)" >&2
+              rc=1
+            fi
+          done
+          for f in .augment/hooks/*.sh .augment/hooks/lib/*.sh \
+            .augment/hooks/test/*.sh; do
+            bash -n "$f" || rc=1
+          done
+          python3 -m py_compile .augment/hooks/lib/command_scan.py || rc=1
+          exit "$rc"
+
+      # `/bin/bash` rather than `bash`: on macOS the former is 3.2, which
+      # the hooks support. Naming it explicitly is what makes this leg a
+      # compatibility check rather than a second run of the Linux one,
+      # and it holds whether or not PATH happens to resolve to the same
+      # binary.
+      #
+      # Naming it here only covers the harnesses. The suites drive the
+      # hooks as a child process, so they propagate their own
+      # interpreter rather than re-resolving `bash` -- otherwise this leg
+      # would exercise the harnesses under 3.2 and the shipped hooks,
+      # which are the deliverable, under whatever PATH gave. Both
+      # versions are printed for that reason: if they ever differ, the
+      # propagation is what keeps this honest.
+      - name: Run hook test suites
+        run: |
+          /bin/bash --version | head -1
+          command -v bash && bash --version | head -1
+          /bin/bash .augment/hooks/test/classification_test.sh
+          /bin/bash .augment/hooks/test/lock_test.sh
+          /bin/bash .augment/hooks/test/prime_test.sh
+
+  auggie-hooks-gate:
+    # Single-name aggregator over the `auggie-hooks` matrix, mirroring
+    # `build-gate`: reports `Auggie hook tests gate` whether the matrix
+    # ran, skipped, or failed, so branch protection has one stable name
+    # to require. Same two skip-causes to tell apart -- a diff that
+    # misses the `auggie_hooks` filter (legitimate, pass) versus
+    # `changes` itself failing (unclassified diff, fail).
+    name: Auggie hook tests gate
+    runs-on: ubuntu-latest
+    needs: [changes, auggie-hooks]
+    if: always()
+    steps:
+      - name: Resolve auggie-hooks matrix outcome
+        run: |
+          if [[ "${{ needs.changes.result }}" != "success" ]]; then
+            echo "changes job did not succeed (result: ${{ needs.changes.result }}); refusing to gate green" >&2
+            exit 1
+          fi
+          case "${{ needs.auggie-hooks.result }}" in
+            success|skipped) exit 0 ;;
+            *) echo "auggie-hooks aggregate result: ${{ needs.auggie-hooks.result }}" >&2; exit 1 ;;
+          esac
