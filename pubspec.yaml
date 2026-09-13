@@ -96,7 +96,7 @@ dependencies:
   # directly because `hook/build.dart` reads `CodeConfig.targetOS` and
   # `CodeConfig.cCompiler` from it for the Android NDK floor check, and
   # neither `hooks` nor `native_toolchain_rust` re-exports it.
-  code_assets: ^1.2.1
+  code_assets: ">=1.2.1 <3.0.0"
 
 dev_dependencies:
   flutter_test:
