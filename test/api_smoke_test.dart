@@ -186,6 +186,14 @@ class _RecordingApi implements NtsRustLibApi {
     trustStatusCalls = 0;
     nextTrustStatus = _zeroFfiTrustStatus();
     onBoottimeRead = null;
+    strictReadCalls = 0;
+    clockInvalidateCalls = 0;
+    descriptorCalls = 0;
+    nextStrictThrow = null;
+    strictMicrosOverride = null;
+    strictReadBackendOverride = null;
+    // `strictGeneration` is deliberately not reset: like the offset
+    // below it only ever advances, mirroring the Rust core's counter.
     // Do NOT reset `_bootSw` or `suspendOffsetMicros` — the mocked
     // boottime source feeds the isolate-wide MonotonicClock.instance,
     // so zeroing the offset here would jump the clock backwards after
@@ -293,6 +301,63 @@ class _RecordingApi implements NtsRustLibApi {
   int crateApiNtsNtsBoottimeMicros() {
     onBoottimeRead?.call();
     return _bootSw.elapsedMicroseconds + suspendOffsetMicros;
+  }
+
+  // --- Strict clock surface --------------------------------------------
+  //
+  // The strict read shares `_bootSw` + `suspendOffsetMicros` with the
+  // legacy boottime stub so the two timelines agree, and adds the
+  // provenance fields the strict contract carries. `strictGeneration`
+  // is the mock's stand-in for the Rust core's process-wide counter:
+  // it advances on `crateApiNtsNtsClockInvalidate` and never resets.
+  static const ffi.NtsClockBackend strictBackend =
+      ffi.NtsClockBackend.appleContinuous;
+  int strictGeneration = 1;
+  int strictReadCalls = 0;
+  int clockInvalidateCalls = 0;
+  int descriptorCalls = 0;
+  // One-shot: thrown by the next strict read, then cleared.
+  Object? nextStrictThrow;
+  // Pins the next strict reading's micros; `null` reads the stopwatch.
+  int? strictMicrosOverride;
+  // Reports a backend other than the descriptor's on the next read.
+  ffi.NtsClockBackend? strictReadBackendOverride;
+
+  @override
+  ffi.NtsClockDescriptor crateApiNtsNtsClockDescriptor() {
+    descriptorCalls++;
+    return const ffi.NtsClockDescriptor(
+      backend: strictBackend,
+      semanticsVersion: 1,
+      conversionVersion: 1,
+    );
+  }
+
+  @override
+  ffi.NtsStrictClockReading crateApiNtsNtsStrictClockRead() {
+    strictReadCalls++;
+    final pending = nextStrictThrow;
+    if (pending != null) {
+      nextStrictThrow = null;
+      throw pending;
+    }
+    final micros =
+        strictMicrosOverride ??
+        _bootSw.elapsedMicroseconds + suspendOffsetMicros;
+    strictMicrosOverride = null;
+    final backend = strictReadBackendOverride ?? strictBackend;
+    strictReadBackendOverride = null;
+    return ffi.NtsStrictClockReading(
+      micros: micros,
+      backend: backend,
+      generation: strictGeneration,
+    );
+  }
+
+  @override
+  int crateApiNtsNtsClockInvalidate() {
+    clockInvalidateCalls++;
+    return ++strictGeneration;
   }
 
   // --- NtsClient surface ----------------------------------------------
@@ -3516,6 +3581,503 @@ void main() {
       expect(synced.offsetMicros, 0);
       expect(synced.jitterMicros, 0);
       expect(synced.errorBoundMicros, 228);
+    });
+  });
+
+  group('strict clock (nts-flr8)', () {
+    // Every context here is resolved through the shared mock, so it
+    // carries `testInjected` provenance; the native arm is covered by
+    // the real-bridge cases at the end of the group and by the Rust
+    // unit tests. Cases that reset the entrypoint restore the mock.
+    tearDown(() {
+      if (NtsBridge.state == NtsBridgeState.uninitialized) {
+        NtsRustLib.initMock(api: api);
+      }
+      NtsBridge.debugReset();
+    });
+
+    test('resolve() rejects the mock bridge with StrictClockMockOnly '
+        'and never reads the clock', () {
+      final before = api.strictReadCalls;
+      expect(StrictClockContext.resolve, throwsA(isA<StrictClockMockOnly>()));
+      expect(api.strictReadCalls, before);
+    });
+
+    test('resolve() rejects an uninitialized bridge before any FFI '
+        'call', () {
+      NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
+      final before = api.strictReadCalls;
+      expect(
+        StrictClockContext.resolve,
+        throwsA(isA<StrictClockUninitialized>()),
+      );
+      expect(api.strictReadCalls, before);
+    });
+
+    test('resolveForTesting() refuses anything but a mock bridge', () {
+      NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
+      expect(StrictClockContext.resolveForTesting, throwsStateError);
+    });
+
+    test('resolveForTesting() binds descriptor, generation and '
+        'testInjected provenance from one descriptor call and one '
+        'read', () {
+      final reads = api.strictReadCalls;
+      final descs = api.descriptorCalls;
+      final ctx = StrictClockContext.resolveForTesting();
+      expect(api.strictReadCalls, reads + 1);
+      expect(api.descriptorCalls, descs + 1);
+      expect(ctx.provenance, StrictClockProvenance.testInjected);
+      expect(ctx.generation, api.strictGeneration);
+      expect(
+        ctx.descriptor,
+        const ClockSourceDescriptor(
+          backend: ClockBackend.appleContinuous,
+          semanticsVersion: 1,
+          conversionVersion: 1,
+        ),
+      );
+      expect(ctx.isValid, isTrue);
+      expect(ctx.invalidationReason, isNull);
+    });
+
+    test('now() returns a reading on the context descriptor and '
+        'generation, and equal consecutive readings are valid', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      // Pinned above the shared stopwatch timeline (which carries the
+      // suspend offset accumulated by earlier tests) so the pin is
+      // not itself a regression against the resolve-time reading.
+      final pinned = api.crateApiNtsNtsBoottimeMicros() + 1_000_000;
+      api.strictMicrosOverride = pinned;
+      final a = ctx.now();
+      api.strictMicrosOverride = pinned;
+      final b = ctx.now();
+      expect(a.micros, pinned);
+      expect(b, a);
+      expect(a.generation, ctx.generation);
+      expect(a.descriptor, ctx.descriptor);
+      expect(ctx.isValid, isTrue);
+    });
+
+    test('now() advances across simulated suspend', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      final before = ctx.now();
+      api.suspendOffsetMicros += const Duration(minutes: 3).inMicroseconds;
+      expect(
+        ctx.elapsedSince(before),
+        greaterThanOrEqualTo(const Duration(minutes: 3)),
+      );
+    });
+
+    test('a typed native fault fails that call and invalidates the '
+        'context permanently', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(errno: 22);
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockSourceFault>()
+              .having((e) => e.kind, 'kind', SourceFaultKind.syscallFailed)
+              .having((e) => e.errno, 'errno', 22),
+        ),
+      );
+      expect(ctx.isValid, isFalse);
+      expect(ctx.invalidationReason, StrictClockInvalidationReason.sourceFault);
+      // The fault was one-shot; the mock would now succeed, but the
+      // context must not: there is no repair short of re-resolution.
+      final reads = api.strictReadCalls;
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.sourceFault,
+          ),
+        ),
+      );
+      expect(api.strictReadCalls, reads);
+      expect(StrictClockContext.resolveForTesting().isValid, isTrue);
+    });
+
+    test('every NtsClockFault variant maps to its StrictClockError', () {
+      final cases = <ffi.NtsClockFault, Matcher>{
+        const ffi.NtsClockFault.unsupported(): isA<StrictClockUnsupported>(),
+        const ffi.NtsClockFault.timebaseUnavailable(
+          kernReturn: 5,
+          numer: 0,
+          denom: 1,
+        ): isA<StrictClockSourceFault>().having(
+          (e) => e.kind,
+          'kind',
+          SourceFaultKind.timebaseUnavailable,
+        ),
+        const ffi.NtsClockFault.invalidRaw(): isA<StrictClockSourceFault>()
+            .having((e) => e.kind, 'kind', SourceFaultKind.invalidRaw),
+        const ffi.NtsClockFault.conversionOverflow():
+            isA<StrictClockSourceFault>().having(
+              (e) => e.kind,
+              'kind',
+              SourceFaultKind.conversionOverflow,
+            ),
+        const ffi.NtsClockFault.regression(
+          previous: 10,
+          observed: 9,
+        ): isA<StrictClockRegression>()
+            .having((e) => e.previous, 'previous', 10)
+            .having((e) => e.observed, 'observed', 9),
+        const ffi.NtsClockFault.generationChanged(
+          expected: 1,
+          observed: 2,
+        ): isA<StrictClockInvalidated>().having(
+          (e) => e.reason,
+          'reason',
+          StrictClockInvalidationReason.nativeGeneration,
+        ),
+      };
+      for (final entry in cases.entries) {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextStrictThrow = entry.key;
+        expect(ctx.now, throwsA(entry.value), reason: '${entry.key}');
+        expect(ctx.isValid, isFalse, reason: '${entry.key}');
+      }
+    });
+
+    test('an untyped bridge failure is a bridge SourceFault, not a '
+        'silent fallback', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      api.nextStrictThrow = UnsupportedError('symbol missing');
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockSourceFault>()
+              .having((e) => e.kind, 'kind', SourceFaultKind.bridge)
+              .having((e) => e.message, 'message', contains('symbol missing')),
+        ),
+      );
+      expect(ctx.isValid, isFalse);
+    });
+
+    test('a reading below the previous one is a regression that also '
+        'advances the native generation', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      final high = api.crateApiNtsNtsBoottimeMicros() + 10_000_000;
+      api.strictMicrosOverride = high;
+      ctx.now();
+      final invalidates = api.clockInvalidateCalls;
+      api.strictMicrosOverride = high - 1;
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockRegression>()
+              .having((e) => e.previous, 'previous', high)
+              .having((e) => e.observed, 'observed', high - 1),
+        ),
+      );
+      expect(ctx.invalidationReason, StrictClockInvalidationReason.regression);
+      expect(api.clockInvalidateCalls, invalidates + 1);
+    });
+
+    test('a native generation change observed on read invalidates '
+        'the context', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      // Another engine invalidated the clock: the mock's counter
+      // moves without this context's involvement.
+      api.crateApiNtsNtsClockInvalidate();
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockInvalidated>()
+              .having((e) => e.generation, 'generation', ctx.generation)
+              .having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+        ),
+      );
+      expect(ctx.isValid, isFalse);
+      final fresh = StrictClockContext.resolveForTesting();
+      expect(fresh.generation, greaterThan(ctx.generation));
+    });
+
+    test('a read reporting a different backend is an unknown source', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      api.strictReadBackendOverride = ffi.NtsClockBackend.linuxBoottime;
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockUnknownSource>()
+              .having(
+                (e) => e.expected,
+                'expected',
+                ClockBackend.appleContinuous,
+              )
+              .having(
+                (e) => e.observed,
+                'observed',
+                ClockBackend.linuxBoottime,
+              ),
+        ),
+      );
+      expect(
+        ctx.invalidationReason,
+        StrictClockInvalidationReason.unknownSource,
+      );
+    });
+
+    test('elapsedSince rejects readings from another generation or '
+        'coordinate without reading the clock', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      final reading = ctx.now();
+      api.crateApiNtsNtsClockInvalidate();
+      final later = StrictClockContext.resolveForTesting();
+      final reads = api.strictReadCalls;
+      expect(
+        () => later.elapsedSince(reading),
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.nativeGeneration,
+          ),
+        ),
+      );
+      expect(api.strictReadCalls, reads);
+      // A cross-generation reading does not poison the context that
+      // rejected it.
+      expect(later.isValid, isTrue);
+    });
+
+    test('invalidate() is explicit, idempotent and terminal', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      ctx.invalidate();
+      ctx.invalidate();
+      expect(ctx.invalidationReason, StrictClockInvalidationReason.explicit);
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.explicit,
+          ),
+        ),
+      );
+    });
+
+    test('NtsBridge.dispose() invalidates every context resolved '
+        'before it, and re-initialization does not revive them', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      final invalidates = api.clockInvalidateCalls;
+      NtsBridge.dispose();
+      // The mock arm does not reach into the entrypoint: the double
+      // may not stub the invalidate call, and the isolate epoch alone
+      // is sufficient to fail this isolate's contexts closed.
+      expect(api.clockInvalidateCalls, invalidates);
+      NtsRustLib.initMock(api: api);
+      expect(NtsBridge.state, NtsBridgeState.mock);
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.bridgeReset,
+          ),
+        ),
+      );
+      expect(ctx.isValid, isFalse);
+      expect(StrictClockContext.resolveForTesting().isValid, isTrue);
+    });
+
+    test('a raw NtsRustLib.dispose() + initMock() that bypasses '
+        'NtsBridge is still caught', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      NtsRustLib.dispose();
+      NtsRustLib.initMock(api: _RecordingApi());
+      try {
+        expect(
+          ctx.now,
+          throwsA(
+            isA<StrictClockInvalidated>().having(
+              (e) => e.reason,
+              'reason',
+              StrictClockInvalidationReason.bridgeReset,
+            ),
+          ),
+        );
+      } finally {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
+      }
+    });
+
+    test('a late async completion holding a stale context fails closed '
+        'instead of reading the re-initialized bridge', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final anchor = ctx.now();
+      // An operation captured `ctx` before the teardown and only
+      // resumes after a fresh bridge is installed.
+      final pending = Future<void>.delayed(Duration.zero).then((_) {
+        return ctx.elapsedSince(anchor);
+      });
+      NtsBridge.dispose();
+      NtsRustLib.initMock(api: api);
+      final reads = api.strictReadCalls;
+      await expectLater(
+        pending,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.bridgeReset,
+          ),
+        ),
+      );
+      expect(api.strictReadCalls, reads);
+    });
+
+    test('debugReset() alone invalidates contexts on this isolate', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      NtsBridge.debugReset();
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.bridgeReset,
+          ),
+        ),
+      );
+    });
+
+    test('with the real generated bridge, resolve() takes the native '
+        'arm and a dispatch failure surfaces as a StrictClockError', () {
+      // Same construction as the MonotonicClock real-bridge case: the
+      // generated implementation reads as native, but this test
+      // process exports no Rust symbols, so the first FFI call fails.
+      final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+      final binding = GeneralizedFrbRustBinding(lib);
+      final handler = BaseHandler();
+      final realApi = NtsRustLibApiImpl(
+        handler: handler,
+        wire: NtsRustLibWire.fromExternalLibrary(lib),
+        generalizedFrbRustBinding: binding,
+        portManager: PortManager(binding, handler),
+      );
+      NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
+      try {
+        NtsRustLib.initMock(api: realApi);
+        expect(NtsBridge.state, NtsBridgeState.native);
+        expect(StrictClockContext.resolveForTesting, throwsStateError);
+        expect(
+          StrictClockContext.resolve,
+          throwsA(
+            isA<StrictClockSourceFault>().having(
+              (e) => e.kind,
+              'kind',
+              SourceFaultKind.bridge,
+            ),
+          ),
+        );
+      } finally {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
+      }
+    });
+
+    test('ClockSourceDescriptor compatibility is backend + both '
+        'versions, independent of package version', () {
+      const a = ClockSourceDescriptor(
+        backend: ClockBackend.linuxBoottime,
+        semanticsVersion: 1,
+        conversionVersion: 1,
+      );
+      const same = ClockSourceDescriptor(
+        backend: ClockBackend.linuxBoottime,
+        semanticsVersion: 1,
+        conversionVersion: 1,
+      );
+      const otherBackend = ClockSourceDescriptor(
+        backend: ClockBackend.appleContinuous,
+        semanticsVersion: 1,
+        conversionVersion: 1,
+      );
+      const otherSemantics = ClockSourceDescriptor(
+        backend: ClockBackend.linuxBoottime,
+        semanticsVersion: 2,
+        conversionVersion: 1,
+      );
+      const otherConversion = ClockSourceDescriptor(
+        backend: ClockBackend.linuxBoottime,
+        semanticsVersion: 1,
+        conversionVersion: 2,
+      );
+      expect(a.isCompatibleWith(same), isTrue);
+      expect(a, same);
+      expect(a.hashCode, same.hashCode);
+      expect(a.isCompatibleWith(otherBackend), isFalse);
+      expect(a.isCompatibleWith(otherSemantics), isFalse);
+      expect(a.isCompatibleWith(otherConversion), isFalse);
+      expect(
+        a.toString(),
+        'ClockSourceDescriptor(backend: linuxBoottime, '
+        'semanticsVersion: 1, conversionVersion: 1)',
+      );
+    });
+
+    test('StrictClockError subtypes render their message via '
+        'toString and the hierarchy is exhaustively switchable', () {
+      const errors = <StrictClockError>[
+        StrictClockUninitialized(),
+        StrictClockMockOnly(),
+        StrictClockUnsupported(),
+        StrictClockSourceFault(kind: SourceFaultKind.invalidRaw, detail: 'd'),
+        StrictClockRegression(previous: 2, observed: 1),
+        StrictClockInvalidated(
+          generation: 7,
+          reason: StrictClockInvalidationReason.explicit,
+        ),
+        StrictClockUnknownSource(
+          expected: ClockBackend.linuxBoottime,
+          observed: ClockBackend.appleContinuous,
+        ),
+        StrictClockDescriptorIncompatible(
+          expected: ClockSourceDescriptor(
+            backend: ClockBackend.linuxBoottime,
+            semanticsVersion: 1,
+            conversionVersion: 1,
+          ),
+          actual: ClockSourceDescriptor(
+            backend: ClockBackend.linuxBoottime,
+            semanticsVersion: 2,
+            conversionVersion: 1,
+          ),
+        ),
+      ];
+      for (final e in errors) {
+        expect(e, isA<Exception>());
+        expect(e.toString(), contains(e.message));
+        // Exhaustive: a new subtype fails to compile here.
+        final tag = switch (e) {
+          StrictClockUninitialized() => 'uninitialized',
+          StrictClockMockOnly() => 'mockOnly',
+          StrictClockUnsupported() => 'unsupported',
+          StrictClockSourceFault() => 'sourceFault',
+          StrictClockRegression() => 'regression',
+          StrictClockInvalidated() => 'invalidated',
+          StrictClockUnknownSource() => 'unknownSource',
+          StrictClockDescriptorIncompatible() => 'incompatible',
+        };
+        expect(tag, isNotEmpty);
+      }
     });
   });
 

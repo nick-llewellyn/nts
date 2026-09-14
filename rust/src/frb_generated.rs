@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1496270294;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 32425462;
 
 // Section: executor
 
@@ -434,6 +434,64 @@ fn wire__crate__api__nts__nts_boottime_micros_impl(
         },
     )
 }
+fn wire__crate__api__nts__nts_clock_descriptor_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "nts_clock_descriptor",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, crate::api::nts::NtsClockFault>((move || {
+                let output_ok = crate::api::nts::nts_clock_descriptor()?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__nts__nts_clock_invalidate_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "nts_clock_invalidate",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Ok::<_, ()>(crate::api::nts::nts_clock_invalidate())?;
+                std::result::Result::Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__nts__nts_dns_pool_stats_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -501,6 +559,35 @@ fn wire__crate__api__nts__nts_query_impl(
                     std::result::Result::Ok(output_ok)
                 })())
             }
+        },
+    )
+}
+fn wire__crate__api__nts__nts_strict_clock_read_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "nts_strict_clock_read",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, crate::api::nts::NtsClockFault>((move || {
+                let output_ok = crate::api::nts::nts_strict_clock_read()?;
+                std::result::Result::Ok(output_ok)
+            })())
         },
     )
 }
@@ -695,6 +782,84 @@ impl SseDecode for Vec<u8> {
     }
 }
 
+impl SseDecode for crate::api::nts::NtsClockBackend {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::nts::NtsClockBackend::LinuxBoottime,
+            1 => crate::api::nts::NtsClockBackend::AppleContinuous,
+            2 => crate::api::nts::NtsClockBackend::WindowsInterruptTime,
+            _ => unreachable!("Invalid variant for NtsClockBackend: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::NtsClockDescriptor {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_backend = <crate::api::nts::NtsClockBackend>::sse_decode(deserializer);
+        let mut var_semanticsVersion = <u32>::sse_decode(deserializer);
+        let mut var_conversionVersion = <u32>::sse_decode(deserializer);
+        return crate::api::nts::NtsClockDescriptor {
+            backend: var_backend,
+            semantics_version: var_semanticsVersion,
+            conversion_version: var_conversionVersion,
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::NtsClockFault {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                return crate::api::nts::NtsClockFault::Unsupported;
+            }
+            1 => {
+                let mut var_errno = <i32>::sse_decode(deserializer);
+                return crate::api::nts::NtsClockFault::SyscallFailed { errno: var_errno };
+            }
+            2 => {
+                let mut var_kernReturn = <i32>::sse_decode(deserializer);
+                let mut var_numer = <u32>::sse_decode(deserializer);
+                let mut var_denom = <u32>::sse_decode(deserializer);
+                return crate::api::nts::NtsClockFault::TimebaseUnavailable {
+                    kern_return: var_kernReturn,
+                    numer: var_numer,
+                    denom: var_denom,
+                };
+            }
+            3 => {
+                return crate::api::nts::NtsClockFault::InvalidRaw;
+            }
+            4 => {
+                return crate::api::nts::NtsClockFault::ConversionOverflow;
+            }
+            5 => {
+                let mut var_previous = <i64>::sse_decode(deserializer);
+                let mut var_observed = <i64>::sse_decode(deserializer);
+                return crate::api::nts::NtsClockFault::Regression {
+                    previous: var_previous,
+                    observed: var_observed,
+                };
+            }
+            6 => {
+                let mut var_expected = <i64>::sse_decode(deserializer);
+                let mut var_observed = <i64>::sse_decode(deserializer);
+                return crate::api::nts::NtsClockFault::GenerationChanged {
+                    expected: var_expected,
+                    observed: var_observed,
+                };
+            }
+            _ => {
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+            }
+        }
+    }
+}
+
 impl SseDecode for crate::api::nts::NtsDnsPoolStats {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -797,6 +962,20 @@ impl SseDecode for crate::api::nts::NtsServerSpec {
         return crate::api::nts::NtsServerSpec {
             host: var_host,
             port: var_port,
+        };
+    }
+}
+
+impl SseDecode for crate::api::nts::NtsStrictClockReading {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_micros = <i64>::sse_decode(deserializer);
+        let mut var_backend = <crate::api::nts::NtsClockBackend>::sse_decode(deserializer);
+        let mut var_generation = <i64>::sse_decode(deserializer);
+        return crate::api::nts::NtsStrictClockReading {
+            micros: var_micros,
+            backend: var_backend,
+            generation: var_generation,
         };
     }
 }
@@ -1015,9 +1194,9 @@ fn pde_ffi_dispatcher_primary_impl(
         4 => wire__crate__api__nts__NtsClient_query_impl(port, ptr, rust_vec_len, data_len),
         6 => wire__crate__api__nts__NtsClient_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
         8 => wire__crate__api__simple__init_app_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__nts__nts_query_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__nts__nts_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__nts__phase_timings_default_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__nts__nts_query_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__nts__nts_warm_cookies_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__nts__phase_timings_default_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1036,8 +1215,11 @@ fn pde_ffi_dispatcher_sync_impl(
         5 => wire__crate__api__nts__NtsClient_trust_mode_impl(ptr, rust_vec_len, data_len),
         7 => wire__crate__api__nts__NtsClient_with_trust_mode_impl(ptr, rust_vec_len, data_len),
         9 => wire__crate__api__nts__nts_boottime_micros_impl(ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__nts__nts_dns_pool_stats_impl(ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__nts__nts_trust_status_impl(ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__nts__nts_clock_descriptor_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__nts__nts_clock_invalidate_impl(ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__nts__nts_dns_pool_stats_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__nts__nts_strict_clock_read_impl(ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__nts__nts_trust_status_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1059,6 +1241,100 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<NtsClient>> for NtsClient {
     }
 }
 
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsClockBackend {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::LinuxBoottime => 0.into_dart(),
+            Self::AppleContinuous => 1.into_dart(),
+            Self::WindowsInterruptTime => 2.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::nts::NtsClockBackend
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsClockBackend>
+    for crate::api::nts::NtsClockBackend
+{
+    fn into_into_dart(self) -> crate::api::nts::NtsClockBackend {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsClockDescriptor {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.backend.into_into_dart().into_dart(),
+            self.semantics_version.into_into_dart().into_dart(),
+            self.conversion_version.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::nts::NtsClockDescriptor
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsClockDescriptor>
+    for crate::api::nts::NtsClockDescriptor
+{
+    fn into_into_dart(self) -> crate::api::nts::NtsClockDescriptor {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsClockFault {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            crate::api::nts::NtsClockFault::Unsupported => [0.into_dart()].into_dart(),
+            crate::api::nts::NtsClockFault::SyscallFailed { errno } => {
+                [1.into_dart(), errno.into_into_dart().into_dart()].into_dart()
+            }
+            crate::api::nts::NtsClockFault::TimebaseUnavailable {
+                kern_return,
+                numer,
+                denom,
+            } => [
+                2.into_dart(),
+                kern_return.into_into_dart().into_dart(),
+                numer.into_into_dart().into_dart(),
+                denom.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::nts::NtsClockFault::InvalidRaw => [3.into_dart()].into_dart(),
+            crate::api::nts::NtsClockFault::ConversionOverflow => [4.into_dart()].into_dart(),
+            crate::api::nts::NtsClockFault::Regression { previous, observed } => [
+                5.into_dart(),
+                previous.into_into_dart().into_dart(),
+                observed.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::nts::NtsClockFault::GenerationChanged { expected, observed } => [
+                6.into_dart(),
+                expected.into_into_dart().into_dart(),
+                observed.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            _ => {
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::nts::NtsClockFault
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsClockFault>
+    for crate::api::nts::NtsClockFault
+{
+    fn into_into_dart(self) -> crate::api::nts::NtsClockFault {
+        self
+    }
+}
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsDnsPoolStats {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
@@ -1174,6 +1450,28 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsServerSpec>
     for crate::api::nts::NtsServerSpec
 {
     fn into_into_dart(self) -> crate::api::nts::NtsServerSpec {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsStrictClockReading {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.micros.into_into_dart().into_dart(),
+            self.backend.into_into_dart().into_dart(),
+            self.generation.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::nts::NtsStrictClockReading
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::NtsStrictClockReading>
+    for crate::api::nts::NtsStrictClockReading
+{
+    fn into_into_dart(self) -> crate::api::nts::NtsStrictClockReading {
         self
     }
 }
@@ -1430,6 +1728,76 @@ impl SseEncode for Vec<u8> {
     }
 }
 
+impl SseEncode for crate::api::nts::NtsClockBackend {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::nts::NtsClockBackend::LinuxBoottime => 0,
+                crate::api::nts::NtsClockBackend::AppleContinuous => 1,
+                crate::api::nts::NtsClockBackend::WindowsInterruptTime => 2,
+                _ => {
+                    unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
+impl SseEncode for crate::api::nts::NtsClockDescriptor {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::nts::NtsClockBackend>::sse_encode(self.backend, serializer);
+        <u32>::sse_encode(self.semantics_version, serializer);
+        <u32>::sse_encode(self.conversion_version, serializer);
+    }
+}
+
+impl SseEncode for crate::api::nts::NtsClockFault {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::nts::NtsClockFault::Unsupported => {
+                <i32>::sse_encode(0, serializer);
+            }
+            crate::api::nts::NtsClockFault::SyscallFailed { errno } => {
+                <i32>::sse_encode(1, serializer);
+                <i32>::sse_encode(errno, serializer);
+            }
+            crate::api::nts::NtsClockFault::TimebaseUnavailable {
+                kern_return,
+                numer,
+                denom,
+            } => {
+                <i32>::sse_encode(2, serializer);
+                <i32>::sse_encode(kern_return, serializer);
+                <u32>::sse_encode(numer, serializer);
+                <u32>::sse_encode(denom, serializer);
+            }
+            crate::api::nts::NtsClockFault::InvalidRaw => {
+                <i32>::sse_encode(3, serializer);
+            }
+            crate::api::nts::NtsClockFault::ConversionOverflow => {
+                <i32>::sse_encode(4, serializer);
+            }
+            crate::api::nts::NtsClockFault::Regression { previous, observed } => {
+                <i32>::sse_encode(5, serializer);
+                <i64>::sse_encode(previous, serializer);
+                <i64>::sse_encode(observed, serializer);
+            }
+            crate::api::nts::NtsClockFault::GenerationChanged { expected, observed } => {
+                <i32>::sse_encode(6, serializer);
+                <i64>::sse_encode(expected, serializer);
+                <i64>::sse_encode(observed, serializer);
+            }
+            _ => {
+                unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+            }
+        }
+    }
+}
+
 impl SseEncode for crate::api::nts::NtsDnsPoolStats {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1513,6 +1881,15 @@ impl SseEncode for crate::api::nts::NtsServerSpec {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.host, serializer);
         <u16>::sse_encode(self.port, serializer);
+    }
+}
+
+impl SseEncode for crate::api::nts::NtsStrictClockReading {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i64>::sse_encode(self.micros, serializer);
+        <crate::api::nts::NtsClockBackend>::sse_encode(self.backend, serializer);
+        <i64>::sse_encode(self.generation, serializer);
     }
 }
 

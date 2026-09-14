@@ -67,7 +67,7 @@ class NtsRustLib
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1496270294;
+  int get rustContentHash => 32425462;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -112,6 +112,10 @@ abstract class NtsRustLibApi extends BaseApi {
 
   PlatformInt64 crateApiNtsNtsBoottimeMicros();
 
+  NtsClockDescriptor crateApiNtsNtsClockDescriptor();
+
+  PlatformInt64 crateApiNtsNtsClockInvalidate();
+
   NtsDnsPoolStats crateApiNtsNtsDnsPoolStats();
 
   Future<NtsTimeSample> crateApiNtsNtsQuery({
@@ -120,6 +124,8 @@ abstract class NtsRustLibApi extends BaseApi {
     required int dnsConcurrencyCap,
     PlatformInt64? verificationTimeMs,
   });
+
+  NtsStrictClockReading crateApiNtsNtsStrictClockRead();
 
   NtsTrustStatus crateApiNtsNtsTrustStatus();
 
@@ -449,12 +455,56 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       const TaskConstMeta(debugName: 'nts_boottime_micros', argNames: []);
 
   @override
-  NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
+  NtsClockDescriptor crateApiNtsNtsClockDescriptor() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 10)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_nts_clock_descriptor,
+          decodeErrorData: sse_decode_nts_clock_fault,
+        ),
+        constMeta: kCrateApiNtsNtsClockDescriptorConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsNtsClockDescriptorConstMeta =>
+      const TaskConstMeta(debugName: 'nts_clock_descriptor', argNames: []);
+
+  @override
+  PlatformInt64 crateApiNtsNtsClockInvalidate() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 11)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_i_64,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNtsNtsClockInvalidateConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsNtsClockInvalidateConstMeta =>
+      const TaskConstMeta(debugName: 'nts_clock_invalidate', argNames: []);
+
+  @override
+  NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_nts_dns_pool_stats,
@@ -488,7 +538,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 13,
             port: port_,
           );
         },
@@ -509,12 +559,34 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   );
 
   @override
+  NtsStrictClockReading crateApiNtsNtsStrictClockRead() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_nts_strict_clock_reading,
+          decodeErrorData: sse_decode_nts_clock_fault,
+        ),
+        constMeta: kCrateApiNtsNtsStrictClockReadConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNtsNtsStrictClockReadConstMeta =>
+      const TaskConstMeta(debugName: 'nts_strict_clock_read', argNames: []);
+
+  @override
   NtsTrustStatus crateApiNtsNtsTrustStatus() {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 12)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 15)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_nts_trust_status,
@@ -548,7 +620,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 16,
             port: port_,
           );
         },
@@ -577,7 +649,7 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 17,
             port: port_,
           );
         },
@@ -697,6 +769,60 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  NtsClockBackend dco_decode_nts_clock_backend(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return NtsClockBackend.values[raw as int];
+  }
+
+  @protected
+  NtsClockDescriptor dco_decode_nts_clock_descriptor(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return NtsClockDescriptor(
+      backend: dco_decode_nts_clock_backend(arr[0]),
+      semanticsVersion: dco_decode_u_32(arr[1]),
+      conversionVersion: dco_decode_u_32(arr[2]),
+    );
+  }
+
+  @protected
+  NtsClockFault dco_decode_nts_clock_fault(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return const NtsClockFault_Unsupported();
+      case 1:
+        return NtsClockFault_SyscallFailed(errno: dco_decode_i_32(raw[1]));
+      case 2:
+        return NtsClockFault_TimebaseUnavailable(
+          kernReturn: dco_decode_i_32(raw[1]),
+          numer: dco_decode_u_32(raw[2]),
+          denom: dco_decode_u_32(raw[3]),
+        );
+      case 3:
+        return const NtsClockFault_InvalidRaw();
+      case 4:
+        return const NtsClockFault_ConversionOverflow();
+      case 5:
+        return NtsClockFault_Regression(
+          previous: dco_decode_i_64(raw[1]),
+          observed: dco_decode_i_64(raw[2]),
+        );
+      case 6:
+        return NtsClockFault_GenerationChanged(
+          expected: dco_decode_i_64(raw[1]),
+          observed: dco_decode_i_64(raw[2]),
+        );
+      default:
+        throw Exception(
+          'flutter_rust_bridge generated codec: unexpected enum variant tag in DCO wire format: ${raw[0]}',
+        );
+    }
+  }
+
+  @protected
   NtsDnsPoolStats dco_decode_nts_dns_pool_stats(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -766,6 +892,19 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     return NtsServerSpec(
       host: dco_decode_String(arr[0]),
       port: dco_decode_u_16(arr[1]),
+    );
+  }
+
+  @protected
+  NtsStrictClockReading dco_decode_nts_strict_clock_reading(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    return NtsStrictClockReading(
+      micros: dco_decode_i_64(arr[0]),
+      backend: dco_decode_nts_clock_backend(arr[1]),
+      generation: dco_decode_i_64(arr[2]),
     );
   }
 
@@ -1021,6 +1160,73 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  NtsClockBackend sse_decode_nts_clock_backend(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final inner = sse_decode_i_32(deserializer);
+    return NtsClockBackend.values[inner];
+  }
+
+  @protected
+  NtsClockDescriptor sse_decode_nts_clock_descriptor(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final var_backend = sse_decode_nts_clock_backend(deserializer);
+    final var_semanticsVersion = sse_decode_u_32(deserializer);
+    final var_conversionVersion = sse_decode_u_32(deserializer);
+    return NtsClockDescriptor(
+      backend: var_backend,
+      semanticsVersion: var_semanticsVersion,
+      conversionVersion: var_conversionVersion,
+    );
+  }
+
+  @protected
+  NtsClockFault sse_decode_nts_clock_fault(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    final tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return const NtsClockFault_Unsupported();
+      case 1:
+        final var_errno = sse_decode_i_32(deserializer);
+        return NtsClockFault_SyscallFailed(errno: var_errno);
+      case 2:
+        final var_kernReturn = sse_decode_i_32(deserializer);
+        final var_numer = sse_decode_u_32(deserializer);
+        final var_denom = sse_decode_u_32(deserializer);
+        return NtsClockFault_TimebaseUnavailable(
+          kernReturn: var_kernReturn,
+          numer: var_numer,
+          denom: var_denom,
+        );
+      case 3:
+        return const NtsClockFault_InvalidRaw();
+      case 4:
+        return const NtsClockFault_ConversionOverflow();
+      case 5:
+        final var_previous = sse_decode_i_64(deserializer);
+        final var_observed = sse_decode_i_64(deserializer);
+        return NtsClockFault_Regression(
+          previous: var_previous,
+          observed: var_observed,
+        );
+      case 6:
+        final var_expected = sse_decode_i_64(deserializer);
+        final var_observed = sse_decode_i_64(deserializer);
+        return NtsClockFault_GenerationChanged(
+          expected: var_expected,
+          observed: var_observed,
+        );
+      default:
+        throw UnimplementedError(
+          'flutter_rust_bridge generated codec: unexpected enum variant tag: $tag_',
+        );
+    }
+  }
+
+  @protected
   NtsDnsPoolStats sse_decode_nts_dns_pool_stats(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     final var_inFlight = sse_decode_u_32(deserializer);
@@ -1115,6 +1321,21 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_host = sse_decode_String(deserializer);
     final var_port = sse_decode_u_16(deserializer);
     return NtsServerSpec(host: var_host, port: var_port);
+  }
+
+  @protected
+  NtsStrictClockReading sse_decode_nts_strict_clock_reading(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final var_micros = sse_decode_i_64(deserializer);
+    final var_backend = sse_decode_nts_clock_backend(deserializer);
+    final var_generation = sse_decode_i_64(deserializer);
+    return NtsStrictClockReading(
+      micros: var_micros,
+      backend: var_backend,
+      generation: var_generation,
+    );
   }
 
   @protected
@@ -1422,6 +1643,68 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  void sse_encode_nts_clock_backend(
+    NtsClockBackend self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_nts_clock_descriptor(
+    NtsClockDescriptor self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_nts_clock_backend(self.backend, serializer);
+    sse_encode_u_32(self.semanticsVersion, serializer);
+    sse_encode_u_32(self.conversionVersion, serializer);
+  }
+
+  @protected
+  void sse_encode_nts_clock_fault(
+    NtsClockFault self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case NtsClockFault_Unsupported():
+        sse_encode_i_32(0, serializer);
+      case NtsClockFault_SyscallFailed(errno: final errno):
+        sse_encode_i_32(1, serializer);
+        sse_encode_i_32(errno, serializer);
+      case NtsClockFault_TimebaseUnavailable(
+        kernReturn: final kernReturn,
+        numer: final numer,
+        denom: final denom,
+      ):
+        sse_encode_i_32(2, serializer);
+        sse_encode_i_32(kernReturn, serializer);
+        sse_encode_u_32(numer, serializer);
+        sse_encode_u_32(denom, serializer);
+      case NtsClockFault_InvalidRaw():
+        sse_encode_i_32(3, serializer);
+      case NtsClockFault_ConversionOverflow():
+        sse_encode_i_32(4, serializer);
+      case NtsClockFault_Regression(
+        previous: final previous,
+        observed: final observed,
+      ):
+        sse_encode_i_32(5, serializer);
+        sse_encode_i_64(previous, serializer);
+        sse_encode_i_64(observed, serializer);
+      case NtsClockFault_GenerationChanged(
+        expected: final expected,
+        observed: final observed,
+      ):
+        sse_encode_i_32(6, serializer);
+        sse_encode_i_64(expected, serializer);
+        sse_encode_i_64(observed, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_nts_dns_pool_stats(
     NtsDnsPoolStats self,
     SseSerializer serializer,
@@ -1496,6 +1779,17 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.host, serializer);
     sse_encode_u_16(self.port, serializer);
+  }
+
+  @protected
+  void sse_encode_nts_strict_clock_reading(
+    NtsStrictClockReading self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_64(self.micros, serializer);
+    sse_encode_nts_clock_backend(self.backend, serializer);
+    sse_encode_i_64(self.generation, serializer);
   }
 
   @protected

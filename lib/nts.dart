@@ -78,6 +78,14 @@ export 'src/api/bridge.dart';
 // budgets.
 export 'src/api/clock.dart';
 
+// Strict, provenance-attributed sleep-aware clock. Unlike
+// `MonotonicClock`, a `StrictClockContext` names its native source,
+// is bound to a live generation, and fails closed on that call — no
+// `Stopwatch` fallback, no clamping — whenever the source faults or
+// the bridge is torn down. `noteStrictClockBridgeReset` is the hook
+// `NtsBridge` uses to invalidate contexts and is not for consumers.
+export 'src/api/strict_clock.dart' hide noteStrictClockBridgeReset;
+
 // Public NTS surface (RFC 8915). The wrapper layer carries the
 // dartdoc that consumers see and applies the package's default values
 // for optional parameters; it forwards to the FRB-generated bindings

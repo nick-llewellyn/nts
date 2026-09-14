@@ -21,6 +21,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:meta/meta.dart' show visibleForTesting;
 
 import '../ffi/frb_generated.dart' show NtsRustLib;
+import 'strict_clock.dart' show noteStrictClockBridgeReset;
 
 /// What the `flutter_rust_bridge` entrypoint currently holds on this
 /// isolate.
@@ -286,7 +287,16 @@ abstract final class NtsBridge {
   /// the same limitation [ensureInitialized] documents for concurrent
   /// direct `NtsRustLib.init()` calls.
   static void dispose() {
-    if (state == NtsBridgeState.uninitialized) return;
+    final current = state;
+    if (current == NtsBridgeState.uninitialized) return;
+    // Invalidate every `StrictClockContext` before the entrypoint goes
+    // away: the native generation bump has to reach the Rust core
+    // while the dispatch still works, and other isolates and engines
+    // in this process fail closed on their next read rather than
+    // continuing on a source this isolate has just torn down.
+    noteStrictClockBridgeReset(
+      invalidateNative: current == NtsBridgeState.native,
+    );
     NtsRustLib.dispose();
     _inFlight = null;
     _settled = false;
@@ -303,6 +313,7 @@ abstract final class NtsBridge {
   /// report success from state whose Rust-side initializers never ran.
   @visibleForTesting
   static void debugReset() {
+    noteStrictClockBridgeReset(invalidateNative: false);
     _inFlight = null;
     _settled = false;
   }

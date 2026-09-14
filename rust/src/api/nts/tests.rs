@@ -4876,3 +4876,109 @@ fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
         "the expired entry must be dropped, releasing its keys and jar",
     );
 }
+
+// ---- strict clock bridge surface --------------------------------------
+
+/// The descriptor is a compile-time fact and must name the backend the
+/// strict read actually dispatches to on this host, or both must agree
+/// the target is unsupported.
+#[test]
+fn strict_clock_descriptor_matches_strict_read_backend() {
+    match (nts_clock_descriptor(), nts_strict_clock_read()) {
+        (Ok(d), Ok(r)) => {
+            assert_eq!(d.backend, r.backend);
+            assert_eq!(d.semantics_version, 1);
+            assert_eq!(d.conversion_version, 1);
+            assert!(r.micros >= 0);
+            assert!(r.generation >= 1);
+        }
+        (Err(NtsClockFault::Unsupported), Err(NtsClockFault::Unsupported)) => {}
+        (d, r) => panic!("descriptor {d:?} and read {r:?} disagree"),
+    }
+}
+
+/// `nts_clock_invalidate` is the bridge-lifecycle hook: it must move
+/// the live generation so a reading taken before it can be told apart
+/// from one taken after.
+#[test]
+fn strict_clock_invalidate_advances_generation_seen_by_reads() {
+    let Ok(before) = nts_strict_clock_read() else {
+        return; // unsupported target: nothing to compare
+    };
+    let bumped = nts_clock_invalidate();
+    assert!(bumped > before.generation);
+    let after = nts_strict_clock_read().expect("read after invalidate");
+    assert!(after.generation >= bumped);
+    assert_ne!(after.generation, before.generation);
+}
+
+/// A faulting native read surfaces as the mapped `NtsClockFault` on
+/// that call — no integer, no fallback — while the legacy export on
+/// the same seam still returns a value. This is the bridge-level
+/// statement of the two contracts.
+#[test]
+fn strict_clock_read_reports_fault_where_legacy_export_degrades() {
+    use crate::nts::boottime::{with_raw_override, ClockFault};
+    with_raw_override(
+        || Err(ClockFault::SyscallFailed { errno: 22 }),
+        || {
+            assert_eq!(
+                nts_strict_clock_read(),
+                Err(NtsClockFault::SyscallFailed { errno: 22 })
+            );
+            assert!(nts_boottime_micros() >= 0);
+        },
+    );
+}
+
+/// Every internal fault variant has a distinct bridge mirror; a new
+/// internal variant without a mapping fails to compile in `From`, and
+/// this pins the payloads across the boundary.
+#[test]
+fn strict_clock_fault_mirror_is_lossless() {
+    use crate::nts::boottime::ClockFault as F;
+    let cases = [
+        (F::Unsupported, NtsClockFault::Unsupported),
+        (
+            F::SyscallFailed { errno: 22 },
+            NtsClockFault::SyscallFailed { errno: 22 },
+        ),
+        (
+            F::TimebaseUnavailable {
+                kern_return: 4,
+                numer: 0,
+                denom: 3,
+            },
+            NtsClockFault::TimebaseUnavailable {
+                kern_return: 4,
+                numer: 0,
+                denom: 3,
+            },
+        ),
+        (F::InvalidRaw, NtsClockFault::InvalidRaw),
+        (F::ConversionOverflow, NtsClockFault::ConversionOverflow),
+        (
+            F::Regression {
+                previous: 5,
+                observed: 4,
+            },
+            NtsClockFault::Regression {
+                previous: 5,
+                observed: 4,
+            },
+        ),
+        (
+            F::GenerationChanged {
+                expected: 1,
+                observed: 2,
+            },
+            NtsClockFault::GenerationChanged {
+                expected: 1,
+                observed: 2,
+            },
+        ),
+    ];
+    for (internal, mirrored) in cases {
+        assert_eq!(NtsClockFault::from(internal), mirrored);
+    }
+}

@@ -650,10 +650,17 @@ pub fn nts_trust_status() -> NtsTrustStatus {
 /// across suspend/resume cycles.
 ///
 /// The epoch is arbitrary (per-boot); only differences between two
-/// readings from the same process are meaningful. On targets outside
-/// the five supported platforms the reading degrades to a plain
-/// monotonic elapsed-since-process-anchor value (suspend-frozen,
-/// best-effort).
+/// readings from the same process are meaningful.
+///
+/// **Legacy, best-effort, nonportable.** This is the pre-strict
+/// contract kept for source compatibility: on targets outside the
+/// five supported platforms, and on any native read or conversion
+/// fault on a supported one, the value silently degrades to a plain
+/// monotonic elapsed-since-process-anchor counter (suspend-frozen,
+/// on a different epoch). A caller cannot tell the two apart from
+/// the integer. Strict consumers use [`nts_strict_clock_read`], which
+/// reports the fault on that call instead; no strict operation reads
+/// this function.
 ///
 /// Marked `#[frb(sync)]` for the same reason as
 /// [`nts_dns_pool_stats`]: a single clock read is cheap enough that
@@ -666,6 +673,179 @@ pub fn nts_trust_status() -> NtsTrustStatus {
 #[flutter_rust_bridge::frb(sync)]
 pub fn nts_boottime_micros() -> i64 {
     crate::nts::boottime::boottime_micros()
+}
+
+/// Native suspend-inclusive clock source family, as reported on a
+/// [`NtsStrictClockReading`] and in the [`NtsClockDescriptor`].
+///
+/// Identifies the backend a reading actually came from, not the
+/// bridge's native/mock classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NtsClockBackend {
+    /// `clock_gettime(CLOCK_BOOTTIME)` — Android, Linux.
+    LinuxBoottime,
+    /// `mach_continuous_time` scaled by `mach_timebase_info` — iOS,
+    /// macOS.
+    AppleContinuous,
+    /// `QueryInterruptTimePrecise` — Windows.
+    WindowsInterruptTime,
+}
+
+impl From<crate::nts::boottime::ClockBackend> for NtsClockBackend {
+    fn from(b: crate::nts::boottime::ClockBackend) -> Self {
+        use crate::nts::boottime::ClockBackend as B;
+        match b {
+            B::LinuxBoottime => Self::LinuxBoottime,
+            B::AppleContinuous => Self::AppleContinuous,
+            B::WindowsInterruptTime => Self::WindowsInterruptTime,
+        }
+    }
+}
+
+/// Why a strict clock call failed. Thrown from
+/// [`nts_strict_clock_read`] and [`nts_clock_descriptor`].
+///
+/// Every variant is reported on the call that observed it. No variant
+/// is accompanied by a substitute reading, and a read that returns one
+/// has already advanced the live generation (see
+/// [`NtsStrictClockReading::generation`]) so contexts bound before the
+/// fault fail closed on their next call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NtsClockFault {
+    /// The compile target has no supported suspend-inclusive source.
+    /// Web and every platform outside the five documented ones.
+    Unsupported,
+    /// `clock_gettime(CLOCK_BOOTTIME)` returned non-zero; `errno` was
+    /// read immediately afterwards.
+    SyscallFailed { errno: i32 },
+    /// `mach_timebase_info` returned a non-success `kern_return`, or
+    /// a zero numerator / denominator. Not cached: the next read
+    /// probes again.
+    TimebaseUnavailable {
+        kern_return: i32,
+        numer: u32,
+        denom: u32,
+    },
+    /// A raw native field was outside its documented domain.
+    InvalidRaw,
+    /// The checked scale or narrowing to `i64` microseconds failed.
+    ConversionOverflow,
+    /// A sequential reader observed a value strictly below its
+    /// previous one.
+    Regression { previous: i64, observed: i64 },
+    /// The reader's bound generation no longer matches the live one.
+    GenerationChanged { expected: i64, observed: i64 },
+}
+
+impl From<crate::nts::boottime::ClockFault> for NtsClockFault {
+    fn from(f: crate::nts::boottime::ClockFault) -> Self {
+        use crate::nts::boottime::ClockFault as F;
+        match f {
+            F::Unsupported => Self::Unsupported,
+            F::SyscallFailed { errno } => Self::SyscallFailed { errno },
+            F::TimebaseUnavailable {
+                kern_return,
+                numer,
+                denom,
+            } => Self::TimebaseUnavailable {
+                kern_return,
+                numer,
+                denom,
+            },
+            F::InvalidRaw => Self::InvalidRaw,
+            F::ConversionOverflow => Self::ConversionOverflow,
+            F::Regression { previous, observed } => Self::Regression { previous, observed },
+            F::GenerationChanged { expected, observed } => {
+                Self::GenerationChanged { expected, observed }
+            }
+        }
+    }
+}
+
+/// A successful strict clock reading (`ntsStrictClockRead` on the
+/// Dart side).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NtsStrictClockReading {
+    /// Microseconds on the coordinate described by
+    /// [`NtsClockDescriptor`]: arbitrary per-boot origin, floored to
+    /// whole microseconds, range `0..=i64::MAX`. `0` is a valid
+    /// reading.
+    pub micros: i64,
+    /// Source the raw sample came from.
+    pub backend: NtsClockBackend,
+    /// Live generation the reading was taken under. An in-process
+    /// invalidation token: it advances on every strict fault and on
+    /// [`nts_clock_invalidate`]. Two readings are only comparable when
+    /// their generations are equal. It is **not** a boot or device
+    /// identity — independently started processes on the same boot
+    /// hold unrelated generations.
+    pub generation: i64,
+}
+
+/// Versioned description of the strict clock coordinate on this
+/// build (`ntsClockDescriptor` on the Dart side).
+///
+/// Two descriptors are compatible iff `backend`, `semantics_version`
+/// and `conversion_version` are all equal. The package version is not
+/// an input to that decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NtsClockDescriptor {
+    /// Compile-time backend for this target.
+    pub backend: NtsClockBackend,
+    /// Coordinate semantics version: origin rule, unit, range and
+    /// comparison rules. Currently `1`.
+    pub semantics_version: u32,
+    /// Raw-to-microsecond conversion rule version (flooring, scaling).
+    /// Currently `1`.
+    pub conversion_version: u32,
+}
+
+/// Strict sleep-aware clock read.
+///
+/// Returns a provenance-attributed reading or throws an
+/// [`NtsClockFault`] **on this call**. Unlike [`nts_boottime_micros`]
+/// it never substitutes a process-local `Instant` counter, never
+/// clamps, and uses checked arithmetic for the native-unit conversion.
+/// Any fault advances the live generation before it is reported.
+///
+/// Performs no I/O beyond the single clock read. Marked
+/// `#[frb(sync)]` because the Dart strict context calls it from
+/// synchronous hot getters.
+#[flutter_rust_bridge::frb(sync)]
+pub fn nts_strict_clock_read() -> Result<NtsStrictClockReading, NtsClockFault> {
+    let r = crate::nts::boottime::strict_read()?;
+    Ok(NtsStrictClockReading {
+        micros: r.micros,
+        backend: r.backend.into(),
+        generation: r.generation,
+    })
+}
+
+/// Describe the strict clock coordinate for this build.
+///
+/// Throws [`NtsClockFault::Unsupported`] on targets without a
+/// supported backend; a successful result is a compile-time fact and
+/// does not prove that a read will succeed.
+#[flutter_rust_bridge::frb(sync)]
+pub fn nts_clock_descriptor() -> Result<NtsClockDescriptor, NtsClockFault> {
+    let backend = crate::nts::boottime::platform_backend().ok_or(NtsClockFault::Unsupported)?;
+    Ok(NtsClockDescriptor {
+        backend: backend.into(),
+        semantics_version: crate::nts::boottime::SEMANTICS_VERSION,
+        conversion_version: crate::nts::boottime::CONVERSION_VERSION,
+    })
+}
+
+/// Advance the strict clock's live generation and return the new
+/// value.
+///
+/// Called by the Dart bridge lifecycle on disposal so every strict
+/// context bound under the old generation fails closed on its next
+/// read instead of continuing across a bridge reset. Cheap (one
+/// atomic increment); never fails.
+#[flutter_rust_bridge::frb(sync)]
+pub fn nts_clock_invalidate() -> i64 {
+    crate::nts::boottime::invalidate_generation()
 }
 
 /// Trust-anchor backend that authenticated a TLS chain, or that a
