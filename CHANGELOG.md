@@ -26,7 +26,7 @@ tarball.
   `ntsBoottimeMicros()` is unchanged and now documented as best-effort
   and nonportable; no strict path reads it. Foundation for the public
   Dart strict-clock contexts that follow in this release.
-  (PR link to be added when the PR is opened.)
+  ([#353](https://github.com/nick-llewellyn/nts/pull/353))
 
 - `StrictClockContext`, the public strict sleep-aware clock. Where
   `MonotonicClock` is best-effort and carries no provenance,
@@ -53,7 +53,7 @@ tarball.
   `ClockSourceDescriptor.isCompatibleWith` is semantic compatibility
   only (backend + versions); `generation` equality is a same-process
   lifecycle token and proves nothing across processes. No I/O on the
-  read path. (PR link to be added when the PR is opened.)
+  read path. ([#353](https://github.com/nick-llewellyn/nts/pull/353))
 
 ### Internal
 
