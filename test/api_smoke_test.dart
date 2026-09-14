@@ -4062,11 +4062,12 @@ void main() {
           ),
         ),
       ];
+      final tags = <String>{};
       for (final e in errors) {
         expect(e, isA<Exception>());
         expect(e.toString(), contains(e.message));
         // Exhaustive: a new subtype fails to compile here.
-        final tag = switch (e) {
+        tags.add(switch (e) {
           StrictClockUninitialized() => 'uninitialized',
           StrictClockMockOnly() => 'mockOnly',
           StrictClockUnsupported() => 'unsupported',
@@ -4075,9 +4076,21 @@ void main() {
           StrictClockInvalidated() => 'invalidated',
           StrictClockUnknownSource() => 'unknownSource',
           StrictClockDescriptorIncompatible() => 'incompatible',
-        };
-        expect(tag, isNotEmpty);
+        });
       }
+      // Two-sided: the switch forces an arm for every subtype, and this
+      // forces a sample for every arm, so adding a subtype with its arm
+      // but without exercising it fails here rather than passing.
+      expect(tags, {
+        'uninitialized',
+        'mockOnly',
+        'unsupported',
+        'sourceFault',
+        'regression',
+        'invalidated',
+        'unknownSource',
+        'incompatible',
+      });
     });
   });
 

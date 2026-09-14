@@ -21,21 +21,26 @@ tarball.
   `unsupported`, `syscallFailed(errno)`, `timebaseUnavailable`,
   `invalidRaw`, `conversionOverflow`, `regression`,
   `generationChanged`. Every fault advances the generation so contexts
-  bound before it fail closed on their next read; a failed Apple
+  bound before it fail closed on their next read, and a reading whose
+  generation moved while it was being taken is rejected rather than
+  stamped with the retired value; on the strict path a failed Apple
   timebase probe is no longer cached as permanent. The legacy
-  `ntsBoottimeMicros()` is unchanged and now documented as best-effort
-  and nonportable; no strict path reads it. Foundation for the public
-  Dart strict-clock contexts that follow in this release.
+  `ntsBoottimeMicros()` is unchanged in value and now documented as
+  best-effort and nonportable; its fallback stays sticky on every
+  platform (previously Apple only) so one `MonotonicClock` never mixes
+  epochs, and no strict path reads it. Foundation for the public Dart
+  strict-clock contexts that follow in this release.
   ([#353](https://github.com/nick-llewellyn/nts/pull/353))
 
 - `StrictClockContext`, the public strict sleep-aware clock. Where
   `MonotonicClock` is best-effort and carries no provenance,
   `StrictClockContext.resolve()` binds one explicit
   `ClockSourceDescriptor` (`backend`, `semanticsVersion`,
-  `conversionVersion`) and one live `generation`, and every `now()` /
-  `elapsedSince()` either returns a `StrictReading` on that coordinate
-  or throws a `StrictClockError` on that call and leaves the context
-  permanently invalid — there is no `Stopwatch` or `Instant` fallback
+  `conversionVersion`) and one live `generation`. `now()` returns a
+  `StrictReading` on that coordinate and `elapsedSince(reading)` a
+  `Duration` from it; either throws a `StrictClockError` on that call
+  and leaves the context permanently invalid — there is no `Stopwatch`
+  or `Instant` fallback
   and no repair short of resolving a new context. `resolve()` fails
   distinctly on an uninitialized bridge (`StrictClockUninitialized`), a
   hand-written mock (`StrictClockMockOnly`; tests use
@@ -49,7 +54,12 @@ tarball.
   `dispose()` on a native bridge also advances the process-wide
   generation so contexts in other isolates fail closed on their next
   read; a raw `NtsRustLib.dispose()` + `init()` that bypasses
-  `NtsBridge` is caught by the context's api-identity check.
+  `NtsBridge` is caught by the context's api-identity check because
+  `init()` builds a fresh API object. A raw `dispose()` followed by
+  `initMock(api:)` with the *same* object is not detectable — the
+  entrypoint exposes no per-installation token — and a context
+  resolved before it keeps reading through the reinstalled double;
+  use `NtsBridge.dispose()` when a reset should be observed.
   `ClockSourceDescriptor.isCompatibleWith` is semantic compatibility
   only (backend + versions); `generation` equality is a same-process
   lifecycle token and proves nothing across processes. No I/O on the

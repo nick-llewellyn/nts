@@ -1,6 +1,6 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // coverage:ignore-file
-// ignore_for_file: type=lint
+// ignore_for_file: type=lint, type=warning, deprecated_member_use, deprecated_member_use_from_same_package
 // ignore_for_file: unused_element, deprecated_member_use, deprecated_member_use_from_same_package, use_function_type_syntax_for_parameters, unnecessary_const, avoid_init_to_null, invalid_override_different_default_values_named, prefer_expression_function_bodies, annotate_overrides, invalid_annotation_target, unnecessary_question_mark
 
 part of 'nts.dart';
@@ -9,6 +9,7 @@ part of 'nts.dart';
 // FreezedGenerator
 // **************************************************************************
 
+// GENERATED CODE - DO NOT MODIFY BY HAND
 // dart format off
 T _$identity<T>(T value) => value;
 /// @nodoc
@@ -20,7 +21,7 @@ mixin _$NtsClockFault {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault);
 }
 
 
@@ -29,7 +30,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'NtsClockFault()';
+    return 'NtsClockFault()';
 }
 
 
@@ -215,7 +216,7 @@ class NtsClockFault_Unsupported extends NtsClockFault {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_Unsupported);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_Unsupported);
 }
 
 
@@ -224,7 +225,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'NtsClockFault.unsupported()';
+    return 'NtsClockFault.unsupported()';
 }
 
 
@@ -252,16 +253,18 @@ $NtsClockFault_SyscallFailedCopyWith<NtsClockFault_SyscallFailed> get copyWith =
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_SyscallFailed&&(identical(other.errno, errno) || other.errno == errno));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_SyscallFailed&&(identical(other.errno, errno) || other.errno == errno));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,errno);
+int get hashCode {
+    return Object.hash(runtimeType,errno);
+}
 
 @override
 String toString() {
-  return 'NtsClockFault.syscallFailed(errno: $errno)';
+    return 'NtsClockFault.syscallFailed(errno: $errno)';
 }
 
 
@@ -320,16 +323,18 @@ $NtsClockFault_TimebaseUnavailableCopyWith<NtsClockFault_TimebaseUnavailable> ge
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_TimebaseUnavailable&&(identical(other.kernReturn, kernReturn) || other.kernReturn == kernReturn)&&(identical(other.numer, numer) || other.numer == numer)&&(identical(other.denom, denom) || other.denom == denom));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_TimebaseUnavailable&&(identical(other.kernReturn, kernReturn) || other.kernReturn == kernReturn)&&(identical(other.numer, numer) || other.numer == numer)&&(identical(other.denom, denom) || other.denom == denom));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,kernReturn,numer,denom);
+int get hashCode {
+    return Object.hash(runtimeType,kernReturn,numer,denom);
+}
 
 @override
 String toString() {
-  return 'NtsClockFault.timebaseUnavailable(kernReturn: $kernReturn, numer: $numer, denom: $denom)';
+    return 'NtsClockFault.timebaseUnavailable(kernReturn: $kernReturn, numer: $numer, denom: $denom)';
 }
 
 
@@ -383,7 +388,7 @@ class NtsClockFault_InvalidRaw extends NtsClockFault {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_InvalidRaw);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_InvalidRaw);
 }
 
 
@@ -392,7 +397,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'NtsClockFault.invalidRaw()';
+    return 'NtsClockFault.invalidRaw()';
 }
 
 
@@ -415,7 +420,7 @@ class NtsClockFault_ConversionOverflow extends NtsClockFault {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_ConversionOverflow);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_ConversionOverflow);
 }
 
 
@@ -424,7 +429,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'NtsClockFault.conversionOverflow()';
+    return 'NtsClockFault.conversionOverflow()';
 }
 
 
@@ -453,16 +458,18 @@ $NtsClockFault_RegressionCopyWith<NtsClockFault_Regression> get copyWith => _$Nt
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_Regression&&(identical(other.previous, previous) || other.previous == previous)&&(identical(other.observed, observed) || other.observed == observed));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_Regression&&(identical(other.previous, previous) || other.previous == previous)&&(identical(other.observed, observed) || other.observed == observed));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,previous,observed);
+int get hashCode {
+    return Object.hash(runtimeType,previous,observed);
+}
 
 @override
 String toString() {
-  return 'NtsClockFault.regression(previous: $previous, observed: $observed)';
+    return 'NtsClockFault.regression(previous: $previous, observed: $observed)';
 }
 
 
@@ -521,16 +528,18 @@ $NtsClockFault_GenerationChangedCopyWith<NtsClockFault_GenerationChanged> get co
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_GenerationChanged&&(identical(other.expected, expected) || other.expected == expected)&&(identical(other.observed, observed) || other.observed == observed));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_GenerationChanged&&(identical(other.expected, expected) || other.expected == expected)&&(identical(other.observed, observed) || other.observed == observed));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,expected,observed);
+int get hashCode {
+    return Object.hash(runtimeType,expected,observed);
+}
 
 @override
 String toString() {
-  return 'NtsClockFault.generationChanged(expected: $expected, observed: $observed)';
+    return 'NtsClockFault.generationChanged(expected: $expected, observed: $observed)';
 }
 
 
@@ -578,7 +587,7 @@ mixin _$NtsError {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError);
 }
 
 
@@ -587,7 +596,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'NtsError()';
+    return 'NtsError()';
 }
 
 
@@ -790,16 +799,18 @@ $NtsError_InvalidSpecCopyWith<NtsError_InvalidSpec> get copyWith => _$NtsError_I
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_InvalidSpec&&(identical(other.field0, field0) || other.field0 == field0));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_InvalidSpec&&(identical(other.field0, field0) || other.field0 == field0));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,field0);
+int get hashCode {
+    return Object.hash(runtimeType,field0);
+}
 
 @override
 String toString() {
-  return 'NtsError.invalidSpec(field0: $field0)';
+    return 'NtsError.invalidSpec(field0: $field0)';
 }
 
 
@@ -857,16 +868,18 @@ $NtsError_NetworkCopyWith<NtsError_Network> get copyWith => _$NtsError_NetworkCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Network&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Network&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,message,trustBackend);
+int get hashCode {
+    return Object.hash(runtimeType,message,trustBackend);
+}
 
 @override
 String toString() {
-  return 'NtsError.network(message: $message, trustBackend: $trustBackend)';
+    return 'NtsError.network(message: $message, trustBackend: $trustBackend)';
 }
 
 
@@ -925,16 +938,18 @@ $NtsError_KeProtocolCopyWith<NtsError_KeProtocol> get copyWith => _$NtsError_KeP
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_KeProtocol&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_KeProtocol&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,message,trustBackend);
+int get hashCode {
+    return Object.hash(runtimeType,message,trustBackend);
+}
 
 @override
 String toString() {
-  return 'NtsError.keProtocol(message: $message, trustBackend: $trustBackend)';
+    return 'NtsError.keProtocol(message: $message, trustBackend: $trustBackend)';
 }
 
 
@@ -993,16 +1008,18 @@ $NtsError_NtpProtocolCopyWith<NtsError_NtpProtocol> get copyWith => _$NtsError_N
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_NtpProtocol&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_NtpProtocol&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,message,trustBackend);
+int get hashCode {
+    return Object.hash(runtimeType,message,trustBackend);
+}
 
 @override
 String toString() {
-  return 'NtsError.ntpProtocol(message: $message, trustBackend: $trustBackend)';
+    return 'NtsError.ntpProtocol(message: $message, trustBackend: $trustBackend)';
 }
 
 
@@ -1061,16 +1078,18 @@ $NtsError_AuthenticationCopyWith<NtsError_Authentication> get copyWith => _$NtsE
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Authentication&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Authentication&&(identical(other.message, message) || other.message == message)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,message,trustBackend);
+int get hashCode {
+    return Object.hash(runtimeType,message,trustBackend);
+}
 
 @override
 String toString() {
-  return 'NtsError.authentication(message: $message, trustBackend: $trustBackend)';
+    return 'NtsError.authentication(message: $message, trustBackend: $trustBackend)';
 }
 
 
@@ -1129,16 +1148,18 @@ $NtsError_TimeoutCopyWith<NtsError_Timeout> get copyWith => _$NtsError_TimeoutCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Timeout&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Timeout&&(identical(other.phase, phase) || other.phase == phase)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,phase,trustBackend);
+int get hashCode {
+    return Object.hash(runtimeType,phase,trustBackend);
+}
 
 @override
 String toString() {
-  return 'NtsError.timeout(phase: $phase, trustBackend: $trustBackend)';
+    return 'NtsError.timeout(phase: $phase, trustBackend: $trustBackend)';
 }
 
 
@@ -1196,16 +1217,18 @@ $NtsError_NoCookiesCopyWith<NtsError_NoCookies> get copyWith => _$NtsError_NoCoo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_NoCookies&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_NoCookies&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,trustBackend);
+int get hashCode {
+    return Object.hash(runtimeType,trustBackend);
+}
 
 @override
 String toString() {
-  return 'NtsError.noCookies(trustBackend: $trustBackend)';
+    return 'NtsError.noCookies(trustBackend: $trustBackend)';
 }
 
 
@@ -1262,16 +1285,18 @@ $NtsError_TrustBackendUnavailableCopyWith<NtsError_TrustBackendUnavailable> get 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_TrustBackendUnavailable&&(identical(other.field0, field0) || other.field0 == field0));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_TrustBackendUnavailable&&(identical(other.field0, field0) || other.field0 == field0));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,field0);
+int get hashCode {
+    return Object.hash(runtimeType,field0);
+}
 
 @override
 String toString() {
-  return 'NtsError.trustBackendUnavailable(field0: $field0)';
+    return 'NtsError.trustBackendUnavailable(field0: $field0)';
 }
 
 
@@ -1328,16 +1353,18 @@ $NtsError_InternalCopyWith<NtsError_Internal> get copyWith => _$NtsError_Interna
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Internal&&(identical(other.field0, field0) || other.field0 == field0));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_Internal&&(identical(other.field0, field0) || other.field0 == field0));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,field0);
+int get hashCode {
+    return Object.hash(runtimeType,field0);
+}
 
 @override
 String toString() {
-  return 'NtsError.internal(field0: $field0)';
+    return 'NtsError.internal(field0: $field0)';
 }
 
 
@@ -1384,7 +1411,7 @@ mixin _$TrustMode {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode);
 }
 
 
@@ -1393,7 +1420,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'TrustMode()';
+    return 'TrustMode()';
 }
 
 
@@ -1561,7 +1588,7 @@ class TrustMode_PlatformWithFallback extends TrustMode {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_PlatformWithFallback);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_PlatformWithFallback);
 }
 
 
@@ -1570,7 +1597,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'TrustMode.platformWithFallback()';
+    return 'TrustMode.platformWithFallback()';
 }
 
 
@@ -1593,7 +1620,7 @@ class TrustMode_PlatformOnly extends TrustMode {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_PlatformOnly);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_PlatformOnly);
 }
 
 
@@ -1602,7 +1629,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'TrustMode.platformOnly()';
+    return 'TrustMode.platformOnly()';
 }
 
 
@@ -1625,7 +1652,7 @@ class TrustMode_BundledOnly extends TrustMode {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_BundledOnly);
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_BundledOnly);
 }
 
 
@@ -1634,7 +1661,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'TrustMode.bundledOnly()';
+    return 'TrustMode.bundledOnly()';
 }
 
 
@@ -1662,16 +1689,18 @@ $TrustMode_CustomCopyWith<TrustMode_Custom> get copyWith => _$TrustMode_CustomCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_Custom&&const DeepCollectionEquality().equals(other.field0, field0));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is TrustMode_Custom&&const DeepCollectionEquality().equals(other.field0, field0));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(field0));
+int get hashCode {
+    return Object.hash(runtimeType,const DeepCollectionEquality().hash(field0));
+}
 
 @override
 String toString() {
-  return 'TrustMode.custom(field0: $field0)';
+    return 'TrustMode.custom(field0: $field0)';
 }
 
 

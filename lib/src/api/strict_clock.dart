@@ -185,11 +185,20 @@ enum StrictClockInvalidationReason {
 /// FFI call: that [NtsBridge.state] still matches its
 /// [provenance]; that the entrypoint still holds the API object it
 /// was resolved against (so a raw `NtsRustLib.dispose()` + `init()`
-/// is caught even though it bypasses [NtsBridge]); and that
-/// [NtsBridge.dispose] / `debugReset` have not run since. After the
-/// FFI call it checks the reading's generation and backend, and its
-/// monotonicity against this context's own previous reading. Equal
-/// consecutive readings are valid.
+/// is caught even though it bypasses [NtsBridge], because `init()`
+/// builds a fresh API object); and that [NtsBridge.dispose] /
+/// `debugReset` have not run since. After the FFI call it checks the
+/// reading's generation and backend, and its monotonicity against
+/// this context's own previous reading. Equal consecutive readings
+/// are valid.
+///
+/// One raw sequence is outside that coverage: `NtsRustLib.dispose()`
+/// followed by `initMock(api:)` with the *same* API object. The
+/// entrypoint exposes no per-installation token, so state, identity
+/// and epoch all read as unchanged and a context resolved before it
+/// keeps reading through the reinstalled double. That is the caller
+/// asserting the double's lifecycle is continuous; tear down through
+/// [NtsBridge.dispose] instead when a reset should be observed.
 ///
 /// **Other engines.** Dart statics are per isolate, so contexts in
 /// another isolate or engine are unaffected by this isolate's

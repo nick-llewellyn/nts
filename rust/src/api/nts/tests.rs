@@ -4902,6 +4902,9 @@ fn strict_clock_descriptor_matches_strict_read_backend() {
 /// from one taken after.
 #[test]
 fn strict_clock_invalidate_advances_generation_seen_by_reads() {
+    // Moves the process-wide generation outside `with_raw_override`;
+    // hold the lock so a reader another test just bound is not retired.
+    let _serial = crate::nts::boottime::generation_test_guard();
     let Ok(before) = nts_strict_clock_read() else {
         return; // unsupported target: nothing to compare
     };

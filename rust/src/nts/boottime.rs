@@ -36,6 +36,8 @@
 //!   from a sequential reader is a [`ClockFault::Regression`].
 
 use std::ops::Add;
+#[cfg(not(test))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
@@ -154,6 +156,25 @@ pub(crate) fn invalidate_generation() -> i64 {
 fn observe_fault(fault: ClockFault) -> ClockFault {
     invalidate_generation();
     fault
+}
+
+/// Serialises tests that advance, or assume nobody else advances, the
+/// process-wide [`GENERATION`]. Cargo runs tests concurrently, and an
+/// injected fault on one thread retires the generation a reader on
+/// another thread was just bound to. [`with_raw_override`] holds this
+/// for its body, so no injection test takes it directly (a nested take
+/// would deadlock); a test that moves the generation any other way —
+/// [`invalidate_generation`] called outright — must hold it itself.
+#[cfg(test)]
+static GENERATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take [`GENERATION_LOCK`], recovering from a poisoned guard so one
+/// failing test cannot cascade into every generation-sensitive test.
+#[cfg(test)]
+pub(crate) fn generation_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    GENERATION_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Raw platform sample before conversion. Carries the native unit so
@@ -339,22 +360,26 @@ thread_local! {
 }
 
 /// Run `body` with `reader` standing in for the platform reader on the
-/// current thread, restoring the previous seam afterwards (also on
-/// panic).
+/// current thread, restoring the previous seam and the thread's legacy
+/// fallback latch afterwards (also on panic). Holds [`GENERATION_LOCK`]
+/// throughout: the seam is thread-local but the generation an injected
+/// fault advances is not.
 #[cfg(test)]
 pub(crate) fn with_raw_override<R>(
     reader: impl FnMut() -> Result<RawSample, ClockFault> + 'static,
     body: impl FnOnce() -> R,
 ) -> R {
-    struct Restore(Option<RawReader>);
+    struct Restore(Option<RawReader>, bool);
     impl Drop for Restore {
         fn drop(&mut self) {
             let prev = self.0.take();
             RAW_OVERRIDE.with(|slot| *slot.borrow_mut() = prev);
+            legacy_fallback::restore(self.1);
         }
     }
+    let _serial = generation_test_guard();
     let prev = RAW_OVERRIDE.with(|slot| slot.borrow_mut().replace(Box::new(reader)));
-    let _restore = Restore(prev);
+    let _restore = Restore(prev, legacy_fallback::is_latched());
     body()
 }
 
@@ -380,16 +405,27 @@ fn read_checked() -> Result<(i64, ClockBackend), ClockFault> {
 /// Strict read: a provenance-attributed reading or a typed fault on
 /// this call. No fallback, no clamp, no deferred notification.
 ///
-/// The generation is loaded *before* the raw read so a reading can
-/// never carry a generation newer than the source state it was taken
-/// under.
+/// The generation is loaded on both sides of the raw read and the
+/// reading is stamped with it only when the two agree. Loading before
+/// means a reading can never carry a generation newer than the source
+/// state it was taken under; checking after means a reading can never
+/// carry a generation that was retired *while* it was being taken —
+/// otherwise a reader bound to the retired generation would accept
+/// one post-invalidation sample before failing closed.
 pub(crate) fn strict_read() -> Result<StrictReading, ClockFault> {
-    let generation = generation();
+    let before = generation();
     let (micros, backend) = read_checked()?;
+    let observed = generation();
+    if observed != before {
+        return Err(ClockFault::GenerationChanged {
+            expected: before,
+            observed,
+        });
+    }
     Ok(StrictReading {
         micros,
         backend,
-        generation,
+        generation: before,
     })
 }
 
@@ -460,10 +496,67 @@ impl SequentialReader {
 /// caller cannot tell a native reading from the suspend-frozen
 /// process-local counter, and the two are on different epochs. Kept
 /// only for source compatibility; no strict operation may call it.
+///
+/// The degradation is sticky: once this path has served a fallback
+/// value it serves fallback for the rest of the process, even if the
+/// native source recovers. The two epochs differ by an arbitrary
+/// offset, and a `MonotonicClock` on the Dart side takes raw deltas
+/// between consecutive values on the promise that one instance never
+/// mixes epochs; switching back would surface as a jump in either
+/// direction. The strict path is unaffected — it never falls back, so
+/// it has nothing to stay on — and keeps re-probing on every call.
 pub(crate) fn boottime_micros() -> i64 {
-    match read_checked() {
-        Ok((micros, _)) => micros,
-        Err(_) => instant_fallback_micros(),
+    if !legacy_fallback::is_latched() {
+        if let Ok((micros, _)) = read_checked() {
+            return micros;
+        }
+        legacy_fallback::latch();
+    }
+    instant_fallback_micros()
+}
+
+/// The sticky decision behind [`boottime_micros`]: process-wide, since
+/// every legacy caller in the process shares one epoch.
+#[cfg(not(test))]
+mod legacy_fallback {
+    use super::{AtomicBool, Ordering};
+
+    static LATCHED: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn is_latched() -> bool {
+        LATCHED.load(Ordering::Acquire)
+    }
+
+    pub(super) fn latch() {
+        LATCHED.store(true, Ordering::Release);
+    }
+}
+
+/// Test-build twin of the latch, thread-local like the raw-read seam.
+/// A fault injected through [`with_raw_override`] on one thread must
+/// not move every other test's legacy readings onto the fallback
+/// epoch — that is the very jump the latch exists to prevent, and it
+/// breaks any concurrent test timing a `BootInstant` deadline.
+/// [`with_raw_override`] restores the latch on exit for the same
+/// reason.
+#[cfg(test)]
+mod legacy_fallback {
+    use std::cell::Cell;
+
+    thread_local! {
+        static LATCHED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(super) fn is_latched() -> bool {
+        LATCHED.with(Cell::get)
+    }
+
+    pub(super) fn latch() {
+        LATCHED.with(|l| l.set(true));
+    }
+
+    pub(super) fn restore(latched: bool) {
+        LATCHED.with(|l| l.set(latched));
     }
 }
 
@@ -661,8 +754,8 @@ mod tests {
     // ---- strict path -------------------------------------------------
 
     use super::{
-        generation, invalidate_generation, platform_backend, strict_read, with_raw_override,
-        ClockBackend, ClockFault, RawSample, SequentialReader, StrictReading,
+        generation, generation_test_guard, invalidate_generation, platform_backend, strict_read,
+        with_raw_override, ClockBackend, ClockFault, RawSample, SequentialReader, StrictReading,
     };
     use std::cell::Cell;
     use std::rc::Rc;
@@ -711,13 +804,82 @@ mod tests {
                 let r = strict_read();
                 assert_eq!(r, Err(ClockFault::SyscallFailed { errno: 22 }));
                 assert!(generation() > before, "fault must advance the generation");
+                assert_eq!(fallback_probe.get(), 1, "one strict raw read, no retry");
                 // Legacy path degrades; strict path reported. Same seam,
-                // two contracts.
+                // two contracts. Whether the legacy call probes the seam
+                // depends on whether an earlier test already latched it
+                // onto the fallback, so only its value is asserted.
                 let legacy = super::boottime_micros();
                 assert!(legacy >= 0);
             },
         );
-        assert_eq!(fallback_probe.get(), 2, "one strict + one legacy raw read");
+    }
+
+    #[test]
+    fn legacy_fallback_is_sticky_where_strict_keeps_probing() {
+        let probes = Rc::new(Cell::new(0u32));
+        let seen = Rc::clone(&probes);
+        let mut script = scripted(vec![
+            Err(ClockFault::TimebaseUnavailable {
+                kern_return: 5,
+                numer: 0,
+                denom: 0,
+            }),
+            linux(10, 0),
+        ]);
+        with_raw_override(
+            move || {
+                seen.set(seen.get() + 1);
+                script()
+            },
+            || {
+                // One transient fault: the legacy path degrades ...
+                assert!(super::boottime_micros() >= 0);
+                assert_eq!(probes.get(), 1);
+                // ... and stays degraded although the source recovered:
+                // no further probe, so the epoch cannot switch back.
+                let a = super::boottime_micros();
+                let b = super::boottime_micros();
+                assert_eq!(probes.get(), 1, "legacy must not re-probe once latched");
+                assert!(b >= a);
+                // The strict path shares the seam but not the latch: it
+                // probes again and reports the recovered source.
+                assert_eq!(strict_read().map(|r| r.micros), Ok(10_000_000));
+                assert_eq!(probes.get(), 2);
+            },
+        );
+    }
+
+    #[test]
+    fn strict_read_refuses_a_reading_that_straddles_an_invalidation() {
+        // The seam stands in for a concurrent `invalidate_generation`
+        // landing after `strict_read` loaded the generation and before
+        // the raw sample came back: the sample is fine, but the
+        // generation it would be stamped with was retired underneath it.
+        with_raw_override(
+            || {
+                invalidate_generation();
+                linux(7, 0)
+            },
+            || {
+                let before = generation();
+                assert!(matches!(
+                    strict_read(),
+                    Err(ClockFault::GenerationChanged { expected, observed })
+                        if expected == before && observed == before + 1
+                ));
+                // Not a fault of the source: the generation moved exactly
+                // once, by the injected invalidation, not again by the report.
+                assert_eq!(generation(), before + 1);
+                // A reader bound to the retired generation never gets the
+                // straddling sample either.
+                let mut reader = SequentialReader::bind();
+                assert!(matches!(
+                    reader.read(),
+                    Err(ClockFault::GenerationChanged { .. })
+                ));
+            },
+        );
     }
 
     #[test]
@@ -863,6 +1025,9 @@ mod tests {
 
     #[test]
     fn invalidate_generation_is_strictly_increasing() {
+        // Moves the generation outside `with_raw_override`, so it takes
+        // the lock itself rather than retire a reader another test bound.
+        let _serial = generation_test_guard();
         let a = invalidate_generation();
         let b = invalidate_generation();
         assert!(b > a);
