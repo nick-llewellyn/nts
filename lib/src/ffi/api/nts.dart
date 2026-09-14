@@ -8,9 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `arm_send_against_call_deadline`, `bind_connected_udp_using`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner_using`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `arm_send_against_call_deadline`, `bind_connected_udp_using`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `clock_fault`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner_using`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`, `hash`, `hash`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`, `hash`, `hash`, `hash`
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
 /// with `Relaxed` ordering; the snapshot is intended for
@@ -354,6 +354,45 @@ abstract class NtsClient implements RustOpaqueInterface {
       .crateApiNtsNtsClientWithTrustMode(trustMode: trustMode);
 }
 
+/// Where in an operation a strict clock fault was observed. Carried by
+/// [NtsError.clockFault] so a caller can tell a failed budget anchor
+/// from a failed receipt stamp without parsing text.
+///
+/// The first five stages are raised by this crate; `Await`, `Return`
+/// and `Projection` are raised by the Dart strict context on its side
+/// of the bridge and share this vocabulary so one error type covers
+/// the whole operation.
+enum ClockFaultStage {
+  /// Binding the operation's call-wide budget on entry (Rust), or
+  /// admitting the call through the bridge gate (Dart).
+  admission,
+
+  /// Inside the NTS-KE handshake's own deadline: DNS, connect, TLS
+  /// or record I/O.
+  handshake,
+
+  /// Session-table work: the singleflight budget or wait, the idle
+  /// TTL check, the LRU prune, or the access-time refresh.
+  session,
+
+  /// Arming the UDP setup or `send`/`recv` deadlines against the
+  /// call-wide budget.
+  udp,
+
+  /// Stamping the wire receipt, bracketing the round trip, or
+  /// recording the replay-guard entry.
+  receipt,
+
+  /// Dart: awaiting the bridge result under the strict budget.
+  await_,
+
+  /// Dart: attributing a returned sample to the strict context.
+  return_,
+
+  /// Dart: projecting a synced time from a strict anchor.
+  projection,
+}
+
 /// Native suspend-inclusive clock source family, as reported on a
 /// [NtsStrictClockReading] and in the [NtsClockDescriptor].
 ///
@@ -410,7 +449,7 @@ class NtsClockDescriptor {
 }
 
 @freezed
-sealed class NtsClockFault with _$NtsClockFault implements FrbException {
+sealed class NtsClockFault with _$NtsClockFault {
   const NtsClockFault._();
 
   /// The compile target has no supported suspend-inclusive source.
@@ -453,6 +492,21 @@ sealed class NtsClockFault with _$NtsClockFault implements FrbException {
     required PlatformInt64 expected,
     required PlatformInt64 observed,
   }) = NtsClockFault_GenerationChanged;
+
+  /// The sleep-aware clock advanced materially more than the
+  /// suspend-frozen monotonic clock across the AEAD-NTPv4 `send` /
+  /// `recv` bracket: the process was suspended while the request was
+  /// in flight. `round_trip_micros` is measured on the monotonic
+  /// clock and would under-state the real round trip — making the
+  /// sample look *better* to delay-based selection than it is — so
+  /// the sample is rejected. `boottime_micros` is the sleep-aware
+  /// span, `monotonic_micros` the span the round trip would have
+  /// reported; the difference is at least
+  /// `SUSPEND_IN_FLIGHT_TOLERANCE_MICROS` (50 ms). Retry the query.
+  const factory NtsClockFault.suspendedInFlight({
+    required PlatformInt64 boottimeMicros,
+    required PlatformInt64 monotonicMicros,
+  }) = NtsClockFault_SuspendedInFlight;
 }
 
 /// Snapshot of the bounded DNS resolver pool counters.
@@ -657,6 +711,23 @@ sealed class NtsError with _$NtsError implements FrbException {
   const factory NtsError.trustBackendUnavailable(String field0) =
       NtsError_TrustBackendUnavailable;
 
+  /// The strict sleep-aware clock faulted while this operation was
+  /// using it, at `stage`. The operation is invalid as a whole: no
+  /// fresh budget is issued, no earlier reading is substituted, and
+  /// a sample is never returned alongside this error. `generation`
+  /// is the strict-clock generation the operation was bound to when
+  /// it started (see [NtsStrictClockReading.generation]); a Dart
+  /// strict context compares it against its own to decide whether
+  /// the context itself is still valid. New in 10.0.0; consumers
+  /// using exhaustive `switch` on `NtsError` must add an arm for
+  /// this variant.
+  const factory NtsError.clockFault({
+    required ClockFaultStage stage,
+    required NtsClockFault fault,
+    required PlatformInt64 generation,
+    TrustBackend? trustBackend,
+  }) = NtsError_ClockFault;
+
   /// Bug guard for unreachable internal states.
   const factory NtsError.internal(String field0) = NtsError_Internal;
 }
@@ -771,20 +842,36 @@ class NtsTimeSample {
   /// pattern established by `phase_timings`.
   final TrustBackend trustBackend;
 
-  /// Sleep-aware monotonic reading taken immediately after the
+  /// Strict sleep-aware reading taken immediately after the
   /// AEAD-NTPv4 UDP `recv` returned — the wire-level receipt
   /// instant of this sample, before any FFI-return, worker-thread
   /// handoff, or Dart event-loop latency is incurred.
   ///
-  /// Same clock source and epoch as [ntsBoottimeMicros]
-  /// (Dart: `ntsBoottimeMicros` / `MonotonicClock`), including on
-  /// the degraded non-boottime path (both route through the same
-  /// process-wide anchor), so subtracting this from a later
-  /// `MonotonicClock` reading in the same process yields the
-  /// scheduling lag since receipt. The epoch is arbitrary
+  /// Since 10.0 this is a strict reading on the coordinate described
+  /// by [NtsClockDescriptor], never the process-local fallback: a
+  /// query whose receipt read faults fails with
+  /// [NtsError.clockFault] at [ClockFaultStage.receipt] rather
+  /// than returning a sample stamped on a different epoch. On a
+  /// healthy native clock it is the same value [ntsBoottimeMicros]
+  /// would return, so subtracting it from a later reading taken
+  /// under the same `recv_clock_generation`
+  /// yields the scheduling lag since receipt. The epoch is arbitrary
   /// (per-boot): never persist this value and never compare it
   /// across boots, devices, or processes.
   final PlatformInt64 recvBoottimeMicros;
+
+  /// Live strict-clock generation `recv_boottime_micros` was read
+  /// under (see [NtsStrictClockReading.generation]). A consumer
+  /// attributes the stamp by comparing this with its own context's
+  /// generation instead of judging the number's plausibility; a
+  /// mismatch means the stamp is foreign and must not be aged. `0`
+  /// never occurs on a sample produced by this crate — the live
+  /// generation starts at `1` — so it is free for Dart-side fixtures
+  /// to mean "no receipt stamp".
+  final PlatformInt64 recvClockGeneration;
+
+  /// Backend the receipt stamp was read from.
+  final NtsClockBackend recvClockBackend;
 
   /// True clock offset θ = ((T2−T1)+(T3−T4))/2 in microseconds
   /// (RFC 5905 §8), computed from the four on-wire timestamps:
@@ -922,6 +1009,8 @@ class NtsTimeSample {
     required this.phaseTimings,
     required this.trustBackend,
     required this.recvBoottimeMicros,
+    required this.recvClockGeneration,
+    required this.recvClockBackend,
     required this.offsetMicros,
     required this.peerDelayMicros,
     required this.rootDelayMicros,
@@ -940,6 +1029,8 @@ class NtsTimeSample {
       phaseTimings.hashCode ^
       trustBackend.hashCode ^
       recvBoottimeMicros.hashCode ^
+      recvClockGeneration.hashCode ^
+      recvClockBackend.hashCode ^
       offsetMicros.hashCode ^
       peerDelayMicros.hashCode ^
       rootDelayMicros.hashCode ^
@@ -960,6 +1051,8 @@ class NtsTimeSample {
           phaseTimings == other.phaseTimings &&
           trustBackend == other.trustBackend &&
           recvBoottimeMicros == other.recvBoottimeMicros &&
+          recvClockGeneration == other.recvClockGeneration &&
+          recvClockBackend == other.recvClockBackend &&
           offsetMicros == other.offsetMicros &&
           peerDelayMicros == other.peerDelayMicros &&
           rootDelayMicros == other.rootDelayMicros &&

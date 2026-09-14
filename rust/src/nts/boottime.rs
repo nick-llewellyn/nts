@@ -38,6 +38,7 @@
 //! - Equal consecutive readings are valid; a strictly smaller reading
 //!   from a sequential reader is a [`ClockFault::Regression`].
 
+use std::cell::Cell;
 use std::ops::Add;
 #[cfg(not(test))]
 use std::sync::atomic::AtomicBool;
@@ -97,8 +98,13 @@ pub(crate) const fn platform_backend() -> Option<ClockBackend> {
 ///
 /// Every variant is reported on the call that observed it; none is
 /// deferred, and none is accompanied by a substitute value.
+///
+/// Declared `pub` rather than `pub(crate)` only because it is carried
+/// by [`crate::nts::ke::KeError`], which is `pub` for the
+/// `__internal-fuzz` re-export; the enclosing module is `pub(crate)`,
+/// so it is not reachable from outside the crate in ordinary builds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClockFault {
+pub enum ClockFault {
     /// The compile target has no supported suspend-inclusive source.
     Unsupported,
     /// `clock_gettime(CLOCK_BOOTTIME)` returned non-zero; `errno` is
@@ -157,8 +163,172 @@ pub(crate) fn generation() -> i64 {
 /// Advance the live generation and return the new value. Called by
 /// the bridge lifecycle (dispose / re-init) so contexts bound before
 /// the reset cannot keep reading as if nothing happened.
+///
+/// Under `cfg(test)` this asserts that the calling test holds
+/// [`test_sync::exclusive`]: the generation is process-wide, and the
+/// strict paths in `api::nts` and `nts::ke` bind a [`SequentialReader`]
+/// per operation, so an unserialised advance would fail whichever
+/// unrelated test happened to have a reader in flight.
 pub(crate) fn invalidate_generation() -> i64 {
+    #[cfg(test)]
+    test_sync::assert_exclusive_held();
     GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+/// Test-only serialisation of generation advances against strict-path
+/// work.
+///
+/// `cargo test --lib` runs every test in one process on a thread pool,
+/// and the live generation is a single process-wide token. A test that
+/// advances it — by injecting a fault through [`with_raw_override`], by
+/// calling [`invalidate_generation`], or by comparing a synthetic
+/// reversed pair through [`BootInstant::checked_duration_since`] —
+/// would otherwise retire the [`SequentialReader`] of any test running
+/// a strict production path at the same moment, and that test would
+/// fail with [`ClockFault::GenerationChanged`] for reasons unrelated to
+/// what it asserts.
+///
+/// The rule: strict-path work runs under [`shared`] (taken
+/// automatically by [`SequentialReader::bind`], and explicitly by tests
+/// that keep stamped state such as `Session::atime` across calls);
+/// anything that advances the generation runs under [`exclusive`].
+/// [`invalidate_generation`] enforces the second half with an
+/// assertion, so a forgotten `exclusive()` is a deterministic panic in
+/// the offending test rather than a flake somewhere else.
+///
+/// Reader-preferring: a fresh `shared` waits only while an `exclusive`
+/// is *held*, never while one is pending, so a shared test that joins
+/// threads which bind their own readers cannot deadlock against a
+/// pending writer. `exclusive` waits until no reader is active. A
+/// thread holding `exclusive` (and any thread that called
+/// [`adopt_exclusive`] under it) gets no-op `shared` guards so the
+/// production paths it drives do not block on its own lock; a thread an
+/// exclusive test spawns *without* adopting blocks, and the wait panics
+/// after [`WAIT_LIMIT`] with a message naming this rule instead of
+/// hanging the run.
+#[cfg(test)]
+pub(crate) mod test_sync {
+    use std::cell::Cell;
+    use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+    use std::time::{Duration, Instant};
+
+    struct State {
+        readers: usize,
+        writer: bool,
+    }
+
+    static LOCK: Mutex<State> = Mutex::new(State {
+        readers: 0,
+        writer: false,
+    });
+    static CV: Condvar = Condvar::new();
+
+    thread_local! {
+        static EXCLUSIVE_HERE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    const WAIT_LIMIT: Duration = Duration::from_secs(60);
+
+    fn lock() -> MutexGuard<'static, State> {
+        LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn wait_while(
+        mut st: MutexGuard<'static, State>,
+        what: &str,
+        blocked: impl Fn(&State) -> bool,
+    ) -> MutexGuard<'static, State> {
+        let started = Instant::now();
+        while blocked(&st) {
+            let left = WAIT_LIMIT
+                .checked_sub(started.elapsed())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "boottime::test_sync: waited {WAIT_LIMIT:?} for {what}; a test holding \
+                     `exclusive()` must not drive strict-path work on a spawned thread \
+                     without `adopt_exclusive()`, and shared tests must eventually finish"
+                    )
+                });
+            st = CV
+                .wait_timeout(st, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        st
+    }
+
+    /// Shared hold: strict-path work may run; no generation advance
+    /// can start until it drops.
+    #[derive(Debug)]
+    pub(crate) struct Shared {
+        counted: bool,
+    }
+
+    pub(crate) fn shared() -> Shared {
+        if EXCLUSIVE_HERE.with(Cell::get) {
+            return Shared { counted: false };
+        }
+        let mut st = wait_while(lock(), "an exclusive holder to release", |s| s.writer);
+        st.readers += 1;
+        Shared { counted: true }
+    }
+
+    impl Drop for Shared {
+        fn drop(&mut self) {
+            if self.counted {
+                let mut st = lock();
+                st.readers -= 1;
+                CV.notify_all();
+            }
+        }
+    }
+
+    /// Exclusive hold: the generation may be advanced; no strict-path
+    /// work on other threads is in flight.
+    #[derive(Debug)]
+    pub(crate) struct Exclusive(());
+
+    pub(crate) fn exclusive() -> Exclusive {
+        assert!(
+            !EXCLUSIVE_HERE.with(Cell::get),
+            "boottime::test_sync: nested exclusive() on one thread"
+        );
+        let mut st = wait_while(lock(), "readers and any other exclusive holder", |s| {
+            s.writer || s.readers > 0
+        });
+        st.writer = true;
+        drop(st);
+        EXCLUSIVE_HERE.with(|c| c.set(true));
+        Exclusive(())
+    }
+
+    impl Drop for Exclusive {
+        fn drop(&mut self) {
+            EXCLUSIVE_HERE.with(|c| c.set(false));
+            let mut st = lock();
+            st.writer = false;
+            CV.notify_all();
+        }
+    }
+
+    /// Mark the current thread as belonging to the test that holds
+    /// `exclusive()`, so its `shared()` guards are no-ops. Call at the
+    /// top of a closure an exclusive test spawns.
+    pub(crate) fn adopt_exclusive() {
+        assert!(
+            lock().writer,
+            "boottime::test_sync: adopt_exclusive() without an exclusive holder"
+        );
+        EXCLUSIVE_HERE.with(|c| c.set(true));
+    }
+
+    pub(super) fn assert_exclusive_held() {
+        assert!(
+            lock().writer,
+            "boottime::test_sync: the clock generation advanced outside `exclusive()`; \
+             wrap the test in `let _x = test_sync::exclusive();`"
+        );
+    }
 }
 
 /// Record a fault: advance the generation and hand the fault back so
@@ -166,25 +336,6 @@ pub(crate) fn invalidate_generation() -> i64 {
 fn observe_fault(fault: ClockFault) -> ClockFault {
     invalidate_generation();
     fault
-}
-
-/// Serialises tests that advance, or assume nobody else advances, the
-/// process-wide [`GENERATION`]. Cargo runs tests concurrently, and an
-/// injected fault on one thread retires the generation a reader on
-/// another thread was just bound to. [`with_raw_override`] holds this
-/// for its body, so no injection test takes it directly (a nested take
-/// would deadlock); a test that moves the generation any other way —
-/// [`invalidate_generation`] called outright — must hold it itself.
-#[cfg(test)]
-static GENERATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Take [`GENERATION_LOCK`], recovering from a poisoned guard so one
-/// failing test cannot cascade into every generation-sensitive test.
-#[cfg(test)]
-pub(crate) fn generation_test_guard() -> std::sync::MutexGuard<'static, ()> {
-    GENERATION_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Raw platform sample before conversion. Carries the native unit so
@@ -371,9 +522,10 @@ thread_local! {
 
 /// Run `body` with `reader` standing in for the platform reader on the
 /// current thread, restoring the previous seam and the thread's legacy
-/// fallback latch afterwards (also on panic). Holds [`GENERATION_LOCK`]
-/// throughout: the seam is thread-local but the generation an injected
-/// fault advances is not.
+/// fallback latch afterwards (also on panic). Takes no lock itself:
+/// the seam is thread-local, but a fault `reader` injects advances the
+/// process-wide generation, so a test that scripts one must hold
+/// [`test_sync::exclusive`] around the call.
 #[cfg(test)]
 pub(crate) fn with_raw_override<R>(
     reader: impl FnMut() -> Result<RawSample, ClockFault> + 'static,
@@ -387,7 +539,6 @@ pub(crate) fn with_raw_override<R>(
             legacy_fallback::restore(self.1);
         }
     }
-    let _serial = generation_test_guard();
     let prev = RAW_OVERRIDE.with(|slot| slot.borrow_mut().replace(Box::new(reader)));
     let _restore = Restore(prev, legacy_fallback::is_latched());
     body()
@@ -463,18 +614,32 @@ pub(crate) fn strict_read_bound(expected: i64) -> Result<StrictReading, ClockFau
 /// readings it took itself, in program order; that is the only
 /// relation under which "smaller than the previous" means the source
 /// went backwards.
+///
+/// Takes `&self` throughout: one reader is threaded through a whole
+/// operation (a query, a handshake, a UDP setup) and lives inside
+/// deadline newtypes that are shared by reference, so the sequence
+/// state is a `Cell` rather than a `&mut` requirement on every caller.
+/// A reader is not `Sync`; each operation binds its own.
 #[derive(Debug)]
 pub(crate) struct SequentialReader {
     generation: i64,
-    last: Option<i64>,
+    last: Cell<Option<i64>>,
+    #[cfg(test)]
+    _shared: test_sync::Shared,
 }
 
 impl SequentialReader {
     /// Bind a reader to the current live generation without reading.
     pub(crate) fn bind() -> Self {
+        // Hold the test-sync share *before* sampling the generation so
+        // an exclusive holder cannot advance it in between.
+        #[cfg(test)]
+        let shared = test_sync::shared();
         Self {
             generation: generation(),
-            last: None,
+            last: Cell::new(None),
+            #[cfg(test)]
+            _shared: shared,
         }
     }
 
@@ -495,9 +660,9 @@ impl SequentialReader {
     /// [`strict_read_bound`]: a reader on a retired generation never
     /// touches the source, and a reading that straddled an
     /// invalidation is rejected.
-    pub(crate) fn read(&mut self) -> Result<StrictReading, ClockFault> {
+    pub(crate) fn read(&self) -> Result<StrictReading, ClockFault> {
         let reading = strict_read_bound(self.generation)?;
-        if let Some(previous) = self.last {
+        if let Some(previous) = self.last.get() {
             if reading.micros < previous {
                 return Err(observe_fault(ClockFault::Regression {
                     previous,
@@ -505,8 +670,28 @@ impl SequentialReader {
                 }));
             }
         }
-        self.last = Some(reading.micros);
+        self.last.set(Some(reading.micros));
         Ok(reading)
+    }
+
+    /// [`read`](Self::read) as a [`BootInstant`].
+    pub(crate) fn instant(&self) -> Result<BootInstant, ClockFault> {
+        self.read().map(BootInstant::from)
+    }
+
+    /// Strict elapsed time from `earlier` (a reading this reader took)
+    /// to a fresh reading. Composes [`instant`](Self::instant) with
+    /// [`BootInstant::checked_duration_since`], so a fault on either
+    /// step is reported and never collapsed to zero.
+    pub(crate) fn elapsed_since(&self, earlier: BootInstant) -> Result<Duration, ClockFault> {
+        self.instant()?.checked_duration_since(earlier)
+    }
+
+    /// Strict time left until `deadline` from a fresh reading, zero
+    /// once it has passed. Composes [`instant`](Self::instant) with
+    /// [`BootInstant::checked_remaining_until`].
+    pub(crate) fn remaining_until(&self, deadline: BootInstant) -> Result<Duration, ClockFault> {
+        self.instant()?.checked_remaining_until(deadline)
     }
 }
 
@@ -615,19 +800,32 @@ mod legacy_fallback {
 ///
 /// Only differences between values taken under one generation are
 /// meaningful; the absolute value is not comparable across processes
-/// or reboots. Two families of operations exist:
+/// or reboots. Every instant therefore carries the generation it was
+/// read under, and the strict comparison refuses a pair from different
+/// generations: a stamp stored before a fault or a bridge reset is
+/// *foreign* to a reading taken after it, and a foreign stamp cannot be
+/// aged, only retired. Two families of operations exist:
 ///
-/// - **Strict**: [`try_now`](Self::try_now) and
-///   [`checked_duration_since`](Self::checked_duration_since) report a
-///   [`ClockFault`] instead of substituting a value. A reversed pair
-///   is a [`ClockFault::Regression`], not zero elapsed time.
-/// - **Legacy**: [`now`](Self::now), [`elapsed`](Self::elapsed) and
-///   [`saturating_duration_since`](Self::saturating_duration_since)
-///   keep the pre-strict shape for call sites not yet migrated. They
-///   read through [`boottime_micros`] and so can silently land on the
-///   process-local fallback epoch; no strict operation may use them.
+/// - **Strict**: [`try_now`](Self::try_now), [`checked_add`](Self::checked_add)
+///   and [`checked_duration_since`](Self::checked_duration_since) report
+///   a [`ClockFault`] instead of substituting a value. A reversed pair
+///   is a [`ClockFault::Regression`], not zero elapsed time; a pair from
+///   different generations is a [`ClockFault::GenerationChanged`].
+/// - **Legacy**: [`now`](Self::now), [`elapsed`](Self::elapsed),
+///   [`saturating_duration_since`](Self::saturating_duration_since) and
+///   `Add<Duration>` keep the pre-strict shape for call sites not yet
+///   migrated. They read through [`boottime_micros`] and so can
+///   silently land on the process-local fallback epoch; no strict
+///   operation may use them.
+///
+/// The derived ordering is by `micros` first, so an LRU scan over
+/// stamps still picks the numerically oldest; it says nothing about
+/// comparability, which only `checked_duration_since` decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct BootInstant(i64);
+pub(crate) struct BootInstant {
+    micros: i64,
+    generation: i64,
+}
 
 impl BootInstant {
     /// Strict read of the sleep-aware clock now.
@@ -637,43 +835,102 @@ impl BootInstant {
 
     /// Legacy read of the sleep-aware clock now. See the type doc.
     pub(crate) fn now() -> Self {
-        Self(boottime_micros())
+        Self {
+            micros: boottime_micros(),
+            generation: generation(),
+        }
     }
 
     /// Construct from a raw microsecond reading on the same epoch as
-    /// [`strict_read`]. Exists so tests can drive deadline and TTL
-    /// logic across a synthetic suspend gap without sleeping.
+    /// [`strict_read`], under the current live generation. Exists so
+    /// tests can drive deadline and TTL logic across a synthetic
+    /// suspend gap without sleeping.
     #[cfg(test)]
     pub(crate) fn from_micros(micros: i64) -> Self {
-        Self(micros)
+        Self {
+            micros,
+            generation: generation(),
+        }
     }
 
     /// Raw microsecond coordinate.
     pub(crate) fn micros(self) -> i64 {
-        self.0
+        self.micros
+    }
+
+    /// Generation this instant was read under.
+    pub(crate) fn generation(self) -> i64 {
+        self.generation
+    }
+
+    /// Offset forward by `rhs` under the same generation, or
+    /// [`ClockFault::ConversionOverflow`] when the result does not fit
+    /// the coordinate. Strict counterpart of `Add<Duration>`: a
+    /// deadline is never silently clamped to the end of the range.
+    pub(crate) fn checked_add(self, rhs: Duration) -> Result<Self, ClockFault> {
+        let micros = i64::try_from(rhs.as_micros())
+            .ok()
+            .and_then(|d| self.micros.checked_add(d))
+            .ok_or(ClockFault::ConversionOverflow)?;
+        Ok(Self {
+            micros,
+            generation: self.generation,
+        })
     }
 
     /// Time elapsed from `earlier` to `self`. Equal instants yield
-    /// [`Duration::ZERO`]; `self < earlier` is reported as
-    /// [`ClockFault::Regression`] rather than collapsed to zero.
+    /// [`Duration::ZERO`]. A pair from different generations is
+    /// [`ClockFault::GenerationChanged`] (`expected` is `earlier`'s
+    /// generation). `self < earlier` under one generation is a
+    /// [`ClockFault::Regression`] rather than zero, and — like a
+    /// [`SequentialReader`] regression — it advances the live
+    /// generation, because the two readings were taken in program
+    /// order under a lock at every call site and a reversed pair there
+    /// means the source went backwards.
     pub(crate) fn checked_duration_since(self, earlier: Self) -> Result<Duration, ClockFault> {
-        if self.0 < earlier.0 {
-            return Err(ClockFault::Regression {
-                previous: earlier.0,
-                observed: self.0,
+        if self.generation != earlier.generation {
+            return Err(ClockFault::GenerationChanged {
+                expected: earlier.generation,
+                observed: self.generation,
             });
         }
+        if self.micros < earlier.micros {
+            return Err(observe_fault(ClockFault::Regression {
+                previous: earlier.micros,
+                observed: self.micros,
+            }));
+        }
         // Non-negative by the guard above; `i64::MAX` fits `u64`.
-        Ok(Duration::from_micros(self.0.abs_diff(earlier.0)))
+        Ok(Duration::from_micros(self.micros.abs_diff(earlier.micros)))
+    }
+
+    /// Time from `self` (a reading) until `deadline` (a projection made
+    /// with [`checked_add`](Self::checked_add)), or [`Duration::ZERO`]
+    /// once the deadline has passed. A pair from different generations
+    /// is [`ClockFault::GenerationChanged`] (`expected` is the
+    /// deadline's generation). Unlike
+    /// [`checked_duration_since`](Self::checked_duration_since), a
+    /// deadline behind the reading is not a regression: nothing was
+    /// observed going backwards, the budget simply ran out, and expiry
+    /// is a legal outcome the caller reports as a timeout.
+    pub(crate) fn checked_remaining_until(self, deadline: Self) -> Result<Duration, ClockFault> {
+        if self.generation != deadline.generation {
+            return Err(ClockFault::GenerationChanged {
+                expected: deadline.generation,
+                observed: self.generation,
+            });
+        }
+        let delta = deadline.micros.saturating_sub(self.micros);
+        Ok(u64::try_from(delta).map_or(Duration::ZERO, Duration::from_micros))
     }
 
     /// Time elapsed from `earlier` to `self`, saturating at
     /// [`Duration::ZERO`] when `earlier` is the later of the two.
     /// Mirrors `Instant::saturating_duration_since`. Legacy: hides a
-    /// backwards pair; strict paths use
+    /// backwards pair and ignores generations; strict paths use
     /// [`checked_duration_since`](Self::checked_duration_since).
     pub(crate) fn saturating_duration_since(self, earlier: Self) -> Duration {
-        let delta = self.0.saturating_sub(earlier.0);
+        let delta = self.micros.saturating_sub(earlier.micros);
         u64::try_from(delta).map_or(Duration::ZERO, Duration::from_micros)
     }
 
@@ -686,7 +943,10 @@ impl BootInstant {
 
 impl From<StrictReading> for BootInstant {
     fn from(reading: StrictReading) -> Self {
-        Self(reading.micros)
+        Self {
+            micros: reading.micros,
+            generation: reading.generation,
+        }
     }
 }
 
@@ -697,10 +957,14 @@ impl Add<Duration> for BootInstant {
     /// wrapping. A `Duration` large enough to saturate is ~292k years,
     /// so the clamp is unreachable for any real budget or TTL; it
     /// exists so a caller-supplied `timeout_ms` cannot produce a
-    /// deadline in the past.
+    /// deadline in the past. Legacy; strict paths use
+    /// [`BootInstant::checked_add`].
     fn add(self, rhs: Duration) -> Self {
         let micros = i64::try_from(rhs.as_micros()).unwrap_or(i64::MAX);
-        Self(self.0.saturating_add(micros))
+        Self {
+            micros: self.micros.saturating_add(micros),
+            generation: self.generation,
+        }
     }
 }
 
@@ -784,6 +1048,22 @@ mod tests {
     }
 
     #[test]
+    fn boot_instant_checked_add_reports_overflow_and_keeps_generation() {
+        let base = BootInstant::from_micros(1_000);
+        let later = base.checked_add(Duration::from_millis(5)).unwrap();
+        assert_eq!(later.micros(), 6_000);
+        assert_eq!(later.generation(), base.generation());
+        assert_eq!(
+            BootInstant::from_micros(i64::MAX - 10).checked_add(Duration::from_secs(1)),
+            Err(ClockFault::ConversionOverflow)
+        );
+        assert_eq!(
+            base.checked_add(Duration::MAX),
+            Err(ClockFault::ConversionOverflow)
+        );
+    }
+
+    #[test]
     fn boot_instant_now_advances_across_a_wait() {
         let a = BootInstant::now();
         let start = std::time::Instant::now();
@@ -796,7 +1076,7 @@ mod tests {
     // ---- strict path -------------------------------------------------
 
     use super::{
-        generation, generation_test_guard, invalidate_generation, platform_backend, strict_read,
+        generation, invalidate_generation, platform_backend, strict_read, test_sync,
         with_raw_override, ClockBackend, ClockFault, RawSample, SequentialReader, StrictReading,
     };
     use std::cell::Cell;
@@ -823,7 +1103,7 @@ mod tests {
     fn strict_read_on_this_host_matches_platform_backend() {
         // A concurrent injection test advancing the generation mid-read
         // would turn this valid host read into `GenerationChanged`.
-        let _serial = generation_test_guard();
+        let _shared = test_sync::shared();
         match (strict_read(), platform_backend()) {
             (Ok(r), Some(backend)) => {
                 assert_eq!(r.backend, backend);
@@ -837,6 +1117,7 @@ mod tests {
 
     #[test]
     fn strict_read_never_falls_back_on_startup_fault() {
+        let _x = test_sync::exclusive();
         let fallback_probe = Rc::new(Cell::new(0u32));
         let seen = Rc::clone(&fallback_probe);
         with_raw_override(
@@ -862,6 +1143,7 @@ mod tests {
 
     #[test]
     fn legacy_fallback_is_sticky_where_strict_keeps_probing() {
+        let _x = test_sync::exclusive();
         let probes = Rc::new(Cell::new(0u32));
         let seen = Rc::clone(&probes);
         let mut script = scripted(vec![
@@ -931,6 +1213,7 @@ mod tests {
         // generation: the bound read must report the mismatch instead,
         // never probe, and leave the live generation to the contexts
         // still on it.
+        let _x = test_sync::exclusive();
         let probes = Rc::new(Cell::new(0u32));
         let seen = Rc::clone(&probes);
         with_raw_override(
@@ -968,6 +1251,7 @@ mod tests {
         // landing after `strict_read` loaded the generation and before
         // the raw sample came back: the sample is fine, but the
         // generation it would be stamped with was retired underneath it.
+        let _x = test_sync::exclusive();
         with_raw_override(
             || {
                 invalidate_generation();
@@ -985,7 +1269,7 @@ mod tests {
                 assert_eq!(generation(), before + 1);
                 // A reader bound to the retired generation never gets the
                 // straddling sample either.
-                let mut reader = SequentialReader::bind();
+                let reader = SequentialReader::bind();
                 assert!(matches!(
                     reader.read(),
                     Err(ClockFault::GenerationChanged { .. })
@@ -996,6 +1280,7 @@ mod tests {
 
     #[test]
     fn sequential_reader_fails_on_success_then_fault_and_stays_failed() {
+        let _x = test_sync::exclusive();
         with_raw_override(
             scripted(vec![
                 linux(10, 0),
@@ -1008,7 +1293,7 @@ mod tests {
                 linux(11, 0),
             ]),
             || {
-                let mut reader = SequentialReader::bind();
+                let reader = SequentialReader::bind();
                 assert_eq!(reader.read().map(|r| r.micros), Ok(10_000_000));
                 assert_eq!(reader.read().map(|r| r.micros), Ok(10_000_000));
                 let bound = reader.generation();
@@ -1029,6 +1314,7 @@ mod tests {
 
     #[test]
     fn re_resolution_after_fault_yields_a_fresh_valid_reader() {
+        let _x = test_sync::exclusive();
         let probes = Rc::new(Cell::new(0u32));
         let seen = Rc::clone(&probes);
         let mut script = scripted(vec![
@@ -1045,12 +1331,12 @@ mod tests {
                 script()
             },
             || {
-                let mut stale = SequentialReader::bind();
+                let stale = SequentialReader::bind();
                 assert!(matches!(
                     stale.read(),
                     Err(ClockFault::SyscallFailed { errno: 1 })
                 ));
-                let mut fresh = SequentialReader::bind();
+                let fresh = SequentialReader::bind();
                 let r = fresh.read().expect("fresh reader after recovery");
                 assert_eq!(r.micros, 3_000_000);
                 assert_eq!(r.generation, fresh.generation());
@@ -1079,7 +1365,7 @@ mod tests {
         with_raw_override(
             scripted(vec![linux(0, 0), linux(0, 0), linux(0, 999)]),
             || {
-                let mut reader = SequentialReader::bind();
+                let reader = SequentialReader::bind();
                 assert_eq!(reader.read().map(|r| r.micros), Ok(0));
                 assert_eq!(reader.read().map(|r| r.micros), Ok(0));
                 // 999 ns floors to 0 us: still equal, still valid.
@@ -1090,8 +1376,9 @@ mod tests {
 
     #[test]
     fn regression_is_reported_not_saturated_and_invalidates() {
+        let _x = test_sync::exclusive();
         with_raw_override(scripted(vec![linux(5, 0), linux(4, 999_999_999)]), || {
-            let mut reader = SequentialReader::bind();
+            let reader = SequentialReader::bind();
             let before = reader.generation();
             assert_eq!(reader.read().map(|r| r.micros), Ok(5_000_000));
             assert_eq!(
@@ -1111,10 +1398,12 @@ mod tests {
 
     #[test]
     fn checked_duration_since_reports_reversed_pair() {
+        let _x = test_sync::exclusive();
         let a = BootInstant::from_micros(1_000);
         let b = BootInstant::from_micros(1_000);
         let c = BootInstant::from_micros(999);
         assert_eq!(b.checked_duration_since(a), Ok(Duration::ZERO));
+        let before = generation();
         assert_eq!(
             c.checked_duration_since(a),
             Err(ClockFault::Regression {
@@ -1122,10 +1411,128 @@ mod tests {
                 observed: 999,
             })
         );
+        assert!(
+            generation() > before,
+            "a reversed pair is an observed fault"
+        );
         assert_eq!(
             BootInstant::from_micros(i64::MAX).checked_duration_since(BootInstant::from_micros(0)),
             Ok(Duration::from_micros(u64::try_from(i64::MAX).unwrap()))
         );
+    }
+
+    #[test]
+    fn checked_duration_since_refuses_a_foreign_generation() {
+        let _x = test_sync::exclusive();
+        let earlier = BootInstant::from_micros(1_000);
+        let retired = invalidate_generation();
+        let later = BootInstant::from_micros(2_000);
+        assert_eq!(later.generation(), retired);
+        // Numerically later, but on a coordinate whose trust was
+        // withdrawn between the two stamps: not ageable, and not a
+        // regression either — nothing was observed going backwards.
+        let before = generation();
+        assert_eq!(
+            later.checked_duration_since(earlier),
+            Err(ClockFault::GenerationChanged {
+                expected: earlier.generation(),
+                observed: retired,
+            })
+        );
+        assert_eq!(generation(), before);
+        // Same generation, same numbers: fine.
+        assert_eq!(
+            BootInstant::from_micros(2_000).checked_duration_since(later),
+            Ok(Duration::ZERO)
+        );
+    }
+
+    #[test]
+    fn checked_remaining_until_treats_expiry_as_zero_not_regression() {
+        let _x = test_sync::exclusive();
+        let now = BootInstant::from_micros(5_000);
+        let deadline = now.checked_add(Duration::from_millis(2)).unwrap();
+        assert_eq!(
+            now.checked_remaining_until(deadline),
+            Ok(Duration::from_millis(2))
+        );
+        assert_eq!(
+            deadline.checked_remaining_until(deadline),
+            Ok(Duration::ZERO)
+        );
+        let before = generation();
+        assert_eq!(
+            BootInstant::from_micros(9_000).checked_remaining_until(deadline),
+            Ok(Duration::ZERO)
+        );
+        assert_eq!(generation(), before, "expiry must not invalidate the clock");
+        let retired = invalidate_generation();
+        let later = BootInstant::from_micros(6_000);
+        assert_eq!(
+            later.checked_remaining_until(deadline),
+            Err(ClockFault::GenerationChanged {
+                expected: deadline.generation(),
+                observed: retired,
+            })
+        );
+    }
+
+    #[test]
+    fn sequential_reader_remaining_until_reads_then_projects() {
+        with_raw_override(
+            scripted(vec![linux(1, 0), linux(1, 300_000_000), linux(2, 0)]),
+            || {
+                let reader = SequentialReader::bind();
+                let deadline = reader
+                    .instant()
+                    .unwrap()
+                    .checked_add(Duration::from_millis(500))
+                    .unwrap();
+                assert_eq!(
+                    reader.remaining_until(deadline),
+                    Ok(Duration::from_millis(200))
+                );
+                assert_eq!(reader.remaining_until(deadline), Ok(Duration::ZERO));
+            },
+        );
+    }
+
+    #[test]
+    fn sequential_reader_elapsed_since_composes_read_and_difference() {
+        with_raw_override(scripted(vec![linux(1, 0), linux(1, 250_000_000)]), || {
+            let reader = SequentialReader::bind();
+            let start = reader.instant().unwrap();
+            assert_eq!(start.generation(), reader.generation());
+            assert_eq!(reader.elapsed_since(start), Ok(Duration::from_millis(250)));
+        });
+    }
+
+    #[test]
+    fn test_sync_exclusive_waits_for_readers_and_blocks_fresh_readers() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+        let held = SequentialReader::bind();
+        let (tx, rx) = mpsc::channel();
+        let released = Arc::new(AtomicBool::new(false));
+        let released_w = Arc::clone(&released);
+        let writer = std::thread::spawn(move || {
+            let x = test_sync::exclusive();
+            tx.send(()).unwrap();
+            // Hold long enough for the main thread to reach `bind()`
+            // while the exclusive is still held.
+            std::thread::sleep(Duration::from_millis(100));
+            released_w.store(true, Ordering::SeqCst);
+            drop(x);
+        });
+        // Writer cannot enter while `held` is alive.
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+        drop(held);
+        rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        // Now the writer holds: a fresh reader is admitted only once
+        // the exclusive has been released.
+        let _r = SequentialReader::bind();
+        assert!(released.load(Ordering::SeqCst));
+        writer.join().unwrap();
     }
 
     #[test]
@@ -1135,7 +1542,7 @@ mod tests {
         let handles: Vec<_> = (0..8)
             .map(|_| {
                 std::thread::spawn(|| {
-                    let mut reader = SequentialReader::bind();
+                    let reader = SequentialReader::bind();
                     for _ in 0..2_000 {
                         match reader.read() {
                             Ok(_) | Err(ClockFault::Unsupported) => {}
@@ -1157,9 +1564,7 @@ mod tests {
 
     #[test]
     fn invalidate_generation_is_strictly_increasing() {
-        // Moves the generation outside `with_raw_override`, so it takes
-        // the lock itself rather than retire a reader another test bound.
-        let _serial = generation_test_guard();
+        let _x = test_sync::exclusive();
         let a = invalidate_generation();
         let b = invalidate_generation();
         assert!(b > a);
@@ -1349,6 +1754,7 @@ mod tests {
 
     #[test]
     fn override_is_thread_local_and_restored() {
+        let _x = test_sync::exclusive();
         with_raw_override(scripted(vec![Err(ClockFault::Unsupported)]), || {
             assert_eq!(strict_read(), Err(ClockFault::Unsupported));
             let other =
@@ -1358,9 +1764,6 @@ mod tests {
                 "override must not leak to other threads"
             );
         });
-        // `with_raw_override` released the guard with its body; retake
-        // it so the restored host read cannot see a concurrent advance.
-        let _serial = generation_test_guard();
         match platform_backend() {
             Some(_) => assert!(strict_read().is_ok(), "seam must be restored"),
             None => assert_eq!(strict_read(), Err(ClockFault::Unsupported)),

@@ -59,7 +59,7 @@ use rustls::pki_types::UnixTime;
 use zeroize::Zeroizing;
 
 use crate::nts::aead::{AeadError, AeadKey};
-use crate::nts::boottime::BootInstant;
+use crate::nts::boottime::{BootInstant, ClockFault, SequentialReader};
 use crate::nts::cookies::CookieJar;
 use crate::nts::dns::{
     resolve_with_global, system_lookup, DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS, SPAWN_FAILED_PREFIX,
@@ -275,20 +275,34 @@ pub struct NtsTimeSample {
     /// queries. New in 3.0.0; mirrors the per-query observable
     /// pattern established by `phase_timings`.
     pub trust_backend: TrustBackend,
-    /// Sleep-aware monotonic reading taken immediately after the
+    /// Strict sleep-aware reading taken immediately after the
     /// AEAD-NTPv4 UDP `recv` returned — the wire-level receipt
     /// instant of this sample, before any FFI-return, worker-thread
     /// handoff, or Dart event-loop latency is incurred.
     ///
-    /// Same clock source and epoch as [`nts_boottime_micros`]
-    /// (Dart: `ntsBoottimeMicros` / `MonotonicClock`), including on
-    /// the degraded non-boottime path (both route through the same
-    /// process-wide anchor), so subtracting this from a later
-    /// `MonotonicClock` reading in the same process yields the
-    /// scheduling lag since receipt. The epoch is arbitrary
+    /// Since 10.0 this is a strict reading on the coordinate described
+    /// by [`NtsClockDescriptor`], never the process-local fallback: a
+    /// query whose receipt read faults fails with
+    /// [`NtsError::ClockFault`] at [`ClockFaultStage::Receipt`] rather
+    /// than returning a sample stamped on a different epoch. On a
+    /// healthy native clock it is the same value [`nts_boottime_micros`]
+    /// would return, so subtracting it from a later reading taken
+    /// under the same `recv_clock_generation`
+    /// yields the scheduling lag since receipt. The epoch is arbitrary
     /// (per-boot): never persist this value and never compare it
     /// across boots, devices, or processes.
     pub recv_boottime_micros: i64,
+    /// Live strict-clock generation `recv_boottime_micros` was read
+    /// under (see [`NtsStrictClockReading::generation`]). A consumer
+    /// attributes the stamp by comparing this with its own context's
+    /// generation instead of judging the number's plausibility; a
+    /// mismatch means the stamp is foreign and must not be aged. `0`
+    /// never occurs on a sample produced by this crate — the live
+    /// generation starts at `1` — so it is free for Dart-side fixtures
+    /// to mean "no receipt stamp".
+    pub recv_clock_generation: i64,
+    /// Backend the receipt stamp was read from.
+    pub recv_clock_backend: NtsClockBackend,
     /// True clock offset θ = ((T2−T1)+(T3−T4))/2 in microseconds
     /// (RFC 5905 §8), computed from the four on-wire timestamps:
     /// T1 client transmit, T2 server receive, T3 server transmit,
@@ -703,7 +717,9 @@ impl From<crate::nts::boottime::ClockBackend> for NtsClockBackend {
 }
 
 /// Why a strict clock call failed. Thrown from
-/// [`nts_strict_clock_read`] and [`nts_clock_descriptor`].
+/// [`nts_strict_clock_read`] and [`nts_clock_descriptor`], and carried
+/// by [`NtsError::ClockFault`] when a query, warm-up or projection
+/// observed one mid-operation.
 ///
 /// Not every variant is reachable from every export:
 ///
@@ -716,8 +732,10 @@ impl From<crate::nts::boottime::ClockBackend> for NtsClockBackend {
 ///   previous one — so it never produces [`Regression`]; the Dart
 ///   `StrictClockContext` compares consecutive readings itself.
 /// - [`Regression`] is produced by the crate-internal sequential
-///   reader, which no export in this surface calls. The variant is
-///   mapped so the conversion from the core fault type is total.
+///   reader that a query, warm-up or projection binds for the whole
+///   operation, and reaches Dart through [`NtsError::ClockFault`].
+/// - [`SuspendedInFlight`] is produced only by the AEAD-NTPv4
+///   round-trip bracket, also through [`NtsError::ClockFault`].
 ///
 /// Every variant is reported on the call that observed it, and none
 /// is accompanied by a substitute reading. A read that faults has
@@ -725,7 +743,9 @@ impl From<crate::nts::boottime::ClockBackend> for NtsClockBackend {
 /// [`NtsStrictClockReading::generation`]) — [`GenerationChanged`]
 /// reports an advance that happened before or during the read and
 /// does not advance it again — so contexts bound before the fault
-/// fail closed on their next call.
+/// fail closed on their next call. [`SuspendedInFlight`] does not
+/// touch the generation at all: the clock was sound, the interval it
+/// measured was not.
 ///
 /// [`Unsupported`]: NtsClockFault::Unsupported
 /// [`SyscallFailed`]: NtsClockFault::SyscallFailed
@@ -734,6 +754,7 @@ impl From<crate::nts::boottime::ClockBackend> for NtsClockBackend {
 /// [`ConversionOverflow`]: NtsClockFault::ConversionOverflow
 /// [`Regression`]: NtsClockFault::Regression
 /// [`GenerationChanged`]: NtsClockFault::GenerationChanged
+/// [`SuspendedInFlight`]: NtsClockFault::SuspendedInFlight
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NtsClockFault {
     /// The compile target has no supported suspend-inclusive source.
@@ -762,6 +783,66 @@ pub enum NtsClockFault {
     /// the sample cannot be stamped with the generation it was taken
     /// under.
     GenerationChanged { expected: i64, observed: i64 },
+    /// The sleep-aware clock advanced materially more than the
+    /// suspend-frozen monotonic clock across the AEAD-NTPv4 `send` /
+    /// `recv` bracket: the process was suspended while the request was
+    /// in flight. `round_trip_micros` is measured on the monotonic
+    /// clock and would under-state the real round trip — making the
+    /// sample look *better* to delay-based selection than it is — so
+    /// the sample is rejected. `boottime_micros` is the sleep-aware
+    /// span, `monotonic_micros` the span the round trip would have
+    /// reported; the difference is at least
+    /// `SUSPEND_IN_FLIGHT_TOLERANCE_MICROS` (50 ms). Retry the query.
+    SuspendedInFlight {
+        boottime_micros: i64,
+        monotonic_micros: i64,
+    },
+}
+
+/// Slack allowed between the sleep-aware and monotonic spans of one UDP
+/// round trip before the sample is rejected as
+/// [`NtsClockFault::SuspendedInFlight`]. The two spans bracket the same
+/// `send`/`recv` pair (the sleep-aware reads sit just outside the
+/// monotonic ones), so on an awake system they differ only by the cost
+/// of the reads themselves and any preemption that lands between the
+/// paired reads — microseconds to a few milliseconds. A suspend is
+/// tens of milliseconds at the very least. 50 ms therefore separates
+/// the two populations with margin on both sides, and a doze shorter
+/// than that under-states a round trip by less than the burst-selection
+/// noise floor.
+pub const SUSPEND_IN_FLIGHT_TOLERANCE_MICROS: i64 = 50_000;
+
+/// Where in an operation a strict clock fault was observed. Carried by
+/// [`NtsError::ClockFault`] so a caller can tell a failed budget anchor
+/// from a failed receipt stamp without parsing text.
+///
+/// The first five stages are raised by this crate; `Await`, `Return`
+/// and `Projection` are raised by the Dart strict context on its side
+/// of the bridge and share this vocabulary so one error type covers
+/// the whole operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClockFaultStage {
+    /// Binding the operation's call-wide budget on entry (Rust), or
+    /// admitting the call through the bridge gate (Dart).
+    Admission,
+    /// Inside the NTS-KE handshake's own deadline: DNS, connect, TLS
+    /// or record I/O.
+    Handshake,
+    /// Session-table work: the singleflight budget or wait, the idle
+    /// TTL check, the LRU prune, or the access-time refresh.
+    Session,
+    /// Arming the UDP setup or `send`/`recv` deadlines against the
+    /// call-wide budget.
+    Udp,
+    /// Stamping the wire receipt, bracketing the round trip, or
+    /// recording the replay-guard entry.
+    Receipt,
+    /// Dart: awaiting the bridge result under the strict budget.
+    Await,
+    /// Dart: attributing a returned sample to the strict context.
+    Return,
+    /// Dart: projecting a synced time from a strict anchor.
+    Projection,
 }
 
 impl From<crate::nts::boottime::ClockFault> for NtsClockFault {
@@ -1231,6 +1312,22 @@ pub enum NtsError {
     /// in 3.0.0; consumers using exhaustive `switch` on `NtsError`
     /// must add an arm for this variant.
     TrustBackendUnavailable(String),
+    /// The strict sleep-aware clock faulted while this operation was
+    /// using it, at `stage`. The operation is invalid as a whole: no
+    /// fresh budget is issued, no earlier reading is substituted, and
+    /// a sample is never returned alongside this error. `generation`
+    /// is the strict-clock generation the operation was bound to when
+    /// it started (see [`NtsStrictClockReading::generation`]); a Dart
+    /// strict context compares it against its own to decide whether
+    /// the context itself is still valid. New in 10.0.0; consumers
+    /// using exhaustive `switch` on `NtsError` must add an arm for
+    /// this variant.
+    ClockFault {
+        stage: ClockFaultStage,
+        fault: NtsClockFault,
+        generation: i64,
+        trust_backend: Option<TrustBackend>,
+    },
     /// Bug guard for unreachable internal states.
     Internal(String),
 }
@@ -1260,11 +1357,27 @@ impl NtsError {
             | Self::NtpProtocol { trust_backend, .. }
             | Self::Authentication { trust_backend, .. }
             | Self::Timeout { trust_backend, .. }
+            | Self::ClockFault { trust_backend, .. }
             | Self::NoCookies { trust_backend } => {
                 *trust_backend = next;
             }
         }
         self
+    }
+
+    /// Build a [`ClockFault`](Self::ClockFault) for `stage` from the
+    /// reader an operation is bound to. Returned as a closure so call
+    /// sites can `map_err` a strict read in one expression.
+    pub(crate) fn clock_fault(
+        stage: ClockFaultStage,
+        clock: &SequentialReader,
+    ) -> impl Fn(ClockFault) -> Self + '_ {
+        move |fault| Self::ClockFault {
+            stage,
+            fault: fault.into(),
+            generation: clock.generation(),
+            trust_backend: None,
+        }
     }
 }
 
@@ -1279,6 +1392,15 @@ impl std::fmt::Display for NtsError {
             Self::Timeout { phase, .. } => write!(f, "operation timed out in phase {phase:?}"),
             Self::NoCookies { .. } => f.write_str("server delivered no cookies"),
             Self::TrustBackendUnavailable(m) => write!(f, "trust backend unavailable: {m}"),
+            Self::ClockFault {
+                stage,
+                fault,
+                generation,
+                ..
+            } => write!(
+                f,
+                "strict clock fault at {stage:?} (generation {generation}): {fault:?}"
+            ),
             Self::Internal(m) => write!(f, "internal: {m}"),
         }
     }
@@ -1307,6 +1429,12 @@ impl From<KeError> for NtsError {
                 trust_backend: None,
             },
             KeError::NoCookies => Self::NoCookies {
+                trust_backend: None,
+            },
+            KeError::ClockFault { fault, generation } => Self::ClockFault {
+                stage: ClockFaultStage::Handshake,
+                fault: fault.into(),
+                generation,
                 trust_backend: None,
             },
             // `TrustBackendUnavailable` only fires on the
@@ -1634,14 +1762,21 @@ impl HandshakeSlot {
     }
 
     /// Park until the leader publishes a result or `deadline` elapses.
-    /// Returns `Some(result_clone)` when a result is available, `None`
-    /// on deadline expiry. Each waiter receives an independent
-    /// `Clone` of the leader's `Result`.
-    fn wait_until(&self, deadline: BootInstant) -> Option<Result<HandshakeSlotOk, NtsError>> {
+    /// Returns `Ok(Some(result_clone))` when a result is available,
+    /// `Ok(None)` on deadline expiry, and `Err` when the waiter's
+    /// strict clock faulted on a wake — the waiter is then failed by
+    /// the caller rather than re-parked against a budget it can no
+    /// longer measure. Each waiter receives an independent `Clone` of
+    /// the leader's `Result`.
+    fn wait_until(
+        &self,
+        clock: &SequentialReader,
+        deadline: BootInstant,
+    ) -> Result<Option<Result<HandshakeSlotOk, NtsError>>, ClockFault> {
         let mut g = lock_recover(&self.result);
         loop {
             if let Some(r) = g.as_ref() {
-                return Some(r.clone());
+                return Ok(Some(r.clone()));
             }
             // Sleep-aware remaining: a waiter parked across device
             // suspend must unpark against the caller's wall-clock
@@ -1650,9 +1785,9 @@ impl HandshakeSlot {
             // suspend-frozen, hence the surrounding loop re-reads the
             // boot clock on every wake and re-parks for whatever is
             // genuinely left.
-            let remaining = deadline.saturating_duration_since(BootInstant::now());
+            let remaining = clock.remaining_until(deadline)?;
             if remaining.is_zero() {
-                return None;
+                return Ok(None);
             }
             let (next_g, _) = self
                 .cv
@@ -1834,38 +1969,47 @@ impl SeenUidCache {
         }
     }
 
-    /// Drop entries older than [`SEEN_UID_TTL`] relative to `now`.
-    /// Entries are pushed in non-decreasing `now` order, so the front
-    /// is always the oldest and a single front-to-back walk that stops
-    /// at the first still-live entry suffices.
+    /// Drop entries older than [`SEEN_UID_TTL`] relative to `now`, and
+    /// entries stamped under a generation other than `now`'s. Entries
+    /// are pushed in non-decreasing `now` order (generation first, then
+    /// micros), so the front is always the oldest and a single
+    /// front-to-back walk that stops at the first still-live entry
+    /// suffices.
     ///
     /// This pass is TTL-only: the [`SEEN_UID_CAP`] ceiling is enforced
     /// separately, on the insertion path in [`note`](Self::note), so a
     /// rejected duplicate never evicts an unrelated UID (which would
     /// silently shrink the replay-detection window).
     ///
-    /// Uses `saturating_duration_since` rather than `duration_since` so
-    /// a `now` that is somehow earlier than a front entry's insertion
-    /// instant yields `Duration::ZERO` (treated as still-live) instead
-    /// of panicking. `note` samples `now` under the same lock that
-    /// guards insertion, so the non-decreasing invariant holds in
-    /// practice; the saturating call hardens the path against any
-    /// future caller that violates it.
-    fn prune(&mut self, now: BootInstant) {
+    /// A *foreign* entry — stamped before a clock fault or a bridge
+    /// reset retired its generation — cannot be aged, only retired, so
+    /// it is dropped like an expired one. A front entry stamped *later*
+    /// than `now` under the same generation is a clock regression:
+    /// `note` samples `now` under the same lock that guards insertion,
+    /// so the two readings are in program order and a reversed pair
+    /// means the source went backwards. That is reported, not
+    /// tolerated, and the caller fails the operation.
+    fn prune(&mut self, now: BootInstant) -> Result<(), ClockFault> {
         while let Some((_, inserted)) = self.order.front() {
-            if now.saturating_duration_since(*inserted) >= SEEN_UID_TTL {
-                if let Some((uid, _)) = self.order.pop_front() {
-                    self.seen.remove(&uid);
-                }
-            } else {
-                break;
+            match now.checked_duration_since(*inserted) {
+                Ok(age) if age >= SEEN_UID_TTL => {}
+                Ok(_) => break,
+                Err(ClockFault::GenerationChanged { .. }) => {}
+                Err(fault) => return Err(fault),
+            }
+            if let Some((uid, _)) = self.order.pop_front() {
+                self.seen.remove(&uid);
             }
         }
+        Ok(())
     }
 
-    /// Record `uid` as seen at `now`, returning `true` if it was newly
-    /// recorded (accept the response) or `false` if it was already
-    /// present within the TTL window (replay — reject the response).
+    /// Record `uid` as seen at `now`, returning `Ok(true)` if it was
+    /// newly recorded (accept the response) or `Ok(false)` if it was
+    /// already present within the TTL window (replay — reject the
+    /// response). `Err` means `now` could not be ordered against the
+    /// cache — it regressed below the newest entry — and nothing was
+    /// inserted; the caller fails the operation.
     ///
     /// TTL pruning runs first so an expired prior sighting does not
     /// spuriously flag a replay. The [`SEEN_UID_CAP`] ceiling is
@@ -1873,10 +2017,19 @@ impl SeenUidCache {
     /// inserted, so a rejected duplicate leaves the existing window
     /// untouched. The UID is heap-allocated once as an `Arc<[u8]>` and
     /// shared between `seen` and `order`.
-    fn note(&mut self, uid: &[u8], now: BootInstant) -> bool {
-        self.prune(now);
+    fn note(&mut self, uid: &[u8], now: BootInstant) -> Result<bool, ClockFault> {
+        self.prune(now)?;
+        // Preserve the non-decreasing-`now` invariant `prune` relies on
+        // against the newest entry, not just the oldest: `prune` stops
+        // at the first live entry, so a `now` behind the back would
+        // otherwise be pushed unnoticed. After `prune` every surviving
+        // entry shares `now`'s generation, so the only error here is a
+        // regression.
+        if let Some((_, newest)) = self.order.back() {
+            now.checked_duration_since(*newest)?;
+        }
         if self.seen.contains(uid) {
-            return false;
+            return Ok(false);
         }
         while self.order.len() >= SEEN_UID_CAP {
             if let Some((evicted, _)) = self.order.pop_front() {
@@ -1886,7 +2039,7 @@ impl SeenUidCache {
         let shared: Arc<[u8]> = Arc::from(uid);
         self.seen.insert(Arc::clone(&shared));
         self.order.push_back((shared, now));
-        true
+        Ok(true)
     }
 }
 
@@ -1949,12 +2102,33 @@ const SESSION_TABLE_IDLE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// it a table that went quiet past the TTL would serve the stale
 /// session and refresh its `atime`, so the entry would never age out.
 ///
-/// Uses `saturating_duration_since` so an `atime` somehow later than
-/// `now` yields [`Duration::ZERO`] (treated as fresh) rather than
-/// panicking. Callers sample `now` under the same `map` lock that
-/// guards installation, so this is defensive only.
-fn prune_sessions(map: &mut HashMap<String, Session>, now: BootInstant, cap_headroom: usize) {
-    map.retain(|_, s| now.saturating_duration_since(s.atime) < SESSION_TABLE_IDLE_TTL);
+/// Ages are strict: an entry whose `atime` was stamped under a
+/// generation other than `now`'s is *foreign* — it cannot be aged, only
+/// retired — and is dropped in the first pass like an expired one. An
+/// `atime` later than `now` under the same generation is a clock
+/// regression: callers sample `now` under the same `map` lock that
+/// guards every `atime` write, so the pair is in program order and a
+/// reversed pair means the source went backwards. Such entries are
+/// dropped too, and the fault is returned so the caller aborts its
+/// install (the harvested session is dropped, zeroizing its keys)
+/// rather than stamping a new entry on a clock that just failed.
+fn prune_sessions(
+    map: &mut HashMap<String, Session>,
+    now: BootInstant,
+    cap_headroom: usize,
+) -> Result<(), ClockFault> {
+    let mut regression = None;
+    map.retain(|_, s| match now.checked_duration_since(s.atime) {
+        Ok(age) => age < SESSION_TABLE_IDLE_TTL,
+        Err(ClockFault::GenerationChanged { .. }) => false,
+        Err(fault) => {
+            regression.get_or_insert(fault);
+            false
+        }
+    });
+    if let Some(fault) = regression {
+        return Err(fault);
+    }
     let limit = SESSION_TABLE_CAP.saturating_sub(cap_headroom);
     while map.len() > limit {
         let Some(oldest) = map
@@ -1966,6 +2140,7 @@ fn prune_sessions(map: &mut HashMap<String, Session>, now: BootInstant, cap_head
         };
         map.remove(&oldest);
     }
+    Ok(())
 }
 
 /// Per-host session table keyed by `host:port` so two specs with
@@ -2535,6 +2710,9 @@ fn establish_session(
         jar,
         trust_backend,
         ke_warnings,
+        // Placeholder only: the singleflight leader re-stamps `atime`
+        // from the operation's strict reader under the `map` lock at
+        // install, so this value is never aged against.
         atime: BootInstant::now(),
     };
     Ok((session, outcome.phase_timings))
@@ -2667,6 +2845,7 @@ impl SessionTable {
     /// keys off `session_key(spec)`, not off the table itself.
     fn checkout(
         &self,
+        clock: &SequentialReader,
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
@@ -2674,6 +2853,7 @@ impl SessionTable {
         verification_time_ms: Option<i64>,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         self.checkout_with(
+            clock,
             spec,
             timeout,
             dns_concurrency_cap,
@@ -2690,6 +2870,14 @@ impl SessionTable {
     /// path (count invocations, block until released, fail
     /// deterministically) without standing up a faux NTS-KE responder.
     /// The closure signature mirrors `establish_session`.
+    ///
+    /// `clock` is the calling operation's strict reader: every budget
+    /// anchor, idle-TTL check, access-time stamp and waiter wake on
+    /// this path reads through it, so a clock fault anywhere in the
+    /// checkout fails the operation as
+    /// `NtsError::ClockFault { stage: Session, .. }` instead of serving
+    /// a session whose age could not be established or re-arming a
+    /// budget that could not be measured. Expiry is still `Timeout`.
     #[expect(
         clippy::too_many_lines,
         reason = "linear singleflight role-election loop: phase A cache hit \
@@ -2705,13 +2893,15 @@ impl SessionTable {
     )]
     fn checkout_with(
         &self,
+        clock: &SequentialReader,
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
         do_handshake: &HandshakeFn,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         let key = session_key(spec);
-        let started = BootInstant::now();
+        let session_fault = NtsError::clock_fault(ClockFaultStage::Session, clock);
+        let started = clock.instant().map_err(&session_fault)?;
         loop {
             // Phase A: try the cache. Return immediately on a hit with
             // at least one cookie. Drop the `map` lock before any
@@ -2719,6 +2909,12 @@ impl SessionTable {
             // unrelated cache hits behind itself.
             {
                 let mut g = lock_recover(&self.map);
+                // One strict reading under the lock serves both the
+                // TTL check and the access-time refresh below, so a
+                // fault is reported before a cookie is drawn and the
+                // refreshed stamp is in program order with every other
+                // `atime` written under this lock.
+                let now = clock.instant().map_err(&session_fault)?;
                 // Enforce the idle TTL before serving. `prune_sessions`
                 // runs only on installs, so without this check a table
                 // that went quiet past the TTL would serve the stale
@@ -2731,10 +2927,21 @@ impl SessionTable {
                 // Removing under the `map` lock alone is the same
                 // discipline `invalidate` and `evict_session` use.
                 // With the entry gone, the cache lookup below misses
-                // and the caller falls through to a re-handshake.
-                if g.get(&key).is_some_and(|s| {
-                    BootInstant::now().saturating_duration_since(s.atime) >= SESSION_TABLE_IDLE_TTL
-                }) {
+                // and the caller falls through to a re-handshake. An
+                // entry stamped under a retired generation is foreign
+                // — its age cannot be established — and is removed the
+                // same way, never served; an `atime` ahead of `now`
+                // under the same generation is a regression and fails
+                // the checkout.
+                let retire = match g.get(&key) {
+                    Some(s) => match now.checked_duration_since(s.atime) {
+                        Ok(age) => age >= SESSION_TABLE_IDLE_TTL,
+                        Err(ClockFault::GenerationChanged { .. }) => true,
+                        Err(fault) => return Err(session_fault(fault)),
+                    },
+                    None => false,
+                };
+                if retire {
                     g.remove(&key);
                 }
                 if let Some(s) = g.get_mut(&key) {
@@ -2754,7 +2961,7 @@ impl SessionTable {
                                 // stamp so an actively-used session is
                                 // never the eviction victim and never
                                 // ages out under the idle TTL.
-                                s.atime = BootInstant::now();
+                                s.atime = now;
                                 let ctx = build_query_context(s, cookie);
                                 return Ok((ctx, KePhaseTimings::default()));
                             }
@@ -2808,8 +3015,20 @@ impl SessionTable {
                     // parked-waiter case below, which now reports the
                     // phase the leader was actually in via the slot's
                     // `PhaseReporter` (NTS-43). Provenance: bd nts-r54,
-                    // nts-tk2t.
-                    let remaining = match timeout.checked_sub(started.elapsed()) {
+                    // nts-tk2t. A strict clock fault on the elapsed
+                    // read is neither: it is published to the waiters
+                    // and returned as `ClockFault { Session }`, so no
+                    // handshake starts on a budget that could not be
+                    // measured.
+                    let elapsed = match clock.elapsed_since(started) {
+                        Ok(d) => d,
+                        Err(fault) => {
+                            let err = session_fault(fault);
+                            guard.complete(Err(err.clone()));
+                            return Err(err);
+                        }
+                    };
+                    let remaining = match timeout.checked_sub(elapsed) {
                         Some(d) if !d.is_zero() => d,
                         _ => {
                             guard.complete(Err(NtsError::Timeout {
@@ -2886,6 +3105,22 @@ impl SessionTable {
                             // `expect`.
                             let cookie_opt = {
                                 let mut g = lock_recover(&self.map);
+                                // The install stamp is read under the
+                                // `map` lock through the operation's
+                                // strict reader, so it is in program
+                                // order with every other `atime` and
+                                // with the prune below. A fault here
+                                // aborts the install: `session` drops
+                                // (zeroizing its keys) and the fault is
+                                // published to the waiters.
+                                let now = match clock.instant() {
+                                    Ok(now) => now,
+                                    Err(fault) => {
+                                        let err = session_fault(fault);
+                                        guard.complete(Err(err.clone()));
+                                        return Err(err);
+                                    }
+                                };
                                 // Bound the table before the insert.
                                 // Ask for a free slot only when the
                                 // insert will actually grow the map:
@@ -2894,7 +3129,13 @@ impl SessionTable {
                                 // headroom there would evict an
                                 // unrelated LRU entry for nothing.
                                 let headroom = usize::from(!g.contains_key(&key));
-                                prune_sessions(&mut g, BootInstant::now(), headroom);
+                                if let Err(fault) = prune_sessions(&mut g, now, headroom) {
+                                    let err = session_fault(fault);
+                                    guard.complete(Err(err.clone()));
+                                    return Err(err);
+                                }
+                                let mut session = session;
+                                session.atime = now;
                                 g.insert(key.clone(), session);
                                 let s = g.get_mut(&key).expect("just inserted under this key");
                                 s.jar
@@ -2940,9 +3181,11 @@ impl SessionTable {
                     // budget-exhaustion path above, which surfaces
                     // `DnsTimeout` directly because no handshake has
                     // started on that thread. Provenance: bd nts-r54,
-                    // nts-tk2t.
-                    let deadline = started + timeout;
-                    match slot.wait_until(deadline) {
+                    // nts-tk2t. A strict fault on a wake fails this
+                    // waiter alone as `ClockFault { Session }`; the
+                    // leader and the other waiters are unaffected.
+                    let deadline = started.checked_add(timeout).map_err(&session_fault)?;
+                    match slot.wait_until(clock, deadline).map_err(&session_fault)? {
                         // Leader installed a session; loop back to phase
                         // A and pop a cookie. The slot's `Ok` payload
                         // carries the leader's harvested count and
@@ -3028,15 +3271,24 @@ impl SessionTable {
     /// reporting the leader's codes is the accurate answer, matching
     /// how `fresh_cookies` and `trust_backend` already cross that
     /// boundary.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "mirror of `checkout_with`'s leader/waiter election minus \
+                  the cache phase; the strict install (read, prune, stamp, \
+                  insert under one lock) is kept inline so the two leader \
+                  paths stay side-by-side comparable"
+    )]
     fn warm_cookies_with(
         &self,
+        clock: &SequentialReader,
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
         do_handshake: &HandshakeFn,
     ) -> Result<(u32, KePhaseTimings, TrustBackend, Vec<u16>), NtsError> {
         let key = session_key(spec);
-        let started = BootInstant::now();
+        let session_fault = NtsError::clock_fault(ClockFaultStage::Session, clock);
+        let started = clock.instant().map_err(&session_fault)?;
         // Phase B: leader-or-waiter election. No Phase A — the
         // contract is "force a fresh handshake," so the cache is
         // intentionally bypassed on the leader path. Waiters
@@ -3067,8 +3319,18 @@ impl SessionTable {
                 // pre-DNS budget exhaustion. The waiter case below now
                 // reports the phase the leader was actually in via the
                 // slot's `PhaseReporter` (NTS-43), rather than a blanket
-                // `KeRecordIo`. Provenance: bd nts-r54, nts-tk2t.
-                let remaining = match timeout.checked_sub(started.elapsed()) {
+                // `KeRecordIo`. Provenance: bd nts-r54, nts-tk2t. A
+                // strict clock fault on the elapsed read is published
+                // to the waiters and returned as `ClockFault { Session }`.
+                let elapsed = match clock.elapsed_since(started) {
+                    Ok(d) => d,
+                    Err(fault) => {
+                        let err = session_fault(fault);
+                        guard.complete(Err(err.clone()));
+                        return Err(err);
+                    }
+                };
+                let remaining = match timeout.checked_sub(elapsed) {
                     Some(d) if !d.is_zero() => d,
                     _ => {
                         let err = NtsError::Timeout {
@@ -3113,12 +3375,31 @@ impl SessionTable {
                         let session_warnings = session.ke_warnings.clone();
                         {
                             let mut g = lock_recover(&self.map);
-                            // Same pre-insert bound as the
-                            // `checkout_with` leader path, headroom
+                            // Same install discipline as the
+                            // `checkout_with` leader path: one strict
+                            // reading under the `map` lock stamps the
+                            // install and bounds the prune, and a
+                            // fault aborts the install (dropping
+                            // `session`, zeroizing its keys) and is
+                            // published to the waiters. Headroom
                             // included: only a growing insert needs a
                             // slot freed for it.
+                            let now = match clock.instant() {
+                                Ok(now) => now,
+                                Err(fault) => {
+                                    let err = session_fault(fault);
+                                    guard.complete(Err(err.clone()));
+                                    return Err(err);
+                                }
+                            };
                             let headroom = usize::from(!g.contains_key(&key));
-                            prune_sessions(&mut g, BootInstant::now(), headroom);
+                            if let Err(fault) = prune_sessions(&mut g, now, headroom) {
+                                let err = session_fault(fault);
+                                guard.complete(Err(err.clone()));
+                                return Err(err);
+                            }
+                            let mut session = session;
+                            session.atime = now;
                             g.insert(key.clone(), session);
                         }
                         // Publish the leader's harvested count
@@ -3143,8 +3424,8 @@ impl SessionTable {
                 }
             }
             Role::Waiter(slot) => {
-                let deadline = started + timeout;
-                match slot.wait_until(deadline) {
+                let deadline = started.checked_add(timeout).map_err(&session_fault)?;
+                match slot.wait_until(clock, deadline).map_err(&session_fault)? {
                     Some(Ok(payload)) => {
                         // Return the leader's harvested count
                         // verbatim from the slot payload — never
@@ -3187,6 +3468,7 @@ impl SessionTable {
     /// binds the handshake closure to the real [`establish_session`].
     fn warm_cookies(
         &self,
+        clock: &SequentialReader,
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
@@ -3194,6 +3476,7 @@ impl SessionTable {
         verification_time_ms: Option<i64>,
     ) -> Result<(u32, KePhaseTimings, TrustBackend, Vec<u16>), NtsError> {
         self.warm_cookies_with(
+            clock,
             spec,
             timeout,
             dns_concurrency_cap,
@@ -3204,26 +3487,31 @@ impl SessionTable {
     }
 
     /// Record the Unique Identifier echoed by an accepted server
-    /// response in the short-lived [`SeenUidCache`], returning `true`
-    /// if it was newly seen (the caller should accept the response) or
-    /// `false` if it was already recorded within the TTL window (a
-    /// replay — the caller must reject the response before depositing
-    /// its now-stale cookies). See [`SeenUidCache`] for the full
-    /// threat model. Defense-in-depth layered above the AEAD; NTS-40 /
-    /// Finding #2.
+    /// response in the short-lived [`SeenUidCache`], returning
+    /// `Ok(true)` if it was newly seen (the caller should accept the
+    /// response) or `Ok(false)` if it was already recorded within the
+    /// TTL window (a replay — the caller must reject the response
+    /// before depositing its now-stale cookies). `Err` is a strict
+    /// clock fault: the sighting could not be stamped, nothing was
+    /// recorded, and the caller must reject the response rather than
+    /// accept one it cannot later recognise as replayed. See
+    /// [`SeenUidCache`] for the full threat model. Defense-in-depth
+    /// layered above the AEAD; NTS-40 / Finding #2.
     ///
     /// Takes the `seen_uids` mutex alone for the duration of the
     /// lookup-and-insert; it is never held alongside `map` or
     /// `inflight`, so it imposes no lock-ordering discipline.
     ///
-    /// `now` is sampled *after* the lock is acquired so the timestamp
-    /// written into the cache is ordered consistently with the
-    /// insertion itself: under contention, the thread that wins the
-    /// lock both samples the later instant and pushes the later entry,
-    /// keeping [`SeenUidCache`]'s non-decreasing-`now` invariant intact.
-    fn note_unique_id(&self, uid: &[u8]) -> bool {
+    /// `now` is read through the operation's strict `clock` *after*
+    /// the lock is acquired so the timestamp written into the cache is
+    /// ordered consistently with the insertion itself: under
+    /// contention, the thread that wins the lock both samples the
+    /// later instant and pushes the later entry, keeping
+    /// [`SeenUidCache`]'s non-decreasing-`now` invariant intact.
+    fn note_unique_id(&self, clock: &SequentialReader, uid: &[u8]) -> Result<bool, ClockFault> {
         let mut cache = lock_recover(&self.seen_uids);
-        cache.note(uid, BootInstant::now())
+        let now = clock.instant()?;
+        cache.note(uid, now)
     }
 
     /// Deposit fresh cookies harvested from a verified server reply.
@@ -3313,7 +3601,7 @@ impl SessionTable {
         let key = session_key(spec);
         let mut g = lock_recover(&self.map);
         let headroom = usize::from(!g.contains_key(&key));
-        prune_sessions(&mut g, BootInstant::now(), headroom);
+        prune_sessions(&mut g, BootInstant::now(), headroom).expect("test install clock");
         g.insert(key, session);
     }
 
@@ -3420,8 +3708,8 @@ fn take_udp_connect_stamp() -> Option<u64> {
 ///
 /// Single wall-clock budget shared across the UDP setup phase — the
 /// bounded DNS lookup *and* the read/write timeouts written onto the
-/// returned socket. Anchored once from `BootInstant::now() + total` at
-/// the top of [`bind_connected_udp_using`] so the budget shrinks
+/// returned socket. Anchored once from a strict reading plus `total`
+/// at the top of [`bind_connected_udp_using`] so the budget shrinks
 /// monotonically as DNS consumes time, in place of the prior pattern
 /// where the caller's `timeout` was passed verbatim to both phases and
 /// the wall-clock cost of one UDP setup could overshoot it by up to 2x.
@@ -3429,29 +3717,44 @@ fn take_udp_connect_stamp() -> Option<u64> {
 /// Anchored on the sleep-aware [`BootInstant`] for the same reason as
 /// the KE-side `Deadline`: `std::time::Instant` freezes across device
 /// suspend, so a UDP leg interrupted by sleep would resume with a
-/// budget the caller's wall clock no longer has.
+/// budget the caller's wall clock no longer has. Every reading goes
+/// through the operation's [`SequentialReader`], so a clock fault
+/// while arming a step fails the call as
+/// `NtsError::ClockFault { stage: Udp, .. }` instead of arming a
+/// socket timeout from a budget that could not be measured; an
+/// elapsed budget is still `Timeout`.
 ///
 /// This is the UDP companion to the `Deadline` newtype private to
 /// [`crate::nts::ke`]; the two intentionally do not share an
 /// implementation because `apply_to` must be socket-type-aware
 /// (`TcpStream` vs `UdpSocket`) and the duplicated surface is small.
-#[derive(Debug, Clone, Copy)]
-struct UdpDeadline(BootInstant);
+#[derive(Debug)]
+struct UdpDeadline<'c> {
+    clock: &'c SequentialReader,
+    at: BootInstant,
+}
 
-impl UdpDeadline {
-    /// Anchor a deadline `total` from `now`. Callers pass the entire
-    /// caller-visible UDP-phase budget; subsequent steps consult
-    /// [`UdpDeadline::remaining_or_timeout`] before issuing any
-    /// blocking syscall or arming a socket-level timeout.
-    fn new(total: Duration) -> Self {
-        Self(BootInstant::now() + total)
+impl<'c> UdpDeadline<'c> {
+    /// Anchor a deadline `total` from a fresh strict reading. Callers
+    /// pass the entire caller-visible UDP-phase budget; subsequent
+    /// steps consult [`UdpDeadline::remaining_or_timeout`] before
+    /// issuing any blocking syscall or arming a socket-level timeout.
+    fn new(clock: &'c SequentialReader, total: Duration) -> Result<Self, NtsError> {
+        let at = clock
+            .instant()
+            .and_then(|now| now.checked_add(total))
+            .map_err(NtsError::clock_fault(ClockFaultStage::Udp, clock))?;
+        Ok(Self { clock, at })
     }
 
-    /// Time left before the deadline expires. Saturates at
-    /// [`Duration::ZERO`] so callers can branch on `is_zero()` without
-    /// handling a negative-duration case.
-    fn remaining(&self) -> Duration {
-        self.0.saturating_duration_since(BootInstant::now())
+    /// Time left before the deadline expires, zero once it has passed,
+    /// so callers can branch on `is_zero()` without handling a
+    /// negative-duration case. A clock fault is reported, never
+    /// collapsed to zero.
+    fn remaining(&self) -> Result<Duration, NtsError> {
+        self.clock
+            .remaining_until(self.at)
+            .map_err(NtsError::clock_fault(ClockFaultStage::Udp, self.clock))
     }
 
     /// Convenience wrapper that yields the remaining budget when there
@@ -3466,7 +3769,7 @@ impl UdpDeadline {
     /// callsite tags `Ntp` (the next blocking step is the AEAD-NTPv4
     /// `send`/`recv` round-trip).
     fn remaining_or_timeout(&self, phase: TimeoutPhase) -> Result<Duration, NtsError> {
-        let remaining = self.remaining();
+        let remaining = self.remaining()?;
         if remaining.is_zero() {
             return Err(NtsError::Timeout {
                 phase,
@@ -3504,6 +3807,7 @@ struct UdpBindOutcome {
 /// the post-bind socket timeouts are armed from what remains after the
 /// lookup rather than from `timeout` afresh.
 fn bind_connected_udp_using<F>(
+    clock: &SequentialReader,
     host: &str,
     port: u16,
     timeout: Duration,
@@ -3513,7 +3817,7 @@ fn bind_connected_udp_using<F>(
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
-    let deadline = UdpDeadline::new(timeout);
+    let deadline = UdpDeadline::new(clock, timeout)?;
     // Pre-DNS budget exhaustion is tagged as `DnsTimeout` because
     // that is the next phase the call would have entered — see the
     // `remaining_or_timeout` rustdoc.
@@ -3795,6 +4099,15 @@ fn nts_query_inner(
               satisfy the lint and would obscure that the seam adds exactly \
               one injected dependency"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear exchange whose ordering is the contract: anchor, \
+              checkout, UDP setup, T1 stamp and seal, send re-arm, the \
+              strict send/recv bracket, T4 and the receipt stamp, then \
+              parse, replay guard and deposit. The capture points are \
+              documented relative to each other, and splitting the body \
+              would hide which reads sit on either side of which syscall"
+)]
 fn nts_query_inner_using<F>(
     table: &SessionTable,
     spec: NtsServerSpec,
@@ -3822,9 +4135,25 @@ where
     // which contradicts the documented "single global wall-clock
     // budget" contract on `timeout_ms`. Anchored on the sleep-aware
     // clock so the budget keeps elapsing across device suspend.
-    let started = BootInstant::now();
-    let (ctx, ke_timings) =
-        table.checkout(&spec, timeout, cap, trust_mode, verification_time_ms)?;
+    //
+    // One strict reader is bound here and threaded through the whole
+    // call — checkout, UDP setup, the send/recv re-arms, the receipt
+    // stamp and the replay guard — so every reading is in program
+    // order on one generation and a fault anywhere fails this call as
+    // `ClockFault` at the stage that observed it. Nothing on this
+    // path reads the legacy best-effort clock.
+    let clock = SequentialReader::bind();
+    let started = clock
+        .instant()
+        .map_err(NtsError::clock_fault(ClockFaultStage::Admission, &clock))?;
+    let (ctx, ke_timings) = table.checkout(
+        &clock,
+        &spec,
+        timeout,
+        cap,
+        trust_mode,
+        verification_time_ms,
+    )?;
     let session_generation = ctx.session_generation;
     if is_default_client {
         crate::nts::trust_state::TRUST_STATE.record_default_backend(ctx.trust_backend.into());
@@ -3887,6 +4216,15 @@ where
         }
         attribute_post_handshake(NtsError::from(err))
     };
+    // Strict elapsed time since the call-wide anchor, attributed to
+    // the UDP stage: this is what the send/recv re-arms and the UDP
+    // setup slice are measured from.
+    let udp_elapsed = || -> Result<Duration, NtsError> {
+        clock
+            .elapsed_since(started)
+            .map_err(NtsError::clock_fault(ClockFaultStage::Udp, &clock))
+            .map_err(attribute_post_handshake)
+    };
 
     let (uid, nonce) = fresh_request_uid_and_nonce(ctx.c2s_key.nonce_len())?;
 
@@ -3903,13 +4241,20 @@ where
     // syscall after this point is the AEAD-NTPv4 `send`/`recv`,
     // which is the same phase `bind_connected_udp_using` would tag
     // post-DNS (see its `remaining_or_timeout` comment).
-    let udp_budget = remaining_budget_or_ntp_timeout(timeout, started.elapsed())
+    let udp_budget = remaining_budget_or_ntp_timeout(timeout, udp_elapsed()?)
         .map_err(attribute_post_handshake)?;
     let UdpBindOutcome {
         socket,
         dns_micros: udp_dns_micros,
-    } = bind_connected_udp_using(&ctx.ntpv4_host, ctx.ntpv4_port, udp_budget, cap, lookup)
-        .map_err(attribute_post_handshake)?;
+    } = bind_connected_udp_using(
+        &clock,
+        &ctx.ntpv4_host,
+        ctx.ntpv4_port,
+        udp_budget,
+        cap,
+        lookup,
+    )
+    .map_err(attribute_post_handshake)?;
 
     // T1 (client transmit timestamp, RFC 5905 §8) is stamped after the
     // bind so that it and `send_at` — the monotonic anchor of
@@ -3946,9 +4291,24 @@ where
     // stale by an unbounded amount. Short-circuits to `Timeout(Ntp)`
     // rather than putting a packet on the wire once the budget is
     // spent. See `arm_send_against_call_deadline`.
-    arm_send_against_call_deadline(&socket, timeout, started.elapsed())
+    arm_send_against_call_deadline(&socket, timeout, udp_elapsed()?)
         .map_err(attribute_post_handshake)?;
 
+    // Suspend-in-flight bracket. `round_trip_micros` is measured on
+    // the suspend-frozen monotonic clock, so a process suspended
+    // between `send` and `recv` would report a round trip shorter
+    // than the one that actually happened and the sample would look
+    // *better* to delay-based selection than it is. A strict
+    // sleep-aware reading is taken just outside each monotonic one
+    // (`sent_at` before `send_at`, the receipt stamp after
+    // `recv_at`), so the sleep-aware span covers the monotonic span
+    // and the two differ only by read cost and any preemption between
+    // the paired reads on an awake system. The comparison happens
+    // once both spans exist, below.
+    let sent_at = clock
+        .instant()
+        .map_err(NtsError::clock_fault(ClockFaultStage::Receipt, &clock))
+        .map_err(attribute_post_handshake)?;
     let send_at = Instant::now();
     socket
         .send(&packet)
@@ -3965,7 +4325,7 @@ where
     // `timeout_ms`. Short-circuits to `Timeout(Ntp)` if the call-wide
     // budget is already exhausted by the time we get here. See
     // `arm_recv_against_call_deadline` for the full rationale.
-    arm_recv_against_call_deadline(&socket, timeout, started.elapsed())
+    arm_recv_against_call_deadline(&socket, timeout, udp_elapsed()?)
         .map_err(attribute_post_handshake)?;
 
     let mut buf = [0u8; 2048];
@@ -3973,7 +4333,7 @@ where
         .recv(&mut buf)
         .map_err(NtsError::from)
         .map_err(attribute_post_handshake)?;
-    let rtt_micros = send_at.elapsed().as_micros() as i64;
+    let rtt = send_at.elapsed();
     // T4 (destination timestamp, RFC 5905 §8): wall-clock reading at
     // packet arrival, on the same system clock that produced T1. Taken
     // immediately after `recv` — before the boottime stamp below and
@@ -3984,9 +4344,32 @@ where
     let destination_timestamp = system_time_to_ntp64();
     // Wire-level receipt stamp: taken here, before parsing/validation
     // and long before the FFI return, so downstream anchor-lag
-    // arithmetic excludes scheduling latency. Same clock source as
-    // `nts_boottime_micros` by construction.
-    let recv_boottime_micros = crate::nts::boottime::boottime_micros();
+    // arithmetic excludes scheduling latency. A strict reading on the
+    // same reader as every other stamp in this call; a fault here
+    // fails the query rather than returning a sample stamped on the
+    // fallback epoch. It doubles as the closing sleep-aware read of
+    // the suspend-in-flight bracket opened at `sent_at`.
+    let receipt = clock
+        .read()
+        .map_err(NtsError::clock_fault(ClockFaultStage::Receipt, &clock))
+        .map_err(attribute_post_handshake)?;
+    let recv_boottime_micros = receipt.micros;
+    let rtt_micros = i64::try_from(rtt.as_micros()).unwrap_or(i64::MAX);
+    // Both readings came from `clock` in program order, so the
+    // difference cannot be negative or foreign; `saturating_sub` only
+    // guards the arithmetic.
+    let sleep_aware_span_micros = recv_boottime_micros.saturating_sub(sent_at.micros());
+    if sleep_aware_span_micros.saturating_sub(rtt_micros) > SUSPEND_IN_FLIGHT_TOLERANCE_MICROS {
+        return Err(attribute_post_handshake(NtsError::ClockFault {
+            stage: ClockFaultStage::Receipt,
+            fault: NtsClockFault::SuspendedInFlight {
+                boottime_micros: sleep_aware_span_micros,
+                monotonic_micros: rtt_micros,
+            },
+            generation: clock.generation(),
+            trust_backend: None,
+        }));
+    }
 
     let response = parse_server_response(&buf[..n], &uid, transmit_timestamp, &ctx.s2c_key)
         .map_err(evict_on_rekey_signal)?;
@@ -4003,8 +4386,14 @@ where
     // this only closes the residual UID-reuse gap the finding names.
     // The session is *not* evicted — a replay is not a rekey signal,
     // so the cached keys and remaining cookies stay valid for the
-    // next query.
-    if !table.note_unique_id(&response.unique_id) {
+    // next query. A strict fault while stamping the sighting rejects
+    // the response too: a sample whose UID could not be recorded is
+    // one a later replay of it could not be recognised against.
+    let newly_seen = table
+        .note_unique_id(&clock, &response.unique_id)
+        .map_err(NtsError::clock_fault(ClockFaultStage::Receipt, &clock))
+        .map_err(attribute_post_handshake)?;
+    if !newly_seen {
         return Err(attribute_post_handshake(NtsError::NtpProtocol {
             message: format!(
                 "replayed Unique Identifier: response UID already accepted \
@@ -4050,6 +4439,8 @@ where
         phase_timings,
         trust_backend: ctx.trust_backend,
         recv_boottime_micros,
+        recv_clock_generation: receipt.generation,
+        recv_clock_backend: receipt.backend.into(),
         offset_micros,
         peer_delay_micros,
         root_delay_micros: ntp_short_signed_to_micros(response.header.root_delay),
@@ -4120,9 +4511,18 @@ fn nts_warm_cookies_inner(
     // those values verbatim from the slot payload (no cache re-read)
     // and report `KePhaseTimings::default()` because they did not
     // perform KE work themselves. See `SessionTable::warm_cookies_with`
-    // for the full state-machine documentation.
-    let (count, ke_timings, trust_backend, ke_warnings) =
-        table.warm_cookies(&spec, timeout, cap, trust_mode, verification_time_ms)?;
+    // for the full state-machine documentation. The strict reader is
+    // bound per call, as on the query path, so the singleflight budget
+    // and the install stamp share one generation.
+    let clock = SequentialReader::bind();
+    let (count, ke_timings, trust_backend, ke_warnings) = table.warm_cookies(
+        &clock,
+        &spec,
+        timeout,
+        cap,
+        trust_mode,
+        verification_time_ms,
+    )?;
     if is_default_client {
         crate::nts::trust_state::TRUST_STATE.record_default_backend(trust_backend.into());
     }

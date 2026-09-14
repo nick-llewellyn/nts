@@ -1132,12 +1132,12 @@ mod connect {
     #[test]
     fn connect_with_deadline_respects_external_deadline_for_unroutable_ip() {
         let budget = Duration::from_millis(500);
-        let deadline = Some(Deadline::new(budget));
+        let deadline = Deadline::new(budget).expect("strict clock");
         let started = Instant::now();
         let result = connect_with_deadline_using(
             "192.0.2.1",
             4460,
-            deadline,
+            Some(&deadline),
             crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
             None,
             system_lookup,
@@ -1156,20 +1156,22 @@ mod connect {
 mod deadline {
     use super::*;
 
-    /// Pins the `Deadline::remaining` saturation contract: once the
-    /// anchored instant has passed, `remaining()` reports zero rather
-    /// than panicking on the underlying `Duration` subtraction.
-    /// `apply_to` and the connect/read paths in `perform_handshake`
-    /// rely on `is_zero()` as the "deadline elapsed" signal, so
-    /// regressing this would silently re-enable budget overshoot.
+    /// Pins the `Deadline::remaining` expiry contract: once the
+    /// anchored instant has passed, `remaining()` reports `Ok(zero)`
+    /// rather than a fault or a panic on the underlying `Duration`
+    /// subtraction. Expiry is legal; only a regressed or foreign
+    /// reading is a `ClockFault`. `apply_to` and the connect/read
+    /// paths in `perform_handshake` rely on `is_zero()` as the
+    /// "deadline elapsed" signal, so regressing this would silently
+    /// re-enable budget overshoot.
     #[test]
     fn deadline_remaining_saturates_at_zero_after_expiry() {
-        let d = Deadline::new(Duration::from_micros(1));
+        let d = Deadline::new(Duration::from_micros(1)).expect("strict clock");
         std::thread::sleep(Duration::from_millis(10));
+        let remaining = d.remaining().expect("expiry is not a fault");
         assert!(
-            d.remaining().is_zero(),
-            "expired deadline must saturate at zero, got {:?}",
-            d.remaining(),
+            remaining.is_zero(),
+            "expired deadline must report zero, got {remaining:?}",
         );
     }
 
@@ -1181,7 +1183,7 @@ mod deadline {
     /// helper exists to prevent.
     #[test]
     fn deadline_apply_to_returns_timed_out_when_expired() {
-        let d = Deadline::new(Duration::from_micros(1));
+        let d = Deadline::new(Duration::from_micros(1)).expect("strict clock");
         std::thread::sleep(Duration::from_millis(10));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -1198,7 +1200,7 @@ mod deadline {
     #[test]
     fn deadline_apply_to_sets_socket_timeouts_within_remaining_budget() {
         let budget = Duration::from_millis(500);
-        let d = Deadline::new(budget);
+        let d = Deadline::new(budget).expect("strict clock");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         d.apply_to(&tcp).expect("non-zero remaining");
@@ -1230,7 +1232,7 @@ mod deadline {
             KeTimeoutPhase::Tls,
             KeTimeoutPhase::KeRecordIo,
         ] {
-            let d = Deadline::new(Duration::from_micros(1));
+            let d = Deadline::new(Duration::from_micros(1)).expect("strict clock");
             std::thread::sleep(Duration::from_millis(10));
             let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
             match d.apply_to_with_phase(&tcp, phase) {
@@ -1252,7 +1254,7 @@ mod deadline {
     #[test]
     fn deadline_apply_to_with_phase_sets_socket_timeouts_within_remaining() {
         let budget = Duration::from_millis(500);
-        let d = Deadline::new(budget);
+        let d = Deadline::new(budget).expect("strict clock");
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         d.apply_to_with_phase(&tcp, KeTimeoutPhase::Tls)
@@ -1276,7 +1278,7 @@ mod deadline {
     /// `connect_timeout` / `resolve_with_global` unchanged.
     #[test]
     fn deadline_check_or_timeout_short_circuits_after_expiry() {
-        let d = Deadline::new(Duration::from_micros(1));
+        let d = Deadline::new(Duration::from_micros(1)).expect("strict clock");
         std::thread::sleep(Duration::from_millis(10));
         match d.check_or_timeout(KeTimeoutPhase::DnsTimeout) {
             Err(KeError::PhaseTimeout(KeTimeoutPhase::DnsTimeout)) => {}
@@ -1286,7 +1288,7 @@ mod deadline {
             ),
         }
 
-        let live = Deadline::new(Duration::from_millis(500));
+        let live = Deadline::new(Duration::from_millis(500)).expect("strict clock");
         let remaining = live
             .check_or_timeout(KeTimeoutPhase::Connect)
             .expect("non-zero remaining");
