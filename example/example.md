@@ -140,6 +140,8 @@ Future<void> main() async {
         'trust backend unavailable: $message',
       NtsErrorInternal(:final message) => 'internal: $message',
       NtsErrorAbiMismatch(:final message) => 'ABI mismatch: $message',
+      NtsErrorClockFault(:final stage, :final fault) =>
+        'clock fault in stage ${stage.name}: ${fault.message}',
     };
     print('nts call failed: $detail');
   }

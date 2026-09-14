@@ -42,6 +42,8 @@ NtsTimeSample _publicSample(ffi.NtsTimeSample s) => NtsTimeSample(
   phaseTimings: _publicPhase(s.phaseTimings),
   trustBackend: _publicTrustBackend(s.trustBackend),
   recvBoottimeMicros: s.recvBoottimeMicros.toInt(),
+  recvClockGeneration: s.recvClockGeneration.toInt(),
+  recvClockBackend: clockBackendFromFfi(s.recvClockBackend),
   offsetMicros: s.offsetMicros.toInt(),
   peerDelayMicros: s.peerDelayMicros.toInt(),
   rootDelayMicros: s.rootDelayMicros.toInt(),
@@ -93,6 +95,18 @@ TimeoutPhase _publicTimeoutPhase(ffi.TimeoutPhase phase) => switch (phase) {
   ffi.TimeoutPhase.ntp => TimeoutPhase.ntp,
 };
 
+ClockFaultStage _publicClockFaultStage(ffi.ClockFaultStage stage) =>
+    switch (stage) {
+      ffi.ClockFaultStage.admission => ClockFaultStage.admission,
+      ffi.ClockFaultStage.handshake => ClockFaultStage.handshake,
+      ffi.ClockFaultStage.session => ClockFaultStage.session,
+      ffi.ClockFaultStage.udp => ClockFaultStage.udp,
+      ffi.ClockFaultStage.receipt => ClockFaultStage.receipt,
+      ffi.ClockFaultStage.await_ => ClockFaultStage.awaitResult,
+      ffi.ClockFaultStage.return_ => ClockFaultStage.attribution,
+      ffi.ClockFaultStage.projection => ClockFaultStage.projection,
+    };
+
 NtsError _publicError(ffi.NtsError err) => switch (err) {
   ffi.NtsError_InvalidSpec(:final field0) => NtsError.invalidSpec(
     message: field0,
@@ -125,6 +139,18 @@ NtsError _publicError(ffi.NtsError err) => switch (err) {
   ),
   ffi.NtsError_TrustBackendUnavailable(:final field0) =>
     NtsError.trustBackendUnavailable(message: field0),
+  ffi.NtsError_ClockFault(
+    :final stage,
+    :final fault,
+    :final generation,
+    :final trustBackend,
+  ) =>
+    NtsError.clockFault(
+      stage: _publicClockFaultStage(stage),
+      fault: strictClockErrorFromFfi(fault),
+      generation: generation.toInt(),
+      trustBackend: _maybePublicTrustBackend(trustBackend),
+    ),
   ffi.NtsError_Internal(:final field0) => NtsError.internal(message: field0),
 };
 

@@ -7,11 +7,13 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show
+        ClockFaultStage,
         NtsClient,
         NtsDnsPoolStats,
         NtsError,
         NtsErrorAbiMismatch,
         NtsErrorAuthentication,
+        NtsErrorClockFault,
         NtsErrorInternal,
         NtsErrorInvalidSpec,
         NtsErrorKeProtocol,
@@ -25,6 +27,7 @@ import 'package:nts/nts.dart'
         NtsTimeSample,
         NtsWarmCookiesOutcome,
         PhaseTimings,
+        StrictClockUninitialized,
         TimeoutPhase,
         TrustBackend,
         TrustMode;
@@ -910,6 +913,7 @@ enum _NtsErrorKind {
   trustBackendUnavailable,
   internal,
   abiMismatch,
+  clockFault,
 }
 
 /// Kind of [err]'s variant.
@@ -929,6 +933,7 @@ _NtsErrorKind _variantKind(NtsError err) => switch (err) {
   NtsErrorTrustBackendUnavailable() => _NtsErrorKind.trustBackendUnavailable,
   NtsErrorInternal() => _NtsErrorKind.internal,
   NtsErrorAbiMismatch() => _NtsErrorKind.abiMismatch,
+  NtsErrorClockFault() => _NtsErrorKind.clockFault,
 };
 
 /// One sample instance of every `NtsError` variant, for tests that
@@ -949,6 +954,11 @@ const _allNtsErrors = <NtsError>[
   NtsError.trustBackendUnavailable(message: 'x'),
   NtsError.internal(message: 'x'),
   NtsError.abiMismatch(message: 'x'),
+  NtsError.clockFault(
+    stage: ClockFaultStage.admission,
+    fault: StrictClockUninitialized(),
+    generation: 0,
+  ),
 ];
 
 /// Every [_allNtsErrors] sample except the `Timeout` variant.
@@ -978,6 +988,7 @@ String _expectedTag(_NtsErrorKind kind) => switch (kind) {
   _NtsErrorKind.trustBackendUnavailable => 'TrustBackendUnavailable',
   _NtsErrorKind.internal => 'Internal',
   _NtsErrorKind.abiMismatch => 'AbiMismatch',
+  _NtsErrorKind.clockFault => 'ClockFault',
 };
 
 /// Whether [kind] holds a `trustBackend` field at all.
@@ -991,7 +1002,8 @@ bool _carriesAttribution(_NtsErrorKind kind) => switch (kind) {
   _NtsErrorKind.ntpProtocol ||
   _NtsErrorKind.authentication ||
   _NtsErrorKind.timeout ||
-  _NtsErrorKind.noCookies => true,
+  _NtsErrorKind.noCookies ||
+  _NtsErrorKind.clockFault => true,
   // These four have no attribution field at all, so their `null` says
   // nothing about when they fired — `internal` and `abiMismatch` can
   // both be raised downstream of a resolved backend.
@@ -1030,6 +1042,12 @@ NtsError _withBackend(_NtsErrorKind kind, TrustBackend backend) =>
         trustBackend: backend,
       ),
       _NtsErrorKind.noCookies => NtsError.noCookies(trustBackend: backend),
+      _NtsErrorKind.clockFault => NtsError.clockFault(
+        stage: ClockFaultStage.admission,
+        fault: const StrictClockUninitialized(),
+        generation: 0,
+        trustBackend: backend,
+      ),
       _NtsErrorKind.invalidSpec => const NtsError.invalidSpec(message: 'x'),
       _NtsErrorKind.trustBackendUnavailable =>
         const NtsError.trustBackendUnavailable(message: 'x'),
@@ -1058,5 +1076,6 @@ bool _expectedErrorSeverity(_NtsErrorKind kind) => switch (kind) {
   _NtsErrorKind.ntpProtocol ||
   _NtsErrorKind.trustBackendUnavailable ||
   _NtsErrorKind.internal ||
-  _NtsErrorKind.abiMismatch => true,
+  _NtsErrorKind.abiMismatch ||
+  _NtsErrorKind.clockFault => true,
 };

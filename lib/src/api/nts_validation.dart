@@ -139,6 +139,7 @@ Future<T> _dispatch<T>({
   required int dnsConcurrencyCap,
   required int bridgeConcurrencyCap,
   required DateTime? verificationTime,
+  required StrictClockContext? context,
   required Future<T> Function(
     ffi.NtsServerSpec ffiSpec,
     int ffiTimeoutMs,
@@ -157,6 +158,7 @@ Future<T> _dispatch<T>({
   return _withBridgeSlot(
     bridgeConcurrencyCap: bridgeConcurrencyCap,
     timeout: timeout,
+    context: context,
     body: (remainingTimeout) async {
       try {
         return await call(

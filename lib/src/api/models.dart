@@ -21,6 +21,7 @@
 // its projection needs the package's sleep-aware monotonic timeline.
 
 import 'clock.dart';
+import 'strict_clock.dart' show ClockBackend;
 
 /// Address of an NTS-KE endpoint.
 class NtsServerSpec {
@@ -179,14 +180,30 @@ class NtsTimeSample {
   /// FFI-return, worker-thread handoff, or Dart event-loop latency
   /// is incurred.
   ///
-  /// Same clock source and epoch as `ntsBoottimeMicros` /
-  /// `MonotonicClock` (including on the degraded non-boottime path),
-  /// so subtracting this from a later `MonotonicClock` reading in
-  /// the same process yields the scheduling lag since receipt. The
+  /// A strict read since 10.0: taken under [recvClockGeneration] on
+  /// [recvClockBackend], so subtracting it from a later
+  /// `StrictClockContext` reading on the same generation yields the
+  /// scheduling lag since receipt, and a query whose stamp read
+  /// faults fails with `NtsError.clockFault` rather than returning a
+  /// sample stamped on another epoch. On a healthy native clock it is
+  /// the value `MonotonicClock` would read at the same instant. The
   /// epoch is arbitrary (per-boot): never persist this value and
   /// never compare it across boots, devices, or processes. New in
   /// 7.1.
   final int recvBoottimeMicros;
+
+  /// Live strict-clock generation [recvBoottimeMicros] was read under
+  /// (see `StrictClockContext.generation`). Attribution is by
+  /// comparing this with a context's generation, never by judging the
+  /// stamp's plausibility: a mismatch means the stamp is foreign and
+  /// must not be aged. `0` never occurs on a sample produced by the
+  /// native core — the live generation starts at `1` — so the
+  /// fixture default `0` means "no strict receipt". New in 10.0.
+  final int recvClockGeneration;
+
+  /// Backend [recvBoottimeMicros] was read from, or `null` for a
+  /// fixture that carries no strict receipt. New in 10.0.
+  final ClockBackend? recvClockBackend;
 
   /// True clock offset θ = ((T2−T1)+(T3−T4))/2 in microseconds
   /// (RFC 5905 §8), computed from the four on-wire timestamps.
@@ -328,6 +345,9 @@ class NtsTimeSample {
   /// so consumers fall back to [roundTripMicros]. [keWarnings]
   /// defaults to `const []` for the same reason; an empty list is
   /// also the value every real server produces today.
+  /// [recvClockGeneration] defaults to `0` and [recvClockBackend] to
+  /// `null` — together "no strict receipt", which the strict
+  /// acquisition path rejects and the legacy path ignores.
   const NtsTimeSample({
     required this.utcUnixMicros,
     required this.roundTripMicros,
@@ -337,6 +357,8 @@ class NtsTimeSample {
     required this.phaseTimings,
     required this.trustBackend,
     this.recvBoottimeMicros = 0,
+    this.recvClockGeneration = 0,
+    this.recvClockBackend,
     this.offsetMicros = 0,
     this.peerDelayMicros = 0,
     this.rootDelayMicros = 0,
@@ -355,6 +377,8 @@ class NtsTimeSample {
     phaseTimings,
     trustBackend,
     recvBoottimeMicros,
+    recvClockGeneration,
+    recvClockBackend,
     offsetMicros,
     peerDelayMicros,
     rootDelayMicros,
@@ -375,6 +399,8 @@ class NtsTimeSample {
           phaseTimings == other.phaseTimings &&
           trustBackend == other.trustBackend &&
           recvBoottimeMicros == other.recvBoottimeMicros &&
+          recvClockGeneration == other.recvClockGeneration &&
+          recvClockBackend == other.recvClockBackend &&
           offsetMicros == other.offsetMicros &&
           peerDelayMicros == other.peerDelayMicros &&
           rootDelayMicros == other.rootDelayMicros &&
@@ -390,6 +416,8 @@ class NtsTimeSample {
       'freshCookies: $freshCookies, phaseTimings: $phaseTimings, '
       'trustBackend: ${trustBackend.name}, '
       'recvBoottimeMicros: $recvBoottimeMicros, '
+      'recvClockGeneration: $recvClockGeneration, '
+      'recvClockBackend: ${recvClockBackend?.name}, '
       'offsetMicros: $offsetMicros, '
       'peerDelayMicros: $peerDelayMicros, '
       'rootDelayMicros: $rootDelayMicros, '

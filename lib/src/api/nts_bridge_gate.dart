@@ -43,13 +43,33 @@ part of 'nts.dart';
 // `_kBridgeSweepSliceCap`, so a resume re-evaluates against the
 // boottime clock within one slice; the cap never delays a deadline
 // that is nearer than the cap, which is every deadline while awake.
+//
+// A call that passes a `StrictClockContext` is a strict waiter: its
+// expiry decision and its queue-wait deduction are made on that
+// context (`elapsedSince` the reading taken at enqueue), never on
+// `MonotonicClock`, and a fault on any of those reads fails the waiter
+// with `NtsError.clockFault(stage: admission)` instead of admitting it
+// on a refreshed budget. The `MonotonicClock` deadline is still
+// recorded for a strict waiter, but only as input to the sweep timer's
+// arming — a scheduling hint, not a clock decision.
 
 class _BridgeWaiter {
   final int cap;
 
   /// Absolute [MonotonicClock] reading at which this waiter's budget
-  /// runs out. Sleep-aware, unlike the event loop's timer clock.
+  /// runs out. Sleep-aware, unlike the event loop's timer clock. For a
+  /// strict waiter this only schedules the sweep; see [context].
   final int deadlineMicros;
+
+  /// Budget the waiter was queued with.
+  final Duration timeout;
+
+  /// Strict context metering this waiter, or `null` for a legacy
+  /// waiter. When set, [enqueued] is the context's reading at enqueue
+  /// and the sweep decides expiry from `context.elapsedSince(enqueued)`
+  /// against [timeout].
+  final StrictClockContext? context;
+  final StrictReading? enqueued;
 
   /// Captured at enqueue time so the timeout error's stack trace
   /// points at the wrapper call path that queued the waiter, not at
@@ -57,7 +77,14 @@ class _BridgeWaiter {
   final StackTrace enqueueTrace;
 
   final Completer<void> admitted = Completer<void>();
-  _BridgeWaiter(this.cap, this.deadlineMicros, this.enqueueTrace);
+  _BridgeWaiter(
+    this.cap,
+    this.deadlineMicros,
+    this.enqueueTrace, {
+    required this.timeout,
+    this.context,
+    this.enqueued,
+  });
 }
 
 /// Upper bound on how long the queue sweeper parks between deadline
@@ -81,6 +108,7 @@ Future<T> _withBridgeSlot<T>({
   required int bridgeConcurrencyCap,
   required Duration timeout,
   required Future<T> Function(Duration remainingTimeout) body,
+  StrictClockContext? context,
 }) async {
   // Uncontended calls take the slot synchronously and forward
   // `timeout` verbatim; the queue-wait deduction below only applies
@@ -89,12 +117,21 @@ Future<T> _withBridgeSlot<T>({
   if (_bridgeInFlight < bridgeConcurrencyCap) {
     _bridgeInFlight++;
   } else {
+    // A strict waiter reads its own context first, so a context that
+    // is already invalid fails the call here rather than after a
+    // queue wait it could never have been charged for.
+    final enqueued = context == null
+        ? null
+        : _strictRead(context, ClockFaultStage.admission);
     final queueClock = MonotonicClock.instance;
     final queueStartMicros = queueClock.nowMicros();
     final waiter = _BridgeWaiter(
       bridgeConcurrencyCap,
       queueStartMicros + timeout.inMicroseconds,
       StackTrace.current,
+      timeout: timeout,
+      context: context,
+      enqueued: enqueued,
     );
     final wasEmpty = _bridgeQueue.isEmpty;
     _bridgeQueue.add(waiter);
@@ -113,7 +150,10 @@ Future<T> _withBridgeSlot<T>({
     // on either exit: an admitted or expired entry is dropped by the
     // next compaction pass.
     await waiter.admitted.future;
-    remainingTimeout = timeout - queueClock.elapsedSince(queueStartMicros);
+    remainingTimeout = enqueued == null
+        ? timeout - queueClock.elapsedSince(queueStartMicros)
+        : timeout -
+              _strictElapsed(context!, enqueued, ClockFaultStage.admission);
   }
   try {
     if (remainingTimeout < const Duration(milliseconds: 1)) {
@@ -188,16 +228,22 @@ void _sweepBridgeQueue() {
       // Already resolved by an earlier pass in this same turn. Drop.
       continue;
     }
-    if (waiter.deadlineMicros <= nowMicros) {
-      // Budget spent while queued. Expiring here rather than admitting
-      // keeps the freed slot for a waiter that can still use it; the
-      // dispatch-side residual check would only have rejected this one
-      // again.
-      waiter.admitted.completeError(
-        const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation),
-        waiter.enqueueTrace,
-      );
-      continue;
+    switch (_bridgeWaiterVerdict(waiter, nowMicros)) {
+      case _WaiterVerdict.expired:
+        // Budget spent while queued. Expiring here rather than
+        // admitting keeps the freed slot for a waiter that can still
+        // use it; the dispatch-side residual check would only have
+        // rejected this one again.
+        waiter.admitted.completeError(
+          const NtsError.timeout(phase: TimeoutPhase.bridgeSaturation),
+          waiter.enqueueTrace,
+        );
+        continue;
+      case _WaiterVerdict.faulted:
+        // Already failed with `clockFault(admission)`. Drop.
+        continue;
+      case _WaiterVerdict.live:
+        break;
     }
     if (_bridgeInFlight < waiter.cap) {
       _bridgeInFlight++;
@@ -211,4 +257,32 @@ void _sweepBridgeQueue() {
   }
   _bridgeQueue.length = kept;
   _armBridgeSweep(nowMicros, nearestMicros);
+}
+
+enum _WaiterVerdict { live, expired, faulted }
+
+/// Whether [waiter]'s budget ran out, decided on its own clock: the
+/// legacy [MonotonicClock] reading [nowMicros] for a legacy waiter, a
+/// fresh read of its strict context for a strict one. A strict read
+/// that faults fails the waiter with `clockFault(admission)` right
+/// here — it is neither expired as a timeout nor admitted on a budget
+/// the context can no longer meter.
+_WaiterVerdict _bridgeWaiterVerdict(_BridgeWaiter waiter, int nowMicros) {
+  final context = waiter.context;
+  if (context == null) {
+    return waiter.deadlineMicros <= nowMicros
+        ? _WaiterVerdict.expired
+        : _WaiterVerdict.live;
+  }
+  try {
+    return context.elapsedSince(waiter.enqueued!) >= waiter.timeout
+        ? _WaiterVerdict.expired
+        : _WaiterVerdict.live;
+  } on StrictClockError catch (fault) {
+    waiter.admitted.completeError(
+      _clockFaultError(context, ClockFaultStage.admission, fault),
+      waiter.enqueueTrace,
+    );
+    return _WaiterVerdict.faulted;
+  }
 }

@@ -22,8 +22,10 @@ import 'package:meta/meta.dart' show visibleForTesting;
 import '../ffi/api/nts.dart' as ffi;
 import '../ffi/frb_generated.dart' show NtsRustLib;
 import 'bridge.dart';
+import 'models.dart' show NtsTimeSample, TrustBackend;
 
 part 'strict_clock_errors.dart';
+part 'strict_synced_time.dart';
 
 /// Native suspend-inclusive clock source family.
 enum ClockBackend {
@@ -668,6 +670,14 @@ final class StrictClockContext {
         generation: boundGeneration ?? expected.toInt(),
         reason: StrictClockInvalidationReason.nativeGeneration,
       ),
+    ffi.NtsClockFault_SuspendedInFlight(
+      :final boottimeMicros,
+      :final monotonicMicros,
+    ) =>
+      StrictClockSuspendedInFlight(
+        boottimeMicros: boottimeMicros.toInt(),
+        monotonicMicros: monotonicMicros.toInt(),
+      ),
   };
 
   // Exhaustive on purpose, like `_mapFault`: a new FFI variant must be
@@ -683,6 +693,12 @@ final class StrictClockContext {
         ffi.NtsClockFault_TimebaseUnavailable() ||
         ffi.NtsClockFault_InvalidRaw() ||
         ffi.NtsClockFault_ConversionOverflow() =>
+          StrictClockInvalidationReason.sourceFault,
+        // A per-sample verdict from the query round trip; the strict
+        // read export never produces it. Arriving here it is a bridge
+        // out of contract, which is a source fault like any other
+        // untyped throw.
+        ffi.NtsClockFault_SuspendedInFlight() =>
           StrictClockInvalidationReason.sourceFault,
       };
 }
@@ -708,4 +724,72 @@ void noteStrictClockBridgeReset({required bool invalidateNative}) {
   if (invalidateNative) {
     ffi.ntsClockInvalidate();
   }
+}
+
+/// Conversion hook for the wrapper layer: maps a generated clock fault
+/// carried inside an `ffi.NtsError` to the public error hierarchy so
+/// `NtsError.clockFault` never exposes a generated type.
+///
+/// Not part of the public API.
+StrictClockError strictClockErrorFromFfi(ffi.NtsClockFault fault) =>
+    StrictClockContext._mapFault(fault);
+
+/// Conversion hook for the wrapper layer: maps a generated backend
+/// tag to [ClockBackend] for `NtsTimeSample.recvClockBackend`.
+///
+/// Not part of the public API.
+ClockBackend clockBackendFromFfi(ffi.NtsClockBackend backend) =>
+    StrictClockContext._backendFrom(backend);
+
+/// Attribution hook for the strict acquisition path: returns
+/// [sample]'s wire receipt stamp as a [StrictReading] on [context]'s
+/// coordinate, or throws.
+///
+/// Attribution is by provenance, never by plausibility. A sample with
+/// no stamp (`recvClockGeneration == 0`) throws
+/// [StrictClockMissingReceipt]; one stamped under another generation
+/// or backend throws [StrictClockForeignReceipt]. Neither touches the
+/// context — the sample is unattributable, the clock is fine. A stamp
+/// that orders before [notBefore] (a reading this context took before
+/// the query was dispatched) is a cross-reader regression: it is
+/// reported as [StrictClockRegression] and, as with
+/// [StrictClockContext.elapsedSince], invalidates the context and
+/// advances the native generation. A later successful read cannot
+/// certify a sample this function rejected.
+///
+/// Not part of the public API.
+StrictReading attributeStrictReceipt(
+  StrictClockContext context,
+  NtsTimeSample sample, {
+  required StrictReading notBefore,
+}) {
+  context._checkReadingBelongs(notBefore);
+  if (sample.recvClockGeneration == 0) {
+    throw const StrictClockMissingReceipt();
+  }
+  final backend = sample.recvClockBackend;
+  if (sample.recvClockGeneration != context.generation ||
+      backend != context.descriptor.backend) {
+    throw StrictClockForeignReceipt(
+      expectedGeneration: context.generation,
+      observedGeneration: sample.recvClockGeneration,
+      expectedBackend: context.descriptor.backend,
+      observedBackend: backend,
+    );
+  }
+  final micros = sample.recvBoottimeMicros;
+  if (micros < notBefore.micros) {
+    StrictClockContext._tryNativeInvalidate();
+    throw context._fail(
+      StrictClockRegression(previous: notBefore.micros, observed: micros),
+      StrictClockInvalidationReason.regression,
+    );
+  }
+  return StrictReading._(
+    micros: micros,
+    generation: context.generation,
+    descriptor: context.descriptor,
+    provenance: context.provenance,
+    source: context._source,
+  );
 }

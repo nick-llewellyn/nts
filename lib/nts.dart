@@ -83,8 +83,15 @@ export 'src/api/clock.dart';
 // is bound to a live generation, and fails closed on that call — no
 // `Stopwatch` fallback, no clamping — whenever the source faults or
 // the bridge is torn down. `noteStrictClockBridgeReset` is the hook
-// `NtsBridge` uses to invalidate contexts and is not for consumers.
-export 'src/api/strict_clock.dart' hide noteStrictClockBridgeReset;
+// `NtsBridge` uses to invalidate contexts, and the three `*FromFfi` /
+// `attributeStrictReceipt` functions are the wrapper layer's
+// conversion hooks; none of them is for consumers.
+export 'src/api/strict_clock.dart'
+    hide
+        attributeStrictReceipt,
+        clockBackendFromFfi,
+        noteStrictClockBridgeReset,
+        strictClockErrorFromFfi;
 
 // Public NTS surface (RFC 8915). The wrapper layer carries the
 // dartdoc that consumers see and applies the package's default values
