@@ -31,7 +31,7 @@ tarball.
   the constructor (`0` / `null`), so hand-built fixtures still compile;
   the value-semantics contract (`==`, `hashCode`, `toString`) now
   covers them. A sample from a real bridge always carries a non-zero
-  generation.
+  generation. ([#354](https://github.com/nick-llewellyn/nts/pull/354))
 
 ### Added
 
@@ -47,7 +47,8 @@ tarball.
   stamp, the UDP deadlines and the wire receipt; a fault at any of
   them fails that call as `NtsError.clockFault` with the matching
   stage instead of substituting a value, and a session entry stamped
-  under a retired generation is dropped rather than served. The
+  under a retired generation is dropped rather than served
+  ([#354](https://github.com/nick-llewellyn/nts/pull/354)). The
   send/recv pair is additionally bracketed by strict readings, and a
   sample whose sleep-aware span exceeds its monotonic round trip by
   more than 50 ms is rejected as `StrictClockSuspendedInFlight`
