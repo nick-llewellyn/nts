@@ -604,16 +604,18 @@ $NtsClockFault_SuspendedInFlightCopyWith<NtsClockFault_SuspendedInFlight> get co
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_SuspendedInFlight&&(identical(other.boottimeMicros, boottimeMicros) || other.boottimeMicros == boottimeMicros)&&(identical(other.monotonicMicros, monotonicMicros) || other.monotonicMicros == monotonicMicros));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_SuspendedInFlight&&(identical(other.boottimeMicros, boottimeMicros) || other.boottimeMicros == boottimeMicros)&&(identical(other.monotonicMicros, monotonicMicros) || other.monotonicMicros == monotonicMicros));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,boottimeMicros,monotonicMicros);
+int get hashCode {
+    return Object.hash(runtimeType,boottimeMicros,monotonicMicros);
+}
 
 @override
 String toString() {
-  return 'NtsClockFault.suspendedInFlight(boottimeMicros: $boottimeMicros, monotonicMicros: $monotonicMicros)';
+    return 'NtsClockFault.suspendedInFlight(boottimeMicros: $boottimeMicros, monotonicMicros: $monotonicMicros)';
 }
 
 
@@ -1436,16 +1438,18 @@ $NtsError_ClockFaultCopyWith<NtsError_ClockFault> get copyWith => _$NtsError_Clo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_ClockFault&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.fault, fault) || other.fault == fault)&&(identical(other.generation, generation) || other.generation == generation)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_ClockFault&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.fault, fault) || other.fault == fault)&&(identical(other.generation, generation) || other.generation == generation)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,stage,fault,generation,trustBackend);
+int get hashCode {
+    return Object.hash(runtimeType,stage,fault,generation,trustBackend);
+}
 
 @override
 String toString() {
-  return 'NtsError.clockFault(stage: $stage, fault: $fault, generation: $generation, trustBackend: $trustBackend)';
+    return 'NtsError.clockFault(stage: $stage, fault: $fault, generation: $generation, trustBackend: $trustBackend)';
 }
 
 
