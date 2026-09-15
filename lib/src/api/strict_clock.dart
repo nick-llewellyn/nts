@@ -337,13 +337,13 @@ final class StrictClockContext {
     try {
       raw = ffi.ntsStrictClockRead();
     } on ffi.NtsClockFault catch (fault) {
-      throw _fail(_mapFault(fault), _reasonFor(fault));
+      throw _fail(
+        _mapFault(fault, boundGeneration: generation),
+        _reasonFor(fault),
+      );
     } catch (error) {
       throw _fail(
-        StrictClockSourceFault(
-          kind: SourceFaultKind.bridge,
-          detail: error.toString(),
-        ),
+        _bridgeFault(error),
         StrictClockInvalidationReason.sourceFault,
       );
     }
@@ -492,11 +492,34 @@ final class StrictClockContext {
     } on ffi.NtsClockFault catch (fault) {
       throw _mapFault(fault);
     } catch (error) {
-      throw StrictClockSourceFault(
-        kind: SourceFaultKind.bridge,
-        detail: error.toString(),
+      throw _bridgeFault(error);
+    }
+  }
+
+  /// Classify an untyped throw from the bridge. `RangeError` and
+  /// `UnimplementedError` are the two shapes the FRB-generated decoder
+  /// produces when the loaded library's wire layout disagrees with
+  /// these bindings (see the ABI-mismatch notes in
+  /// `nts_validation.dart`), so they carry rebuild guidance rather
+  /// than being blamed on the clock source. Nothing else is
+  /// attributable to the decoder and stays a generic bridge fault.
+  static StrictClockSourceFault _bridgeFault(Object error) {
+    if (error is RangeError || error is UnimplementedError) {
+      return StrictClockSourceFault(
+        kind: SourceFaultKind.abiMismatch,
+        detail:
+            'the loaded native library and these Dart bindings disagree '
+            'on the wire layout of a value crossing the FFI boundary '
+            '($error) — rebuild the native library from the Rust sources '
+            'matching this package version (`cargo build --release` in '
+            '`rust/`, then regenerate bindings with '
+            '`dart run tool/check_bindings.dart` if the Rust API changed)',
       );
     }
+    return StrictClockSourceFault(
+      kind: SourceFaultKind.bridge,
+      detail: error.toString(),
+    );
   }
 
   static ClockSourceDescriptor _descriptorFrom(ffi.NtsClockDescriptor d) =>
@@ -513,7 +536,16 @@ final class StrictClockContext {
       ClockBackend.windowsInterruptTime,
   };
 
-  static StrictClockError _mapFault(ffi.NtsClockFault f) => switch (f) {
+  /// Convert a typed FFI fault. [boundGeneration] is the generation of
+  /// the context that made the call, when there is one: a
+  /// `generationChanged` fault's `expected` is the live generation the
+  /// read began under, not the context's, so the resulting
+  /// [StrictClockInvalidated] names the context's own generation. At
+  /// resolution time there is no context yet and `expected` stands.
+  static StrictClockError _mapFault(
+    ffi.NtsClockFault f, {
+    int? boundGeneration,
+  }) => switch (f) {
     ffi.NtsClockFault_Unsupported() => const StrictClockUnsupported(),
     ffi.NtsClockFault_SyscallFailed(:final errno) => StrictClockSourceFault(
       kind: SourceFaultKind.syscallFailed,
@@ -546,7 +578,7 @@ final class StrictClockContext {
       ),
     ffi.NtsClockFault_GenerationChanged(:final expected) =>
       StrictClockInvalidated(
-        generation: expected.toInt(),
+        generation: boundGeneration ?? expected.toInt(),
         reason: StrictClockInvalidationReason.nativeGeneration,
       ),
   };

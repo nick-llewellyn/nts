@@ -20,16 +20,23 @@ tarball.
   the process-wide generation for the bridge lifecycle. Fault variants:
   `unsupported`, `syscallFailed(errno)`, `timebaseUnavailable`,
   `invalidRaw`, `conversionOverflow`, `regression`,
-  `generationChanged`. Every fault advances the generation so contexts
-  bound before it fail closed on their next read, and a reading whose
-  generation moved while it was being taken is rejected rather than
-  stamped with the retired value; on the strict path a failed Apple
-  timebase probe is no longer cached as permanent. The legacy
-  `ntsBoottimeMicros()` is unchanged in value and now documented as
-  best-effort and nonportable; its fallback stays sticky on every
-  platform (previously Apple only) so one `MonotonicClock` never mixes
-  epochs, and no strict path reads it. Foundation for the public Dart
-  strict-clock contexts that follow in this release.
+  `generationChanged`. A strict-read fault in the source or the
+  conversion advances the generation so contexts bound before it fail
+  closed on their next read; `generationChanged` is the exception,
+  reporting an advance that happened while the reading was being
+  taken so the reading is rejected rather than stamped with the
+  retired value, and `ntsClockDescriptor()`'s `unsupported` is a
+  compile-time fact that leaves the generation alone. On the strict
+  path a failed Apple timebase probe is no longer cached as permanent.
+  The legacy `ntsBoottimeMicros()` returns the same native values
+  while the source succeeds and is now documented as best-effort and
+  nonportable. After a first fault it now stays on the process-local
+  fallback on every platform (previously Apple only; Linux and Windows
+  re-probed and could return to native), so a `MonotonicClock` changes
+  epoch at most once, at that fault, instead of on any later recovery
+  — the jump at the fault itself remains, which is the reason no
+  strict path reads it. Foundation for the public Dart strict-clock
+  contexts that follow in this release.
   ([#353](https://github.com/nick-llewellyn/nts/pull/353))
 
 - `StrictClockContext`, the public strict sleep-aware clock. Where

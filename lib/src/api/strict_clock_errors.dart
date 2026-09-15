@@ -68,8 +68,17 @@ enum SourceFaultKind {
   /// The checked scale or narrowing to microseconds overflowed.
   conversionOverflow,
 
-  /// The bridge threw something that is not a typed clock fault: a
-  /// missing symbol, a disposed entrypoint, an unstubbed mock method.
+  /// The loaded native library and these Dart bindings disagree on
+  /// the wire layout of the value crossing the FFI boundary (the
+  /// generated decoder threw). Rebuild the native library from the
+  /// Rust sources matching this package version; resolving a new
+  /// context does not help. The same classification the query entry
+  /// points report as `NtsError.abiMismatch`.
+  abiMismatch,
+
+  /// The bridge threw something that is not a typed clock fault and
+  /// not a decode failure: a missing symbol, a disposed entrypoint, an
+  /// unstubbed mock method.
   bridge,
 }
 

@@ -832,7 +832,9 @@ pub struct NtsClockDescriptor {
 /// [`NtsClockFault`] **on this call**. Unlike [`nts_boottime_micros`]
 /// it never substitutes a process-local `Instant` counter, never
 /// clamps, and uses checked arithmetic for the native-unit conversion.
-/// Any fault advances the live generation before it is reported.
+/// A source or conversion fault advances the live generation before it
+/// is reported; `GenerationChanged` reports an advance that already
+/// happened during the read and does not advance it again.
 ///
 /// Performs no I/O beyond the single clock read. Marked
 /// `#[frb(sync)]` because the Dart strict context calls it from

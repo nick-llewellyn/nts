@@ -501,10 +501,17 @@ impl SequentialReader {
 /// value it serves fallback for the rest of the process, even if the
 /// native source recovers. The two epochs differ by an arbitrary
 /// offset, and a `MonotonicClock` on the Dart side takes raw deltas
-/// between consecutive values on the promise that one instance never
-/// mixes epochs; switching back would surface as a jump in either
-/// direction. The strict path is unaffected — it never falls back, so
-/// it has nothing to stay on — and keeps re-probing on every call.
+/// between consecutive values, so every switch between them surfaces
+/// as a jump in one of those deltas. The latch bounds that to at most
+/// one switch per process — native to fallback, at the first fault —
+/// where re-probing could switch back and forth on every call. It
+/// does **not** remove that first jump: a sequence that began on the
+/// native coordinate and faults later still crosses epochs once, and
+/// no offset is carried across to hide it, because a value continuous
+/// with the native ones but no longer counting suspend would be the
+/// silent mixing the strict path exists to refuse. The strict path is
+/// unaffected — it never falls back, so it has nothing to stay on —
+/// and keeps re-probing on every call.
 pub(crate) fn boottime_micros() -> i64 {
     if !legacy_fallback::is_latched() {
         if let Ok((micros, _)) = read_checked() {

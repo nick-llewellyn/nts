@@ -3750,6 +3750,50 @@ void main() {
       }
     });
 
+    test('a generationChanged fault names the context\'s own generation, '
+        'not the live one the read began under', () {
+      final ctx = StrictClockContext.resolveForTesting();
+      // A context on generation g while the live generation has moved
+      // on to g+1 and moves again mid-read: the FFI fault carries
+      // `expected: g+1`, which is not this context's generation.
+      api.nextStrictThrow = ffi.NtsClockFault.generationChanged(
+        expected: PlatformInt64Util.from(ctx.generation + 1),
+        observed: PlatformInt64Util.from(ctx.generation + 2),
+      );
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockInvalidated>()
+              .having((e) => e.generation, 'generation', ctx.generation)
+              .having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+        ),
+      );
+      expect(
+        ctx.invalidationReason,
+        StrictClockInvalidationReason.nativeGeneration,
+      );
+      // With no context yet bound, resolution reports the generation
+      // the read began under — the only one there is.
+      api.nextStrictThrow = ffi.NtsClockFault.generationChanged(
+        expected: PlatformInt64Util.from(7),
+        observed: PlatformInt64Util.from(8),
+      );
+      expect(
+        StrictClockContext.resolveForTesting,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.generation,
+            'generation',
+            7,
+          ),
+        ),
+      );
+    });
+
     test('an untyped bridge failure is a bridge SourceFault, not a '
         'silent fallback', () {
       final ctx = StrictClockContext.resolveForTesting();
@@ -3763,6 +3807,55 @@ void main() {
         ),
       );
       expect(ctx.isValid, isFalse);
+    });
+
+    test('an FRB decode failure is an abiMismatch SourceFault with '
+        'rebuild guidance, not a clock-source fault', () {
+      // The two shapes the generated decoder produces on a wire-layout
+      // disagreement, mirroring the query entry points' classification.
+      for (final failure in <Object>[
+        RangeError.range(9, 0, 8, 'byteOffset'),
+        UnimplementedError('unknown discriminant'),
+      ]) {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextStrictThrow = failure;
+        expect(
+          ctx.now,
+          throwsA(
+            isA<StrictClockSourceFault>()
+                .having((e) => e.kind, 'kind', SourceFaultKind.abiMismatch)
+                .having((e) => e.errno, 'errno', isNull)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('rebuild the native library'),
+                    contains('$failure'),
+                  ),
+                ),
+          ),
+          reason: '$failure',
+        );
+        expect(ctx.isValid, isFalse, reason: '$failure');
+        expect(
+          ctx.invalidationReason,
+          StrictClockInvalidationReason.sourceFault,
+          reason: '$failure',
+        );
+        // Resolution goes through the same classifier.
+        api.nextStrictThrow = failure;
+        expect(
+          StrictClockContext.resolveForTesting,
+          throwsA(
+            isA<StrictClockSourceFault>().having(
+              (e) => e.kind,
+              'kind',
+              SourceFaultKind.abiMismatch,
+            ),
+          ),
+          reason: '$failure',
+        );
+      }
     });
 
     test('a reading below the previous one is a regression that also '
