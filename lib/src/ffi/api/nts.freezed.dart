@@ -56,7 +56,7 @@ extension NtsClockFaultPatterns on NtsClockFault {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NtsClockFault_Unsupported value)?  unsupported,TResult Function( NtsClockFault_SyscallFailed value)?  syscallFailed,TResult Function( NtsClockFault_TimebaseUnavailable value)?  timebaseUnavailable,TResult Function( NtsClockFault_InvalidRaw value)?  invalidRaw,TResult Function( NtsClockFault_ConversionOverflow value)?  conversionOverflow,TResult Function( NtsClockFault_Regression value)?  regression,TResult Function( NtsClockFault_GenerationChanged value)?  generationChanged,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NtsClockFault_Unsupported value)?  unsupported,TResult Function( NtsClockFault_SyscallFailed value)?  syscallFailed,TResult Function( NtsClockFault_TimebaseUnavailable value)?  timebaseUnavailable,TResult Function( NtsClockFault_InvalidRaw value)?  invalidRaw,TResult Function( NtsClockFault_ConversionOverflow value)?  conversionOverflow,TResult Function( NtsClockFault_Regression value)?  regression,TResult Function( NtsClockFault_GenerationChanged value)?  generationChanged,TResult Function( NtsClockFault_SuspendedInFlight value)?  suspendedInFlight,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case NtsClockFault_Unsupported() when unsupported != null:
@@ -66,7 +66,8 @@ return timebaseUnavailable(_that);case NtsClockFault_InvalidRaw() when invalidRa
 return invalidRaw(_that);case NtsClockFault_ConversionOverflow() when conversionOverflow != null:
 return conversionOverflow(_that);case NtsClockFault_Regression() when regression != null:
 return regression(_that);case NtsClockFault_GenerationChanged() when generationChanged != null:
-return generationChanged(_that);case _:
+return generationChanged(_that);case NtsClockFault_SuspendedInFlight() when suspendedInFlight != null:
+return suspendedInFlight(_that);case _:
   return orElse();
 
 }
@@ -84,7 +85,7 @@ return generationChanged(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NtsClockFault_Unsupported value)  unsupported,required TResult Function( NtsClockFault_SyscallFailed value)  syscallFailed,required TResult Function( NtsClockFault_TimebaseUnavailable value)  timebaseUnavailable,required TResult Function( NtsClockFault_InvalidRaw value)  invalidRaw,required TResult Function( NtsClockFault_ConversionOverflow value)  conversionOverflow,required TResult Function( NtsClockFault_Regression value)  regression,required TResult Function( NtsClockFault_GenerationChanged value)  generationChanged,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NtsClockFault_Unsupported value)  unsupported,required TResult Function( NtsClockFault_SyscallFailed value)  syscallFailed,required TResult Function( NtsClockFault_TimebaseUnavailable value)  timebaseUnavailable,required TResult Function( NtsClockFault_InvalidRaw value)  invalidRaw,required TResult Function( NtsClockFault_ConversionOverflow value)  conversionOverflow,required TResult Function( NtsClockFault_Regression value)  regression,required TResult Function( NtsClockFault_GenerationChanged value)  generationChanged,required TResult Function( NtsClockFault_SuspendedInFlight value)  suspendedInFlight,}){
 final _that = this;
 switch (_that) {
 case NtsClockFault_Unsupported():
@@ -94,7 +95,8 @@ return timebaseUnavailable(_that);case NtsClockFault_InvalidRaw():
 return invalidRaw(_that);case NtsClockFault_ConversionOverflow():
 return conversionOverflow(_that);case NtsClockFault_Regression():
 return regression(_that);case NtsClockFault_GenerationChanged():
-return generationChanged(_that);}
+return generationChanged(_that);case NtsClockFault_SuspendedInFlight():
+return suspendedInFlight(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -108,7 +110,7 @@ return generationChanged(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NtsClockFault_Unsupported value)?  unsupported,TResult? Function( NtsClockFault_SyscallFailed value)?  syscallFailed,TResult? Function( NtsClockFault_TimebaseUnavailable value)?  timebaseUnavailable,TResult? Function( NtsClockFault_InvalidRaw value)?  invalidRaw,TResult? Function( NtsClockFault_ConversionOverflow value)?  conversionOverflow,TResult? Function( NtsClockFault_Regression value)?  regression,TResult? Function( NtsClockFault_GenerationChanged value)?  generationChanged,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NtsClockFault_Unsupported value)?  unsupported,TResult? Function( NtsClockFault_SyscallFailed value)?  syscallFailed,TResult? Function( NtsClockFault_TimebaseUnavailable value)?  timebaseUnavailable,TResult? Function( NtsClockFault_InvalidRaw value)?  invalidRaw,TResult? Function( NtsClockFault_ConversionOverflow value)?  conversionOverflow,TResult? Function( NtsClockFault_Regression value)?  regression,TResult? Function( NtsClockFault_GenerationChanged value)?  generationChanged,TResult? Function( NtsClockFault_SuspendedInFlight value)?  suspendedInFlight,}){
 final _that = this;
 switch (_that) {
 case NtsClockFault_Unsupported() when unsupported != null:
@@ -118,7 +120,8 @@ return timebaseUnavailable(_that);case NtsClockFault_InvalidRaw() when invalidRa
 return invalidRaw(_that);case NtsClockFault_ConversionOverflow() when conversionOverflow != null:
 return conversionOverflow(_that);case NtsClockFault_Regression() when regression != null:
 return regression(_that);case NtsClockFault_GenerationChanged() when generationChanged != null:
-return generationChanged(_that);case _:
+return generationChanged(_that);case NtsClockFault_SuspendedInFlight() when suspendedInFlight != null:
+return suspendedInFlight(_that);case _:
   return null;
 
 }
@@ -135,7 +138,7 @@ return generationChanged(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  unsupported,TResult Function( int errno)?  syscallFailed,TResult Function( int kernReturn,  int numer,  int denom)?  timebaseUnavailable,TResult Function()?  invalidRaw,TResult Function()?  conversionOverflow,TResult Function( PlatformInt64 previous,  PlatformInt64 observed)?  regression,TResult Function( PlatformInt64 expected,  PlatformInt64 observed)?  generationChanged,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  unsupported,TResult Function( int errno)?  syscallFailed,TResult Function( int kernReturn,  int numer,  int denom)?  timebaseUnavailable,TResult Function()?  invalidRaw,TResult Function()?  conversionOverflow,TResult Function( PlatformInt64 previous,  PlatformInt64 observed)?  regression,TResult Function( PlatformInt64 expected,  PlatformInt64 observed)?  generationChanged,TResult Function( PlatformInt64 boottimeMicros,  PlatformInt64 monotonicMicros)?  suspendedInFlight,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case NtsClockFault_Unsupported() when unsupported != null:
 return unsupported();case NtsClockFault_SyscallFailed() when syscallFailed != null:
@@ -144,7 +147,8 @@ return timebaseUnavailable(_that.kernReturn,_that.numer,_that.denom);case NtsClo
 return invalidRaw();case NtsClockFault_ConversionOverflow() when conversionOverflow != null:
 return conversionOverflow();case NtsClockFault_Regression() when regression != null:
 return regression(_that.previous,_that.observed);case NtsClockFault_GenerationChanged() when generationChanged != null:
-return generationChanged(_that.expected,_that.observed);case _:
+return generationChanged(_that.expected,_that.observed);case NtsClockFault_SuspendedInFlight() when suspendedInFlight != null:
+return suspendedInFlight(_that.boottimeMicros,_that.monotonicMicros);case _:
   return orElse();
 
 }
@@ -162,7 +166,7 @@ return generationChanged(_that.expected,_that.observed);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  unsupported,required TResult Function( int errno)  syscallFailed,required TResult Function( int kernReturn,  int numer,  int denom)  timebaseUnavailable,required TResult Function()  invalidRaw,required TResult Function()  conversionOverflow,required TResult Function( PlatformInt64 previous,  PlatformInt64 observed)  regression,required TResult Function( PlatformInt64 expected,  PlatformInt64 observed)  generationChanged,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  unsupported,required TResult Function( int errno)  syscallFailed,required TResult Function( int kernReturn,  int numer,  int denom)  timebaseUnavailable,required TResult Function()  invalidRaw,required TResult Function()  conversionOverflow,required TResult Function( PlatformInt64 previous,  PlatformInt64 observed)  regression,required TResult Function( PlatformInt64 expected,  PlatformInt64 observed)  generationChanged,required TResult Function( PlatformInt64 boottimeMicros,  PlatformInt64 monotonicMicros)  suspendedInFlight,}) {final _that = this;
 switch (_that) {
 case NtsClockFault_Unsupported():
 return unsupported();case NtsClockFault_SyscallFailed():
@@ -171,7 +175,8 @@ return timebaseUnavailable(_that.kernReturn,_that.numer,_that.denom);case NtsClo
 return invalidRaw();case NtsClockFault_ConversionOverflow():
 return conversionOverflow();case NtsClockFault_Regression():
 return regression(_that.previous,_that.observed);case NtsClockFault_GenerationChanged():
-return generationChanged(_that.expected,_that.observed);}
+return generationChanged(_that.expected,_that.observed);case NtsClockFault_SuspendedInFlight():
+return suspendedInFlight(_that.boottimeMicros,_that.monotonicMicros);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -185,7 +190,7 @@ return generationChanged(_that.expected,_that.observed);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  unsupported,TResult? Function( int errno)?  syscallFailed,TResult? Function( int kernReturn,  int numer,  int denom)?  timebaseUnavailable,TResult? Function()?  invalidRaw,TResult? Function()?  conversionOverflow,TResult? Function( PlatformInt64 previous,  PlatformInt64 observed)?  regression,TResult? Function( PlatformInt64 expected,  PlatformInt64 observed)?  generationChanged,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  unsupported,TResult? Function( int errno)?  syscallFailed,TResult? Function( int kernReturn,  int numer,  int denom)?  timebaseUnavailable,TResult? Function()?  invalidRaw,TResult? Function()?  conversionOverflow,TResult? Function( PlatformInt64 previous,  PlatformInt64 observed)?  regression,TResult? Function( PlatformInt64 expected,  PlatformInt64 observed)?  generationChanged,TResult? Function( PlatformInt64 boottimeMicros,  PlatformInt64 monotonicMicros)?  suspendedInFlight,}) {final _that = this;
 switch (_that) {
 case NtsClockFault_Unsupported() when unsupported != null:
 return unsupported();case NtsClockFault_SyscallFailed() when syscallFailed != null:
@@ -194,7 +199,8 @@ return timebaseUnavailable(_that.kernReturn,_that.numer,_that.denom);case NtsClo
 return invalidRaw();case NtsClockFault_ConversionOverflow() when conversionOverflow != null:
 return conversionOverflow();case NtsClockFault_Regression() when regression != null:
 return regression(_that.previous,_that.observed);case NtsClockFault_GenerationChanged() when generationChanged != null:
-return generationChanged(_that.expected,_that.observed);case _:
+return generationChanged(_that.expected,_that.observed);case NtsClockFault_SuspendedInFlight() when suspendedInFlight != null:
+return suspendedInFlight(_that.boottimeMicros,_that.monotonicMicros);case _:
   return null;
 
 }
@@ -579,6 +585,76 @@ as PlatformInt64,
 }
 
 /// @nodoc
+
+
+class NtsClockFault_SuspendedInFlight extends NtsClockFault {
+  const NtsClockFault_SuspendedInFlight({required this.boottimeMicros, required this.monotonicMicros}): super._();
+  
+
+ final  PlatformInt64 boottimeMicros;
+ final  PlatformInt64 monotonicMicros;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsClockFault_SuspendedInFlightCopyWith<NtsClockFault_SuspendedInFlight> get copyWith => _$NtsClockFault_SuspendedInFlightCopyWithImpl<NtsClockFault_SuspendedInFlight>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_SuspendedInFlight&&(identical(other.boottimeMicros, boottimeMicros) || other.boottimeMicros == boottimeMicros)&&(identical(other.monotonicMicros, monotonicMicros) || other.monotonicMicros == monotonicMicros));
+}
+
+
+@override
+int get hashCode {
+    return Object.hash(runtimeType,boottimeMicros,monotonicMicros);
+}
+
+@override
+String toString() {
+    return 'NtsClockFault.suspendedInFlight(boottimeMicros: $boottimeMicros, monotonicMicros: $monotonicMicros)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $NtsClockFault_SuspendedInFlightCopyWith<$Res> implements $NtsClockFaultCopyWith<$Res> {
+  factory $NtsClockFault_SuspendedInFlightCopyWith(NtsClockFault_SuspendedInFlight value, $Res Function(NtsClockFault_SuspendedInFlight) _then) = _$NtsClockFault_SuspendedInFlightCopyWithImpl;
+@useResult
+$Res call({
+ PlatformInt64 boottimeMicros, PlatformInt64 monotonicMicros
+});
+
+
+
+
+}
+/// @nodoc
+class _$NtsClockFault_SuspendedInFlightCopyWithImpl<$Res>
+    implements $NtsClockFault_SuspendedInFlightCopyWith<$Res> {
+  _$NtsClockFault_SuspendedInFlightCopyWithImpl(this._self, this._then);
+
+  final NtsClockFault_SuspendedInFlight _self;
+  final $Res Function(NtsClockFault_SuspendedInFlight) _then;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? boottimeMicros = null,Object? monotonicMicros = null,}) {
+  return _then(NtsClockFault_SuspendedInFlight(
+boottimeMicros: null == boottimeMicros ? _self.boottimeMicros : boottimeMicros // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,monotonicMicros: null == monotonicMicros ? _self.monotonicMicros : monotonicMicros // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,
+  ));
+}
+
+
+}
+
+/// @nodoc
 mixin _$NtsError {
 
 
@@ -622,7 +698,7 @@ extension NtsErrorPatterns on NtsError {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NtsError_InvalidSpec value)?  invalidSpec,TResult Function( NtsError_Network value)?  network,TResult Function( NtsError_KeProtocol value)?  keProtocol,TResult Function( NtsError_NtpProtocol value)?  ntpProtocol,TResult Function( NtsError_Authentication value)?  authentication,TResult Function( NtsError_Timeout value)?  timeout,TResult Function( NtsError_NoCookies value)?  noCookies,TResult Function( NtsError_TrustBackendUnavailable value)?  trustBackendUnavailable,TResult Function( NtsError_Internal value)?  internal,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NtsError_InvalidSpec value)?  invalidSpec,TResult Function( NtsError_Network value)?  network,TResult Function( NtsError_KeProtocol value)?  keProtocol,TResult Function( NtsError_NtpProtocol value)?  ntpProtocol,TResult Function( NtsError_Authentication value)?  authentication,TResult Function( NtsError_Timeout value)?  timeout,TResult Function( NtsError_NoCookies value)?  noCookies,TResult Function( NtsError_TrustBackendUnavailable value)?  trustBackendUnavailable,TResult Function( NtsError_ClockFault value)?  clockFault,TResult Function( NtsError_Internal value)?  internal,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
@@ -633,7 +709,8 @@ return ntpProtocol(_that);case NtsError_Authentication() when authentication != 
 return authentication(_that);case NtsError_Timeout() when timeout != null:
 return timeout(_that);case NtsError_NoCookies() when noCookies != null:
 return noCookies(_that);case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
-return trustBackendUnavailable(_that);case NtsError_Internal() when internal != null:
+return trustBackendUnavailable(_that);case NtsError_ClockFault() when clockFault != null:
+return clockFault(_that);case NtsError_Internal() when internal != null:
 return internal(_that);case _:
   return orElse();
 
@@ -652,7 +729,7 @@ return internal(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NtsError_InvalidSpec value)  invalidSpec,required TResult Function( NtsError_Network value)  network,required TResult Function( NtsError_KeProtocol value)  keProtocol,required TResult Function( NtsError_NtpProtocol value)  ntpProtocol,required TResult Function( NtsError_Authentication value)  authentication,required TResult Function( NtsError_Timeout value)  timeout,required TResult Function( NtsError_NoCookies value)  noCookies,required TResult Function( NtsError_TrustBackendUnavailable value)  trustBackendUnavailable,required TResult Function( NtsError_Internal value)  internal,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NtsError_InvalidSpec value)  invalidSpec,required TResult Function( NtsError_Network value)  network,required TResult Function( NtsError_KeProtocol value)  keProtocol,required TResult Function( NtsError_NtpProtocol value)  ntpProtocol,required TResult Function( NtsError_Authentication value)  authentication,required TResult Function( NtsError_Timeout value)  timeout,required TResult Function( NtsError_NoCookies value)  noCookies,required TResult Function( NtsError_TrustBackendUnavailable value)  trustBackendUnavailable,required TResult Function( NtsError_ClockFault value)  clockFault,required TResult Function( NtsError_Internal value)  internal,}){
 final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec():
@@ -663,7 +740,8 @@ return ntpProtocol(_that);case NtsError_Authentication():
 return authentication(_that);case NtsError_Timeout():
 return timeout(_that);case NtsError_NoCookies():
 return noCookies(_that);case NtsError_TrustBackendUnavailable():
-return trustBackendUnavailable(_that);case NtsError_Internal():
+return trustBackendUnavailable(_that);case NtsError_ClockFault():
+return clockFault(_that);case NtsError_Internal():
 return internal(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
@@ -678,7 +756,7 @@ return internal(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NtsError_InvalidSpec value)?  invalidSpec,TResult? Function( NtsError_Network value)?  network,TResult? Function( NtsError_KeProtocol value)?  keProtocol,TResult? Function( NtsError_NtpProtocol value)?  ntpProtocol,TResult? Function( NtsError_Authentication value)?  authentication,TResult? Function( NtsError_Timeout value)?  timeout,TResult? Function( NtsError_NoCookies value)?  noCookies,TResult? Function( NtsError_TrustBackendUnavailable value)?  trustBackendUnavailable,TResult? Function( NtsError_Internal value)?  internal,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NtsError_InvalidSpec value)?  invalidSpec,TResult? Function( NtsError_Network value)?  network,TResult? Function( NtsError_KeProtocol value)?  keProtocol,TResult? Function( NtsError_NtpProtocol value)?  ntpProtocol,TResult? Function( NtsError_Authentication value)?  authentication,TResult? Function( NtsError_Timeout value)?  timeout,TResult? Function( NtsError_NoCookies value)?  noCookies,TResult? Function( NtsError_TrustBackendUnavailable value)?  trustBackendUnavailable,TResult? Function( NtsError_ClockFault value)?  clockFault,TResult? Function( NtsError_Internal value)?  internal,}){
 final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
@@ -689,7 +767,8 @@ return ntpProtocol(_that);case NtsError_Authentication() when authentication != 
 return authentication(_that);case NtsError_Timeout() when timeout != null:
 return timeout(_that);case NtsError_NoCookies() when noCookies != null:
 return noCookies(_that);case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
-return trustBackendUnavailable(_that);case NtsError_Internal() when internal != null:
+return trustBackendUnavailable(_that);case NtsError_ClockFault() when clockFault != null:
+return clockFault(_that);case NtsError_Internal() when internal != null:
 return internal(_that);case _:
   return null;
 
@@ -707,7 +786,7 @@ return internal(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String field0)?  invalidSpec,TResult Function( String message,  TrustBackend? trustBackend)?  network,TResult Function( String message,  TrustBackend? trustBackend)?  keProtocol,TResult Function( String message,  TrustBackend? trustBackend)?  ntpProtocol,TResult Function( String message,  TrustBackend? trustBackend)?  authentication,TResult Function( TimeoutPhase phase,  TrustBackend? trustBackend)?  timeout,TResult Function( TrustBackend? trustBackend)?  noCookies,TResult Function( String field0)?  trustBackendUnavailable,TResult Function( String field0)?  internal,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String field0)?  invalidSpec,TResult Function( String message,  TrustBackend? trustBackend)?  network,TResult Function( String message,  TrustBackend? trustBackend)?  keProtocol,TResult Function( String message,  TrustBackend? trustBackend)?  ntpProtocol,TResult Function( String message,  TrustBackend? trustBackend)?  authentication,TResult Function( TimeoutPhase phase,  TrustBackend? trustBackend)?  timeout,TResult Function( TrustBackend? trustBackend)?  noCookies,TResult Function( String field0)?  trustBackendUnavailable,TResult Function( ClockFaultStage stage,  NtsClockFault fault,  PlatformInt64 generation,  TrustBackend? trustBackend)?  clockFault,TResult Function( String field0)?  internal,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
 return invalidSpec(_that.field0);case NtsError_Network() when network != null:
@@ -717,7 +796,8 @@ return ntpProtocol(_that.message,_that.trustBackend);case NtsError_Authenticatio
 return authentication(_that.message,_that.trustBackend);case NtsError_Timeout() when timeout != null:
 return timeout(_that.phase,_that.trustBackend);case NtsError_NoCookies() when noCookies != null:
 return noCookies(_that.trustBackend);case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
-return trustBackendUnavailable(_that.field0);case NtsError_Internal() when internal != null:
+return trustBackendUnavailable(_that.field0);case NtsError_ClockFault() when clockFault != null:
+return clockFault(_that.stage,_that.fault,_that.generation,_that.trustBackend);case NtsError_Internal() when internal != null:
 return internal(_that.field0);case _:
   return orElse();
 
@@ -736,7 +816,7 @@ return internal(_that.field0);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String field0)  invalidSpec,required TResult Function( String message,  TrustBackend? trustBackend)  network,required TResult Function( String message,  TrustBackend? trustBackend)  keProtocol,required TResult Function( String message,  TrustBackend? trustBackend)  ntpProtocol,required TResult Function( String message,  TrustBackend? trustBackend)  authentication,required TResult Function( TimeoutPhase phase,  TrustBackend? trustBackend)  timeout,required TResult Function( TrustBackend? trustBackend)  noCookies,required TResult Function( String field0)  trustBackendUnavailable,required TResult Function( String field0)  internal,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String field0)  invalidSpec,required TResult Function( String message,  TrustBackend? trustBackend)  network,required TResult Function( String message,  TrustBackend? trustBackend)  keProtocol,required TResult Function( String message,  TrustBackend? trustBackend)  ntpProtocol,required TResult Function( String message,  TrustBackend? trustBackend)  authentication,required TResult Function( TimeoutPhase phase,  TrustBackend? trustBackend)  timeout,required TResult Function( TrustBackend? trustBackend)  noCookies,required TResult Function( String field0)  trustBackendUnavailable,required TResult Function( ClockFaultStage stage,  NtsClockFault fault,  PlatformInt64 generation,  TrustBackend? trustBackend)  clockFault,required TResult Function( String field0)  internal,}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec():
 return invalidSpec(_that.field0);case NtsError_Network():
@@ -746,7 +826,8 @@ return ntpProtocol(_that.message,_that.trustBackend);case NtsError_Authenticatio
 return authentication(_that.message,_that.trustBackend);case NtsError_Timeout():
 return timeout(_that.phase,_that.trustBackend);case NtsError_NoCookies():
 return noCookies(_that.trustBackend);case NtsError_TrustBackendUnavailable():
-return trustBackendUnavailable(_that.field0);case NtsError_Internal():
+return trustBackendUnavailable(_that.field0);case NtsError_ClockFault():
+return clockFault(_that.stage,_that.fault,_that.generation,_that.trustBackend);case NtsError_Internal():
 return internal(_that.field0);}
 }
 /// A variant of `when` that fallback to returning `null`
@@ -761,7 +842,7 @@ return internal(_that.field0);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String field0)?  invalidSpec,TResult? Function( String message,  TrustBackend? trustBackend)?  network,TResult? Function( String message,  TrustBackend? trustBackend)?  keProtocol,TResult? Function( String message,  TrustBackend? trustBackend)?  ntpProtocol,TResult? Function( String message,  TrustBackend? trustBackend)?  authentication,TResult? Function( TimeoutPhase phase,  TrustBackend? trustBackend)?  timeout,TResult? Function( TrustBackend? trustBackend)?  noCookies,TResult? Function( String field0)?  trustBackendUnavailable,TResult? Function( String field0)?  internal,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String field0)?  invalidSpec,TResult? Function( String message,  TrustBackend? trustBackend)?  network,TResult? Function( String message,  TrustBackend? trustBackend)?  keProtocol,TResult? Function( String message,  TrustBackend? trustBackend)?  ntpProtocol,TResult? Function( String message,  TrustBackend? trustBackend)?  authentication,TResult? Function( TimeoutPhase phase,  TrustBackend? trustBackend)?  timeout,TResult? Function( TrustBackend? trustBackend)?  noCookies,TResult? Function( String field0)?  trustBackendUnavailable,TResult? Function( ClockFaultStage stage,  NtsClockFault fault,  PlatformInt64 generation,  TrustBackend? trustBackend)?  clockFault,TResult? Function( String field0)?  internal,}) {final _that = this;
 switch (_that) {
 case NtsError_InvalidSpec() when invalidSpec != null:
 return invalidSpec(_that.field0);case NtsError_Network() when network != null:
@@ -771,7 +852,8 @@ return ntpProtocol(_that.message,_that.trustBackend);case NtsError_Authenticatio
 return authentication(_that.message,_that.trustBackend);case NtsError_Timeout() when timeout != null:
 return timeout(_that.phase,_that.trustBackend);case NtsError_NoCookies() when noCookies != null:
 return noCookies(_that.trustBackend);case NtsError_TrustBackendUnavailable() when trustBackendUnavailable != null:
-return trustBackendUnavailable(_that.field0);case NtsError_Internal() when internal != null:
+return trustBackendUnavailable(_that.field0);case NtsError_ClockFault() when clockFault != null:
+return clockFault(_that.stage,_that.fault,_that.generation,_that.trustBackend);case NtsError_Internal() when internal != null:
 return internal(_that.field0);case _:
   return null;
 
@@ -1332,6 +1414,89 @@ as String,
 }
 
 
+}
+
+/// @nodoc
+
+
+class NtsError_ClockFault extends NtsError {
+  const NtsError_ClockFault({required this.stage, required this.fault, required this.generation, this.trustBackend}): super._();
+  
+
+ final  ClockFaultStage stage;
+ final  NtsClockFault fault;
+ final  PlatformInt64 generation;
+ final  TrustBackend? trustBackend;
+
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsError_ClockFaultCopyWith<NtsError_ClockFault> get copyWith => _$NtsError_ClockFaultCopyWithImpl<NtsError_ClockFault>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsError_ClockFault&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.fault, fault) || other.fault == fault)&&(identical(other.generation, generation) || other.generation == generation)&&(identical(other.trustBackend, trustBackend) || other.trustBackend == trustBackend));
+}
+
+
+@override
+int get hashCode {
+    return Object.hash(runtimeType,stage,fault,generation,trustBackend);
+}
+
+@override
+String toString() {
+    return 'NtsError.clockFault(stage: $stage, fault: $fault, generation: $generation, trustBackend: $trustBackend)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $NtsError_ClockFaultCopyWith<$Res> implements $NtsErrorCopyWith<$Res> {
+  factory $NtsError_ClockFaultCopyWith(NtsError_ClockFault value, $Res Function(NtsError_ClockFault) _then) = _$NtsError_ClockFaultCopyWithImpl;
+@useResult
+$Res call({
+ ClockFaultStage stage, NtsClockFault fault, PlatformInt64 generation, TrustBackend? trustBackend
+});
+
+
+$NtsClockFaultCopyWith<$Res> get fault;
+
+}
+/// @nodoc
+class _$NtsError_ClockFaultCopyWithImpl<$Res>
+    implements $NtsError_ClockFaultCopyWith<$Res> {
+  _$NtsError_ClockFaultCopyWithImpl(this._self, this._then);
+
+  final NtsError_ClockFault _self;
+  final $Res Function(NtsError_ClockFault) _then;
+
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? stage = null,Object? fault = null,Object? generation = null,Object? trustBackend = freezed,}) {
+  return _then(NtsError_ClockFault(
+stage: null == stage ? _self.stage : stage // ignore: cast_nullable_to_non_nullable
+as ClockFaultStage,fault: null == fault ? _self.fault : fault // ignore: cast_nullable_to_non_nullable
+as NtsClockFault,generation: null == generation ? _self.generation : generation // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,trustBackend: freezed == trustBackend ? _self.trustBackend : trustBackend // ignore: cast_nullable_to_non_nullable
+as TrustBackend?,
+  ));
+}
+
+/// Create a copy of NtsError
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$NtsClockFaultCopyWith<$Res> get fault {
+  
+  return $NtsClockFaultCopyWith<$Res>(_self.fault, (value) {
+    return _then(_self.copyWith(fault: value));
+  });
+}
 }
 
 /// @nodoc

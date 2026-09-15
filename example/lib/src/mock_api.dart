@@ -21,6 +21,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:nts/src/ffi/api/nts.dart'
     show
         NtsClient,
+        NtsClockBackend,
         NtsDnsPoolStats,
         NtsError,
         NtsServerSpec,
@@ -297,8 +298,11 @@ class MockNtsApi implements NtsRustLibApi {
       // `MonotonicClock` runs on its Stopwatch fallback with an
       // unrelated epoch. A zero stamp fails `_getTime`'s
       // epoch-plausibility window and deliberately selects the
-      // post-`await` fallback arithmetic.
+      // post-`await` fallback arithmetic. Generation 0 is the matching
+      // "no strict receipt" marker; the strict path rejects it.
       recvBoottimeMicros: PlatformInt64Util.from(0),
+      recvClockGeneration: PlatformInt64Util.from(0),
+      recvClockBackend: NtsClockBackend.appleContinuous,
       // Simulated RFC 5905 statistics: a small offset, a peer delay
       // slightly under the round trip (as if the server spent ~1 ms
       // processing), and modest root metrics for a stratum-1 server.

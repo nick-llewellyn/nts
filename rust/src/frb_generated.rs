@@ -738,6 +738,24 @@ impl SseDecode for bool {
     }
 }
 
+impl SseDecode for crate::api::nts::ClockFaultStage {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::nts::ClockFaultStage::Admission,
+            1 => crate::api::nts::ClockFaultStage::Handshake,
+            2 => crate::api::nts::ClockFaultStage::Session,
+            3 => crate::api::nts::ClockFaultStage::Udp,
+            4 => crate::api::nts::ClockFaultStage::Receipt,
+            5 => crate::api::nts::ClockFaultStage::Await,
+            6 => crate::api::nts::ClockFaultStage::Return,
+            7 => crate::api::nts::ClockFaultStage::Projection,
+            _ => unreachable!("Invalid variant for ClockFaultStage: {}", inner),
+        };
+    }
+}
+
 impl SseDecode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -854,6 +872,14 @@ impl SseDecode for crate::api::nts::NtsClockFault {
                     observed: var_observed,
                 };
             }
+            7 => {
+                let mut var_boottimeMicros = <i64>::sse_decode(deserializer);
+                let mut var_monotonicMicros = <i64>::sse_decode(deserializer);
+                return crate::api::nts::NtsClockFault::SuspendedInFlight {
+                    boottime_micros: var_boottimeMicros,
+                    monotonic_micros: var_monotonicMicros,
+                };
+            }
             _ => {
                 unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
@@ -945,6 +971,19 @@ impl SseDecode for crate::api::nts::NtsError {
                 return crate::api::nts::NtsError::TrustBackendUnavailable(var_field0);
             }
             8 => {
+                let mut var_stage = <crate::api::nts::ClockFaultStage>::sse_decode(deserializer);
+                let mut var_fault = <crate::api::nts::NtsClockFault>::sse_decode(deserializer);
+                let mut var_generation = <i64>::sse_decode(deserializer);
+                let mut var_trustBackend =
+                    <Option<crate::api::nts::TrustBackend>>::sse_decode(deserializer);
+                return crate::api::nts::NtsError::ClockFault {
+                    stage: var_stage,
+                    fault: var_fault,
+                    generation: var_generation,
+                    trust_backend: var_trustBackend,
+                };
+            }
+            9 => {
                 let mut var_field0 = <String>::sse_decode(deserializer);
                 return crate::api::nts::NtsError::Internal(var_field0);
             }
@@ -992,6 +1031,8 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
         let mut var_phaseTimings = <crate::api::nts::PhaseTimings>::sse_decode(deserializer);
         let mut var_trustBackend = <crate::api::nts::TrustBackend>::sse_decode(deserializer);
         let mut var_recvBoottimeMicros = <i64>::sse_decode(deserializer);
+        let mut var_recvClockGeneration = <i64>::sse_decode(deserializer);
+        let mut var_recvClockBackend = <crate::api::nts::NtsClockBackend>::sse_decode(deserializer);
         let mut var_offsetMicros = <i64>::sse_decode(deserializer);
         let mut var_peerDelayMicros = <i64>::sse_decode(deserializer);
         let mut var_rootDelayMicros = <i64>::sse_decode(deserializer);
@@ -1007,6 +1048,8 @@ impl SseDecode for crate::api::nts::NtsTimeSample {
             phase_timings: var_phaseTimings,
             trust_backend: var_trustBackend,
             recv_boottime_micros: var_recvBoottimeMicros,
+            recv_clock_generation: var_recvClockGeneration,
+            recv_clock_backend: var_recvClockBackend,
             offset_micros: var_offsetMicros,
             peer_delay_micros: var_peerDelayMicros,
             root_delay_micros: var_rootDelayMicros,
@@ -1243,6 +1286,33 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<NtsClient>> for NtsClient {
 }
 
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::nts::ClockFaultStage {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Admission => 0.into_dart(),
+            Self::Handshake => 1.into_dart(),
+            Self::Session => 2.into_dart(),
+            Self::Udp => 3.into_dart(),
+            Self::Receipt => 4.into_dart(),
+            Self::Await => 5.into_dart(),
+            Self::Return => 6.into_dart(),
+            Self::Projection => 7.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::nts::ClockFaultStage
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::nts::ClockFaultStage>
+    for crate::api::nts::ClockFaultStage
+{
+    fn into_into_dart(self) -> crate::api::nts::ClockFaultStage {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsClockBackend {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
@@ -1317,6 +1387,15 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsClockFault {
                 6.into_dart(),
                 expected.into_into_dart().into_dart(),
                 observed.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::nts::NtsClockFault::SuspendedInFlight {
+                boottime_micros,
+                monotonic_micros,
+            } => [
+                7.into_dart(),
+                boottime_micros.into_into_dart().into_dart(),
+                monotonic_micros.into_into_dart().into_dart(),
             ]
             .into_dart(),
             _ => {
@@ -1418,8 +1497,21 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsError {
             crate::api::nts::NtsError::TrustBackendUnavailable(field0) => {
                 [7.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
+            crate::api::nts::NtsError::ClockFault {
+                stage,
+                fault,
+                generation,
+                trust_backend,
+            } => [
+                8.into_dart(),
+                stage.into_into_dart().into_dart(),
+                fault.into_into_dart().into_dart(),
+                generation.into_into_dart().into_dart(),
+                trust_backend.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
             crate::api::nts::NtsError::Internal(field0) => {
-                [8.into_dart(), field0.into_into_dart().into_dart()].into_dart()
+                [9.into_dart(), field0.into_into_dart().into_dart()].into_dart()
             }
             _ => {
                 unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
@@ -1488,6 +1580,8 @@ impl flutter_rust_bridge::IntoDart for crate::api::nts::NtsTimeSample {
             self.phase_timings.into_into_dart().into_dart(),
             self.trust_backend.into_into_dart().into_dart(),
             self.recv_boottime_micros.into_into_dart().into_dart(),
+            self.recv_clock_generation.into_into_dart().into_dart(),
+            self.recv_clock_backend.into_into_dart().into_dart(),
             self.offset_micros.into_into_dart().into_dart(),
             self.peer_delay_micros.into_into_dart().into_dart(),
             self.root_delay_micros.into_into_dart().into_dart(),
@@ -1688,6 +1782,28 @@ impl SseEncode for bool {
     }
 }
 
+impl SseEncode for crate::api::nts::ClockFaultStage {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::nts::ClockFaultStage::Admission => 0,
+                crate::api::nts::ClockFaultStage::Handshake => 1,
+                crate::api::nts::ClockFaultStage::Session => 2,
+                crate::api::nts::ClockFaultStage::Udp => 3,
+                crate::api::nts::ClockFaultStage::Receipt => 4,
+                crate::api::nts::ClockFaultStage::Await => 5,
+                crate::api::nts::ClockFaultStage::Return => 6,
+                crate::api::nts::ClockFaultStage::Projection => 7,
+                _ => {
+                    unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
+                }
+            },
+            serializer,
+        );
+    }
+}
+
 impl SseEncode for i32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1792,6 +1908,14 @@ impl SseEncode for crate::api::nts::NtsClockFault {
                 <i64>::sse_encode(expected, serializer);
                 <i64>::sse_encode(observed, serializer);
             }
+            crate::api::nts::NtsClockFault::SuspendedInFlight {
+                boottime_micros,
+                monotonic_micros,
+            } => {
+                <i32>::sse_encode(7, serializer);
+                <i64>::sse_encode(boottime_micros, serializer);
+                <i64>::sse_encode(monotonic_micros, serializer);
+            }
             _ => {
                 unimplemented!("flutter_rust_bridge generated codec: unexpected enum variant tag in SSE wire format");
             }
@@ -1866,8 +1990,20 @@ impl SseEncode for crate::api::nts::NtsError {
                 <i32>::sse_encode(7, serializer);
                 <String>::sse_encode(field0, serializer);
             }
-            crate::api::nts::NtsError::Internal(field0) => {
+            crate::api::nts::NtsError::ClockFault {
+                stage,
+                fault,
+                generation,
+                trust_backend,
+            } => {
                 <i32>::sse_encode(8, serializer);
+                <crate::api::nts::ClockFaultStage>::sse_encode(stage, serializer);
+                <crate::api::nts::NtsClockFault>::sse_encode(fault, serializer);
+                <i64>::sse_encode(generation, serializer);
+                <Option<crate::api::nts::TrustBackend>>::sse_encode(trust_backend, serializer);
+            }
+            crate::api::nts::NtsError::Internal(field0) => {
+                <i32>::sse_encode(9, serializer);
                 <String>::sse_encode(field0, serializer);
             }
             _ => {
@@ -1905,6 +2041,8 @@ impl SseEncode for crate::api::nts::NtsTimeSample {
         <crate::api::nts::PhaseTimings>::sse_encode(self.phase_timings, serializer);
         <crate::api::nts::TrustBackend>::sse_encode(self.trust_backend, serializer);
         <i64>::sse_encode(self.recv_boottime_micros, serializer);
+        <i64>::sse_encode(self.recv_clock_generation, serializer);
+        <crate::api::nts::NtsClockBackend>::sse_encode(self.recv_clock_backend, serializer);
         <i64>::sse_encode(self.offset_micros, serializer);
         <i64>::sse_encode(self.peer_delay_micros, serializer);
         <i64>::sse_encode(self.root_delay_micros, serializer);

@@ -60,6 +60,7 @@ typedef _WarmEndpoint =
       int dnsConcurrencyCap,
       int bridgeConcurrencyCap,
       DateTime? verificationTime,
+      StrictClockContext? context,
     });
 
 typedef _QueryEndpoint =
@@ -69,15 +70,54 @@ typedef _QueryEndpoint =
       int dnsConcurrencyCap,
       int bridgeConcurrencyCap,
       DateTime? verificationTime,
+      StrictClockContext? context,
     });
 
-// Shared preamble and closure binding for the two `getTime` entry
-// points. `client` selects which pair of endpoints the burst runs
-// against: its own methods when non-null (per-client session table),
-// the top-level functions when null (the process-wide default client).
-// Binding the forwarded arguments once here is what keeps the two
-// surfaces from drifting.
-//
+typedef _BoundEndpoints = ({
+  Future<NtsWarmCookiesOutcome> Function(Duration timeout) warm,
+  Future<NtsTimeSample> Function(Duration timeout) query,
+});
+
+// Shared preamble and closure binding for the `getTime` entry points.
+// `client` selects which pair of endpoints the burst runs against: its
+// own methods when non-null (per-client session table), the top-level
+// functions when null (the process-wide default client). `context`,
+// when non-null, is forwarded so the bridge gate meters each call's
+// queue wait on the strict clock. Binding the forwarded arguments once
+// here is what keeps the surfaces from drifting.
+_BoundEndpoints _bindGetTimeEndpoints({
+  required NtsServerSpec spec,
+  required DateTime? verificationTime,
+  required NtsClient? client,
+  required StrictClockContext? context,
+}) {
+  final resolvedVerificationMs = _verificationMs(verificationTime);
+  _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
+  final resolved = _verificationInstant(resolvedVerificationMs);
+  final _WarmEndpoint warmEndpoint = client == null
+      ? ntsWarmCookies
+      : client.warmCookies;
+  final _QueryEndpoint queryEndpoint = client == null ? ntsQuery : client.query;
+  return (
+    warm: (timeout) => warmEndpoint(
+      spec: spec,
+      timeout: timeout,
+      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
+      verificationTime: resolved,
+      context: context,
+    ),
+    query: (timeout) => queryEndpoint(
+      spec: spec,
+      timeout: timeout,
+      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
+      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
+      verificationTime: resolved,
+      context: context,
+    ),
+  );
+}
+
 // `async` deliberately: both entry points promise their validation
 // failures arrive as a rejected future, not as a synchronous throw,
 // and `NtsClient.getTime` delegates here with an expression body.
@@ -86,28 +126,34 @@ Future<NtsSyncedTime> _getTimeFor({
   required DateTime? verificationTime,
   NtsClient? client,
 }) async {
-  final resolvedVerificationMs = _verificationMs(verificationTime);
-  _validateGetTime(spec: spec, verificationTimeMs: resolvedVerificationMs);
-  final resolved = _verificationInstant(resolvedVerificationMs);
-  final _WarmEndpoint warmEndpoint = client == null
-      ? ntsWarmCookies
-      : client.warmCookies;
-  final _QueryEndpoint queryEndpoint = client == null ? ntsQuery : client.query;
-  return _getTime(
-    warm: (timeout) => warmEndpoint(
-      spec: spec,
-      timeout: timeout,
-      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
-      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-      verificationTime: resolved,
-    ),
-    query: (timeout) => queryEndpoint(
-      spec: spec,
-      timeout: timeout,
-      dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
-      bridgeConcurrencyCap: kDefaultBridgeConcurrencyCap,
-      verificationTime: resolved,
-    ),
+  final endpoints = _bindGetTimeEndpoints(
+    spec: spec,
+    verificationTime: verificationTime,
+    client: client,
+    context: null,
+  );
+  return _getTime(warm: endpoints.warm, query: endpoints.query);
+}
+
+// Strict counterpart of `_getTimeFor`: same validation and endpoint
+// binding, with `context` metering the budget, the bridge gate, the
+// receipt attribution and the returned projection.
+Future<StrictSyncedTime> _getTimeStrictFor({
+  required NtsServerSpec spec,
+  required StrictClockContext context,
+  required DateTime? verificationTime,
+  NtsClient? client,
+}) async {
+  final endpoints = _bindGetTimeEndpoints(
+    spec: spec,
+    verificationTime: verificationTime,
+    client: client,
+    context: context,
+  );
+  return _getTimeStrict(
+    context: context,
+    warm: endpoints.warm,
+    query: endpoints.query,
   );
 }
 
@@ -237,9 +283,178 @@ Future<NtsSyncedTime> _getTime({
           wireLagMicros >= postAwaitLagMicros)
       ? wireLagMicros
       : postAwaitLagMicros;
-  // Sample jitter ψ (RFC 5905 §10): RMS of the offset differences
-  // between the winning sample and every other burst sample. With a
-  // single sample the sum is empty and ψ is 0.
+  final stats = _burstStatistics(best, offsets);
+  return NtsSyncedTime(
+    utcUnixMicros:
+        best.utcUnixMicros + stats.delayMicros ~/ 2 + anchorLagMicros,
+    roundTripMicros: best.roundTripMicros,
+    samplesUsed: samplesUsed,
+    trustBackend: best.trustBackend,
+    offsetMicros: best.offsetMicros,
+    jitterMicros: stats.jitterMicros,
+    errorBoundMicros: stats.errorBoundMicros,
+  );
+}
+
+// Strict variant of `_getTime`. Same burst, selection and compensation,
+// with every clock decision made on `context` and no fallback at any
+// of them:
+//
+// - The budget is metered on `context`. A read that faults fails the
+//   call as `clockFault(awaitResult)`; a spent budget is still
+//   `timeout(ntp)`. No fresh budget is ever started after a fault.
+// - Every `await` is followed by a strict read before its result is
+//   used — or, when it completed with an error, before that error is
+//   propagated or recorded — so a bridge reset or native generation
+//   change that lands while the call was parked fails the call rather
+//   than letting a stale completion through or hiding behind a
+//   network error.
+// - A sample is attributed to `context` by its receipt stamp's
+//   generation and backend (`attributeStrictReceipt`), never by the
+//   plausibility window the legacy path uses. A missing or foreign
+//   stamp fails the call as `clockFault(attribution)` — not tolerated
+//   as a burst failure, because a later successful read could not
+//   certify the sample after the fact.
+// - The anchor lag is the strict receipt aged on `context`; a stamp
+//   that does not order against the context's own readings is a
+//   regression and fails the call.
+Future<StrictSyncedTime> _getTimeStrict({
+  required StrictClockContext context,
+  required Future<NtsWarmCookiesOutcome> Function(Duration timeout) warm,
+  required Future<NtsTimeSample> Function(Duration timeout) query,
+}) async {
+  TrustBackend? backend;
+  StrictReading read(ClockFaultStage stage) =>
+      _strictRead(context, stage, trustBackend: backend);
+  final start = read(ClockFaultStage.admission);
+  // `now()` enforces monotonicity against `start` on this context, so
+  // the difference is never negative and never clamped.
+  Duration remaining() =>
+      _kGetTimeTimeout -
+      Duration(
+        microseconds: read(ClockFaultStage.awaitResult).micros - start.micros,
+      );
+
+  // An `await` that completes with an error still owes the strict
+  // read: a bridge reset or native generation change that landed
+  // while the call was parked fails the call instead of hiding behind
+  // the error. A `clockFault` is exempt — it already carries the
+  // native verdict, and a further read could only restate it as a
+  // less specific generation change.
+  void readAfterFailure(NtsError err) {
+    if (err is! NtsErrorClockFault) read(ClockFaultStage.awaitResult);
+  }
+
+  final warmBudget = remaining();
+  if (warmBudget < _kMinDispatchBudget) {
+    throw const NtsError.timeout(phase: TimeoutPhase.ntp);
+  }
+  final NtsWarmCookiesOutcome outcome;
+  try {
+    outcome = await warm(warmBudget);
+  } on NtsError catch (err) {
+    readAfterFailure(err);
+    rethrow;
+  }
+  read(ClockFaultStage.awaitResult);
+  backend = outcome.trustBackend;
+  if (outcome.freshCookies < 1) {
+    throw NtsError.noCookies(trustBackend: backend);
+  }
+
+  final burst = math.min(_kGetTimeMaxBurst, outcome.freshCookies);
+  NtsTimeSample? best;
+  StrictReading? bestReceipt;
+  var samplesUsed = 0;
+  final offsets = <int>[];
+  Object? lastError;
+  StackTrace? lastStack;
+  for (var i = 0; i < burst; i++) {
+    final left = remaining();
+    if (left < _kMinDispatchBudget) break;
+    final NtsTimeSample sample;
+    try {
+      sample = await query(left);
+    } on NtsError catch (err, stack) {
+      // Same best-effort posture as the legacy burst, after the
+      // post-`await` read: on the final attempt there is no further
+      // read before `lastError` is rethrown, so this is the one that
+      // keeps a clock event from hiding behind a network error. A
+      // `clockFault` from the query lands here too: if it moved the
+      // generation it is what is rethrown or the next read fails the
+      // call, and a per-sample `suspendedInFlight` verdict is exactly
+      // what a retry is for.
+      readAfterFailure(err);
+      lastError = err;
+      lastStack = stack;
+      continue;
+    }
+    final receipt = _attributeReceipt(
+      context,
+      sample,
+      notBefore: start,
+      trustBackend: backend,
+    );
+    // Post-`await` re-validation and the cross-reader ordering check
+    // in one read: `elapsedSince` fails on a bridge reset, a native
+    // generation change, or a stamp above the context's fresh reading.
+    _strictElapsed(
+      context,
+      receipt,
+      ClockFaultStage.attribution,
+      trustBackend: backend,
+    );
+    samplesUsed++;
+    offsets.add(sample.offsetMicros);
+    if (best == null ||
+        _effectiveDelayMicros(sample) < _effectiveDelayMicros(best)) {
+      best = sample;
+      bestReceipt = receipt;
+    }
+  }
+
+  if (best == null) {
+    if (lastError != null) {
+      Error.throwWithStackTrace(lastError, lastStack!);
+    }
+    throw NtsError.timeout(phase: TimeoutPhase.ntp, trustBackend: backend);
+  }
+
+  // The anchor is a fresh reading on `context`; the receipt was
+  // already ordered below an earlier reading on the same context, and
+  // `now()` is monotonic against that, so the lag is non-negative.
+  final anchor = read(ClockFaultStage.projection);
+  final anchorLagMicros = anchor.micros - bestReceipt!.micros;
+  final stats = _burstStatistics(best, offsets);
+  return StrictSyncedTime(
+    context: context,
+    anchor: anchor,
+    utcUnixMicros:
+        best.utcUnixMicros + stats.delayMicros ~/ 2 + anchorLagMicros,
+    referenceMicros: bestReceipt.micros,
+    roundTripMicros: best.roundTripMicros,
+    samplesUsed: samplesUsed,
+    trustBackend: best.trustBackend,
+    offsetMicros: best.offsetMicros,
+    jitterMicros: stats.jitterMicros,
+    errorBoundMicros: stats.errorBoundMicros,
+  );
+}
+
+// The RFC 5905 statistics both `getTime` variants attach to the
+// returned time: the delay used for compensation, the burst jitter ψ,
+// and the root-distance error bound.
+//
+// Jitter (§10) is the RMS of the offset differences between the
+// winning sample and every other burst sample; with a single sample
+// the sum is empty and ψ is 0. The error bound at the anchor instant
+// is half the winning sample's network delay + half the server's root
+// delay + the server's root dispersion + ψ. Fixture-shaped samples
+// (all-zero 7.1 fields) degrade to the pre-7.1 `roundTrip / 2` bound.
+({int delayMicros, int jitterMicros, int errorBoundMicros}) _burstStatistics(
+  NtsTimeSample best,
+  List<int> offsets,
+) {
   final theta0 = best.offsetMicros;
   var sumSq = 0.0;
   for (final theta in offsets) {
@@ -249,26 +464,90 @@ Future<NtsSyncedTime> _getTime({
   final jitterMicros = offsets.length > 1
       ? math.sqrt(sumSq / (offsets.length - 1)).round()
       : 0;
-  // Worst-case error bound at the anchor instant, following the
-  // RFC 5905 root-distance recipe: half the winning sample's network
-  // delay + half the server's root delay + the server's root
-  // dispersion + sample jitter. Fixture-shaped samples (all-zero 7.1
-  // fields) degrade to the pre-7.1 `roundTrip / 2` bound.
   final delayMicros = _effectiveDelayMicros(best);
   final errorBoundMicros =
       delayMicros ~/ 2 +
       best.rootDelayMicros ~/ 2 +
       best.rootDispersionMicros +
       jitterMicros;
-  return NtsSyncedTime(
-    utcUnixMicros: best.utcUnixMicros + delayMicros ~/ 2 + anchorLagMicros,
-    roundTripMicros: best.roundTripMicros,
-    samplesUsed: samplesUsed,
-    trustBackend: best.trustBackend,
-    offsetMicros: best.offsetMicros,
+  return (
+    delayMicros: delayMicros,
     jitterMicros: jitterMicros,
     errorBoundMicros: errorBoundMicros,
   );
+}
+
+// --- strict clock helpers ---------------------------------------------
+//
+// Every strict read the wrapper makes on a caller's context goes
+// through these, so a `StrictClockError` always reaches the caller as
+// `NtsError.clockFault` carrying the stage that read served, the
+// context's generation, and the trust backend resolved so far. The
+// original stack is preserved so the trace points at the read, not at
+// the conversion.
+
+NtsError _clockFaultError(
+  StrictClockContext context,
+  ClockFaultStage stage,
+  StrictClockError fault, {
+  TrustBackend? trustBackend,
+}) => NtsError.clockFault(
+  stage: stage,
+  fault: fault,
+  generation: context.generation,
+  trustBackend: trustBackend,
+);
+
+StrictReading _strictRead(
+  StrictClockContext context,
+  ClockFaultStage stage, {
+  TrustBackend? trustBackend,
+}) {
+  try {
+    return context.now();
+  } on StrictClockError catch (fault, stack) {
+    Error.throwWithStackTrace(
+      _clockFaultError(context, stage, fault, trustBackend: trustBackend),
+      stack,
+    );
+  }
+}
+
+Duration _strictElapsed(
+  StrictClockContext context,
+  StrictReading earlier,
+  ClockFaultStage stage, {
+  TrustBackend? trustBackend,
+}) {
+  try {
+    return context.elapsedSince(earlier);
+  } on StrictClockError catch (fault, stack) {
+    Error.throwWithStackTrace(
+      _clockFaultError(context, stage, fault, trustBackend: trustBackend),
+      stack,
+    );
+  }
+}
+
+StrictReading _attributeReceipt(
+  StrictClockContext context,
+  NtsTimeSample sample, {
+  required StrictReading notBefore,
+  TrustBackend? trustBackend,
+}) {
+  try {
+    return attributeStrictReceipt(context, sample, notBefore: notBefore);
+  } on StrictClockError catch (fault, stack) {
+    Error.throwWithStackTrace(
+      _clockFaultError(
+        context,
+        ClockFaultStage.attribution,
+        fault,
+        trustBackend: trustBackend,
+      ),
+      stack,
+    );
+  }
 }
 
 // The network delay used for burst selection, one-way compensation,

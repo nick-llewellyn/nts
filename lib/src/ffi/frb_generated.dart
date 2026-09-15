@@ -729,6 +729,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  NtsClockFault dco_decode_box_autoadd_nts_clock_fault(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_nts_clock_fault(raw);
+  }
+
+  @protected
   NtsServerSpec dco_decode_box_autoadd_nts_server_spec(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_nts_server_spec(raw);
@@ -744,6 +750,12 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   TrustMode dco_decode_box_autoadd_trust_mode(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_trust_mode(raw);
+  }
+
+  @protected
+  ClockFaultStage dco_decode_clock_fault_stage(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return ClockFaultStage.values[raw as int];
   }
 
   @protected
@@ -823,6 +835,11 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           expected: dco_decode_i_64(raw[1]),
           observed: dco_decode_i_64(raw[2]),
         );
+      case 7:
+        return NtsClockFault_SuspendedInFlight(
+          boottimeMicros: dco_decode_i_64(raw[1]),
+          monotonicMicros: dco_decode_i_64(raw[2]),
+        );
       default:
         throw Exception(
           'flutter_rust_bridge generated codec: unexpected enum variant tag in DCO wire format: ${raw[0]}',
@@ -883,6 +900,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       case 7:
         return NtsError_TrustBackendUnavailable(dco_decode_String(raw[1]));
       case 8:
+        return NtsError_ClockFault(
+          stage: dco_decode_clock_fault_stage(raw[1]),
+          fault: dco_decode_box_autoadd_nts_clock_fault(raw[2]),
+          generation: dco_decode_i_64(raw[3]),
+          trustBackend: dco_decode_opt_box_autoadd_trust_backend(raw[4]),
+        );
+      case 9:
         return NtsError_Internal(dco_decode_String(raw[1]));
       default:
         throw Exception(
@@ -920,8 +944,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 14)
-      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
+    if (arr.length != 16)
+      throw Exception('unexpected arr length: expect 16 but see ${arr.length}');
     return NtsTimeSample(
       utcUnixMicros: dco_decode_i_64(arr[0]),
       roundTripMicros: dco_decode_i_64(arr[1]),
@@ -931,12 +955,14 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       phaseTimings: dco_decode_phase_timings(arr[5]),
       trustBackend: dco_decode_trust_backend(arr[6]),
       recvBoottimeMicros: dco_decode_i_64(arr[7]),
-      offsetMicros: dco_decode_i_64(arr[8]),
-      peerDelayMicros: dco_decode_i_64(arr[9]),
-      rootDelayMicros: dco_decode_i_64(arr[10]),
-      rootDispersionMicros: dco_decode_i_64(arr[11]),
-      serverPrecision: dco_decode_i_8(arr[12]),
-      keWarnings: dco_decode_list_prim_u_16_strict(arr[13]),
+      recvClockGeneration: dco_decode_i_64(arr[8]),
+      recvClockBackend: dco_decode_nts_clock_backend(arr[9]),
+      offsetMicros: dco_decode_i_64(arr[10]),
+      peerDelayMicros: dco_decode_i_64(arr[11]),
+      rootDelayMicros: dco_decode_i_64(arr[12]),
+      rootDispersionMicros: dco_decode_i_64(arr[13]),
+      serverPrecision: dco_decode_i_8(arr[14]),
+      keWarnings: dco_decode_list_prim_u_16_strict(arr[15]),
     );
   }
 
@@ -1114,6 +1140,14 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  NtsClockFault sse_decode_box_autoadd_nts_clock_fault(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_nts_clock_fault(deserializer));
+  }
+
+  @protected
   NtsServerSpec sse_decode_box_autoadd_nts_server_spec(
     SseDeserializer deserializer,
   ) {
@@ -1133,6 +1167,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   TrustMode sse_decode_box_autoadd_trust_mode(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_trust_mode(deserializer));
+  }
+
+  @protected
+  ClockFaultStage sse_decode_clock_fault_stage(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    final inner = sse_decode_i_32(deserializer);
+    return ClockFaultStage.values[inner];
   }
 
   @protected
@@ -1227,6 +1268,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           expected: var_expected,
           observed: var_observed,
         );
+      case 7:
+        final var_boottimeMicros = sse_decode_i_64(deserializer);
+        final var_monotonicMicros = sse_decode_i_64(deserializer);
+        return NtsClockFault_SuspendedInFlight(
+          boottimeMicros: var_boottimeMicros,
+          monotonicMicros: var_monotonicMicros,
+        );
       default:
         throw UnimplementedError(
           'flutter_rust_bridge generated codec: unexpected enum variant tag: $tag_',
@@ -1314,6 +1362,19 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
         final var_field0 = sse_decode_String(deserializer);
         return NtsError_TrustBackendUnavailable(var_field0);
       case 8:
+        final var_stage = sse_decode_clock_fault_stage(deserializer);
+        final var_fault = sse_decode_box_autoadd_nts_clock_fault(deserializer);
+        final var_generation = sse_decode_i_64(deserializer);
+        final var_trustBackend = sse_decode_opt_box_autoadd_trust_backend(
+          deserializer,
+        );
+        return NtsError_ClockFault(
+          stage: var_stage,
+          fault: var_fault,
+          generation: var_generation,
+          trustBackend: var_trustBackend,
+        );
+      case 9:
         final var_field0 = sse_decode_String(deserializer);
         return NtsError_Internal(var_field0);
       default:
@@ -1357,6 +1418,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     final var_phaseTimings = sse_decode_phase_timings(deserializer);
     final var_trustBackend = sse_decode_trust_backend(deserializer);
     final var_recvBoottimeMicros = sse_decode_i_64(deserializer);
+    final var_recvClockGeneration = sse_decode_i_64(deserializer);
+    final var_recvClockBackend = sse_decode_nts_clock_backend(deserializer);
     final var_offsetMicros = sse_decode_i_64(deserializer);
     final var_peerDelayMicros = sse_decode_i_64(deserializer);
     final var_rootDelayMicros = sse_decode_i_64(deserializer);
@@ -1372,6 +1435,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       phaseTimings: var_phaseTimings,
       trustBackend: var_trustBackend,
       recvBoottimeMicros: var_recvBoottimeMicros,
+      recvClockGeneration: var_recvClockGeneration,
+      recvClockBackend: var_recvClockBackend,
       offsetMicros: var_offsetMicros,
       peerDelayMicros: var_peerDelayMicros,
       rootDelayMicros: var_rootDelayMicros,
@@ -1586,6 +1651,15 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   }
 
   @protected
+  void sse_encode_box_autoadd_nts_clock_fault(
+    NtsClockFault self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_nts_clock_fault(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_nts_server_spec(
     NtsServerSpec self,
     SseSerializer serializer,
@@ -1610,6 +1684,15 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_trust_mode(self, serializer);
+  }
+
+  @protected
+  void sse_encode_clock_fault_stage(
+    ClockFaultStage self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
   }
 
   @protected
@@ -1709,6 +1792,13 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
         sse_encode_i_32(6, serializer);
         sse_encode_i_64(expected, serializer);
         sse_encode_i_64(observed, serializer);
+      case NtsClockFault_SuspendedInFlight(
+        boottimeMicros: final boottimeMicros,
+        monotonicMicros: final monotonicMicros,
+      ):
+        sse_encode_i_32(7, serializer);
+        sse_encode_i_64(boottimeMicros, serializer);
+        sse_encode_i_64(monotonicMicros, serializer);
     }
   }
 
@@ -1773,8 +1863,19 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
       case NtsError_TrustBackendUnavailable(field0: final field0):
         sse_encode_i_32(7, serializer);
         sse_encode_String(field0, serializer);
-      case NtsError_Internal(field0: final field0):
+      case NtsError_ClockFault(
+        stage: final stage,
+        fault: final fault,
+        generation: final generation,
+        trustBackend: final trustBackend,
+      ):
         sse_encode_i_32(8, serializer);
+        sse_encode_clock_fault_stage(stage, serializer);
+        sse_encode_box_autoadd_nts_clock_fault(fault, serializer);
+        sse_encode_i_64(generation, serializer);
+        sse_encode_opt_box_autoadd_trust_backend(trustBackend, serializer);
+      case NtsError_Internal(field0: final field0):
+        sse_encode_i_32(9, serializer);
         sse_encode_String(field0, serializer);
     }
   }
@@ -1814,6 +1915,8 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
     sse_encode_phase_timings(self.phaseTimings, serializer);
     sse_encode_trust_backend(self.trustBackend, serializer);
     sse_encode_i_64(self.recvBoottimeMicros, serializer);
+    sse_encode_i_64(self.recvClockGeneration, serializer);
+    sse_encode_nts_clock_backend(self.recvClockBackend, serializer);
     sse_encode_i_64(self.offsetMicros, serializer);
     sse_encode_i_64(self.peerDelayMicros, serializer);
     sse_encode_i_64(self.rootDelayMicros, serializer);

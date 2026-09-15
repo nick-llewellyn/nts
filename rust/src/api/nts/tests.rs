@@ -449,7 +449,9 @@ fn bind_connected_udp_handles_ipv4_loopback() {
     // (which leak detached workers for ~2 s) cannot saturate the
     // global pool out from under this test. Pool-cap behaviour
     // itself is covered by `dns::tests::cap_reached_returns_would_block`.
+    let clock = SequentialReader::bind();
     let UdpBindOutcome { socket, .. } = bind_connected_udp_using(
+        &clock,
         "127.0.0.1",
         echo_port,
         Duration::from_secs(2),
@@ -484,9 +486,16 @@ fn bind_connected_udp_handles_ipv6_loopback() {
     };
     let echo_port = echo.local_addr().expect("local addr").port();
 
-    let UdpBindOutcome { socket, .. } =
-        bind_connected_udp_using("::1", echo_port, Duration::from_secs(2), 64, system_lookup)
-            .expect("bind_connected_udp");
+    let clock = SequentialReader::bind();
+    let UdpBindOutcome { socket, .. } = bind_connected_udp_using(
+        &clock,
+        "::1",
+        echo_port,
+        Duration::from_secs(2),
+        64,
+        system_lookup,
+    )
+    .expect("bind_connected_udp");
     assert!(matches!(
         socket.local_addr().expect("local addr"),
         SocketAddr::V6(_)
@@ -1141,7 +1150,9 @@ fn nts_query_preserves_session_on_ntsn_kod_with_wrong_uid() {
 /// hits a real DNS responder.
 #[test]
 fn bind_connected_udp_reports_dns_failure() {
+    let clock = SequentialReader::bind();
     let err = bind_connected_udp_using(
+        &clock,
         "no-such-host.invalid",
         123,
         Duration::from_millis(500),
@@ -1173,11 +1184,13 @@ fn bind_connected_udp_reports_dns_failure() {
 #[test]
 fn bind_connected_udp_surfaces_slow_dns_as_timeout() {
     let budget = Duration::from_millis(50);
+    let clock = SequentialReader::bind();
     let started = Instant::now();
-    let result = bind_connected_udp_using("ignored.invalid", 0, budget, 64, |_host, _port| {
-        std::thread::sleep(Duration::from_secs(2));
-        Ok(vec![SocketAddr::from(([127, 0, 0, 1], 0))])
-    });
+    let result =
+        bind_connected_udp_using(&clock, "ignored.invalid", 0, budget, 64, |_host, _port| {
+            std::thread::sleep(Duration::from_secs(2));
+            Ok(vec![SocketAddr::from(([127, 0, 0, 1], 0))])
+        });
     let elapsed = started.elapsed();
 
     match result {
@@ -1205,9 +1218,11 @@ fn bind_connected_udp_surfaces_slow_dns_as_timeout() {
 /// `NtsError::Network`.
 #[test]
 fn udp_deadline_remaining_or_timeout_after_expiry() {
-    let d = UdpDeadline::new(Duration::from_micros(1));
+    let clock = SequentialReader::bind();
+    let d = UdpDeadline::new(&clock, Duration::from_micros(1)).expect("strict clock");
     std::thread::sleep(Duration::from_millis(10));
-    assert!(d.remaining().is_zero(), "expired deadline must saturate");
+    let remaining = d.remaining().expect("expiry is not a fault");
+    assert!(remaining.is_zero(), "expired deadline must report zero");
     match d.remaining_or_timeout(TimeoutPhase::Ntp) {
         Err(NtsError::Timeout {
             phase: TimeoutPhase::Ntp,
@@ -1234,7 +1249,9 @@ fn bind_connected_udp_socket_timeouts_reflect_remaining_budget() {
 
     let budget = Duration::from_millis(500);
     let dns_consumes = Duration::from_millis(200);
+    let clock = SequentialReader::bind();
     let UdpBindOutcome { socket, .. } = bind_connected_udp_using(
+        &clock,
         "ignored.invalid",
         echo_port,
         budget,
@@ -2217,6 +2234,10 @@ fn nts_query_live_cloudflare() {
 /// or waiter against this client's table.
 #[test]
 fn nts_query_live_cloudflare_via_client() {
+    // Stamped state (`Session::atime`) is kept across calls: hold the
+    // test-sync share so no concurrent test advances the generation
+    // underneath it and retires the cached session as foreign.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let spec = NtsServerSpec {
         host: "time.cloudflare.com".to_owned(),
         port: DEFAULT_KE_PORT,
@@ -2538,8 +2559,9 @@ fn checkout_collapses_concurrent_cold_queries_onto_one_handshake() {
             let spec = spec.clone();
             let do_handshake = do_handshake.clone();
             thread::spawn(move || {
+                let clock = SequentialReader::bind();
                 table
-                    .checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                    .checkout_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
                     .map(|(ctx, _)| ctx)
             })
         })
@@ -2636,7 +2658,8 @@ fn checkout_does_not_serialize_handshakes_across_distinct_hosts() {
         let spec_a = spec_a.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
-            table.checkout_with(&spec_a, Duration::from_secs(10), 4, &do_handshake)
+            let clock = SequentialReader::bind();
+            table.checkout_with(&clock, &spec_a, Duration::from_secs(10), 4, &do_handshake)
         })
     };
     let h_b = {
@@ -2644,7 +2667,8 @@ fn checkout_does_not_serialize_handshakes_across_distinct_hosts() {
         let spec_b = spec_b.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
-            table.checkout_with(&spec_b, Duration::from_secs(10), 4, &do_handshake)
+            let clock = SequentialReader::bind();
+            table.checkout_with(&clock, &spec_b, Duration::from_secs(10), 4, &do_handshake)
         })
     };
 
@@ -2699,7 +2723,10 @@ fn checkout_waiter_returns_timeout_when_leader_outlasts_deadline() {
         let table = table.clone();
         let spec = spec.clone();
         let do_handshake = do_handshake.clone();
-        thread::spawn(move || table.checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake))
+        thread::spawn(move || {
+            let clock = SequentialReader::bind();
+            table.checkout_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
+        })
     };
 
     // Wait until the leader has actually registered an inflight
@@ -2714,8 +2741,10 @@ fn checkout_waiter_returns_timeout_when_leader_outlasts_deadline() {
 
     // Waiter has a tight 100ms call budget; leader is parked, so
     // the waiter must surface a Timeout once 100ms elapse.
+    let clock = SequentialReader::bind();
     let waiter_started = Instant::now();
     let waiter_outcome = table.checkout_with(
+        &clock,
         &spec,
         Duration::from_millis(100),
         4,
@@ -2786,7 +2815,8 @@ fn checkout_propagates_leader_failure_to_every_waiter() {
             let spec = spec.clone();
             let do_handshake = do_handshake.clone();
             thread::spawn(move || {
-                table.checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                let clock = SequentialReader::bind();
+                table.checkout_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
             })
         })
         .collect();
@@ -2852,10 +2882,11 @@ fn checkout_consecutive_handshakes_get_distinct_generations() {
             ))
         };
 
+    let clock = SequentialReader::bind();
     let mut generations = Vec::with_capacity(3);
     for _ in 0..3 {
         let (ctx, _) = table
-            .checkout_with(&spec, Duration::from_secs(5), 4, &do_handshake)
+            .checkout_with(&clock, &spec, Duration::from_secs(5), 4, &do_handshake)
             .unwrap_or_else(|e| panic!("checkout failed: {e:?}"));
         generations.push(ctx.session_generation);
     }
@@ -2900,14 +2931,15 @@ fn ke_warnings_propagate_to_cached_session_queries() {
             Ok((s, KePhaseTimings::default()))
         };
 
+    let clock = SequentialReader::bind();
     let (first, _) = table
-        .checkout_with(&spec, Duration::from_secs(5), 4, &do_handshake)
+        .checkout_with(&clock, &spec, Duration::from_secs(5), 4, &do_handshake)
         .unwrap_or_else(|e| panic!("first checkout failed: {e:?}"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(first.ke_warnings, vec![0x1234, 0x5678]);
 
     let (second, _) = table
-        .checkout_with(&spec, Duration::from_secs(5), 4, &do_handshake)
+        .checkout_with(&clock, &spec, Duration::from_secs(5), 4, &do_handshake)
         .unwrap_or_else(|e| panic!("second checkout failed: {e:?}"));
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -2940,8 +2972,9 @@ fn ke_warnings_empty_when_server_sends_none() {
                 KePhaseTimings::default(),
             ))
         };
+    let clock = SequentialReader::bind();
     let (ctx, _) = table
-        .checkout_with(&spec, Duration::from_secs(5), 4, &do_handshake)
+        .checkout_with(&clock, &spec, Duration::from_secs(5), 4, &do_handshake)
         .unwrap_or_else(|e| panic!("checkout failed: {e:?}"));
     assert!(ctx.ke_warnings.is_empty());
 }
@@ -3126,6 +3159,10 @@ fn nts_trust_status_snapshot_is_safe_with_no_handshake() {
 /// observability layer.
 #[test]
 fn checkout_cache_hit_preserves_session_trust_backend() {
+    // Stamped state (`Session::atime`) is kept across calls: hold the
+    // test-sync share so no concurrent test advances the generation
+    // underneath it and retires the cached session as foreign.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let spec = NtsServerSpec {
         host: "trust-backend-cache-hit.test".into(),
@@ -3143,8 +3180,10 @@ fn checkout_cache_hit_preserves_session_trust_backend() {
     );
     session.trust_backend = TrustBackend::PlatformWithHybridFallback;
     table.install(&spec, session);
+    let clock = SequentialReader::bind();
     let (ctx, _) = table
         .checkout(
+            &clock,
             &spec,
             Duration::from_secs(5),
             4,
@@ -3209,7 +3248,8 @@ fn warm_cookies_collapses_concurrent_forced_refreshes_onto_one_handshake() {
             let spec = spec.clone();
             let do_handshake = do_handshake.clone();
             thread::spawn(move || {
-                table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                let clock = SequentialReader::bind();
+                table.warm_cookies_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
             })
         })
         .collect();
@@ -3292,7 +3332,8 @@ fn warm_cookies_propagates_leader_failure_to_every_waiter() {
             let spec = spec.clone();
             let do_handshake = do_handshake.clone();
             thread::spawn(move || {
-                table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                let clock = SequentialReader::bind();
+                table.warm_cookies_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
             })
         })
         .collect();
@@ -3357,7 +3398,8 @@ fn warm_cookies_collapses_with_concurrent_query_against_same_host() {
         let spec = spec.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
-            table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+            let clock = SequentialReader::bind();
+            table.warm_cookies_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
         })
     };
     let query = {
@@ -3365,8 +3407,9 @@ fn warm_cookies_collapses_with_concurrent_query_against_same_host() {
         let spec = spec.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
+            let clock = SequentialReader::bind();
             table
-                .checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                .checkout_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
                 .map(|(ctx, _)| ctx)
         })
     };
@@ -3459,8 +3502,9 @@ fn warm_cookies_waiter_reports_delivered_count_when_query_leader_pops_first() {
         let spec = spec.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
+            let clock = SequentialReader::bind();
             table
-                .checkout_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+                .checkout_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
                 .map(|(ctx, _)| ctx)
         })
     };
@@ -3474,7 +3518,8 @@ fn warm_cookies_waiter_reports_delivered_count_when_query_leader_pops_first() {
         let spec = spec.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
-            table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+            let clock = SequentialReader::bind();
+            table.warm_cookies_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
         })
     };
     await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
@@ -3558,14 +3603,16 @@ fn warm_cookies_does_not_serialize_across_distinct_hosts() {
         let table = table.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
-            table.warm_cookies_with(&spec_a, Duration::from_secs(10), 4, &do_handshake)
+            let clock = SequentialReader::bind();
+            table.warm_cookies_with(&clock, &spec_a, Duration::from_secs(10), 4, &do_handshake)
         })
     };
     let warm_b = {
         let table = table.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
-            table.warm_cookies_with(&spec_b, Duration::from_secs(10), 4, &do_handshake)
+            let clock = SequentialReader::bind();
+            table.warm_cookies_with(&clock, &spec_b, Duration::from_secs(10), 4, &do_handshake)
         })
     };
 
@@ -3616,7 +3663,8 @@ fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
         let spec = spec.clone();
         let do_handshake = do_handshake.clone();
         thread::spawn(move || {
-            table.warm_cookies_with(&spec, Duration::from_secs(10), 4, &do_handshake)
+            let clock = SequentialReader::bind();
+            table.warm_cookies_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
         })
     };
 
@@ -3626,8 +3674,10 @@ fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
     let key = session_key(&spec);
     await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| slot.is_some());
 
+    let clock = SequentialReader::bind();
     let waiter_started = Instant::now();
     let waiter_outcome = table.warm_cookies_with(
+        &clock,
         &spec,
         Duration::from_millis(100),
         4,
@@ -3688,14 +3738,16 @@ fn warm_cookies_leader_budget_exhausted_before_handshake_returns_dns_timeout() {
         host: "warm-singleflight-budget-exhausted.test".into(),
         port: 4460,
     };
-    let outcome = table.warm_cookies_with(&spec, Duration::ZERO, 4, &|_: &NtsServerSpec,
-                                                                      _t: Duration,
-                                                                      _c: usize,
-                                                                      _r: Option<
-        &PhaseReporter,
-    >| {
-        panic!("do_handshake must not be invoked when the per-call budget is exhausted")
-    });
+    let clock = SequentialReader::bind();
+    let outcome =
+        table.warm_cookies_with(&clock, &spec, Duration::ZERO, 4, &|_: &NtsServerSpec,
+                                                                    _t: Duration,
+                                                                    _c: usize,
+                                                                    _r: Option<
+            &PhaseReporter,
+        >| {
+            panic!("do_handshake must not be invoked when the per-call budget is exhausted")
+        });
     match outcome {
         Err(NtsError::Timeout {
             phase: TimeoutPhase::DnsTimeout,
@@ -3748,14 +3800,15 @@ fn checkout_leader_budget_exhausted_before_handshake_returns_dns_timeout() {
         host: "checkout-singleflight-budget-exhausted.test".into(),
         port: 4460,
     };
-    let outcome = table.checkout_with(
-        &spec,
-        Duration::ZERO,
-        4,
-        &|_: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
-            panic!("do_handshake must not be invoked when the per-call budget is exhausted")
-        },
-    );
+    let clock = SequentialReader::bind();
+    let outcome = table.checkout_with(&clock, &spec, Duration::ZERO, 4, &|_: &NtsServerSpec,
+                                                                          _t: Duration,
+                                                                          _c: usize,
+                                                                          _r: Option<
+        &PhaseReporter,
+    >| {
+        panic!("do_handshake must not be invoked when the per-call budget is exhausted")
+    });
     match outcome {
         Err(NtsError::Timeout {
             phase: TimeoutPhase::DnsTimeout,
@@ -3800,7 +3853,8 @@ fn warm_cookies_leader_refuses_zero_cookie_session() {
             let session = make_test_session(&spec.host, 123, next_session_generation());
             Ok((session, KePhaseTimings::default()))
         };
-    match table.warm_cookies_with(&spec, Duration::from_secs(5), 4, &do_handshake) {
+    let clock = SequentialReader::bind();
+    match table.warm_cookies_with(&clock, &spec, Duration::from_secs(5), 4, &do_handshake) {
         Err(NtsError::NoCookies {
             trust_backend: Some(_),
         }) => {}
@@ -3974,6 +4028,10 @@ fn counter_to_i64_saturates_instead_of_wrapping() {
 /// Pins acceptance criterion for issue nts-7kv.
 #[test]
 fn nts_query_inner_increments_custom_counter_for_default_client() {
+    // Stamped state (`Session::atime`) is kept across calls: hold the
+    // test-sync share so no concurrent test advances the generation
+    // underneath it and retires the cached session as foreign.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let host = "custom-counter-bump.invalid";
     let spec = NtsServerSpec {
@@ -4429,25 +4487,30 @@ fn query_context_cookie_is_zeroizing_wrapped() {
 fn seen_uid_cache_accepts_distinct_uids() {
     let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
-    assert!(cache.note(&[0x01u8; UID_LEN], base));
-    assert!(cache.note(&[0x02u8; UID_LEN], base));
-    assert!(cache.note(&[0x03u8; UID_LEN], base));
+    assert_eq!(cache.note(&[0x01u8; UID_LEN], base), Ok(true));
+    assert_eq!(cache.note(&[0x02u8; UID_LEN], base), Ok(true));
+    assert_eq!(cache.note(&[0x03u8; UID_LEN], base), Ok(true));
     assert_eq!(cache.order.len(), 3);
     assert_eq!(cache.seen.len(), 3);
 }
 
 /// Re-noting the same UID inside the TTL window is flagged as a replay
-/// (returns `false`). This is the core defense-in-depth assertion: a
-/// response whose UID was already accepted must be rejected before its
-/// stale cookies are deposited.
+/// (returns `Ok(false)`). This is the core defense-in-depth assertion:
+/// a response whose UID was already accepted must be rejected before
+/// its stale cookies are deposited.
 #[test]
 fn seen_uid_cache_rejects_duplicate_within_ttl() {
     let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
     let uid = [0xABu8; UID_LEN];
-    assert!(cache.note(&uid, base), "first sighting must be accepted");
-    assert!(
-        !cache.note(&uid, base + Duration::from_millis(1)),
+    assert_eq!(
+        cache.note(&uid, base),
+        Ok(true),
+        "first sighting must be accepted"
+    );
+    assert_eq!(
+        cache.note(&uid, base + Duration::from_millis(1)),
+        Ok(false),
         "duplicate UID within TTL must be rejected as a replay",
     );
     // A near-but-still-inside-window repeat is also a replay. Use a
@@ -4458,8 +4521,9 @@ fn seen_uid_cache_rejects_duplicate_within_ttl() {
         + SEEN_UID_TTL
             .checked_sub(Duration::from_millis(1))
             .expect("TTL exceeds 1ms");
-    assert!(
-        !cache.note(&uid, just_inside),
+    assert_eq!(
+        cache.note(&uid, just_inside),
+        Ok(false),
         "duplicate UID just inside the TTL window must still be rejected",
     );
 }
@@ -4472,9 +4536,10 @@ fn seen_uid_cache_reaccepts_after_ttl_expiry() {
     let base = BootInstant::now();
     let mut cache = SeenUidCache::new();
     let uid = [0xCDu8; UID_LEN];
-    assert!(cache.note(&uid, base));
-    assert!(
+    assert_eq!(cache.note(&uid, base), Ok(true));
+    assert_eq!(
         cache.note(&uid, base + SEEN_UID_TTL),
+        Ok(true),
         "a UID whose prior sighting has aged past the TTL must be accepted again",
     );
     // The expired entry was pruned, not accumulated alongside the new one.
@@ -4493,47 +4558,77 @@ fn seen_uid_cache_ages_across_a_suspend_gap() {
     let base = BootInstant::from_micros(1_000_000);
     let mut cache = SeenUidCache::new();
     let uid = [0x7Fu8; UID_LEN];
-    assert!(cache.note(&uid, base));
+    assert_eq!(cache.note(&uid, base), Ok(true));
     // Four hours of suspend: `Instant` would have advanced by ~0 here,
     // keeping the entry live; the boot clock advances in full.
     let after_sleep = base + Duration::from_secs(4 * 3600);
-    assert!(
+    assert_eq!(
         cache.note(&uid, after_sleep),
+        Ok(true),
         "an entry older than the TTL across suspend must be pruned",
     );
     assert_eq!(cache.order.len(), 1);
     assert_eq!(cache.seen.len(), 1);
 }
 
-/// `prune` must not panic when handed a `now` earlier than a front
-/// entry's insertion instant. The production path samples `now` under
-/// the same lock that guards insertion, so this never happens in
-/// practice, but `saturating_duration_since` hardens the path against
-/// any future caller that violates the non-decreasing-`now` invariant:
-/// an out-of-order `now` yields `Duration::ZERO`, so the entry is
-/// treated as still-live and simply retained rather than tripping a
-/// panic.
+/// A `now` earlier than an entry already in the cache is a clock
+/// regression, and strict stamping reports it instead of tolerating
+/// it. The production path samples `now` under the same lock that
+/// guards insertion, so the two readings are in program order and a
+/// reversed pair can only mean the source went backwards. `note` must
+/// return the fault and leave the cache untouched — nothing inserted,
+/// nothing pruned — so the caller rejects the response rather than
+/// recording a sighting it could not order. A reported regression
+/// advances the live generation, hence the exclusive hold.
 #[test]
-fn seen_uid_cache_prune_tolerates_earlier_now() {
-    let base = BootInstant::now();
+fn seen_uid_cache_reports_regressed_now_and_inserts_nothing() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let base = BootInstant::from_micros(10_000_000);
     let mut cache = SeenUidCache::new();
     let uid = [0xEFu8; UID_LEN];
-    assert!(cache.note(&uid, base + SEEN_UID_TTL));
-    // A second note with a `now` earlier than the first entry's
-    // timestamp would panic under `duration_since`; with the
-    // saturating call it computes a zero age, retains the live entry,
-    // and rejects the duplicate.
+    assert_eq!(cache.note(&uid, base + SEEN_UID_TTL), Ok(true));
     let earlier = [0x01u8; UID_LEN];
     assert!(
-        cache.note(&earlier, base),
-        "a distinct UID must be accepted even when `now` regresses",
+        matches!(
+            cache.note(&earlier, base),
+            Err(ClockFault::Regression { .. })
+        ),
+        "a `now` behind the newest entry must be reported as a regression",
     );
     assert!(
-        !cache.note(&uid, base),
-        "the still-live original UID must remain a replay under a regressed `now`",
+        matches!(cache.note(&uid, base), Err(ClockFault::Regression { .. })),
+        "the fault is reported before the duplicate check",
     );
-    assert_eq!(cache.order.len(), 2);
-    assert_eq!(cache.seen.len(), 2);
+    assert_eq!(cache.order.len(), 1, "nothing was inserted");
+    assert_eq!(cache.seen.len(), 1);
+    assert!(cache.seen.contains(uid.as_slice()), "nothing was pruned");
+}
+
+/// Entries stamped under a retired generation are *foreign*: their age
+/// cannot be established against a reading from the live generation,
+/// so `prune` retires them like expired entries instead of faulting.
+/// A UID seen only under the old generation is therefore accepted
+/// again — the replay window does not survive a generation change,
+/// which is the same fail-closed shape the session table uses.
+#[test]
+fn seen_uid_cache_retires_foreign_generation_entries() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let mut cache = SeenUidCache::new();
+    let uid = [0x5Au8; UID_LEN];
+    let old = BootInstant::from_micros(10_000_000);
+    assert_eq!(cache.note(&uid, old), Ok(true));
+    crate::nts::boottime::invalidate_generation();
+    // Numerically *earlier* than the old stamp: only the generation
+    // decides, never the number's plausibility.
+    let fresh = BootInstant::from_micros(5_000_000);
+    assert_eq!(
+        cache.note(&uid, fresh),
+        Ok(true),
+        "a sighting recorded under a retired generation must not count as a replay",
+    );
+    assert_eq!(cache.order.len(), 1);
+    assert_eq!(cache.seen.len(), 1);
+    assert_eq!(cache.order.front().map(|(_, at)| *at), Some(fresh));
 }
 
 /// The cache is bounded: filling it past [`SEEN_UID_CAP`] evicts the
@@ -4554,7 +4649,7 @@ fn seen_uid_cache_enforces_capacity_bound() {
     // All inserted at `base`, so only the capacity bound (not the TTL)
     // drives eviction here.
     for u in &uids {
-        assert!(cache.note(u, base));
+        assert_eq!(cache.note(u, base), Ok(true));
     }
     assert_eq!(cache.order.len(), SEEN_UID_CAP);
     assert_eq!(cache.seen.len(), SEEN_UID_CAP);
@@ -4595,13 +4690,14 @@ fn seen_uid_cache_replay_at_capacity_does_not_evict() {
     // Fill to exactly capacity, all stamped at `base` so nothing is
     // TTL-eligible for the duration of the test.
     for u in &uids {
-        assert!(cache.note(u, base));
+        assert_eq!(cache.note(u, base), Ok(true));
     }
     assert_eq!(cache.order.len(), SEEN_UID_CAP);
 
     // Re-note the most-recent UID (a replay) while at capacity.
-    assert!(
-        !cache.note(&uids[SEEN_UID_CAP - 1], base),
+    assert_eq!(
+        cache.note(&uids[SEEN_UID_CAP - 1], base),
+        Ok(false),
         "a duplicate UID must be rejected as a replay",
     );
 
@@ -4622,22 +4718,54 @@ fn seen_uid_cache_replay_at_capacity_does_not_evict() {
 /// End-to-end through the `SessionTable` wrapper: the first sighting of
 /// a UID is accepted, an immediate repeat is rejected as a replay, and
 /// a distinct UID is independently accepted. Exercises the production
-/// `note_unique_id` path (which stamps `BootInstant::now()` internally;
-/// the intra-test elapsed time is far below `SEEN_UID_TTL`, so dedup
-/// holds).
+/// `note_unique_id` path (which stamps a strict reading from the
+/// operation's reader internally; the intra-test elapsed time is far
+/// below `SEEN_UID_TTL`, so dedup holds).
 #[test]
 fn session_table_note_unique_id_dedups() {
     let table = SessionTable::new();
+    let clock = SequentialReader::bind();
     let uid_a = [0x11u8; UID_LEN];
     let uid_b = [0x22u8; UID_LEN];
-    assert!(table.note_unique_id(&uid_a), "first sighting accepted");
-    assert!(
-        !table.note_unique_id(&uid_a),
+    assert_eq!(
+        table.note_unique_id(&clock, &uid_a),
+        Ok(true),
+        "first sighting accepted"
+    );
+    assert_eq!(
+        table.note_unique_id(&clock, &uid_a),
+        Ok(false),
         "second sighting of the same UID must be rejected as a replay",
     );
-    assert!(
-        table.note_unique_id(&uid_b),
+    assert_eq!(
+        table.note_unique_id(&clock, &uid_b),
+        Ok(true),
         "a distinct UID must be accepted independently",
+    );
+}
+
+/// A strict fault while stamping the sighting must surface as `Err`
+/// with nothing recorded, so the caller rejects the response instead
+/// of accepting a sample whose replay it could not later detect. The
+/// reader is bound, then the live generation is retired underneath
+/// it, so its next read is a `GenerationChanged` fault.
+#[test]
+fn session_table_note_unique_id_reports_clock_fault_and_records_nothing() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let table = SessionTable::new();
+    let clock = SequentialReader::bind();
+    crate::nts::boottime::invalidate_generation();
+    let uid = [0x33u8; UID_LEN];
+    assert!(
+        matches!(
+            table.note_unique_id(&clock, &uid),
+            Err(ClockFault::GenerationChanged { .. })
+        ),
+        "a faulted reader must not stamp a sighting",
+    );
+    assert!(
+        lock_recover(&table.seen_uids).order.is_empty(),
+        "nothing may be recorded on a fault",
     );
 }
 
@@ -4677,7 +4805,7 @@ fn prune_sessions_drops_entries_past_the_idle_ttl() {
         ),
     );
 
-    prune_sessions(&mut map, now, 0);
+    prune_sessions(&mut map, now, 0).expect("in-order stamps under one generation");
 
     assert!(
         !map.contains_key("expired.invalid:4460"),
@@ -4713,7 +4841,7 @@ fn prune_sessions_evicts_least_recently_used_to_make_install_room() {
         );
     }
 
-    prune_sessions(&mut map, now, 1);
+    prune_sessions(&mut map, now, 1).expect("in-order stamps under one generation");
 
     assert_eq!(
         map.len(),
@@ -4728,6 +4856,93 @@ fn prune_sessions_evicts_least_recently_used_to_make_install_room() {
     assert!(
         map.contains_key("lru-0.invalid:4460"),
         "the most-recently-used entry must survive",
+    );
+}
+
+/// An entry whose `atime` was stamped under a generation that has since
+/// been retired is foreign: its age cannot be established against a
+/// live reading, so `prune_sessions` drops it like an expired one and
+/// reports no fault. Only the generation decides — the foreign stamp
+/// here is numerically *fresher* than `now`, which under a plausibility
+/// check would have kept it.
+#[test]
+fn prune_sessions_retires_entries_from_a_foreign_generation() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let ttl_micros = i64::try_from(SESSION_TABLE_IDLE_TTL.as_micros()).expect("TTL fits in i64");
+    let mut map = HashMap::new();
+    map.insert(
+        "foreign.invalid:4460".to_owned(),
+        make_test_session_at(
+            "foreign.invalid",
+            1,
+            BootInstant::from_micros(10 * ttl_micros + 5_000_000),
+        ),
+    );
+    crate::nts::boottime::invalidate_generation();
+    let now = BootInstant::from_micros(10 * ttl_micros);
+    map.insert(
+        "live.invalid:4460".to_owned(),
+        make_test_session_at(
+            "live.invalid",
+            2,
+            BootInstant::from_micros(10 * ttl_micros - 1_000_000),
+        ),
+    );
+
+    prune_sessions(&mut map, now, 0).expect("a foreign entry is retired, not a fault");
+
+    assert!(
+        !map.contains_key("foreign.invalid:4460"),
+        "an entry stamped under a retired generation must be dropped",
+    );
+    assert!(
+        map.contains_key("live.invalid:4460"),
+        "an entry stamped under the live generation must survive",
+    );
+}
+
+/// An `atime` later than `now` under the same generation is a clock
+/// regression: every `atime` is written under the `map` lock that
+/// `now` is sampled under, so the pair is in program order. The entry
+/// is dropped and the fault is returned, so the caller aborts its
+/// install rather than stamping a new entry on a clock that just
+/// failed. A reported regression advances the live generation, hence
+/// the exclusive hold.
+#[test]
+fn prune_sessions_reports_a_regressed_now() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let ttl_micros = i64::try_from(SESSION_TABLE_IDLE_TTL.as_micros()).expect("TTL fits in i64");
+    let now = BootInstant::from_micros(10 * ttl_micros);
+    let mut map = HashMap::new();
+    map.insert(
+        "ahead.invalid:4460".to_owned(),
+        make_test_session_at(
+            "ahead.invalid",
+            1,
+            BootInstant::from_micros(10 * ttl_micros + 1),
+        ),
+    );
+    map.insert(
+        "fresh.invalid:4460".to_owned(),
+        make_test_session_at(
+            "fresh.invalid",
+            2,
+            BootInstant::from_micros(10 * ttl_micros - 1_000_000),
+        ),
+    );
+
+    let fault = prune_sessions(&mut map, now, 0).expect_err("a reversed pair is a regression");
+    assert!(
+        matches!(fault, ClockFault::Regression { .. }),
+        "got {fault:?}"
+    );
+    assert!(
+        !map.contains_key("ahead.invalid:4460"),
+        "the regressed entry must be dropped",
+    );
+    assert!(
+        map.contains_key("fresh.invalid:4460"),
+        "an in-order entry must survive the failed sweep",
     );
 }
 
@@ -4800,6 +5015,10 @@ fn reinstalling_a_cached_key_evicts_nothing() {
 /// idle TTL while still in use.
 #[test]
 fn checkout_cache_hit_refreshes_the_lru_stamp() {
+    // Stamped state (`Session::atime`) is kept across calls: hold the
+    // test-sync share so no concurrent test advances the generation
+    // underneath it and retires the cached session as foreign.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let spec = NtsServerSpec {
         host: "atime-refresh.invalid".into(),
@@ -4814,8 +5033,10 @@ fn checkout_cache_hit_refreshes_the_lru_stamp() {
     session.atime = stale;
     table.install(&spec, session);
 
+    let clock = SequentialReader::bind();
     table
         .checkout_with(
+            &clock,
             &spec,
             Duration::from_secs(1),
             DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
@@ -4858,7 +5079,9 @@ fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
             Err(NtsError::Internal("stub".into()))
         }
     };
+    let clock = SequentialReader::bind();
     let _ = table.checkout_with(
+        &clock,
         &spec,
         Duration::from_millis(1),
         DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
@@ -4886,7 +5109,7 @@ fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
 fn strict_clock_descriptor_matches_strict_read_backend() {
     // A concurrent injection test advancing the generation mid-read
     // would turn this valid host read into `GenerationChanged`.
-    let _serial = crate::nts::boottime::generation_test_guard();
+    let _shared = crate::nts::boottime::test_sync::shared();
     match (nts_clock_descriptor(), nts_strict_clock_read(None)) {
         (Ok(d), Ok(r)) => {
             assert_eq!(d.backend, r.backend);
@@ -4905,9 +5128,7 @@ fn strict_clock_descriptor_matches_strict_read_backend() {
 /// from one taken after.
 #[test]
 fn strict_clock_invalidate_advances_generation_seen_by_reads() {
-    // Moves the process-wide generation outside `with_raw_override`;
-    // hold the lock so a reader another test just bound is not retired.
-    let _serial = crate::nts::boottime::generation_test_guard();
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
     let Ok(before) = nts_strict_clock_read(None) else {
         return; // unsupported target: nothing to compare
     };
@@ -4941,6 +5162,7 @@ fn strict_clock_read_bound_to_a_retired_generation_never_reads() {
     use crate::nts::boottime::{generation, invalidate_generation, with_raw_override, ClockFault};
     use std::cell::Cell;
     use std::rc::Rc;
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
     let probes = Rc::new(Cell::new(0u32));
     let seen = Rc::clone(&probes);
     with_raw_override(
@@ -4976,6 +5198,7 @@ fn strict_clock_read_bound_to_a_retired_generation_never_reads() {
 #[test]
 fn strict_clock_read_reports_fault_where_legacy_export_degrades() {
     use crate::nts::boottime::{with_raw_override, ClockFault};
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
     with_raw_override(
         || Err(ClockFault::SyscallFailed { errno: 22 }),
         || {

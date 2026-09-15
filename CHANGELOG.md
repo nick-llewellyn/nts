@@ -8,7 +8,89 @@ tarball.
 
 ## 10.0
 
+### Breaking
+
+- The sealed `NtsError` gains a `clockFault` variant
+  (`NtsErrorClockFault`, carrying `stage`, `fault`, `generation` and
+  the usual `trustBackend`). Exhaustive `switch` expressions over
+  `NtsError` — the pattern the package recommends — stop compiling
+  until they handle it. It means the clock a call was bound to could
+  not vouch for the result: a native read faulted, the bridge was
+  reset or the native generation moved under the call, or a sample's
+  receipt did not match the caller's context. `ClockFaultStage` names
+  where the read served, and `fault` is the underlying
+  `StrictClockError`.
+
+  Every entry point can raise it, not only the strict ones. The
+  native core now runs each security-relevant clock read — the call
+  budget, the handshake deadline, the session-table TTL and access
+  stamps, the UDP deadlines, the wire receipt — strictly for every
+  caller, because that timeline is shared process-wide state and
+  cannot run strict for some callers and best-effort for others; a
+  fault at those stages (`admission`, `handshake`, `session`, `udp`,
+  `receipt`) surfaces to `ntsQuery`, `ntsWarmCookies`, `ntsGetTime`
+  and the `NtsClient` equivalents without any `context:`. In
+  practice that is a fault of the platform clock itself — which
+  previously latched a silent fallback — or a generation change from
+  a bridge reset on another isolate while the call was in flight.
+  The remaining stages —
+  `awaitResult`, `attribution`, `projection` — are Dart-authored and
+  fire only on the strict surfaces (`ntsGetTimeStrict`,
+  `NtsClient.getTimeStrict`, or `ntsQuery` / `ntsWarmCookies` given
+  `context:`), where the `StrictClockContext` metering the call
+  faulted or a returned sample could not be attributed to it. Do not
+  treat the new arm as unreachable on the legacy entry points.
+
+  `NtsTimeSample` gains `recvClockGeneration` and `recvClockBackend`,
+  the strict provenance of `recvBoottimeMicros`. Both are optional on
+  the constructor (`0` / `null`), so hand-built fixtures still compile;
+  the value-semantics contract (`==`, `hashCode`, `toString`) now
+  covers them. A sample from a real bridge always carries a non-zero
+  generation. ([#354](https://github.com/nick-llewellyn/nts/pull/354))
+
 ### Added
+
+- Strict acquisition: `ntsGetTimeStrict` and `NtsClient.getTimeStrict`
+  take a `StrictClockContext` and return a `StrictSyncedTime`, and
+  `ntsQuery`, `ntsWarmCookies`, `NtsClient.query` and
+  `NtsClient.warmCookies` accept an optional `context:`. On the strict
+  path every clock decision is made on the caller's context with no
+  fallback at any of them. The Rust core binds one strict reader per
+  `ntsQuery` / `ntsWarmCookies` call and threads it through the call
+  budget, the NTS-KE handshake deadline, the session singleflight,
+  idle-TTL, access-time and LRU-prune arithmetic, the replay-guard
+  stamp, the UDP deadlines and the wire receipt; a fault at any of
+  them fails that call as `NtsError.clockFault` with the matching
+  stage instead of substituting a value, and a session entry stamped
+  under a retired generation is dropped rather than served
+  ([#354](https://github.com/nick-llewellyn/nts/pull/354)). The
+  send/recv pair is additionally bracketed by strict readings, and a
+  sample whose sleep-aware span exceeds its monotonic round trip by
+  more than 50 ms is rejected as `StrictClockSuspendedInFlight`
+  (stage `receipt`) — a per-sample verdict the next burst sample
+  retries — rather than shipped with an under-measured delay. On the
+  Dart side the bridge admission gate meters a strict waiter's queue
+  wait on its own context (a spent budget is still
+  `timeout(bridgeSaturation)`; a reading that regresses or faults is
+  `clockFault(admission)` and never dispatches); `getTimeStrict`
+  meters its 8-second budget on the context, re-reads it after every
+  `await` so a bridge reset or native generation change that lands
+  while the call was parked fails the stale completion, and
+  attributes each sample by `recvClockGeneration` / `recvClockBackend`
+  rather than by numerical plausibility: a sample with no stamp is
+  `StrictClockMissingReceipt`, one stamped under another generation
+  or backend — including an in-window numeric stamp — is
+  `StrictClockForeignReceipt`, and either fails the whole call at
+  stage `attribution`, since a later successful read could not
+  certify the sample after the fact. The returned `StrictSyncedTime`
+  is anchored on a final reading of the context and its `utcNow()` /
+  `elapsedSinceSync()` re-read that context, throwing
+  `StrictClockInvalidated` once it is invalid; it cannot be
+  constructed on a reading from another context, and a fresh context
+  that reads successfully certifies nothing acquired under a previous
+  one. The legacy `ntsGetTime` / `NtsSyncedTime` path is unchanged
+  and still tolerates an implausible stamp by falling back to a
+  Dart-side arrival time; it does not gain strict guarantees.
 
 - A strict, provenance-attributed read of the sleep-aware native clock
   at the FFI layer: `ntsStrictClockRead()` returns an

@@ -32,6 +32,7 @@ import '../ffi/api/nts.dart' as ffi;
 import 'clock.dart';
 import 'errors.dart';
 import 'models.dart';
+import 'strict_clock.dart';
 
 export 'errors.dart';
 export 'models.dart';
