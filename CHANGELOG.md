@@ -81,7 +81,9 @@ tarball.
   `resolveForTesting()`, whose contexts carry `testInjected`
   provenance and can never be labelled native) and an unsupported
   platform (`StrictClockUnsupported`). Native faults map to
-  `StrictClockSourceFault(kind, errno)` — including
+  `StrictClockSourceFault(kind, detail, errno)` (`errno` present exactly
+  for `SourceFaultKind.syscallFailed`, asserted by the constructor) —
+  including
   `SourceFaultKind.abiMismatch` when the generated decoder rejects
   the loaded library's wire layout, a classification reserved for
   native contexts since no decoder runs behind a test double —

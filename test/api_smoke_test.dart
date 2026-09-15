@@ -4641,6 +4641,31 @@ void main() {
         'sourceIncompatible',
       });
     });
+
+    test('StrictClockSourceFault carries errno exactly for syscallFailed', () {
+      const ok = StrictClockSourceFault(
+        kind: SourceFaultKind.syscallFailed,
+        detail: 'd',
+        errno: 22,
+      );
+      expect(ok.errno, 22);
+      expect(
+        () => StrictClockSourceFault(
+          kind: SourceFaultKind.syscallFailed,
+          detail: 'd',
+        ),
+        throwsA(isA<AssertionError>()),
+      );
+      for (final kind in SourceFaultKind.values) {
+        if (kind == SourceFaultKind.syscallFailed) continue;
+        expect(StrictClockSourceFault(kind: kind, detail: 'd').errno, isNull);
+        expect(
+          () => StrictClockSourceFault(kind: kind, detail: 'd', errno: 22),
+          throwsA(isA<AssertionError>()),
+          reason: '${kind.name} must not carry an errno',
+        );
+      }
+    });
   });
 
   group('bridge admission gate', () {
