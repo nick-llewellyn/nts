@@ -501,8 +501,10 @@ sealed class NtsClockFault with _$NtsClockFault {
   /// sample look *better* to delay-based selection than it is — so
   /// the sample is rejected. `boottime_micros` is the sleep-aware
   /// span, `monotonic_micros` the span the round trip would have
-  /// reported; the difference is at least
-  /// `SUSPEND_IN_FLIGHT_TOLERANCE_MICROS` (50 ms). Retry the query.
+  /// reported; the sample is rejected when the former exceeds the
+  /// latter by strictly more than `SUSPEND_IN_FLIGHT_TOLERANCE_MICROS`
+  /// (50 ms) — a difference of exactly the tolerance is accepted.
+  /// Retry the query.
   const factory NtsClockFault.suspendedInFlight({
     required PlatformInt64 boottimeMicros,
     required PlatformInt64 monotonicMicros,
