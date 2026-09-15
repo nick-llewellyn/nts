@@ -192,6 +192,7 @@ class _RecordingApi implements NtsRustLibApi {
     nextStrictThrow = null;
     strictMicrosOverride = null;
     strictReadBackendOverride = null;
+    strictDescriptorOverride = null;
     // `strictGeneration` is deliberately not reset: like the offset
     // below it only ever advances, mirroring the Rust core's counter.
     // Do NOT reset `_bootSw` or `suspendOffsetMicros` — the mocked
@@ -322,15 +323,19 @@ class _RecordingApi implements NtsRustLibApi {
   int? strictMicrosOverride;
   // Reports a backend other than the descriptor's on the next read.
   ffi.NtsClockBackend? strictReadBackendOverride;
+  // Sticky: the descriptor every resolution sees until cleared, so a
+  // context can be bound to a foreign coordinate.
+  ffi.NtsClockDescriptor? strictDescriptorOverride;
 
   @override
   ffi.NtsClockDescriptor crateApiNtsNtsClockDescriptor() {
     descriptorCalls++;
-    return const ffi.NtsClockDescriptor(
-      backend: strictBackend,
-      semanticsVersion: 1,
-      conversionVersion: 1,
-    );
+    return strictDescriptorOverride ??
+        const ffi.NtsClockDescriptor(
+          backend: strictBackend,
+          semanticsVersion: 1,
+          conversionVersion: 1,
+        );
   }
 
   @override
@@ -3828,8 +3833,8 @@ void main() {
       );
     });
 
-    test('elapsedSince rejects readings from another generation or '
-        'coordinate without reading the clock', () {
+    test('elapsedSince rejects a reading from another generation '
+        'without reading the clock', () {
       final ctx = StrictClockContext.resolveForTesting();
       final reading = ctx.now();
       api.crateApiNtsNtsClockInvalidate();
@@ -3849,6 +3854,77 @@ void main() {
       // A cross-generation reading does not poison the context that
       // rejected it.
       expect(later.isValid, isTrue);
+    });
+
+    test('elapsedSince rejects a same-generation reading from another '
+        'coordinate without reading the clock', () {
+      // Bind one context to a foreign coordinate: same backend (so
+      // resolution's backend check passes) but a different semantics
+      // version, which isCompatibleWith treats as a different clock.
+      api.strictDescriptorOverride = const ffi.NtsClockDescriptor(
+        backend: _RecordingApi.strictBackend,
+        semanticsVersion: 2,
+        conversionVersion: 1,
+      );
+      final foreign = StrictClockContext.resolveForTesting();
+      final foreignReading = foreign.now();
+      api.strictDescriptorOverride = null;
+      final ctx = StrictClockContext.resolveForTesting();
+      expect(foreignReading.generation, ctx.generation);
+      expect(
+        foreignReading.descriptor.isCompatibleWith(ctx.descriptor),
+        isFalse,
+      );
+      final reads = api.strictReadCalls;
+      expect(
+        () => ctx.elapsedSince(foreignReading),
+        throwsA(
+          isA<StrictClockDescriptorIncompatible>()
+              .having((e) => e.expected, 'expected', ctx.descriptor)
+              .having((e) => e.actual, 'actual', foreignReading.descriptor),
+        ),
+      );
+      expect(api.strictReadCalls, reads);
+      expect(ctx.isValid, isTrue);
+      expect(ctx.invalidationReason, isNull);
+    });
+
+    test('an invalid context reports its stored reason from '
+        'elapsedSince before examining the reading', () {
+      api.strictDescriptorOverride = const ffi.NtsClockDescriptor(
+        backend: _RecordingApi.strictBackend,
+        semanticsVersion: 2,
+        conversionVersion: 1,
+      );
+      final foreignReading = StrictClockContext.resolveForTesting().now();
+      api.strictDescriptorOverride = null;
+      final ctx = StrictClockContext.resolveForTesting();
+      final own = ctx.now();
+      api.crateApiNtsNtsClockInvalidate();
+      final staleGeneration = StrictClockContext.resolveForTesting();
+      ctx.invalidate();
+      final staleReading = staleGeneration.now();
+      final reads = api.strictReadCalls;
+      // A foreign descriptor, a foreign generation and the context's
+      // own reading all surface the terminal state, not an argument
+      // error.
+      for (final reading in [foreignReading, staleReading, own]) {
+        final before = api.strictReadCalls;
+        expect(
+          () => ctx.elapsedSince(reading),
+          throwsA(
+            isA<StrictClockInvalidated>()
+                .having((e) => e.generation, 'generation', ctx.generation)
+                .having(
+                  (e) => e.reason,
+                  'reason',
+                  StrictClockInvalidationReason.explicit,
+                ),
+          ),
+        );
+        expect(api.strictReadCalls, before);
+      }
+      expect(api.strictReadCalls, reads);
     });
 
     test('invalidate() is explicit, idempotent and terminal', () {

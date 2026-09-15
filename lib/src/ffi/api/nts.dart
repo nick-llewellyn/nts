@@ -424,13 +424,16 @@ sealed class NtsClockFault with _$NtsClockFault implements FrbException {
       NtsClockFault_ConversionOverflow;
 
   /// A sequential reader observed a value strictly below its
-  /// previous one.
+  /// previous one. Not produced by [ntsStrictClockRead], which
+  /// keeps no previous value; see the enum docs.
   const factory NtsClockFault.regression({
     required PlatformInt64 previous,
     required PlatformInt64 observed,
   }) = NtsClockFault_Regression;
 
-  /// The reader's bound generation no longer matches the live one.
+  /// The live generation advanced while the read was in flight, so
+  /// the sample cannot be stamped with the generation it was taken
+  /// under.
   const factory NtsClockFault.generationChanged({
     required PlatformInt64 expected,
     required PlatformInt64 observed,

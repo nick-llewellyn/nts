@@ -38,10 +38,18 @@ tarball.
   `ClockSourceDescriptor` (`backend`, `semanticsVersion`,
   `conversionVersion`) and one live `generation`. `now()` returns a
   `StrictReading` on that coordinate and `elapsedSince(reading)` a
-  `Duration` from it; either throws a `StrictClockError` on that call
-  and leaves the context permanently invalid — there is no `Stopwatch`
-  or `Instant` fallback
-  and no repair short of resolving a new context. `resolve()` fails
+  `Duration` from it. A source fault, a regression or a lifecycle
+  event throws a `StrictClockError` on that call and leaves the
+  context permanently invalid — there is no `Stopwatch` or `Instant`
+  fallback and no repair short of resolving a new context.
+  `elapsedSince` accepts a reading from any context on the same
+  coordinate and generation; a reading from another coordinate or
+  generation is rejected (`StrictClockDescriptorIncompatible` /
+  `StrictClockInvalidated`) without reading the clock and without
+  invalidating the receiving context. `isValid` and
+  `invalidationReason` report only invalidations the context has
+  already observed; a reset not yet seen by a read leaves them
+  unchanged until the next call fails. `resolve()` fails
   distinctly on an uninitialized bridge (`StrictClockUninitialized`), a
   hand-written mock (`StrictClockMockOnly`; tests use
   `resolveForTesting()`, whose contexts carry `testInjected`

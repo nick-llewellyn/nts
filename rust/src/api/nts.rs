@@ -705,11 +705,34 @@ impl From<crate::nts::boottime::ClockBackend> for NtsClockBackend {
 /// Why a strict clock call failed. Thrown from
 /// [`nts_strict_clock_read`] and [`nts_clock_descriptor`].
 ///
-/// Every variant is reported on the call that observed it. No variant
-/// is accompanied by a substitute reading, and a read that returns one
-/// has already advanced the live generation (see
-/// [`NtsStrictClockReading::generation`]) so contexts bound before the
-/// fault fail closed on their next call.
+/// Not every variant is reachable from every export:
+///
+/// - [`nts_clock_descriptor`] throws only [`Unsupported`], a
+///   compile-time fact that does not touch the live generation.
+/// - [`nts_strict_clock_read`] throws [`Unsupported`],
+///   [`SyscallFailed`], [`TimebaseUnavailable`], [`InvalidRaw`],
+///   [`ConversionOverflow`] and [`GenerationChanged`]. It is
+///   stateless — each call is one raw read with no memory of the
+///   previous one — so it never produces [`Regression`]; the Dart
+///   `StrictClockContext` compares consecutive readings itself.
+/// - [`Regression`] is produced by the crate-internal sequential
+///   reader, which no export in this surface calls. The variant is
+///   mapped so the conversion from the core fault type is total.
+///
+/// Every variant is reported on the call that observed it, and none
+/// is accompanied by a substitute reading. A read that faults has
+/// already advanced the live generation (see
+/// [`NtsStrictClockReading::generation`]) — [`GenerationChanged`]
+/// reports an advance that happened during the read — so contexts
+/// bound before the fault fail closed on their next call.
+///
+/// [`Unsupported`]: NtsClockFault::Unsupported
+/// [`SyscallFailed`]: NtsClockFault::SyscallFailed
+/// [`TimebaseUnavailable`]: NtsClockFault::TimebaseUnavailable
+/// [`InvalidRaw`]: NtsClockFault::InvalidRaw
+/// [`ConversionOverflow`]: NtsClockFault::ConversionOverflow
+/// [`Regression`]: NtsClockFault::Regression
+/// [`GenerationChanged`]: NtsClockFault::GenerationChanged
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NtsClockFault {
     /// The compile target has no supported suspend-inclusive source.
@@ -731,9 +754,12 @@ pub enum NtsClockFault {
     /// The checked scale or narrowing to `i64` microseconds failed.
     ConversionOverflow,
     /// A sequential reader observed a value strictly below its
-    /// previous one.
+    /// previous one. Not produced by [`nts_strict_clock_read`], which
+    /// keeps no previous value; see the enum docs.
     Regression { previous: i64, observed: i64 },
-    /// The reader's bound generation no longer matches the live one.
+    /// The live generation advanced while the read was in flight, so
+    /// the sample cannot be stamped with the generation it was taken
+    /// under.
     GenerationChanged { expected: i64, observed: i64 },
 }
 

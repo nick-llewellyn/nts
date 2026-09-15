@@ -238,10 +238,23 @@ final class StrictClockContext {
   int? _last;
   StrictClockInvalidationReason? _invalidated;
 
-  /// Whether reads can still succeed. Once `false`, never `true` again.
+  /// Whether this context has been observed to be invalid. Once
+  /// `false`, never `true` again.
+  ///
+  /// Reflects only invalidations this object has seen: an explicit
+  /// [invalidate], or a [now] / [elapsedSince] that threw. It is not a
+  /// liveness probe — after [NtsBridge.dispose], `debugReset`, or a
+  /// native generation advance from another isolate or engine, this
+  /// stays `true` until the next read performs the lifecycle and
+  /// generation checks and fails. Call [now] to learn the current
+  /// state.
   bool get isValid => _invalidated == null;
 
   /// Why this context is invalid, or `null` while it is valid.
+  ///
+  /// Same observed-only semantics as [isValid]: `null` means no call
+  /// on this object has failed yet, not that the underlying source
+  /// and bridge are still the ones it was resolved against.
   StrictClockInvalidationReason? get invalidationReason => _invalidated;
 
   /// Resolve a strict context against the native bridge.
@@ -316,6 +329,10 @@ final class StrictClockContext {
   /// that just invalidated it. Equal consecutive readings are valid.
   StrictReading now() {
     _checkLifecycle();
+    return _read();
+  }
+
+  StrictReading _read() {
     final ffi.NtsStrictClockReading raw;
     try {
       raw = ffi.ntsStrictClockRead();
@@ -371,16 +388,23 @@ final class StrictClockContext {
 
   /// Elapsed time from [earlier] to a fresh reading on this context.
   ///
-  /// [earlier] must be a reading from this context (same generation
-  /// and compatible descriptor); otherwise [StrictClockInvalidated] /
-  /// [StrictClockDescriptorIncompatible] is thrown without reading.
-  /// Because [now] enforces monotonicity against this context's own
-  /// sequence, the fresh reading cannot be below [earlier] unless
-  /// [earlier] was taken by a different context on the same
-  /// generation; that case is reported as a [StrictClockRegression].
+  /// The context's own lifecycle is checked first: an already-invalid
+  /// context throws [StrictClockInvalidated] with its stored reason
+  /// whatever [earlier] is, and a bridge reset is reported the same
+  /// way [now] reports it. Only then is [earlier] examined: it must be
+  /// a reading on this context's coordinate (compatible descriptor)
+  /// and generation, otherwise [StrictClockDescriptorIncompatible] /
+  /// [StrictClockInvalidated] is thrown without reading the clock and
+  /// without invalidating this context — a foreign reading is the
+  /// caller's error, not evidence against the source. Because [now]
+  /// enforces monotonicity against this context's own sequence, the
+  /// fresh reading cannot be below [earlier] unless [earlier] was
+  /// taken by a different context on the same generation; that case
+  /// is reported as a [StrictClockRegression] and does invalidate.
   Duration elapsedSince(StrictReading earlier) {
+    _checkLifecycle();
     _checkReadingBelongs(earlier);
-    final current = now();
+    final current = _read();
     if (current.micros < earlier.micros) {
       _tryNativeInvalidate();
       throw _fail(
