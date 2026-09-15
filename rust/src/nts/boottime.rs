@@ -529,12 +529,24 @@ impl SequentialReader {
 /// silent mixing the strict path exists to refuse. The strict path is
 /// unaffected — it never falls back, so it has nothing to stay on —
 /// and keeps re-probing on every call.
+///
+/// The latch is checked again after a successful native read, because
+/// the check, the read and the latch are not one atomic step: another
+/// caller can fault and latch while this read is in flight, and its
+/// fallback value is then already out. A native value returned after
+/// it would be the switch back the latch forbids, so the reading is
+/// discarded and the fallback served instead. Every native value this
+/// function returns was therefore validated before the latch was
+/// committed. That is also all a lock around the three steps could
+/// promise — once a value has been returned, nothing inside this
+/// function can order its use by the caller against another thread's.
 pub(crate) fn boottime_micros() -> i64 {
     if !legacy_fallback::is_latched() {
-        if let Ok((micros, _)) = read_checked() {
-            return micros;
+        match read_checked() {
+            Ok((micros, _)) if !legacy_fallback::is_latched() => return micros,
+            Ok(_) => {}
+            Err(_) => legacy_fallback::latch(),
         }
-        legacy_fallback::latch();
     }
     instant_fallback_micros()
 }
@@ -873,6 +885,36 @@ mod tests {
                 // probes again and reports the recovered source.
                 assert_eq!(strict_read().map(|r| r.micros), Ok(10_000_000));
                 assert_eq!(probes.get(), 2);
+            },
+        );
+    }
+
+    #[test]
+    fn legacy_discards_a_native_reading_that_straddles_the_latch() {
+        // The seam stands in for another caller faulting and latching
+        // after this call checked the latch and before its raw sample
+        // came back: the sample is fine, but a fallback value has
+        // already been handed out, so publishing this one would be the
+        // switch back the latch forbids.
+        use super::{instant_fallback_micros, legacy_fallback};
+        with_raw_override(
+            || {
+                legacy_fallback::latch();
+                linux(1_000_000, 0)
+            },
+            || {
+                let before = instant_fallback_micros();
+                let served = super::boottime_micros();
+                let after = instant_fallback_micros();
+                assert_ne!(
+                    served, 1_000_000_000_000,
+                    "native value published after latch"
+                );
+                assert!(
+                    before <= served && served <= after,
+                    "expected the fallback epoch"
+                );
+                assert!(legacy_fallback::is_latched());
             },
         );
     }
