@@ -14,17 +14,32 @@ tarball.
   (`NtsErrorClockFault`, carrying `stage`, `fault`, `generation` and
   the usual `trustBackend`). Exhaustive `switch` expressions over
   `NtsError` — the pattern the package recommends — stop compiling
-  until they handle it. It is raised only on calls that carry a
-  `StrictClockContext` (`ntsGetTimeStrict`, `NtsClient.getTimeStrict`,
-  or `ntsQuery` / `ntsWarmCookies` given `context:`), where the strict
-  clock the call was bound to could not vouch for the result: a native
-  read faulted, the bridge was reset or the native generation moved
-  under the call, or a sample's receipt did not match the caller's
-  context. `ClockFaultStage` names where the read served — `admission`
-  (Rust call budget or the Dart bridge gate), `handshake`, `session`,
-  `udp`, `receipt`, `awaitResult`, `attribution`, `projection` — and
-  `fault` is the underlying `StrictClockError`. Callers of the legacy
-  entry points never see it; the arm only has to exist.
+  until they handle it. It means the clock a call was bound to could
+  not vouch for the result: a native read faulted, the bridge was
+  reset or the native generation moved under the call, or a sample's
+  receipt did not match the caller's context. `ClockFaultStage` names
+  where the read served, and `fault` is the underlying
+  `StrictClockError`.
+
+  Every entry point can raise it, not only the strict ones. The
+  native core now runs each security-relevant clock read — the call
+  budget, the handshake deadline, the session-table TTL and access
+  stamps, the UDP deadlines, the wire receipt — strictly for every
+  caller, because that timeline is shared process-wide state and
+  cannot run strict for some callers and best-effort for others; a
+  fault at those stages (`admission`, `handshake`, `session`, `udp`,
+  `receipt`) surfaces to `ntsQuery`, `ntsWarmCookies`, `ntsGetTime`
+  and the `NtsClient` equivalents without any `context:`. In
+  practice that is a fault of the platform clock itself — which
+  previously latched a silent fallback — or a generation change from
+  a bridge reset on another isolate while the call was in flight.
+  The remaining stages —
+  `awaitResult`, `attribution`, `projection` — are Dart-authored and
+  fire only on the strict surfaces (`ntsGetTimeStrict`,
+  `NtsClient.getTimeStrict`, or `ntsQuery` / `ntsWarmCookies` given
+  `context:`), where the `StrictClockContext` metering the call
+  faulted or a returned sample could not be attributed to it. Do not
+  treat the new arm as unreachable on the legacy entry points.
 
   `NtsTimeSample` gains `recvClockGeneration` and `recvClockBackend`,
   the strict provenance of `recvBoottimeMicros`. Both are optional on

@@ -304,9 +304,11 @@ Future<NtsSyncedTime> _getTime({
 //   call as `clockFault(awaitResult)`; a spent budget is still
 //   `timeout(ntp)`. No fresh budget is ever started after a fault.
 // - Every `await` is followed by a strict read before its result is
-//   used, so a bridge reset or native generation change that lands
-//   while the call was parked fails the call rather than letting a
-//   stale completion through.
+//   used — or, when it completed with an error, before that error is
+//   propagated or recorded — so a bridge reset or native generation
+//   change that lands while the call was parked fails the call rather
+//   than letting a stale completion through or hiding behind a
+//   network error.
 // - A sample is attributed to `context` by its receipt stamp's
 //   generation and backend (`attributeStrictReceipt`), never by the
 //   plausibility window the legacy path uses. A missing or foreign
@@ -333,11 +335,27 @@ Future<StrictSyncedTime> _getTimeStrict({
         microseconds: read(ClockFaultStage.awaitResult).micros - start.micros,
       );
 
+  // An `await` that completes with an error still owes the strict
+  // read: a bridge reset or native generation change that landed
+  // while the call was parked fails the call instead of hiding behind
+  // the error. A `clockFault` is exempt — it already carries the
+  // native verdict, and a further read could only restate it as a
+  // less specific generation change.
+  void readAfterFailure(NtsError err) {
+    if (err is! NtsErrorClockFault) read(ClockFaultStage.awaitResult);
+  }
+
   final warmBudget = remaining();
   if (warmBudget < _kMinDispatchBudget) {
     throw const NtsError.timeout(phase: TimeoutPhase.ntp);
   }
-  final outcome = await warm(warmBudget);
+  final NtsWarmCookiesOutcome outcome;
+  try {
+    outcome = await warm(warmBudget);
+  } on NtsError catch (err) {
+    readAfterFailure(err);
+    rethrow;
+  }
   read(ClockFaultStage.awaitResult);
   backend = outcome.trustBackend;
   if (outcome.freshCookies < 1) {
@@ -358,10 +376,15 @@ Future<StrictSyncedTime> _getTimeStrict({
     try {
       sample = await query(left);
     } on NtsError catch (err, stack) {
-      // Same best-effort posture as the legacy burst. A `clockFault`
-      // from the query lands here too: if it moved the generation the
-      // next strict read above fails the call, and a per-sample
-      // `suspendedInFlight` verdict is exactly what a retry is for.
+      // Same best-effort posture as the legacy burst, after the
+      // post-`await` read: on the final attempt there is no further
+      // read before `lastError` is rethrown, so this is the one that
+      // keeps a clock event from hiding behind a network error. A
+      // `clockFault` from the query lands here too: if it moved the
+      // generation it is what is rethrown or the next read fails the
+      // call, and a per-sample `suspendedInFlight` verdict is exactly
+      // what a retry is for.
+      readAfterFailure(err);
       lastError = err;
       lastStack = stack;
       continue;

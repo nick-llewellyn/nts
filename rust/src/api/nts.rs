@@ -791,8 +791,10 @@ pub enum NtsClockFault {
     /// sample look *better* to delay-based selection than it is — so
     /// the sample is rejected. `boottime_micros` is the sleep-aware
     /// span, `monotonic_micros` the span the round trip would have
-    /// reported; the difference is at least
-    /// `SUSPEND_IN_FLIGHT_TOLERANCE_MICROS` (50 ms). Retry the query.
+    /// reported; the sample is rejected when the former exceeds the
+    /// latter by strictly more than `SUSPEND_IN_FLIGHT_TOLERANCE_MICROS`
+    /// (50 ms) — a difference of exactly the tolerance is accepted.
+    /// Retry the query.
     SuspendedInFlight {
         boottime_micros: i64,
         monotonic_micros: i64,
@@ -2622,7 +2624,14 @@ fn effective_dns_concurrency_cap(dns_concurrency_cap: u32) -> usize {
 /// ([`checkout`], [`nts_warm_cookies`]) can fold the KE timings into
 /// the [`PhaseTimings`] surface without re-instrumenting the
 /// handshake.
+///
+/// `clock` is the operation's reader: the handshake deadline reads
+/// through it, so the readings before, inside and after the
+/// handshake form one sequence and a source that steps backwards
+/// across the boundary is a [`ClockFault::Regression`] rather than
+/// two separately-monotonic runs.
 fn establish_session(
+    clock: &SequentialReader,
     spec: &NtsServerSpec,
     timeout: Duration,
     dns_concurrency_cap: usize,
@@ -2650,7 +2659,7 @@ fn establish_session(
         verification_time_override,
         phase_reporter: reporter.cloned(),
     };
-    let outcome: KeOutcome = perform_handshake(&req)?;
+    let outcome: KeOutcome = perform_handshake(&req, clock)?;
     let trust_backend: TrustBackend = outcome.trust_backend.into();
     let c2s_key = AeadKey::from_keying_material(outcome.aead_id, &outcome.c2s_key)
         .map_err(|e| NtsError::Internal(format!("KE produced unusable C2S key: {e}")))?;
@@ -2710,10 +2719,15 @@ fn establish_session(
         jar,
         trust_backend,
         ke_warnings,
-        // Placeholder only: the singleflight leader re-stamps `atime`
-        // from the operation's strict reader under the `map` lock at
-        // install, so this value is never aged against.
-        atime: BootInstant::now(),
+        // Not a reading: the singleflight leader stamps `atime` from
+        // the operation's strict reader under the `map` lock at
+        // install. A legacy `BootInstant::now()` here would be a
+        // best-effort read on a strict path — its fault would latch
+        // the fallback and move the generation, and the outer reader
+        // would report only the later `GenerationChanged`. The
+        // foreign placeholder reads nothing and, if ever aged, is
+        // retired rather than served.
+        atime: BootInstant::UNSTAMPED,
     };
     Ok((session, outcome.phase_timings))
 }
@@ -2791,12 +2805,18 @@ enum Role {
 /// into the `KeRequest`, and a waiter reads the reported phase on
 /// timeout. Tests that drive the leader path can advance it to assert
 /// the waiter observes a specific phase.
-type HandshakeFn = dyn Fn(
-    &NtsServerSpec,
-    Duration,
-    usize,
-    Option<&PhaseReporter>,
-) -> Result<(Session, KePhaseTimings), NtsError>;
+///
+/// The lifetime is the borrow of the operation's [`SequentialReader`]:
+/// the production closure captures it so the handshake deadline reads
+/// in the operation's sequence, and a `'static` object type would
+/// refuse that capture.
+type HandshakeFn<'a> = dyn Fn(
+        &NtsServerSpec,
+        Duration,
+        usize,
+        Option<&PhaseReporter>,
+    ) -> Result<(Session, KePhaseTimings), NtsError>
+    + 'a;
 
 /// Build a [`QueryContext`] from a session and a freshly-popped cookie.
 /// Extracted so both the cache-hit and post-handshake branches in
@@ -2858,7 +2878,15 @@ impl SessionTable {
             timeout,
             dns_concurrency_cap,
             &move |s, t, c, reporter| {
-                establish_session(s, t, c, trust_mode.clone(), verification_time_ms, reporter)
+                establish_session(
+                    clock,
+                    s,
+                    t,
+                    c,
+                    trust_mode.clone(),
+                    verification_time_ms,
+                    reporter,
+                )
             },
         )
     }
@@ -2897,7 +2925,7 @@ impl SessionTable {
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
-        do_handshake: &HandshakeFn,
+        do_handshake: &HandshakeFn<'_>,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         let key = session_key(spec);
         let session_fault = NtsError::clock_fault(ClockFaultStage::Session, clock);
@@ -3284,7 +3312,7 @@ impl SessionTable {
         spec: &NtsServerSpec,
         timeout: Duration,
         dns_concurrency_cap: usize,
-        do_handshake: &HandshakeFn,
+        do_handshake: &HandshakeFn<'_>,
     ) -> Result<(u32, KePhaseTimings, TrustBackend, Vec<u16>), NtsError> {
         let key = session_key(spec);
         let session_fault = NtsError::clock_fault(ClockFaultStage::Session, clock);
@@ -3481,7 +3509,15 @@ impl SessionTable {
             timeout,
             dns_concurrency_cap,
             &move |s, t, c, reporter| {
-                establish_session(s, t, c, trust_mode.clone(), verification_time_ms, reporter)
+                establish_session(
+                    clock,
+                    s,
+                    t,
+                    c,
+                    trust_mode.clone(),
+                    verification_time_ms,
+                    reporter,
+                )
             },
         )
     }

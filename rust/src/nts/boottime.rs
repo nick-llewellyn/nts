@@ -828,6 +828,20 @@ pub(crate) struct BootInstant {
 }
 
 impl BootInstant {
+    /// A stamp foreign to every generation: its `generation` is `0`,
+    /// which the live counter starts above and never revisits, so
+    /// [`checked_duration_since`](Self::checked_duration_since) against
+    /// it is always [`ClockFault::GenerationChanged`] and an entry
+    /// carrying it is retired, never aged or served. Reads nothing.
+    /// For a field that must hold *some* instant before the real stamp
+    /// is taken under the lock that orders it — `Session::atime`
+    /// between the handshake and the install — where a legacy
+    /// [`now`](Self::now) would be a best-effort read on a strict path.
+    pub(crate) const UNSTAMPED: Self = Self {
+        micros: 0,
+        generation: 0,
+    };
+
     /// Strict read of the sleep-aware clock now.
     pub(crate) fn try_now() -> Result<Self, ClockFault> {
         strict_read().map(Self::from)

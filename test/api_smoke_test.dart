@@ -5245,6 +5245,65 @@ void main() {
         expect(api.queryDispatches, 0);
       });
 
+      test('a bridge reset while a failing handshake is parked surfaces '
+          'as the clock fault, not the handshake error', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextThrow = const ffi.NtsError.network(message: 'eof');
+        final parked = Completer<void>();
+        api.asyncGate = () => parked.future;
+        final call = ntsGetTimeStrict(spec: spec, context: ctx);
+        expect(api.lastWarmTimeoutMs, isNotNull);
+        NtsBridge.dispose();
+        NtsRustLib.initMock(api: api);
+        api.asyncGate = null;
+        parked.complete();
+        await expectLater(
+          call,
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.bridgeReset,
+              ),
+              trustBackend: isNull,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 0);
+      });
+
+      test('a native generation change while the final query is failing '
+          'surfaces as the clock fault, not the query error', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [
+          // The only attempt: no further budget read follows it, so
+          // the catch's own read is what observes the generation.
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            throw const ffi.NtsError.network(message: 'reset by peer');
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.platform,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+        expect(ctx.isValid, isFalse);
+      });
+
       test('a native generation change while a query is in flight fails '
           'the call at attribution, even for an in-window stamp', () async {
         final ctx = StrictClockContext.resolveForTesting();
@@ -5286,12 +5345,20 @@ void main() {
         api.queryScript = [
           () => strictSample(),
           // The second query fails on the wire, so the burst ends with
-          // one accepted sample and the next strict read is the
-          // projection anchor. Arm the fault from inside the throw.
+          // one accepted sample. Two strict reads follow: the
+          // post-`await` read owed by the failed query, which must
+          // still succeed, and then the projection anchor. Arm the
+          // fault for the second one from inside the throw.
           () {
-            api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(
-              errno: 22,
-            );
+            var reads = 0;
+            api.onStrictRead = () {
+              if (++reads == 2) {
+                api.onStrictRead = null;
+                api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(
+                  errno: 22,
+                );
+              }
+            };
             throw const ffi.NtsError.network(message: 'reset by peer');
           },
         ];

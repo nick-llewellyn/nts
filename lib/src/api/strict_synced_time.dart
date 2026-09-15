@@ -28,15 +28,23 @@ part of 'strict_clock.dart';
 final class StrictSyncedTime {
   /// Bind a projection to [context] at [anchor].
   ///
-  /// [anchor] must be a reading from [context] (same bridge
-  /// incarnation, compatible descriptor, same generation); a foreign
-  /// reading throws [StrictClockSourceIncompatible],
+  /// [anchor] must be *compatible* with [context]: taken on the same
+  /// bridge incarnation, under a compatible descriptor, in the same
+  /// generation. That is what a reading carries, and it is all the
+  /// constructor can check — a reading from another context resolved
+  /// on the same isolate in the same generation is indistinguishable
+  /// from one of [context]'s own, and is accepted. The check is
+  /// therefore a provenance check, not an identity check: it rejects
+  /// a reading from a torn-down bridge, a different clock source, or
+  /// a retired generation, each of which throws
+  /// [StrictClockSourceIncompatible],
   /// [StrictClockDescriptorIncompatible] or
   /// [StrictClockGenerationIncompatible] synchronously, without
   /// invalidating [context]. [utcUnixMicros] must be the compensated UTC valid
   /// at that reading. Intended for the wrapper layer and for test
   /// fixtures; production code receives instances from
-  /// `ntsGetTimeStrict`.
+  /// `ntsGetTimeStrict`, whose anchor is a reading on the very
+  /// context it binds.
   StrictSyncedTime({
     required StrictClockContext context,
     required StrictReading anchor,

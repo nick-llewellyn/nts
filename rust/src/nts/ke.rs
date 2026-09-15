@@ -83,25 +83,29 @@ const TLS_PROTOCOL_VERSIONS: &[&SupportedProtocolVersion] = &[&rustls::version::
 /// `std::time::Instant`: the latter is suspend-frozen on every platform
 /// this package targets, so a handshake interrupted by device sleep
 /// would resume with most of its original budget intact even though the
-/// caller's wall-clock limit had already passed. The deadline owns a
-/// [`SequentialReader`] bound when it is created, so every remaining
-/// check is a strict read under one generation: a clock fault during
+/// caller's wall-clock limit had already passed. The deadline borrows
+/// the [`SequentialReader`] of the operation that requested the
+/// handshake rather than binding its own, so every remaining check is
+/// a strict read in that operation's sequence: a clock fault during
 /// the handshake surfaces as [`KeError::ClockFault`] on that check, and
-/// is never collapsed to "no time left". Expiry itself is not a fault —
-/// a reading past the deadline is a legal zero remaining.
+/// is never collapsed to "no time left". Regression detection is per
+/// reader, so a second reader here would let the source step
+/// backwards across the session/handshake boundary unnoticed — the
+/// caller's reading before the handshake and the first one inside it
+/// would never be compared. Expiry itself is not a fault — a reading
+/// past the deadline is a legal zero remaining.
 #[derive(Debug)]
-struct Deadline {
+struct Deadline<'a> {
     at: BootInstant,
-    clock: SequentialReader,
+    clock: &'a SequentialReader,
 }
 
-impl Deadline {
-    /// Anchor a deadline `total` from a fresh strict reading. Callers
-    /// pass the entire caller-visible budget (`req.timeout`);
-    /// subsequent phases consult [`Deadline::remaining`] before issuing
-    /// any blocking syscall.
-    fn new(total: Duration) -> Result<Self, KeError> {
-        let clock = SequentialReader::bind();
+impl<'a> Deadline<'a> {
+    /// Anchor a deadline `total` from a fresh strict reading on
+    /// `clock`. Callers pass the entire caller-visible budget
+    /// (`req.timeout`); subsequent phases consult
+    /// [`Deadline::remaining`] before issuing any blocking syscall.
+    fn new(clock: &'a SequentialReader, total: Duration) -> Result<Self, KeError> {
         let at = clock
             .instant()
             .and_then(|now| now.checked_add(total))
@@ -1741,6 +1745,11 @@ fn build_with_custom_roots(
 /// how time is distributed across phases. `req.timeout = None` keeps
 /// the prior unbounded behaviour for callers that opt out of timeout
 /// enforcement entirely.
+///
+/// `clock` is the calling operation's [`SequentialReader`]; the
+/// deadline reads through it rather than binding a reader of its own,
+/// so the handshake's readings sit in the caller's sequence and a
+/// regression across the boundary is detected (see [`Deadline`]).
 #[expect(
     clippy::too_many_lines,
     reason = "linear handshake driver: deadline construction, TLS config build, \
@@ -1753,7 +1762,10 @@ fn build_with_custom_roots(
               invariants are visible at the call site rather than scattered \
               across helpers"
 )]
-pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
+pub fn perform_handshake(
+    req: &KeRequest,
+    clock: &SequentialReader,
+) -> Result<KeOutcome, KeFailure> {
     if req.aead_algorithms.is_empty() {
         return Err(KeError::MissingAead.into());
     }
@@ -1822,7 +1834,7 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
 
     let deadline = req
         .timeout
-        .map(Deadline::new)
+        .map(|total| Deadline::new(clock, total))
         .transpose()
         .map_err(attribute)?;
     let connected = connect_with_deadline_using(
@@ -2021,7 +2033,10 @@ fn connect_with_timeout_using<F>(
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
-    let deadline = timeout.map(Deadline::new).transpose()?;
+    let clock = SequentialReader::bind();
+    let deadline = timeout
+        .map(|total| Deadline::new(&clock, total))
+        .transpose()?;
     connect_with_deadline_using(
         host,
         port,
@@ -2060,7 +2075,7 @@ where
 fn connect_with_deadline_using<F>(
     host: &str,
     port: u16,
-    deadline: Option<&Deadline>,
+    deadline: Option<&Deadline<'_>>,
     dns_concurrency_cap: usize,
     reporter: Option<&PhaseReporter>,
     lookup: F,
@@ -2152,7 +2167,7 @@ where
 /// stream.
 fn read_to_end_capped(
     stream: &mut Stream<'_, ClientConnection, TcpStream>,
-    deadline: Option<&Deadline>,
+    deadline: Option<&Deadline<'_>>,
 ) -> Result<Vec<u8>, KeError> {
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
