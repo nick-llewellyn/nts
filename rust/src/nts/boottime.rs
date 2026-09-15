@@ -6,9 +6,12 @@
 //!   names the [`ClockBackend`] it came from and the live
 //!   [`generation`] it was taken under, or a typed [`ClockFault`] on
 //!   *that* call. It never substitutes another source, never clamps,
-//!   and uses checked arithmetic throughout. Every fault advances the
-//!   process-wide generation so contexts holding the old value fail
-//!   closed instead of continuing on a source that just misbehaved.
+//!   and uses checked arithmetic throughout. A source or conversion
+//!   fault advances the process-wide generation so contexts holding
+//!   the old value fail closed instead of continuing on a source that
+//!   just misbehaved; [`ClockFault::GenerationChanged`] is the one
+//!   variant that does not advance it, reporting an advance that
+//!   already happened while the reading was being taken.
 //! - **Legacy** — [`boottime_micros`] keeps the pre-strict contract for
 //!   the bridge's `nts_boottime_micros` export: on the same faults it
 //!   degrades to [`instant_fallback_micros`], a suspend-frozen
@@ -786,6 +789,9 @@ mod tests {
 
     #[test]
     fn strict_read_on_this_host_matches_platform_backend() {
+        // A concurrent injection test advancing the generation mid-read
+        // would turn this valid host read into `GenerationChanged`.
+        let _serial = generation_test_guard();
         match (strict_read(), platform_backend()) {
             (Ok(r), Some(backend)) => {
                 assert_eq!(r.backend, backend);
@@ -1233,6 +1239,9 @@ mod tests {
                 "override must not leak to other threads"
             );
         });
+        // `with_raw_override` released the guard with its body; retake
+        // it so the restored host read cannot see a concurrent advance.
+        let _serial = generation_test_guard();
         match platform_backend() {
             Some(_) => assert!(strict_read().is_ok(), "seam must be restored"),
             None => assert_eq!(strict_read(), Err(ClockFault::Unsupported)),

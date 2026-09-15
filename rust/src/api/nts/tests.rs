@@ -4884,6 +4884,9 @@ fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
 /// the target is unsupported.
 #[test]
 fn strict_clock_descriptor_matches_strict_read_backend() {
+    // A concurrent injection test advancing the generation mid-read
+    // would turn this valid host read into `GenerationChanged`.
+    let _serial = crate::nts::boottime::generation_test_guard();
     match (nts_clock_descriptor(), nts_strict_clock_read()) {
         (Ok(d), Ok(r)) => {
             assert_eq!(d.backend, r.backend);

@@ -31,12 +31,14 @@ tarball.
   The legacy `ntsBoottimeMicros()` returns the same native values
   while the source succeeds and is now documented as best-effort and
   nonportable. After a first fault it now stays on the process-local
-  fallback on every platform (previously Apple only; Linux and Windows
-  re-probed and could return to native), so a `MonotonicClock` changes
-  epoch at most once, at that fault, instead of on any later recovery
-  — the jump at the fault itself remains, which is the reason no
-  strict path reads it. Foundation for the public Dart strict-clock
-  contexts that follow in this release.
+  fallback on every platform (previously Apple only; Linux and Android
+  re-probed `clock_gettime` and could return to native, while Windows'
+  `QueryInterruptTimePrecise` has no failure status and never entered
+  fallback), so a `MonotonicClock` changes epoch at most once, at that
+  fault, instead of on any later recovery — the jump at the fault
+  itself remains, which is the reason no strict path reads it.
+  Foundation for the public Dart strict-clock contexts that follow in
+  this release.
   ([#353](https://github.com/nick-llewellyn/nts/pull/353))
 
 - `StrictClockContext`, the public strict sleep-aware clock. Where
