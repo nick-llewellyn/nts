@@ -302,8 +302,11 @@ final class StrictClockContext {
     // ignore: invalid_use_of_internal_member
     final api = NtsRustLib.instance.api;
     final epoch = _isolateBridgeEpoch;
-    final descriptor = _guard(() => _descriptorFrom(ffi.ntsClockDescriptor()));
-    final reading = _guard(ffi.ntsStrictClockRead);
+    final descriptor = _guard(
+      () => _descriptorFrom(ffi.ntsClockDescriptor()),
+      provenance,
+    );
+    final reading = _guard(ffi.ntsStrictClockRead, provenance);
     final backend = _backendFrom(reading.backend);
     if (backend != descriptor.backend) {
       throw StrictClockUnknownSource(
@@ -343,7 +346,7 @@ final class StrictClockContext {
       );
     } catch (error) {
       throw _fail(
-        _bridgeFault(error),
+        _bridgeFault(error, provenance),
         StrictClockInvalidationReason.sourceFault,
       );
     }
@@ -394,9 +397,9 @@ final class StrictClockContext {
   /// way [now] reports it. Only then is [earlier] examined: it must be
   /// a reading on this context's coordinate (compatible descriptor)
   /// and generation, otherwise [StrictClockDescriptorIncompatible] /
-  /// [StrictClockInvalidated] is thrown without reading the clock and
-  /// without invalidating this context — a foreign reading is the
-  /// caller's error, not evidence against the source. Because [now]
+  /// [StrictClockGenerationIncompatible] is thrown without reading the
+  /// clock and without invalidating this context — a foreign reading
+  /// is the caller's error, not evidence against the source. Because [now]
   /// enforces monotonicity against this context's own sequence, the
   /// fresh reading cannot be below [earlier] unless [earlier] was
   /// taken by a different context on the same generation; that case
@@ -433,9 +436,9 @@ final class StrictClockContext {
       );
     }
     if (reading.generation != generation) {
-      throw StrictClockInvalidated(
-        generation: reading.generation,
-        reason: StrictClockInvalidationReason.nativeGeneration,
+      throw StrictClockGenerationIncompatible(
+        expected: generation,
+        actual: reading.generation,
       );
     }
   }
@@ -486,25 +489,31 @@ final class StrictClockContext {
 
   /// Run a resolution-time FFI call, converting typed faults and
   /// untyped bridge failures into [StrictClockError]s.
-  static T _guard<T>(T Function() call) {
+  static T _guard<T>(T Function() call, StrictClockProvenance provenance) {
     try {
       return call();
     } on ffi.NtsClockFault catch (fault) {
       throw _mapFault(fault);
     } catch (error) {
-      throw _bridgeFault(error);
+      throw _bridgeFault(error, provenance);
     }
   }
 
-  /// Classify an untyped throw from the bridge. `RangeError` and
-  /// `UnimplementedError` are the two shapes the FRB-generated decoder
-  /// produces when the loaded library's wire layout disagrees with
-  /// these bindings (see the ABI-mismatch notes in
-  /// `nts_validation.dart`), so they carry rebuild guidance rather
-  /// than being blamed on the clock source. Nothing else is
-  /// attributable to the decoder and stays a generic bridge fault.
-  static StrictClockSourceFault _bridgeFault(Object error) {
-    if (error is RangeError || error is UnimplementedError) {
+  /// Classify an untyped throw from the bridge. On a native bridge,
+  /// `RangeError` and `UnimplementedError` are the two shapes the
+  /// FRB-generated decoder produces when the loaded library's wire
+  /// layout disagrees with these bindings (see the ABI-mismatch notes
+  /// in `nts_validation.dart`), so they carry rebuild guidance rather
+  /// than being blamed on the clock source. Behind a test double no
+  /// decoder runs — those same shapes are an unstubbed or
+  /// deliberately failing mock — so every throw stays a generic
+  /// bridge fault there, as does anything else on a native bridge.
+  static StrictClockSourceFault _bridgeFault(
+    Object error,
+    StrictClockProvenance provenance,
+  ) {
+    if (provenance == StrictClockProvenance.native &&
+        (error is RangeError || error is UnimplementedError)) {
       return StrictClockSourceFault(
         kind: SourceFaultKind.abiMismatch,
         detail:

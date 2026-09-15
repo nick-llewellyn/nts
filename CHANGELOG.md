@@ -54,8 +54,9 @@ tarball.
   `elapsedSince` accepts a reading from any context on the same
   coordinate and generation; a reading from another coordinate or
   generation is rejected (`StrictClockDescriptorIncompatible` /
-  `StrictClockInvalidated`) without reading the clock and without
-  invalidating the receiving context. `isValid` and
+  `StrictClockGenerationIncompatible`) without reading the clock and
+  without invalidating the receiving context — a foreign reading is
+  the caller's error, not a verdict on either generation. `isValid` and
   `invalidationReason` report only invalidations the context has
   already observed; a reset not yet seen by a read leaves them
   unchanged until the next call fails. `resolve()` fails
@@ -64,9 +65,12 @@ tarball.
   `resolveForTesting()`, whose contexts carry `testInjected`
   provenance and can never be labelled native) and an unsupported
   platform (`StrictClockUnsupported`). Native faults map to
-  `StrictClockSourceFault(kind, errno)`, backwards readings to
-  `StrictClockRegression`, and lifecycle events to
-  `StrictClockInvalidated(reason)`. `NtsBridge.dispose()` and
+  `StrictClockSourceFault(kind, errno)` — including
+  `SourceFaultKind.abiMismatch` when the generated decoder rejects
+  the loaded library's wire layout, a classification reserved for
+  native contexts since no decoder runs behind a test double —
+  backwards readings to `StrictClockRegression`, and lifecycle events
+  to `StrictClockInvalidated(reason)`. `NtsBridge.dispose()` and
   `debugReset()` now invalidate every context on the isolate, and
   `dispose()` on a native bridge also advances the process-wide
   generation so contexts in other isolates fail closed on their next

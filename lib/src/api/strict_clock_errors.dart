@@ -11,8 +11,9 @@ part of 'strict_clock.dart';
 sealed class StrictClockError implements Exception {
   const StrictClockError._();
 
-  /// Human-readable explanation. Never contains clock readings that
-  /// could be mistaken for a fallback value.
+  /// Human-readable explanation. A failure is only ever thrown, never
+  /// returned in place of a reading; readings quoted here (as in
+  /// [StrictClockRegression]) are diagnostic, not a substitute value.
   String get message;
 
   @override
@@ -73,12 +74,15 @@ enum SourceFaultKind {
   /// generated decoder threw). Rebuild the native library from the
   /// Rust sources matching this package version; resolving a new
   /// context does not help. The same classification the query entry
-  /// points report as `NtsError.abiMismatch`.
+  /// points report as `NtsError.abiMismatch`. Only reported by a
+  /// context with [StrictClockProvenance.native]; no decoder runs
+  /// behind a test double.
   abiMismatch,
 
   /// The bridge threw something that is not a typed clock fault and
-  /// not a decode failure: a missing symbol, a disposed entrypoint, an
-  /// unstubbed mock method.
+  /// not a decode failure: a missing symbol, a disposed entrypoint,
+  /// or — on a [StrictClockProvenance.testInjected] context — any
+  /// untyped throw from the double, including an unstubbed method.
   bridge,
 }
 
@@ -104,8 +108,11 @@ final class StrictClockSourceFault extends StrictClockError {
   String get message => 'strict clock source fault (${kind.name}): $_detail';
 }
 
-/// A reading came back strictly below an earlier one on the same
-/// context and generation.
+/// A fresh reading came back strictly below an earlier one on the
+/// same coordinate and generation: this context's own previous
+/// reading, or the `earlier` handed to
+/// [StrictClockContext.elapsedSince], which may come from another
+/// context. Invalidates the context that observed it.
 final class StrictClockRegression extends StrictClockError {
   /// Construct the error.
   const StrictClockRegression({required this.previous, required this.observed})
@@ -128,7 +135,7 @@ final class StrictClockInvalidated extends StrictClockError {
   const StrictClockInvalidated({required this.generation, required this.reason})
     : super._();
 
-  /// Generation the invalidated context (or offending reading) was on.
+  /// Generation the invalidated context was bound to.
   final int generation;
 
   /// Why the context is invalid.
@@ -178,4 +185,30 @@ final class StrictClockDescriptorIncompatible extends StrictClockError {
   @override
   String get message =>
       'reading on $actual is not comparable with a context on $expected';
+}
+
+/// A reading from another generation was passed to a context. The
+/// coordinate is compatible, but the two were not taken under one
+/// counter epoch, so the difference is meaningless. The receiving
+/// context is not invalidated: a foreign reading is the caller's
+/// error, not evidence against the source, and neither generation is
+/// being declared dead — [actual] may even be the live one when an
+/// older context is handed a newer reading.
+final class StrictClockGenerationIncompatible extends StrictClockError {
+  /// Construct the error.
+  const StrictClockGenerationIncompatible({
+    required this.expected,
+    required this.actual,
+  }) : super._();
+
+  /// Generation the context is bound to.
+  final int expected;
+
+  /// Generation the offered reading was taken under.
+  final int actual;
+
+  @override
+  String get message =>
+      'reading on generation $actual is not comparable with a context on '
+      'generation $expected';
 }

@@ -705,6 +705,35 @@ class _CodecProbe extends NtsRustLibApiImpl {
   Object? stringFailure(List<int> b) => failureFrom(sse_decode_String, b);
 }
 
+// A generated implementation — so `NtsBridge.state` reads `native` and
+// `StrictClockContext.resolve()` takes the native arm — whose strict
+// clock entry points throw [nextThrow] once in place of dispatching.
+// Stands in for the generated decoder failing on the way back from a
+// mismatched library; like `_CodecProbe`, nothing here crosses the
+// boundary.
+class _ThrowingNativeApi extends NtsRustLibApiImpl {
+  _ThrowingNativeApi({
+    required super.handler,
+    required super.wire,
+    required super.generalizedFrbRustBinding,
+    required super.portManager,
+  });
+
+  Object? nextThrow;
+
+  Never _throwNext() {
+    final error = nextThrow ?? StateError('_ThrowingNativeApi: nothing armed');
+    nextThrow = null;
+    throw error;
+  }
+
+  @override
+  ffi.NtsClockDescriptor crateApiNtsNtsClockDescriptor() => _throwNext();
+
+  @override
+  ffi.NtsStrictClockReading crateApiNtsNtsStrictClockRead() => _throwNext();
+}
+
 // A four-byte little/big-endian `i32` in the codec's native order,
 // matching what `sse_decode_i_32` reads back.
 List<int> _sseI32(int value) =>
@@ -3809,13 +3838,15 @@ void main() {
       expect(ctx.isValid, isFalse);
     });
 
-    test('an FRB decode failure is an abiMismatch SourceFault with '
-        'rebuild guidance, not a clock-source fault', () {
-      // The two shapes the generated decoder produces on a wire-layout
-      // disagreement, mirroring the query entry points' classification.
+    test('on a testInjected context, decoder-shaped throws from the double '
+        'are bridge faults, not abiMismatch', () {
+      // No generated decoder runs behind a hand-written mock, so a
+      // `RangeError` / `UnimplementedError` there is an unstubbed or
+      // deliberately failing double. Reporting it as abiMismatch would
+      // send the reader to rebuild a native library that is not loaded.
       for (final failure in <Object>[
         RangeError.range(9, 0, 8, 'byteOffset'),
-        UnimplementedError('unknown discriminant'),
+        UnimplementedError('unstubbed'),
       ]) {
         final ctx = StrictClockContext.resolveForTesting();
         api.nextStrictThrow = failure;
@@ -3823,13 +3854,13 @@ void main() {
           ctx.now,
           throwsA(
             isA<StrictClockSourceFault>()
-                .having((e) => e.kind, 'kind', SourceFaultKind.abiMismatch)
+                .having((e) => e.kind, 'kind', SourceFaultKind.bridge)
                 .having((e) => e.errno, 'errno', isNull)
                 .having(
                   (e) => e.message,
                   'message',
                   allOf(
-                    contains('rebuild the native library'),
+                    isNot(contains('rebuild the native library')),
                     contains('$failure'),
                   ),
                 ),
@@ -3850,11 +3881,67 @@ void main() {
             isA<StrictClockSourceFault>().having(
               (e) => e.kind,
               'kind',
-              SourceFaultKind.abiMismatch,
+              SourceFaultKind.bridge,
             ),
           ),
           reason: '$failure',
         );
+      }
+    });
+
+    test('on a native context, an FRB decode failure is an abiMismatch '
+        'SourceFault with rebuild guidance, not a clock-source fault', () {
+      // The generated implementation reads as native; the subclass
+      // stands in for its decoder throwing on a wire-layout
+      // disagreement, the two shapes the query entry points classify
+      // the same way. Anything else on the native arm stays `bridge`.
+      final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+      final binding = GeneralizedFrbRustBinding(lib);
+      final handler = BaseHandler();
+      final throwingApi = _ThrowingNativeApi(
+        handler: handler,
+        wire: NtsRustLibWire.fromExternalLibrary(lib),
+        generalizedFrbRustBinding: binding,
+        portManager: PortManager(binding, handler),
+      );
+      NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
+      try {
+        NtsRustLib.initMock(api: throwingApi);
+        expect(NtsBridge.state, NtsBridgeState.native);
+        final cases = <Object, SourceFaultKind>{
+          RangeError.range(9, 0, 8, 'byteOffset'): SourceFaultKind.abiMismatch,
+          UnimplementedError('unknown discriminant'):
+              SourceFaultKind.abiMismatch,
+          ArgumentError('not from the decoder'): SourceFaultKind.bridge,
+          StateError('not from the decoder'): SourceFaultKind.bridge,
+        };
+        for (final entry in cases.entries) {
+          throwingApi.nextThrow = entry.key;
+          expect(
+            StrictClockContext.resolve,
+            throwsA(
+              isA<StrictClockSourceFault>()
+                  .having((e) => e.kind, 'kind', entry.value)
+                  .having((e) => e.errno, 'errno', isNull)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      entry.value == SourceFaultKind.abiMismatch
+                          ? contains('rebuild the native library')
+                          : isNot(contains('rebuild the native library')),
+                      contains('${entry.key}'),
+                    ),
+                  ),
+            ),
+            reason: '${entry.key}',
+          );
+        }
+      } finally {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
       }
     });
 
@@ -3936,17 +4023,32 @@ void main() {
       expect(
         () => later.elapsedSince(reading),
         throwsA(
-          isA<StrictClockInvalidated>().having(
-            (e) => e.reason,
-            'reason',
-            StrictClockInvalidationReason.nativeGeneration,
-          ),
+          isA<StrictClockGenerationIncompatible>()
+              .having((e) => e.expected, 'expected', later.generation)
+              .having((e) => e.actual, 'actual', reading.generation)
+              .having(
+                (e) => e.message,
+                'message',
+                isNot(anyOf(contains('invalid'), contains('resolve'))),
+              ),
         ),
       );
       expect(api.strictReadCalls, reads);
       // A cross-generation reading does not poison the context that
-      // rejected it.
+      // rejected it, in either direction: the older context handed the
+      // newer reading stays valid too, and its own generation is not
+      // declared dead by the rejection.
       expect(later.isValid, isTrue);
+      final newer = later.now();
+      expect(
+        () => ctx.elapsedSince(newer),
+        throwsA(
+          isA<StrictClockGenerationIncompatible>()
+              .having((e) => e.expected, 'expected', ctx.generation)
+              .having((e) => e.actual, 'actual', newer.generation),
+        ),
+      );
+      expect(ctx.isValid, isTrue);
     });
 
     test('elapsedSince rejects a same-generation reading from another '
@@ -4230,6 +4332,7 @@ void main() {
             conversionVersion: 1,
           ),
         ),
+        StrictClockGenerationIncompatible(expected: 3, actual: 4),
       ];
       final tags = <String>{};
       for (final e in errors) {
@@ -4245,6 +4348,7 @@ void main() {
           StrictClockInvalidated() => 'invalidated',
           StrictClockUnknownSource() => 'unknownSource',
           StrictClockDescriptorIncompatible() => 'incompatible',
+          StrictClockGenerationIncompatible() => 'generationIncompatible',
         });
       }
       // Two-sided: the switch forces an arm for every subtype, and this
@@ -4259,6 +4363,7 @@ void main() {
         'invalidated',
         'unknownSource',
         'incompatible',
+        'generationIncompatible',
       });
     });
   });
