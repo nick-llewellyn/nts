@@ -6,7 +6,107 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 9.4
+## 10.0
+
+### Added
+
+- A strict, provenance-attributed read of the sleep-aware native clock
+  at the FFI layer: `ntsStrictClockRead()` returns an
+  `NtsStrictClockReading` (`micros`, `backend`, `generation`) or throws
+  an `NtsClockFault` on that call — no `Instant` fallback, no clamping,
+  checked native-unit conversion. `ntsClockDescriptor()` reports the
+  compile-time `NtsClockBackend` plus coordinate `semanticsVersion` /
+  `conversionVersion` (both `1`), and `ntsClockInvalidate()` advances
+  the process-wide generation for the bridge lifecycle.
+  `ntsStrictClockRead()` throws `unsupported`, `syscallFailed(errno)`,
+  `timebaseUnavailable`, `invalidRaw`, `conversionOverflow` or
+  `generationChanged`; `ntsClockDescriptor()` throws only
+  `unsupported`. `NtsClockFault` also carries a `regression` variant
+  that **no export produces**: the read is stateless — one raw sample,
+  no memory of the previous one — so it cannot detect a sequential
+  regression, and a direct FFI consumer must compare consecutive
+  readings itself, as `StrictClockContext` does. The variant exists so
+  the mirror of the crate-internal fault type stays total. A
+  strict-read fault in the source or the conversion advances the
+  generation so contexts bound before it fail closed on their next
+  read; `generationChanged` is the exception, reporting an advance
+  that already happened — before the read, for a call bound to a
+  retired generation, or while the reading was being taken — so the
+  reading is refused rather than stamped with the retired value, and
+  `ntsClockDescriptor()`'s `unsupported` is a compile-time fact that
+  leaves the generation alone. `ntsStrictClockRead()` takes an
+  optional `boundGeneration`: a bound call whose generation is no
+  longer live is refused before the source is touched, so a caller
+  that is already terminal cannot make a faulting source advance the
+  generation again under the contexts still bound to it. On the strict
+  path a failed Apple timebase probe is no longer cached as permanent.
+  The legacy `ntsBoottimeMicros()` returns the same native values
+  while the source succeeds and is now documented as best-effort and
+  nonportable. After a first fault it now stays on the process-local
+  fallback on every platform (previously Apple only; Linux and Android
+  re-probed `clock_gettime` and could return to native, while Windows'
+  `QueryInterruptTimePrecise` has no failure status and never entered
+  fallback), so a `MonotonicClock` changes epoch at most once, at that
+  fault, instead of on any later recovery — the jump at the fault
+  itself remains, which is the reason no strict path reads it.
+  Foundation for the public Dart strict-clock contexts that follow in
+  this release.
+  ([#353](https://github.com/nick-llewellyn/nts/pull/353))
+
+- `StrictClockContext`, the public strict sleep-aware clock. Where
+  `MonotonicClock` is best-effort and carries no provenance,
+  `StrictClockContext.resolve()` binds one explicit
+  `ClockSourceDescriptor` (`backend`, `semanticsVersion`,
+  `conversionVersion`) and one live `generation`. `now()` returns a
+  `StrictReading` on that coordinate and `elapsedSince(reading)` a
+  `Duration` from it. A source fault, a regression or a lifecycle
+  event throws a `StrictClockError` on that call and leaves the
+  context permanently invalid — there is no `Stopwatch` or `Instant`
+  fallback and no repair short of resolving a new context.
+  `elapsedSince` accepts a reading from any context resolved on the
+  same bridge incarnation, coordinate and generation; a reading from
+  another incarnation (a mock replaced by the native bridge or by a
+  fresh mock, even one whose generation and descriptor happen to
+  match), coordinate or generation is rejected
+  (`StrictClockSourceIncompatible` / `StrictClockDescriptorIncompatible`
+  / `StrictClockGenerationIncompatible`) without reading the clock and
+  without invalidating the receiving context — a foreign reading is
+  the caller's error, not a verdict on either generation.
+  `StrictReading` exposes its `provenance` for the same reason. `isValid` and
+  `invalidationReason` report only invalidations the context has
+  already observed; a reset not yet seen by a read leaves them
+  unchanged until the next call fails. `resolve()` fails
+  distinctly on an uninitialized bridge (`StrictClockUninitialized`), a
+  hand-written mock (`StrictClockMockOnly`; tests use
+  `resolveForTesting()`, whose contexts carry `testInjected`
+  provenance and can never be labelled native) and an unsupported
+  platform (`StrictClockUnsupported`). Native faults map to
+  `StrictClockSourceFault(kind, detail, errno)` (`errno` present exactly
+  for `SourceFaultKind.syscallFailed`; the public constructor rejects
+  any other pairing with `ArgumentError` in every build mode, not
+  under `assert`) — including
+  `SourceFaultKind.abiMismatch` when the generated decoder rejects
+  the loaded library's wire layout, a classification reserved for
+  native contexts since no decoder runs behind a test double —
+  backwards readings to `StrictClockRegression`, and lifecycle events
+  to `StrictClockInvalidated(reason)`. `NtsBridge.dispose()` and
+  `debugReset()` now invalidate every context on the isolate, and
+  `dispose()` on a native bridge also advances the process-wide
+  generation so contexts in other isolates fail closed on their next
+  read — and that bump is not best-effort: if the invalidate dispatch
+  throws, `dispose()` propagates the error and leaves the entrypoint
+  installed rather than tear it down with other isolates still on
+  the old generation; a raw `NtsRustLib.dispose()` + `init()` that bypasses
+  `NtsBridge` is caught by the context's api-identity check because
+  `init()` builds a fresh API object. A raw `dispose()` followed by
+  `initMock(api:)` with the *same* object is not detectable — the
+  entrypoint exposes no per-installation token — and a context
+  resolved before it keeps reading through the reinstalled double;
+  use `NtsBridge.dispose()` when a reset should be observed.
+  `ClockSourceDescriptor.isCompatibleWith` is semantic compatibility
+  only (backend + versions); `generation` equality is a same-process
+  lifecycle token and proves nothing across processes. No I/O on the
+  read path. ([#353](https://github.com/nick-llewellyn/nts/pull/353))
 
 ### Internal
 

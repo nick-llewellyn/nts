@@ -13,6 +13,572 @@ part of 'nts.dart';
 // dart format off
 T _$identity<T>(T value) => value;
 /// @nodoc
+mixin _$NtsClockFault {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+    return 'NtsClockFault()';
+}
+
+
+}
+
+/// @nodoc
+class $NtsClockFaultCopyWith<$Res>  {
+$NtsClockFaultCopyWith(NtsClockFault _, $Res Function(NtsClockFault) __);
+}
+
+
+/// Adds pattern-matching-related methods to [NtsClockFault].
+extension NtsClockFaultPatterns on NtsClockFault {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( NtsClockFault_Unsupported value)?  unsupported,TResult Function( NtsClockFault_SyscallFailed value)?  syscallFailed,TResult Function( NtsClockFault_TimebaseUnavailable value)?  timebaseUnavailable,TResult Function( NtsClockFault_InvalidRaw value)?  invalidRaw,TResult Function( NtsClockFault_ConversionOverflow value)?  conversionOverflow,TResult Function( NtsClockFault_Regression value)?  regression,TResult Function( NtsClockFault_GenerationChanged value)?  generationChanged,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case NtsClockFault_Unsupported() when unsupported != null:
+return unsupported(_that);case NtsClockFault_SyscallFailed() when syscallFailed != null:
+return syscallFailed(_that);case NtsClockFault_TimebaseUnavailable() when timebaseUnavailable != null:
+return timebaseUnavailable(_that);case NtsClockFault_InvalidRaw() when invalidRaw != null:
+return invalidRaw(_that);case NtsClockFault_ConversionOverflow() when conversionOverflow != null:
+return conversionOverflow(_that);case NtsClockFault_Regression() when regression != null:
+return regression(_that);case NtsClockFault_GenerationChanged() when generationChanged != null:
+return generationChanged(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( NtsClockFault_Unsupported value)  unsupported,required TResult Function( NtsClockFault_SyscallFailed value)  syscallFailed,required TResult Function( NtsClockFault_TimebaseUnavailable value)  timebaseUnavailable,required TResult Function( NtsClockFault_InvalidRaw value)  invalidRaw,required TResult Function( NtsClockFault_ConversionOverflow value)  conversionOverflow,required TResult Function( NtsClockFault_Regression value)  regression,required TResult Function( NtsClockFault_GenerationChanged value)  generationChanged,}){
+final _that = this;
+switch (_that) {
+case NtsClockFault_Unsupported():
+return unsupported(_that);case NtsClockFault_SyscallFailed():
+return syscallFailed(_that);case NtsClockFault_TimebaseUnavailable():
+return timebaseUnavailable(_that);case NtsClockFault_InvalidRaw():
+return invalidRaw(_that);case NtsClockFault_ConversionOverflow():
+return conversionOverflow(_that);case NtsClockFault_Regression():
+return regression(_that);case NtsClockFault_GenerationChanged():
+return generationChanged(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( NtsClockFault_Unsupported value)?  unsupported,TResult? Function( NtsClockFault_SyscallFailed value)?  syscallFailed,TResult? Function( NtsClockFault_TimebaseUnavailable value)?  timebaseUnavailable,TResult? Function( NtsClockFault_InvalidRaw value)?  invalidRaw,TResult? Function( NtsClockFault_ConversionOverflow value)?  conversionOverflow,TResult? Function( NtsClockFault_Regression value)?  regression,TResult? Function( NtsClockFault_GenerationChanged value)?  generationChanged,}){
+final _that = this;
+switch (_that) {
+case NtsClockFault_Unsupported() when unsupported != null:
+return unsupported(_that);case NtsClockFault_SyscallFailed() when syscallFailed != null:
+return syscallFailed(_that);case NtsClockFault_TimebaseUnavailable() when timebaseUnavailable != null:
+return timebaseUnavailable(_that);case NtsClockFault_InvalidRaw() when invalidRaw != null:
+return invalidRaw(_that);case NtsClockFault_ConversionOverflow() when conversionOverflow != null:
+return conversionOverflow(_that);case NtsClockFault_Regression() when regression != null:
+return regression(_that);case NtsClockFault_GenerationChanged() when generationChanged != null:
+return generationChanged(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  unsupported,TResult Function( int errno)?  syscallFailed,TResult Function( int kernReturn,  int numer,  int denom)?  timebaseUnavailable,TResult Function()?  invalidRaw,TResult Function()?  conversionOverflow,TResult Function( PlatformInt64 previous,  PlatformInt64 observed)?  regression,TResult Function( PlatformInt64 expected,  PlatformInt64 observed)?  generationChanged,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case NtsClockFault_Unsupported() when unsupported != null:
+return unsupported();case NtsClockFault_SyscallFailed() when syscallFailed != null:
+return syscallFailed(_that.errno);case NtsClockFault_TimebaseUnavailable() when timebaseUnavailable != null:
+return timebaseUnavailable(_that.kernReturn,_that.numer,_that.denom);case NtsClockFault_InvalidRaw() when invalidRaw != null:
+return invalidRaw();case NtsClockFault_ConversionOverflow() when conversionOverflow != null:
+return conversionOverflow();case NtsClockFault_Regression() when regression != null:
+return regression(_that.previous,_that.observed);case NtsClockFault_GenerationChanged() when generationChanged != null:
+return generationChanged(_that.expected,_that.observed);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  unsupported,required TResult Function( int errno)  syscallFailed,required TResult Function( int kernReturn,  int numer,  int denom)  timebaseUnavailable,required TResult Function()  invalidRaw,required TResult Function()  conversionOverflow,required TResult Function( PlatformInt64 previous,  PlatformInt64 observed)  regression,required TResult Function( PlatformInt64 expected,  PlatformInt64 observed)  generationChanged,}) {final _that = this;
+switch (_that) {
+case NtsClockFault_Unsupported():
+return unsupported();case NtsClockFault_SyscallFailed():
+return syscallFailed(_that.errno);case NtsClockFault_TimebaseUnavailable():
+return timebaseUnavailable(_that.kernReturn,_that.numer,_that.denom);case NtsClockFault_InvalidRaw():
+return invalidRaw();case NtsClockFault_ConversionOverflow():
+return conversionOverflow();case NtsClockFault_Regression():
+return regression(_that.previous,_that.observed);case NtsClockFault_GenerationChanged():
+return generationChanged(_that.expected,_that.observed);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  unsupported,TResult? Function( int errno)?  syscallFailed,TResult? Function( int kernReturn,  int numer,  int denom)?  timebaseUnavailable,TResult? Function()?  invalidRaw,TResult? Function()?  conversionOverflow,TResult? Function( PlatformInt64 previous,  PlatformInt64 observed)?  regression,TResult? Function( PlatformInt64 expected,  PlatformInt64 observed)?  generationChanged,}) {final _that = this;
+switch (_that) {
+case NtsClockFault_Unsupported() when unsupported != null:
+return unsupported();case NtsClockFault_SyscallFailed() when syscallFailed != null:
+return syscallFailed(_that.errno);case NtsClockFault_TimebaseUnavailable() when timebaseUnavailable != null:
+return timebaseUnavailable(_that.kernReturn,_that.numer,_that.denom);case NtsClockFault_InvalidRaw() when invalidRaw != null:
+return invalidRaw();case NtsClockFault_ConversionOverflow() when conversionOverflow != null:
+return conversionOverflow();case NtsClockFault_Regression() when regression != null:
+return regression(_that.previous,_that.observed);case NtsClockFault_GenerationChanged() when generationChanged != null:
+return generationChanged(_that.expected,_that.observed);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class NtsClockFault_Unsupported extends NtsClockFault {
+  const NtsClockFault_Unsupported(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_Unsupported);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+    return 'NtsClockFault.unsupported()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class NtsClockFault_SyscallFailed extends NtsClockFault {
+  const NtsClockFault_SyscallFailed({required this.errno}): super._();
+  
+
+ final  int errno;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsClockFault_SyscallFailedCopyWith<NtsClockFault_SyscallFailed> get copyWith => _$NtsClockFault_SyscallFailedCopyWithImpl<NtsClockFault_SyscallFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_SyscallFailed&&(identical(other.errno, errno) || other.errno == errno));
+}
+
+
+@override
+int get hashCode {
+    return Object.hash(runtimeType,errno);
+}
+
+@override
+String toString() {
+    return 'NtsClockFault.syscallFailed(errno: $errno)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $NtsClockFault_SyscallFailedCopyWith<$Res> implements $NtsClockFaultCopyWith<$Res> {
+  factory $NtsClockFault_SyscallFailedCopyWith(NtsClockFault_SyscallFailed value, $Res Function(NtsClockFault_SyscallFailed) _then) = _$NtsClockFault_SyscallFailedCopyWithImpl;
+@useResult
+$Res call({
+ int errno
+});
+
+
+
+
+}
+/// @nodoc
+class _$NtsClockFault_SyscallFailedCopyWithImpl<$Res>
+    implements $NtsClockFault_SyscallFailedCopyWith<$Res> {
+  _$NtsClockFault_SyscallFailedCopyWithImpl(this._self, this._then);
+
+  final NtsClockFault_SyscallFailed _self;
+  final $Res Function(NtsClockFault_SyscallFailed) _then;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? errno = null,}) {
+  return _then(NtsClockFault_SyscallFailed(
+errno: null == errno ? _self.errno : errno // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class NtsClockFault_TimebaseUnavailable extends NtsClockFault {
+  const NtsClockFault_TimebaseUnavailable({required this.kernReturn, required this.numer, required this.denom}): super._();
+  
+
+ final  int kernReturn;
+ final  int numer;
+ final  int denom;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsClockFault_TimebaseUnavailableCopyWith<NtsClockFault_TimebaseUnavailable> get copyWith => _$NtsClockFault_TimebaseUnavailableCopyWithImpl<NtsClockFault_TimebaseUnavailable>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_TimebaseUnavailable&&(identical(other.kernReturn, kernReturn) || other.kernReturn == kernReturn)&&(identical(other.numer, numer) || other.numer == numer)&&(identical(other.denom, denom) || other.denom == denom));
+}
+
+
+@override
+int get hashCode {
+    return Object.hash(runtimeType,kernReturn,numer,denom);
+}
+
+@override
+String toString() {
+    return 'NtsClockFault.timebaseUnavailable(kernReturn: $kernReturn, numer: $numer, denom: $denom)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $NtsClockFault_TimebaseUnavailableCopyWith<$Res> implements $NtsClockFaultCopyWith<$Res> {
+  factory $NtsClockFault_TimebaseUnavailableCopyWith(NtsClockFault_TimebaseUnavailable value, $Res Function(NtsClockFault_TimebaseUnavailable) _then) = _$NtsClockFault_TimebaseUnavailableCopyWithImpl;
+@useResult
+$Res call({
+ int kernReturn, int numer, int denom
+});
+
+
+
+
+}
+/// @nodoc
+class _$NtsClockFault_TimebaseUnavailableCopyWithImpl<$Res>
+    implements $NtsClockFault_TimebaseUnavailableCopyWith<$Res> {
+  _$NtsClockFault_TimebaseUnavailableCopyWithImpl(this._self, this._then);
+
+  final NtsClockFault_TimebaseUnavailable _self;
+  final $Res Function(NtsClockFault_TimebaseUnavailable) _then;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? kernReturn = null,Object? numer = null,Object? denom = null,}) {
+  return _then(NtsClockFault_TimebaseUnavailable(
+kernReturn: null == kernReturn ? _self.kernReturn : kernReturn // ignore: cast_nullable_to_non_nullable
+as int,numer: null == numer ? _self.numer : numer // ignore: cast_nullable_to_non_nullable
+as int,denom: null == denom ? _self.denom : denom // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class NtsClockFault_InvalidRaw extends NtsClockFault {
+  const NtsClockFault_InvalidRaw(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_InvalidRaw);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+    return 'NtsClockFault.invalidRaw()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class NtsClockFault_ConversionOverflow extends NtsClockFault {
+  const NtsClockFault_ConversionOverflow(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_ConversionOverflow);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+    return 'NtsClockFault.conversionOverflow()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class NtsClockFault_Regression extends NtsClockFault {
+  const NtsClockFault_Regression({required this.previous, required this.observed}): super._();
+  
+
+ final  PlatformInt64 previous;
+ final  PlatformInt64 observed;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsClockFault_RegressionCopyWith<NtsClockFault_Regression> get copyWith => _$NtsClockFault_RegressionCopyWithImpl<NtsClockFault_Regression>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_Regression&&(identical(other.previous, previous) || other.previous == previous)&&(identical(other.observed, observed) || other.observed == observed));
+}
+
+
+@override
+int get hashCode {
+    return Object.hash(runtimeType,previous,observed);
+}
+
+@override
+String toString() {
+    return 'NtsClockFault.regression(previous: $previous, observed: $observed)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $NtsClockFault_RegressionCopyWith<$Res> implements $NtsClockFaultCopyWith<$Res> {
+  factory $NtsClockFault_RegressionCopyWith(NtsClockFault_Regression value, $Res Function(NtsClockFault_Regression) _then) = _$NtsClockFault_RegressionCopyWithImpl;
+@useResult
+$Res call({
+ PlatformInt64 previous, PlatformInt64 observed
+});
+
+
+
+
+}
+/// @nodoc
+class _$NtsClockFault_RegressionCopyWithImpl<$Res>
+    implements $NtsClockFault_RegressionCopyWith<$Res> {
+  _$NtsClockFault_RegressionCopyWithImpl(this._self, this._then);
+
+  final NtsClockFault_Regression _self;
+  final $Res Function(NtsClockFault_Regression) _then;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? previous = null,Object? observed = null,}) {
+  return _then(NtsClockFault_Regression(
+previous: null == previous ? _self.previous : previous // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,observed: null == observed ? _self.observed : observed // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class NtsClockFault_GenerationChanged extends NtsClockFault {
+  const NtsClockFault_GenerationChanged({required this.expected, required this.observed}): super._();
+  
+
+ final  PlatformInt64 expected;
+ final  PlatformInt64 observed;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$NtsClockFault_GenerationChangedCopyWith<NtsClockFault_GenerationChanged> get copyWith => _$NtsClockFault_GenerationChangedCopyWithImpl<NtsClockFault_GenerationChanged>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+    return identical(this, other) || (other.runtimeType == runtimeType&&other is NtsClockFault_GenerationChanged&&(identical(other.expected, expected) || other.expected == expected)&&(identical(other.observed, observed) || other.observed == observed));
+}
+
+
+@override
+int get hashCode {
+    return Object.hash(runtimeType,expected,observed);
+}
+
+@override
+String toString() {
+    return 'NtsClockFault.generationChanged(expected: $expected, observed: $observed)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $NtsClockFault_GenerationChangedCopyWith<$Res> implements $NtsClockFaultCopyWith<$Res> {
+  factory $NtsClockFault_GenerationChangedCopyWith(NtsClockFault_GenerationChanged value, $Res Function(NtsClockFault_GenerationChanged) _then) = _$NtsClockFault_GenerationChangedCopyWithImpl;
+@useResult
+$Res call({
+ PlatformInt64 expected, PlatformInt64 observed
+});
+
+
+
+
+}
+/// @nodoc
+class _$NtsClockFault_GenerationChangedCopyWithImpl<$Res>
+    implements $NtsClockFault_GenerationChangedCopyWith<$Res> {
+  _$NtsClockFault_GenerationChangedCopyWithImpl(this._self, this._then);
+
+  final NtsClockFault_GenerationChanged _self;
+  final $Res Function(NtsClockFault_GenerationChanged) _then;
+
+/// Create a copy of NtsClockFault
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? expected = null,Object? observed = null,}) {
+  return _then(NtsClockFault_GenerationChanged(
+expected: null == expected ? _self.expected : expected // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,observed: null == observed ? _self.observed : observed // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,
+  ));
+}
+
+
+}
+
+/// @nodoc
 mixin _$NtsError {
 
 

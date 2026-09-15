@@ -74,6 +74,15 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  NtsClockBackend dco_decode_nts_clock_backend(dynamic raw);
+
+  @protected
+  NtsClockDescriptor dco_decode_nts_clock_descriptor(dynamic raw);
+
+  @protected
+  NtsClockFault dco_decode_nts_clock_fault(dynamic raw);
+
+  @protected
   NtsDnsPoolStats dco_decode_nts_dns_pool_stats(dynamic raw);
 
   @protected
@@ -81,6 +90,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
 
   @protected
   NtsServerSpec dco_decode_nts_server_spec(dynamic raw);
+
+  @protected
+  NtsStrictClockReading dco_decode_nts_strict_clock_reading(dynamic raw);
 
   @protected
   NtsTimeSample dco_decode_nts_time_sample(dynamic raw);
@@ -180,6 +192,17 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  NtsClockBackend sse_decode_nts_clock_backend(SseDeserializer deserializer);
+
+  @protected
+  NtsClockDescriptor sse_decode_nts_clock_descriptor(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  NtsClockFault sse_decode_nts_clock_fault(SseDeserializer deserializer);
+
+  @protected
   NtsDnsPoolStats sse_decode_nts_dns_pool_stats(SseDeserializer deserializer);
 
   @protected
@@ -187,6 +210,11 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
 
   @protected
   NtsServerSpec sse_decode_nts_server_spec(SseDeserializer deserializer);
+
+  @protected
+  NtsStrictClockReading sse_decode_nts_strict_clock_reading(
+    SseDeserializer deserializer,
+  );
 
   @protected
   NtsTimeSample sse_decode_nts_time_sample(SseDeserializer deserializer);
@@ -307,6 +335,21 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   );
 
   @protected
+  void sse_encode_nts_clock_backend(
+    NtsClockBackend self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_nts_clock_descriptor(
+    NtsClockDescriptor self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_nts_clock_fault(NtsClockFault self, SseSerializer serializer);
+
+  @protected
   void sse_encode_nts_dns_pool_stats(
     NtsDnsPoolStats self,
     SseSerializer serializer,
@@ -317,6 +360,12 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
 
   @protected
   void sse_encode_nts_server_spec(NtsServerSpec self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_nts_strict_clock_reading(
+    NtsStrictClockReading self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_nts_time_sample(NtsTimeSample self, SseSerializer serializer);

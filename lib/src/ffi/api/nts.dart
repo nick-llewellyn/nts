@@ -10,7 +10,7 @@ part 'nts.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `arm_send_against_call_deadline`, `bind_connected_udp_using`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner_using`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`, `hash`, `hash`
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
 /// with `Relaxed` ordering; the snapshot is intended for
@@ -92,10 +92,17 @@ NtsTrustStatus ntsTrustStatus() =>
 /// across suspend/resume cycles.
 ///
 /// The epoch is arbitrary (per-boot); only differences between two
-/// readings from the same process are meaningful. On targets outside
-/// the five supported platforms the reading degrades to a plain
-/// monotonic elapsed-since-process-anchor value (suspend-frozen,
-/// best-effort).
+/// readings from the same process are meaningful.
+///
+/// **Legacy, best-effort, nonportable.** This is the pre-strict
+/// contract kept for source compatibility: on targets outside the
+/// five supported platforms, and on any native read or conversion
+/// fault on a supported one, the value silently degrades to a plain
+/// monotonic elapsed-since-process-anchor counter (suspend-frozen,
+/// on a different epoch). A caller cannot tell the two apart from
+/// the integer. Strict consumers use [ntsStrictClockRead], which
+/// reports the fault on that call instead; no strict operation reads
+/// this function.
 ///
 /// Marked `#[frb(sync)]` for the same reason as
 /// [ntsDnsPoolStats]: a single clock read is cheap enough that
@@ -107,6 +114,53 @@ NtsTrustStatus ntsTrustStatus() =>
 /// `BigInt`.
 PlatformInt64 ntsBoottimeMicros() =>
     NtsRustLib.instance.api.crateApiNtsNtsBoottimeMicros();
+
+/// Strict sleep-aware clock read.
+///
+/// Returns a provenance-attributed reading or throws an
+/// [NtsClockFault] **on this call**. Unlike [ntsBoottimeMicros]
+/// it never substitutes a process-local `Instant` counter, never
+/// clamps, and uses checked arithmetic for the native-unit conversion.
+/// A source or conversion fault advances the live generation before it
+/// is reported; `GenerationChanged` reports an advance that already
+/// happened and does not advance it again.
+///
+/// `bound_generation` is the generation the caller is bound to, when
+/// it has one. A bound call whose generation is no longer live throws
+/// `GenerationChanged` **before touching the source**: the caller is
+/// terminal, and a read whose fault advanced the generation again
+/// would be reported in place of the mismatch and would retire every
+/// context still live. The generation is checked after the read as
+/// well, for an invalidation that raced it. An unbound call (`None`)
+/// reads under whatever generation is live and stamps the reading
+/// with it; the Dart strict context resolves this way and then binds
+/// to the generation it was given.
+///
+/// Performs no I/O beyond the single clock read. Marked
+/// `#[frb(sync)]` because the Dart strict context calls it from
+/// synchronous hot getters.
+NtsStrictClockReading ntsStrictClockRead({PlatformInt64? boundGeneration}) =>
+    NtsRustLib.instance.api.crateApiNtsNtsStrictClockRead(
+      boundGeneration: boundGeneration,
+    );
+
+/// Describe the strict clock coordinate for this build.
+///
+/// Throws [NtsClockFault.unsupported] on targets without a
+/// supported backend; a successful result is a compile-time fact and
+/// does not prove that a read will succeed.
+NtsClockDescriptor ntsClockDescriptor() =>
+    NtsRustLib.instance.api.crateApiNtsNtsClockDescriptor();
+
+/// Advance the strict clock's live generation and return the new
+/// value.
+///
+/// Called by the Dart bridge lifecycle on disposal so every strict
+/// context bound under the old generation fails closed on its next
+/// read instead of continuing across a bridge reset. Cheap (one
+/// atomic increment); never fails.
+PlatformInt64 ntsClockInvalidate() =>
+    NtsRustLib.instance.api.crateApiNtsNtsClockInvalidate();
 
 /// Run a complete authenticated NTPv4 exchange against `spec`.
 ///
@@ -298,6 +352,107 @@ abstract class NtsClient implements RustOpaqueInterface {
       .instance
       .api
       .crateApiNtsNtsClientWithTrustMode(trustMode: trustMode);
+}
+
+/// Native suspend-inclusive clock source family, as reported on a
+/// [NtsStrictClockReading] and in the [NtsClockDescriptor].
+///
+/// Identifies the backend a reading actually came from, not the
+/// bridge's native/mock classification.
+enum NtsClockBackend {
+  /// `clock_gettime(CLOCK_BOOTTIME)` — Android, Linux.
+  linuxBoottime,
+
+  /// `mach_continuous_time` scaled by `mach_timebase_info` — iOS,
+  /// macOS.
+  appleContinuous,
+
+  /// `QueryInterruptTimePrecise` — Windows.
+  windowsInterruptTime,
+}
+
+/// Versioned description of the strict clock coordinate on this
+/// build (`ntsClockDescriptor` on the Dart side).
+///
+/// Two descriptors are compatible iff `backend`, `semantics_version`
+/// and `conversion_version` are all equal. The package version is not
+/// an input to that decision.
+class NtsClockDescriptor {
+  /// Compile-time backend for this target.
+  final NtsClockBackend backend;
+
+  /// Coordinate semantics version: origin rule, unit, range and
+  /// comparison rules. Currently `1`.
+  final int semanticsVersion;
+
+  /// Raw-to-microsecond conversion rule version (flooring, scaling).
+  /// Currently `1`.
+  final int conversionVersion;
+
+  const NtsClockDescriptor({
+    required this.backend,
+    required this.semanticsVersion,
+    required this.conversionVersion,
+  });
+
+  @override
+  int get hashCode =>
+      backend.hashCode ^ semanticsVersion.hashCode ^ conversionVersion.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NtsClockDescriptor &&
+          runtimeType == other.runtimeType &&
+          backend == other.backend &&
+          semanticsVersion == other.semanticsVersion &&
+          conversionVersion == other.conversionVersion;
+}
+
+@freezed
+sealed class NtsClockFault with _$NtsClockFault implements FrbException {
+  const NtsClockFault._();
+
+  /// The compile target has no supported suspend-inclusive source.
+  /// Web and every platform outside the five documented ones.
+  const factory NtsClockFault.unsupported() = NtsClockFault_Unsupported;
+
+  /// `clock_gettime(CLOCK_BOOTTIME)` returned non-zero; `errno` was
+  /// read immediately afterwards.
+  const factory NtsClockFault.syscallFailed({required int errno}) =
+      NtsClockFault_SyscallFailed;
+
+  /// `mach_timebase_info` returned a non-success `kern_return`, or
+  /// a zero numerator / denominator. Not cached: the next read
+  /// probes again.
+  const factory NtsClockFault.timebaseUnavailable({
+    required int kernReturn,
+    required int numer,
+    required int denom,
+  }) = NtsClockFault_TimebaseUnavailable;
+
+  /// A raw native field was outside its documented domain.
+  const factory NtsClockFault.invalidRaw() = NtsClockFault_InvalidRaw;
+
+  /// The checked scale or narrowing to `i64` microseconds failed.
+  const factory NtsClockFault.conversionOverflow() =
+      NtsClockFault_ConversionOverflow;
+
+  /// A sequential reader observed a value strictly below its
+  /// previous one. Not produced by [ntsStrictClockRead], which
+  /// keeps no previous value; see the enum docs.
+  const factory NtsClockFault.regression({
+    required PlatformInt64 previous,
+    required PlatformInt64 observed,
+  }) = NtsClockFault_Regression;
+
+  /// The live generation advanced while the read was in flight, so
+  /// the sample cannot be stamped with the generation it was taken
+  /// under.
+  const factory NtsClockFault.generationChanged({
+    required PlatformInt64 expected,
+    required PlatformInt64 observed,
+  }) = NtsClockFault_GenerationChanged;
 }
 
 /// Snapshot of the bounded DNS resolver pool counters.
@@ -527,6 +682,45 @@ class NtsServerSpec {
           runtimeType == other.runtimeType &&
           host == other.host &&
           port == other.port;
+}
+
+/// A successful strict clock reading (`ntsStrictClockRead` on the
+/// Dart side).
+class NtsStrictClockReading {
+  /// Microseconds on the coordinate described by
+  /// [NtsClockDescriptor]: arbitrary per-boot origin, floored to
+  /// whole microseconds, range `0..=i64::MAX`. `0` is a valid
+  /// reading.
+  final PlatformInt64 micros;
+
+  /// Source the raw sample came from.
+  final NtsClockBackend backend;
+
+  /// Live generation the reading was taken under. An in-process
+  /// invalidation token: it advances on every strict fault and on
+  /// [ntsClockInvalidate]. Two readings are only comparable when
+  /// their generations are equal. It is **not** a boot or device
+  /// identity — independently started processes on the same boot
+  /// hold unrelated generations.
+  final PlatformInt64 generation;
+
+  const NtsStrictClockReading({
+    required this.micros,
+    required this.backend,
+    required this.generation,
+  });
+
+  @override
+  int get hashCode => micros.hashCode ^ backend.hashCode ^ generation.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NtsStrictClockReading &&
+          runtimeType == other.runtimeType &&
+          micros == other.micros &&
+          backend == other.backend &&
+          generation == other.generation;
 }
 
 /// Successful authenticated NTPv4 sample.

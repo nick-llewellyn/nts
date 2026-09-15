@@ -4876,3 +4876,213 @@ fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
         "the expired entry must be dropped, releasing its keys and jar",
     );
 }
+
+// ---- strict clock bridge surface --------------------------------------
+
+/// The descriptor is a compile-time fact and must name the backend the
+/// strict read actually dispatches to on this host, or both must agree
+/// the target is unsupported.
+#[test]
+fn strict_clock_descriptor_matches_strict_read_backend() {
+    // A concurrent injection test advancing the generation mid-read
+    // would turn this valid host read into `GenerationChanged`.
+    let _serial = crate::nts::boottime::generation_test_guard();
+    match (nts_clock_descriptor(), nts_strict_clock_read(None)) {
+        (Ok(d), Ok(r)) => {
+            assert_eq!(d.backend, r.backend);
+            assert_eq!(d.semantics_version, 1);
+            assert_eq!(d.conversion_version, 1);
+            assert!(r.micros >= 0);
+            assert!(r.generation >= 1);
+        }
+        (Err(NtsClockFault::Unsupported), Err(NtsClockFault::Unsupported)) => {}
+        (d, r) => panic!("descriptor {d:?} and read {r:?} disagree"),
+    }
+}
+
+/// `nts_clock_invalidate` is the bridge-lifecycle hook: it must move
+/// the live generation so a reading taken before it can be told apart
+/// from one taken after.
+#[test]
+fn strict_clock_invalidate_advances_generation_seen_by_reads() {
+    // Moves the process-wide generation outside `with_raw_override`;
+    // hold the lock so a reader another test just bound is not retired.
+    let _serial = crate::nts::boottime::generation_test_guard();
+    let Ok(before) = nts_strict_clock_read(None) else {
+        return; // unsupported target: nothing to compare
+    };
+    let bumped = nts_clock_invalidate();
+    assert!(bumped > before.generation);
+    let after = nts_strict_clock_read(None).expect("read after invalidate");
+    assert!(after.generation >= bumped);
+    assert_ne!(after.generation, before.generation);
+    // A call still bound to the retired generation is refused with the
+    // mismatch, and refused again on retry: the refusal is terminal and
+    // does not itself move the generation.
+    let stale = || nts_strict_clock_read(Some(before.generation));
+    assert!(matches!(
+        stale(),
+        Err(NtsClockFault::GenerationChanged { expected, observed })
+            if expected == before.generation && observed == after.generation
+    ));
+    assert_eq!(stale(), stale());
+    assert_eq!(
+        nts_strict_clock_read(Some(after.generation)).map(|r| r.generation),
+        Ok(after.generation)
+    );
+}
+
+/// A bound read on a retired generation is refused before the source
+/// is touched: with the source faulting, the retired caller still gets
+/// `GenerationChanged`, not the fault, and the generation does not
+/// move under the callers still bound to it.
+#[test]
+fn strict_clock_read_bound_to_a_retired_generation_never_reads() {
+    use crate::nts::boottime::{generation, invalidate_generation, with_raw_override, ClockFault};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let probes = Rc::new(Cell::new(0u32));
+    let seen = Rc::clone(&probes);
+    with_raw_override(
+        move || {
+            seen.set(seen.get() + 1);
+            Err(ClockFault::SyscallFailed { errno: 22 })
+        },
+        || {
+            let retired = generation();
+            let live = invalidate_generation();
+            assert_eq!(
+                nts_strict_clock_read(Some(retired)),
+                Err(NtsClockFault::GenerationChanged {
+                    expected: retired,
+                    observed: live,
+                })
+            );
+            assert_eq!(probes.get(), 0);
+            assert_eq!(generation(), live);
+            assert_eq!(
+                nts_strict_clock_read(Some(live)),
+                Err(NtsClockFault::SyscallFailed { errno: 22 })
+            );
+            assert_eq!(probes.get(), 1);
+        },
+    );
+}
+
+/// A faulting native read surfaces as the mapped `NtsClockFault` on
+/// that call — no integer, no fallback — while the legacy export on
+/// the same seam still returns a value. This is the bridge-level
+/// statement of the two contracts.
+#[test]
+fn strict_clock_read_reports_fault_where_legacy_export_degrades() {
+    use crate::nts::boottime::{with_raw_override, ClockFault};
+    with_raw_override(
+        || Err(ClockFault::SyscallFailed { errno: 22 }),
+        || {
+            assert_eq!(
+                nts_strict_clock_read(None),
+                Err(NtsClockFault::SyscallFailed { errno: 22 })
+            );
+            assert!(nts_boottime_micros() >= 0);
+        },
+    );
+}
+
+/// Every internal fault variant has a distinct bridge mirror; a new
+/// internal variant without a mapping fails to compile in `From`, and
+/// this pins the payloads across the boundary.
+///
+/// The `cases` table is guarded on both sides, as the Dart
+/// variant-mapping test is: `Tag::of` is an exhaustive match over
+/// `ClockFault`, so a new variant does not compile until it has an
+/// arm and a tag, and the tags observed from `cases` must equal
+/// `Tag::ALL`, so a tag without a sample fails the set comparison.
+#[test]
+fn strict_clock_fault_mirror_is_lossless() {
+    use crate::nts::boottime::ClockFault as F;
+    use std::collections::BTreeSet;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Tag {
+        Unsupported,
+        SyscallFailed,
+        TimebaseUnavailable,
+        InvalidRaw,
+        ConversionOverflow,
+        Regression,
+        GenerationChanged,
+    }
+
+    impl Tag {
+        const ALL: [Tag; 7] = [
+            Tag::Unsupported,
+            Tag::SyscallFailed,
+            Tag::TimebaseUnavailable,
+            Tag::InvalidRaw,
+            Tag::ConversionOverflow,
+            Tag::Regression,
+            Tag::GenerationChanged,
+        ];
+
+        fn of(fault: &F) -> Tag {
+            match fault {
+                F::Unsupported => Tag::Unsupported,
+                F::SyscallFailed { .. } => Tag::SyscallFailed,
+                F::TimebaseUnavailable { .. } => Tag::TimebaseUnavailable,
+                F::InvalidRaw => Tag::InvalidRaw,
+                F::ConversionOverflow => Tag::ConversionOverflow,
+                F::Regression { .. } => Tag::Regression,
+                F::GenerationChanged { .. } => Tag::GenerationChanged,
+            }
+        }
+    }
+
+    let cases = [
+        (F::Unsupported, NtsClockFault::Unsupported),
+        (
+            F::SyscallFailed { errno: 22 },
+            NtsClockFault::SyscallFailed { errno: 22 },
+        ),
+        (
+            F::TimebaseUnavailable {
+                kern_return: 4,
+                numer: 0,
+                denom: 3,
+            },
+            NtsClockFault::TimebaseUnavailable {
+                kern_return: 4,
+                numer: 0,
+                denom: 3,
+            },
+        ),
+        (F::InvalidRaw, NtsClockFault::InvalidRaw),
+        (F::ConversionOverflow, NtsClockFault::ConversionOverflow),
+        (
+            F::Regression {
+                previous: 5,
+                observed: 4,
+            },
+            NtsClockFault::Regression {
+                previous: 5,
+                observed: 4,
+            },
+        ),
+        (
+            F::GenerationChanged {
+                expected: 1,
+                observed: 2,
+            },
+            NtsClockFault::GenerationChanged {
+                expected: 1,
+                observed: 2,
+            },
+        ),
+    ];
+    let mut seen = BTreeSet::new();
+    for (internal, mirrored) in cases {
+        seen.insert(Tag::of(&internal));
+        assert_eq!(NtsClockFault::from(internal), mirrored);
+    }
+    // Every variant the exhaustive match knows has a sample above.
+    assert_eq!(seen, Tag::ALL.into_iter().collect::<BTreeSet<_>>());
+}
