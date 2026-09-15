@@ -63,12 +63,16 @@ tarball.
   event throws a `StrictClockError` on that call and leaves the
   context permanently invalid — there is no `Stopwatch` or `Instant`
   fallback and no repair short of resolving a new context.
-  `elapsedSince` accepts a reading from any context on the same
-  coordinate and generation; a reading from another coordinate or
-  generation is rejected (`StrictClockDescriptorIncompatible` /
-  `StrictClockGenerationIncompatible`) without reading the clock and
+  `elapsedSince` accepts a reading from any context resolved on the
+  same bridge incarnation, coordinate and generation; a reading from
+  another incarnation (a mock replaced by the native bridge or by a
+  fresh mock, even one whose generation and descriptor happen to
+  match), coordinate or generation is rejected
+  (`StrictClockSourceIncompatible` / `StrictClockDescriptorIncompatible`
+  / `StrictClockGenerationIncompatible`) without reading the clock and
   without invalidating the receiving context — a foreign reading is
-  the caller's error, not a verdict on either generation. `isValid` and
+  the caller's error, not a verdict on either generation.
+  `StrictReading` exposes its `provenance` for the same reason. `isValid` and
   `invalidationReason` report only invalidations the context has
   already observed; a reset not yet seen by a read leaves them
   unchanged until the next call fails. `resolve()` fails

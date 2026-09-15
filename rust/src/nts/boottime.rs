@@ -120,8 +120,15 @@ pub(crate) enum ClockFault {
     /// A sequential reader observed a value strictly below its
     /// previous one.
     Regression { previous: i64, observed: i64 },
-    /// A sequential reader's generation no longer matches the live
-    /// one: some fault or reset happened since it was bound.
+    /// The live generation is not the one the caller expected: some
+    /// fault or reset advanced it. `expected` is the caller's
+    /// generation — the one a bound read ([`strict_read_bound`], and
+    /// a [`SequentialReader`] through it) was asked to hold, or the
+    /// one an unbound [`strict_read`] sampled before taking its
+    /// reading — and `observed` is the live value that replaced it,
+    /// read either before the source was touched (the bound caller
+    /// was already retired) or after (an invalidation raced the
+    /// sample). The reading, if one was taken, is discarded.
     GenerationChanged { expected: i64, observed: i64 },
 }
 

@@ -104,14 +104,16 @@ enum StrictClockProvenance {
   testInjected,
 }
 
-/// A successful strict reading: a coordinate plus the generation and
-/// descriptor it is only meaningful under.
+/// A successful strict reading: a coordinate plus the source, generation
+/// and descriptor it is only meaningful under.
 final class StrictReading {
   const StrictReading._({
     required this.micros,
     required this.generation,
     required this.descriptor,
-  });
+    required this.provenance,
+    required _ClockSource source,
+  }) : _source = source;
 
   /// Microseconds on [descriptor]'s coordinate. `0` is valid.
   final int micros;
@@ -123,20 +125,58 @@ final class StrictReading {
   /// Coordinate the reading is on.
   final ClockSourceDescriptor descriptor;
 
+  /// How the context that took this reading was resolved.
+  final StrictClockProvenance provenance;
+
+  /// The bridge incarnation the reading was taken through. A
+  /// descriptor and generation identify a coordinate only within one
+  /// source: a mock bridge and the native one, or two mock doubles in
+  /// turn, each run their own counter, so equal numbers from different
+  /// incarnations are not the same coordinate.
+  final _ClockSource _source;
+
   @override
   bool operator ==(Object other) =>
       other is StrictReading &&
       micros == other.micros &&
       generation == other.generation &&
-      descriptor == other.descriptor;
+      descriptor == other.descriptor &&
+      _source == other._source;
 
   @override
-  int get hashCode => Object.hash(micros, generation, descriptor);
+  int get hashCode => Object.hash(micros, generation, descriptor, _source);
 
   @override
   String toString() =>
       'StrictReading(micros: $micros, generation: $generation, '
-      'descriptor: $descriptor)';
+      'descriptor: $descriptor, provenance: ${provenance.name})';
+}
+
+/// One bridge incarnation on this isolate: the installed API object
+/// (by identity) under the isolate epoch it was installed in, with the
+/// provenance that state was classified as. Contexts resolved on the
+/// same incarnation share one, so their readings are comparable;
+/// nothing across a reinstall does.
+final class _ClockSource {
+  const _ClockSource({
+    required this.provenance,
+    required this.api,
+    required this.epoch,
+  });
+
+  final StrictClockProvenance provenance;
+  final Object api;
+  final int epoch;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ClockSource &&
+      provenance == other.provenance &&
+      identical(api, other.api) &&
+      epoch == other.epoch;
+
+  @override
+  int get hashCode => Object.hash(provenance, identityHashCode(api), epoch);
 }
 
 /// Why a [StrictClockContext] stopped being usable.
@@ -216,11 +256,8 @@ final class StrictClockContext {
   StrictClockContext._({
     required this.descriptor,
     required this.generation,
-    required this.provenance,
-    required Object boundApi,
-    required int bridgeEpoch,
-  }) : _boundApi = boundApi,
-       _bridgeEpoch = bridgeEpoch;
+    required _ClockSource source,
+  }) : _source = source;
 
   /// Per-isolate count of bridge resets seen by [NtsBridge]. Compared
   /// against the value captured at resolution.
@@ -233,10 +270,9 @@ final class StrictClockContext {
   final int generation;
 
   /// How this context was resolved.
-  final StrictClockProvenance provenance;
+  StrictClockProvenance get provenance => _source.provenance;
 
-  final Object _boundApi;
-  final int _bridgeEpoch;
+  final _ClockSource _source;
   int? _last;
   StrictClockInvalidationReason? _invalidated;
 
@@ -323,9 +359,7 @@ final class StrictClockContext {
     final ctx = StrictClockContext._(
       descriptor: descriptor,
       generation: reading.generation.toInt(),
-      provenance: provenance,
-      boundApi: api,
-      bridgeEpoch: epoch,
+      source: _ClockSource(provenance: provenance, api: api, epoch: epoch),
     );
     ctx._last = reading.micros.toInt();
     return ctx;
@@ -405,6 +439,8 @@ final class StrictClockContext {
       micros: micros,
       generation: generation,
       descriptor: descriptor,
+      provenance: provenance,
+      source: _source,
     );
   }
 
@@ -413,12 +449,19 @@ final class StrictClockContext {
   /// The context's own lifecycle is checked first: an already-invalid
   /// context throws [StrictClockInvalidated] with its stored reason
   /// whatever [earlier] is, and a bridge reset is reported the same
-  /// way [now] reports it. Only then is [earlier] examined: it must be
-  /// a reading on this context's coordinate (compatible descriptor)
-  /// and generation, otherwise [StrictClockDescriptorIncompatible] /
+  /// way [now] reports it. Only then is [earlier] examined: it must
+  /// have been taken through the bridge incarnation this context is
+  /// bound to, on this context's coordinate (compatible descriptor)
+  /// and generation, otherwise [StrictClockSourceIncompatible] /
+  /// [StrictClockDescriptorIncompatible] /
   /// [StrictClockGenerationIncompatible] is thrown without reading the
   /// clock and without invalidating this context — a foreign reading
-  /// is the caller's error, not evidence against the source. Because [now]
+  /// is the caller's error, not evidence against the source. The
+  /// source check comes first because it is what makes the other two
+  /// meaningful: a mock double and the native core, or two doubles
+  /// installed in turn, each run their own counter and report their
+  /// own descriptor, so equal numbers from a reading that outlived a
+  /// bridge reinstall are a coincidence, not a coordinate. Because [now]
   /// enforces monotonicity against this context's own sequence, the
   /// fresh reading cannot be below [earlier] unless [earlier] was
   /// taken by a different context on the same generation; that case
@@ -448,6 +491,12 @@ final class StrictClockContext {
   }
 
   void _checkReadingBelongs(StrictReading reading) {
+    if (reading._source != _source) {
+      throw StrictClockSourceIncompatible(
+        expected: provenance,
+        actual: reading.provenance,
+      );
+    }
     if (!reading.descriptor.isCompatibleWith(descriptor)) {
       throw StrictClockDescriptorIncompatible(
         expected: descriptor,
@@ -474,10 +523,10 @@ final class StrictClockContext {
     // ignore: invalid_use_of_internal_member
     final entrypoint = NtsRustLib.instance;
     final reset =
-        _bridgeEpoch != _isolateBridgeEpoch ||
+        _source.epoch != _isolateBridgeEpoch ||
         NtsBridge.state != expectedState ||
         // ignore: invalid_use_of_internal_member
-        !identical(entrypoint.api, _boundApi);
+        !identical(entrypoint.api, _source.api);
     if (reset) {
       throw _fail(
         StrictClockInvalidated(

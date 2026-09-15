@@ -174,6 +174,33 @@ final class StrictClockUnknownSource extends StrictClockError {
       '${expected.name}';
 }
 
+/// A reading taken through a different bridge incarnation was passed
+/// to a context: the native bridge versus a mock, two mock doubles
+/// installed in turn, or the same double before and after a reset. Each
+/// incarnation runs its own counter and reports its own descriptor, so
+/// even an equal generation and descriptor do not make the reading
+/// comparable. Checked before the descriptor and generation, and like
+/// them it does not invalidate the receiving context. [expected] and
+/// [actual] may be equal: two mocks are both `testInjected`.
+final class StrictClockSourceIncompatible extends StrictClockError {
+  /// Construct the error.
+  const StrictClockSourceIncompatible({
+    required this.expected,
+    required this.actual,
+  }) : super._();
+
+  /// Provenance of the context.
+  final StrictClockProvenance expected;
+
+  /// Provenance of the reading that was offered.
+  final StrictClockProvenance actual;
+
+  @override
+  String get message =>
+      'reading was taken through a ${actual.name} bridge incarnation '
+      'other than the ${expected.name} one this context is bound to';
+}
+
 /// A reading on an incompatible coordinate was passed to a context.
 final class StrictClockDescriptorIncompatible extends StrictClockError {
   /// Construct the error.

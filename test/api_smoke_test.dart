@@ -4274,6 +4274,50 @@ void main() {
       expect(ctx.invalidationReason, isNull);
     });
 
+    test('elapsedSince rejects a reading from an earlier bridge '
+        'incarnation even when its generation and descriptor collide', () {
+      // A reading outlives a bridge reinstall. The replacement double
+      // is a fresh _RecordingApi whose counter is pinned to the old
+      // reading's generation and which reports the same descriptor:
+      // every number on the old reading matches the new context, only
+      // the source differs.
+      final stale = StrictClockContext.resolveForTesting().now();
+      NtsBridge.dispose();
+      final replacement = _RecordingApi()..strictGeneration = stale.generation;
+      NtsRustLib.initMock(api: replacement);
+      try {
+        final ctx = StrictClockContext.resolveForTesting();
+        expect(stale.generation, ctx.generation);
+        expect(stale.descriptor, ctx.descriptor);
+        expect(stale.provenance, ctx.provenance);
+        expect(stale, isNot(ctx.now()));
+        final reads = replacement.strictReadCalls;
+        expect(
+          () => ctx.elapsedSince(stale),
+          throwsA(
+            isA<StrictClockSourceIncompatible>()
+                .having(
+                  (e) => e.expected,
+                  'expected',
+                  StrictClockProvenance.testInjected,
+                )
+                .having(
+                  (e) => e.actual,
+                  'actual',
+                  StrictClockProvenance.testInjected,
+                ),
+          ),
+        );
+        expect(replacement.strictReadCalls, reads);
+        expect(ctx.isValid, isTrue);
+        expect(ctx.invalidationReason, isNull);
+      } finally {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
+      }
+    });
+
     test('an invalid context reports its stored reason from '
         'elapsedSince before examining the reading', () {
       api.strictDescriptorOverride = const ffi.NtsClockDescriptor(
@@ -4558,6 +4602,10 @@ void main() {
           ),
         ),
         StrictClockGenerationIncompatible(expected: 3, actual: 4),
+        StrictClockSourceIncompatible(
+          expected: StrictClockProvenance.native,
+          actual: StrictClockProvenance.testInjected,
+        ),
       ];
       final tags = <String>{};
       for (final e in errors) {
@@ -4574,6 +4622,7 @@ void main() {
           StrictClockUnknownSource() => 'unknownSource',
           StrictClockDescriptorIncompatible() => 'incompatible',
           StrictClockGenerationIncompatible() => 'generationIncompatible',
+          StrictClockSourceIncompatible() => 'sourceIncompatible',
         });
       }
       // Two-sided: the switch forces an arm for every subtype, and this
@@ -4589,6 +4638,7 @@ void main() {
         'unknownSource',
         'incompatible',
         'generationIncompatible',
+        'sourceIncompatible',
       });
     });
   });
