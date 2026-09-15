@@ -27,6 +27,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
         BaseApiImpl,
         BaseHandler,
         ExternalLibrary,
+        PlatformInt64,
         PlatformInt64Util,
         SseDeserializer;
 // Not re-exported by the public FRB entrypoints; the real-bridge
@@ -339,8 +340,20 @@ class _RecordingApi implements NtsRustLibApi {
   }
 
   @override
-  ffi.NtsStrictClockReading crateApiNtsNtsStrictClockRead() {
+  ffi.NtsStrictClockReading crateApiNtsNtsStrictClockRead({
+    PlatformInt64? boundGeneration,
+  }) {
     strictReadCalls++;
+    // Mirrors the native pre-check: a caller on a retired generation
+    // is refused before the source — here, the scripted fault — is
+    // consulted, so `nextStrictThrow` stays armed.
+    if (boundGeneration != null &&
+        boundGeneration.toInt() != strictGeneration) {
+      throw ffi.NtsClockFault.generationChanged(
+        expected: boundGeneration,
+        observed: PlatformInt64Util.from(strictGeneration),
+      );
+    }
     final pending = nextStrictThrow;
     if (pending != null) {
       nextStrictThrow = null;
@@ -731,7 +744,9 @@ class _ThrowingNativeApi extends NtsRustLibApiImpl {
   ffi.NtsClockDescriptor crateApiNtsNtsClockDescriptor() => _throwNext();
 
   @override
-  ffi.NtsStrictClockReading crateApiNtsNtsStrictClockRead() => _throwNext();
+  ffi.NtsStrictClockReading crateApiNtsNtsStrictClockRead({
+    PlatformInt64? boundGeneration,
+  }) => _throwNext();
 }
 
 // One tag per `ffi.NtsClockFault` variant, assigned through an
@@ -4062,6 +4077,48 @@ void main() {
       expect(ctx.isValid, isFalse);
       final fresh = StrictClockContext.resolveForTesting();
       expect(fresh.generation, greaterThan(ctx.generation));
+    });
+
+    test('a retired context is refused before the source is read, so a '
+        'faulting source is reported to it as nativeGeneration and does '
+        'not advance the generation again', () {
+      final stale = StrictClockContext.resolveForTesting();
+      api.crateApiNtsNtsClockInvalidate();
+      final live = StrictClockContext.resolveForTesting();
+      // The source would fault on the next read; the retired context
+      // must not be the one to take that read.
+      api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(errno: 5);
+      final generationBefore = api.strictGeneration;
+      expect(
+        stale.now,
+        throwsA(
+          isA<StrictClockInvalidated>()
+              .having((e) => e.generation, 'generation', stale.generation)
+              .having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+        ),
+      );
+      // Not a source fault, and the source was not consulted: the
+      // scripted fault is still armed and the generation did not move.
+      expect(api.nextStrictThrow, isNotNull);
+      expect(api.strictGeneration, generationBefore);
+      // The context bound to the live generation is unaffected by the
+      // retired one's call; it is the one that meets the source fault.
+      expect(live.isValid, isTrue);
+      expect(
+        live.now,
+        throwsA(
+          isA<StrictClockSourceFault>().having(
+            (e) => e.kind,
+            'kind',
+            SourceFaultKind.syscallFailed,
+          ),
+        ),
+      );
+      expect(api.nextStrictThrow, isNull);
     });
 
     test('a read reporting a different backend is an unknown source', () {

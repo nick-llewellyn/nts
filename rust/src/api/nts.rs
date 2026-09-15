@@ -723,8 +723,9 @@ impl From<crate::nts::boottime::ClockBackend> for NtsClockBackend {
 /// is accompanied by a substitute reading. A read that faults has
 /// already advanced the live generation (see
 /// [`NtsStrictClockReading::generation`]) — [`GenerationChanged`]
-/// reports an advance that happened during the read — so contexts
-/// bound before the fault fail closed on their next call.
+/// reports an advance that happened before or during the read and
+/// does not advance it again — so contexts bound before the fault
+/// fail closed on their next call.
 ///
 /// [`Unsupported`]: NtsClockFault::Unsupported
 /// [`SyscallFailed`]: NtsClockFault::SyscallFailed
@@ -834,14 +835,30 @@ pub struct NtsClockDescriptor {
 /// clamps, and uses checked arithmetic for the native-unit conversion.
 /// A source or conversion fault advances the live generation before it
 /// is reported; `GenerationChanged` reports an advance that already
-/// happened during the read and does not advance it again.
+/// happened and does not advance it again.
+///
+/// `bound_generation` is the generation the caller is bound to, when
+/// it has one. A bound call whose generation is no longer live throws
+/// `GenerationChanged` **before touching the source**: the caller is
+/// terminal, and a read whose fault advanced the generation again
+/// would be reported in place of the mismatch and would retire every
+/// context still live. The generation is checked after the read as
+/// well, for an invalidation that raced it. An unbound call (`None`)
+/// reads under whatever generation is live and stamps the reading
+/// with it; the Dart strict context resolves this way and then binds
+/// to the generation it was given.
 ///
 /// Performs no I/O beyond the single clock read. Marked
 /// `#[frb(sync)]` because the Dart strict context calls it from
 /// synchronous hot getters.
 #[flutter_rust_bridge::frb(sync)]
-pub fn nts_strict_clock_read() -> Result<NtsStrictClockReading, NtsClockFault> {
-    let r = crate::nts::boottime::strict_read()?;
+pub fn nts_strict_clock_read(
+    bound_generation: Option<i64>,
+) -> Result<NtsStrictClockReading, NtsClockFault> {
+    let r = match bound_generation {
+        Some(expected) => crate::nts::boottime::strict_read_bound(expected)?,
+        None => crate::nts::boottime::strict_read()?,
+    };
     Ok(NtsStrictClockReading {
         micros: r.micros,
         backend: r.backend.into(),

@@ -15,6 +15,8 @@
 // Consumers never import generated FFI types: every FFI value is
 // converted at this boundary.
 
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show PlatformInt64Util;
 import 'package:meta/meta.dart' show visibleForTesting;
 
 import '../ffi/api/nts.dart' as ffi;
@@ -283,7 +285,11 @@ final class StrictClockContext {
   /// [NtsBridgeState.mock]; the resulting context has
   /// [provenance] [StrictClockProvenance.testInjected] and its
   /// readings are whatever the double's `crateApiNtsNtsStrictClockRead`
-  /// returns. Throws [StateError] against an uninitialized or native
+  /// returns. The context passes its generation as `boundGeneration`
+  /// on every read after resolution; a double that models retirement
+  /// should refuse a mismatch with `generationChanged` before
+  /// consulting any scripted fault, as the native side does. Throws
+  /// [StateError] against an uninitialized or native
   /// bridge so a native context can never be relabelled and a test
   /// double can never be labelled native.
   @visibleForTesting
@@ -338,7 +344,14 @@ final class StrictClockContext {
   StrictReading _read() {
     final ffi.NtsStrictClockReading raw;
     try {
-      raw = ffi.ntsStrictClockRead();
+      // Bound read: a context whose generation was already retired is
+      // refused on the native side before the source is touched, so
+      // it gets the terminal `nativeGeneration` it is owed rather than
+      // whatever the source does next — and a faulting source cannot
+      // be made to advance the generation again on its behalf.
+      raw = ffi.ntsStrictClockRead(
+        boundGeneration: PlatformInt64Util.from(generation),
+      );
     } on ffi.NtsClockFault catch (fault, stack) {
       // Keep the FFI-side stack through the conversion, as the query
       // entry points do, so the frame that raised the fault is the

@@ -123,13 +123,26 @@ PlatformInt64 ntsBoottimeMicros() =>
 /// clamps, and uses checked arithmetic for the native-unit conversion.
 /// A source or conversion fault advances the live generation before it
 /// is reported; `GenerationChanged` reports an advance that already
-/// happened during the read and does not advance it again.
+/// happened and does not advance it again.
+///
+/// `bound_generation` is the generation the caller is bound to, when
+/// it has one. A bound call whose generation is no longer live throws
+/// `GenerationChanged` **before touching the source**: the caller is
+/// terminal, and a read whose fault advanced the generation again
+/// would be reported in place of the mismatch and would retire every
+/// context still live. The generation is checked after the read as
+/// well, for an invalidation that raced it. An unbound call (`None`)
+/// reads under whatever generation is live and stamps the reading
+/// with it; the Dart strict context resolves this way and then binds
+/// to the generation it was given.
 ///
 /// Performs no I/O beyond the single clock read. Marked
 /// `#[frb(sync)]` because the Dart strict context calls it from
 /// synchronous hot getters.
-NtsStrictClockReading ntsStrictClockRead() =>
-    NtsRustLib.instance.api.crateApiNtsNtsStrictClockRead();
+NtsStrictClockReading ntsStrictClockRead({PlatformInt64? boundGeneration}) =>
+    NtsRustLib.instance.api.crateApiNtsNtsStrictClockRead(
+      boundGeneration: boundGeneration,
+    );
 
 /// Describe the strict clock coordinate for this build.
 ///

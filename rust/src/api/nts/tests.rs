@@ -4887,7 +4887,7 @@ fn strict_clock_descriptor_matches_strict_read_backend() {
     // A concurrent injection test advancing the generation mid-read
     // would turn this valid host read into `GenerationChanged`.
     let _serial = crate::nts::boottime::generation_test_guard();
-    match (nts_clock_descriptor(), nts_strict_clock_read()) {
+    match (nts_clock_descriptor(), nts_strict_clock_read(None)) {
         (Ok(d), Ok(r)) => {
             assert_eq!(d.backend, r.backend);
             assert_eq!(d.semantics_version, 1);
@@ -4908,14 +4908,65 @@ fn strict_clock_invalidate_advances_generation_seen_by_reads() {
     // Moves the process-wide generation outside `with_raw_override`;
     // hold the lock so a reader another test just bound is not retired.
     let _serial = crate::nts::boottime::generation_test_guard();
-    let Ok(before) = nts_strict_clock_read() else {
+    let Ok(before) = nts_strict_clock_read(None) else {
         return; // unsupported target: nothing to compare
     };
     let bumped = nts_clock_invalidate();
     assert!(bumped > before.generation);
-    let after = nts_strict_clock_read().expect("read after invalidate");
+    let after = nts_strict_clock_read(None).expect("read after invalidate");
     assert!(after.generation >= bumped);
     assert_ne!(after.generation, before.generation);
+    // A call still bound to the retired generation is refused with the
+    // mismatch, and refused again on retry: the refusal is terminal and
+    // does not itself move the generation.
+    let stale = || nts_strict_clock_read(Some(before.generation));
+    assert!(matches!(
+        stale(),
+        Err(NtsClockFault::GenerationChanged { expected, observed })
+            if expected == before.generation && observed == after.generation
+    ));
+    assert_eq!(stale(), stale());
+    assert_eq!(
+        nts_strict_clock_read(Some(after.generation)).map(|r| r.generation),
+        Ok(after.generation)
+    );
+}
+
+/// A bound read on a retired generation is refused before the source
+/// is touched: with the source faulting, the retired caller still gets
+/// `GenerationChanged`, not the fault, and the generation does not
+/// move under the callers still bound to it.
+#[test]
+fn strict_clock_read_bound_to_a_retired_generation_never_reads() {
+    use crate::nts::boottime::{generation, invalidate_generation, with_raw_override, ClockFault};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let probes = Rc::new(Cell::new(0u32));
+    let seen = Rc::clone(&probes);
+    with_raw_override(
+        move || {
+            seen.set(seen.get() + 1);
+            Err(ClockFault::SyscallFailed { errno: 22 })
+        },
+        || {
+            let retired = generation();
+            let live = invalidate_generation();
+            assert_eq!(
+                nts_strict_clock_read(Some(retired)),
+                Err(NtsClockFault::GenerationChanged {
+                    expected: retired,
+                    observed: live,
+                })
+            );
+            assert_eq!(probes.get(), 0);
+            assert_eq!(generation(), live);
+            assert_eq!(
+                nts_strict_clock_read(Some(live)),
+                Err(NtsClockFault::SyscallFailed { errno: 22 })
+            );
+            assert_eq!(probes.get(), 1);
+        },
+    );
 }
 
 /// A faulting native read surfaces as the mapped `NtsClockFault` on
@@ -4929,7 +4980,7 @@ fn strict_clock_read_reports_fault_where_legacy_export_degrades() {
         || Err(ClockFault::SyscallFailed { errno: 22 }),
         || {
             assert_eq!(
-                nts_strict_clock_read(),
+                nts_strict_clock_read(None),
                 Err(NtsClockFault::SyscallFailed { errno: 22 })
             );
             assert!(nts_boottime_micros() >= 0);

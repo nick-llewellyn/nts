@@ -125,7 +125,9 @@ abstract class NtsRustLibApi extends BaseApi {
     PlatformInt64? verificationTimeMs,
   });
 
-  NtsStrictClockReading crateApiNtsNtsStrictClockRead();
+  NtsStrictClockReading crateApiNtsNtsStrictClockRead({
+    PlatformInt64? boundGeneration,
+  });
 
   NtsTrustStatus crateApiNtsNtsTrustStatus();
 
@@ -559,11 +561,14 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
   );
 
   @override
-  NtsStrictClockReading crateApiNtsNtsStrictClockRead() {
+  NtsStrictClockReading crateApiNtsNtsStrictClockRead({
+    PlatformInt64? boundGeneration,
+  }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_box_autoadd_i_64(boundGeneration, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 14)!;
         },
         codec: SseCodec(
@@ -571,14 +576,17 @@ class NtsRustLibApiImpl extends NtsRustLibApiImplPlatform
           decodeErrorData: sse_decode_nts_clock_fault,
         ),
         constMeta: kCrateApiNtsNtsStrictClockReadConstMeta,
-        argValues: [],
+        argValues: [boundGeneration],
         apiImpl: this,
       ),
     );
   }
 
   TaskConstMeta get kCrateApiNtsNtsStrictClockReadConstMeta =>
-      const TaskConstMeta(debugName: 'nts_strict_clock_read', argNames: []);
+      const TaskConstMeta(
+        debugName: 'nts_strict_clock_read',
+        argNames: ['boundGeneration'],
+      );
 
   @override
   NtsTrustStatus crateApiNtsNtsTrustStatus() {

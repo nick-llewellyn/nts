@@ -17,16 +17,28 @@ tarball.
   checked native-unit conversion. `ntsClockDescriptor()` reports the
   compile-time `NtsClockBackend` plus coordinate `semanticsVersion` /
   `conversionVersion` (both `1`), and `ntsClockInvalidate()` advances
-  the process-wide generation for the bridge lifecycle. Fault variants:
-  `unsupported`, `syscallFailed(errno)`, `timebaseUnavailable`,
-  `invalidRaw`, `conversionOverflow`, `regression`,
-  `generationChanged`. A strict-read fault in the source or the
-  conversion advances the generation so contexts bound before it fail
-  closed on their next read; `generationChanged` is the exception,
-  reporting an advance that happened while the reading was being
-  taken so the reading is rejected rather than stamped with the
-  retired value, and `ntsClockDescriptor()`'s `unsupported` is a
-  compile-time fact that leaves the generation alone. On the strict
+  the process-wide generation for the bridge lifecycle.
+  `ntsStrictClockRead()` throws `unsupported`, `syscallFailed(errno)`,
+  `timebaseUnavailable`, `invalidRaw`, `conversionOverflow` or
+  `generationChanged`; `ntsClockDescriptor()` throws only
+  `unsupported`. `NtsClockFault` also carries a `regression` variant
+  that **no export produces**: the read is stateless — one raw sample,
+  no memory of the previous one — so it cannot detect a sequential
+  regression, and a direct FFI consumer must compare consecutive
+  readings itself, as `StrictClockContext` does. The variant exists so
+  the mirror of the crate-internal fault type stays total. A
+  strict-read fault in the source or the conversion advances the
+  generation so contexts bound before it fail closed on their next
+  read; `generationChanged` is the exception, reporting an advance
+  that already happened — before the read, for a call bound to a
+  retired generation, or while the reading was being taken — so the
+  reading is refused rather than stamped with the retired value, and
+  `ntsClockDescriptor()`'s `unsupported` is a compile-time fact that
+  leaves the generation alone. `ntsStrictClockRead()` takes an
+  optional `boundGeneration`: a bound call whose generation is no
+  longer live is refused before the source is touched, so a caller
+  that is already terminal cannot make a faulting source advance the
+  generation again under the contexts still bound to it. On the strict
   path a failed Apple timebase probe is no longer cached as permanent.
   The legacy `ntsBoottimeMicros()` returns the same native values
   while the source succeeds and is now documented as best-effort and

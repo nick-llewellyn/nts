@@ -583,9 +583,10 @@ fn wire__crate__api__nts__nts_strict_clock_read_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_bound_generation = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, crate::api::nts::NtsClockFault>((move || {
-                let output_ok = crate::api::nts::nts_strict_clock_read()?;
+                let output_ok = crate::api::nts::nts_strict_clock_read(api_bound_generation)?;
                 std::result::Result::Ok(output_ok)
             })())
         },

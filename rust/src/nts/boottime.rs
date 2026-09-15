@@ -408,27 +408,41 @@ fn read_checked() -> Result<(i64, ClockBackend), ClockFault> {
 /// Strict read: a provenance-attributed reading or a typed fault on
 /// this call. No fallback, no clamp, no deferred notification.
 ///
-/// The generation is loaded on both sides of the raw read and the
-/// reading is stamped with it only when the two agree. Loading before
-/// means a reading can never carry a generation newer than the source
-/// state it was taken under; checking after means a reading can never
-/// carry a generation that was retired *while* it was being taken —
-/// otherwise a reader bound to the retired generation would accept
-/// one post-invalidation sample before failing closed.
+/// Unbound form of [`strict_read_bound`]: the reading is taken under
+/// whatever generation is live when the call begins.
 pub(crate) fn strict_read() -> Result<StrictReading, ClockFault> {
-    let before = generation();
+    strict_read_bound(generation())
+}
+
+/// [`strict_read`] for a caller bound to `expected`.
+///
+/// The live generation is compared with `expected` on both sides of
+/// the raw read and the reading is stamped with it only when both
+/// agree. Checking before the source is touched means a caller on a
+/// retired generation is refused without a native read: that caller
+/// is terminal, and a read whose fault advanced the generation again
+/// would be reported in place of the mismatch it is owed and would
+/// retire every context still live. Checking after means a reading
+/// can never carry a generation that was retired *while* it was being
+/// taken — otherwise a reader bound to the retired generation would
+/// accept one post-invalidation sample before failing closed.
+pub(crate) fn strict_read_bound(expected: i64) -> Result<StrictReading, ClockFault> {
+    let live = generation();
+    if live != expected {
+        return Err(ClockFault::GenerationChanged {
+            expected,
+            observed: live,
+        });
+    }
     let (micros, backend) = read_checked()?;
     let observed = generation();
-    if observed != before {
-        return Err(ClockFault::GenerationChanged {
-            expected: before,
-            observed,
-        });
+    if observed != expected {
+        return Err(ClockFault::GenerationChanged { expected, observed });
     }
     Ok(StrictReading {
         micros,
         backend,
-        generation: before,
+        generation: expected,
     })
 }
 
@@ -470,27 +484,12 @@ impl SequentialReader {
     /// and a regression advances the generation so the mismatch is
     /// reported on every later call.
     ///
-    /// The bound generation is checked before the source is touched:
-    /// a reader on a retired generation is terminal, so it must not
-    /// take a native read whose fault would advance the generation
-    /// again and be reported in place of the mismatch. The reading's
-    /// own generation is checked afterwards as well, for an
-    /// invalidation that raced the read.
+    /// The bound generation is checked on both sides of the read by
+    /// [`strict_read_bound`]: a reader on a retired generation never
+    /// touches the source, and a reading that straddled an
+    /// invalidation is rejected.
     pub(crate) fn read(&mut self) -> Result<StrictReading, ClockFault> {
-        let live = generation();
-        if live != self.generation {
-            return Err(ClockFault::GenerationChanged {
-                expected: self.generation,
-                observed: live,
-            });
-        }
-        let reading = strict_read()?;
-        if reading.generation != self.generation {
-            return Err(ClockFault::GenerationChanged {
-                expected: self.generation,
-                observed: reading.generation,
-            });
-        }
+        let reading = strict_read_bound(self.generation)?;
         if let Some(previous) = self.last {
             if reading.micros < previous {
                 return Err(observe_fault(ClockFault::Regression {
@@ -915,6 +914,43 @@ mod tests {
                     "expected the fallback epoch"
                 );
                 assert!(legacy_fallback::is_latched());
+            },
+        );
+    }
+
+    #[test]
+    fn strict_read_bound_refuses_a_retired_generation_without_touching_the_source() {
+        // The source is set to fault, so a read would advance the
+        // generation: the bound read must report the mismatch instead,
+        // never probe, and leave the live generation to the contexts
+        // still on it.
+        let probes = Rc::new(Cell::new(0u32));
+        let seen = Rc::clone(&probes);
+        with_raw_override(
+            move || {
+                seen.set(seen.get() + 1);
+                Err(ClockFault::SyscallFailed { errno: 1 })
+            },
+            || {
+                let retired = generation();
+                let live = invalidate_generation();
+                assert_eq!(
+                    super::strict_read_bound(retired),
+                    Err(ClockFault::GenerationChanged {
+                        expected: retired,
+                        observed: live,
+                    })
+                );
+                assert_eq!(probes.get(), 0, "retired caller must not touch the source");
+                assert_eq!(generation(), live);
+                // Bound to the live generation, the same call does read
+                // and reports the source's fault, which then retires it.
+                assert_eq!(
+                    super::strict_read_bound(live),
+                    Err(ClockFault::SyscallFailed { errno: 1 })
+                );
+                assert_eq!(probes.get(), 1);
+                assert_eq!(generation(), live + 1);
             },
         );
     }
