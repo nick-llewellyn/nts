@@ -749,6 +749,31 @@ class _ThrowingNativeApi extends NtsRustLibApiImpl {
   }) => _throwNext();
 }
 
+// A generated implementation — so `NtsBridge.state` reads `native` and
+// `NtsBridge.dispose()` takes the arm that reaches into the entrypoint
+// — whose clock-invalidate entry point records each call together with
+// whether the entrypoint was still installed when it arrived, instead
+// of dispatching. Like `_ThrowingNativeApi`, nothing here crosses the
+// boundary.
+class _InvalidateSpyNativeApi extends NtsRustLibApiImpl {
+  _InvalidateSpyNativeApi({
+    required super.handler,
+    required super.wire,
+    required super.generalizedFrbRustBinding,
+    required super.portManager,
+  });
+
+  // One entry per invalidate call: `true` if the entrypoint still held
+  // this API when the call arrived, `false` if it had been torn down.
+  final List<bool> invalidateCallsWhileInstalled = [];
+
+  @override
+  int crateApiNtsNtsClockInvalidate() {
+    invalidateCallsWhileInstalled.add(NtsRustLib.instance.initialized);
+    return invalidateCallsWhileInstalled.length;
+  }
+}
+
 // One tag per `ffi.NtsClockFault` variant, assigned through an
 // exhaustive switch so the variant-mapping test is checked on both
 // sides: a new variant does not compile until it has an arm and a
@@ -4327,6 +4352,41 @@ void main() {
       );
       expect(ctx.isValid, isFalse);
       expect(StrictClockContext.resolveForTesting().isValid, isTrue);
+    });
+
+    test('NtsBridge.dispose() on a native bridge advances the native '
+        'generation exactly once, while the entrypoint still dispatches', () {
+      // The mock-arm test above pins that the double is left alone;
+      // this pins the other arm, the one the process-wide guarantee
+      // rests on: contexts in other isolates and engines fail closed
+      // only because this isolate's disposal reaches the Rust counter,
+      // and it can do that only while the dispatch still works.
+      final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+      final binding = GeneralizedFrbRustBinding(lib);
+      final handler = BaseHandler();
+      final spy = _InvalidateSpyNativeApi(
+        handler: handler,
+        wire: NtsRustLibWire.fromExternalLibrary(lib),
+        generalizedFrbRustBinding: binding,
+        portManager: PortManager(binding, handler),
+      );
+      NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
+      try {
+        NtsRustLib.initMock(api: spy);
+        expect(NtsBridge.state, NtsBridgeState.native);
+        NtsBridge.dispose();
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+        expect(spy.invalidateCallsWhileInstalled, [true]);
+        // Disposing an already-disposed bridge is the documented
+        // no-op, so it must not bump the counter a second time.
+        NtsBridge.dispose();
+        expect(spy.invalidateCallsWhileInstalled, [true]);
+      } finally {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
+      }
     });
 
     test('a raw NtsRustLib.dispose() + initMock() that bypasses '
