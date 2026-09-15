@@ -556,7 +556,9 @@ final class StrictClockContext {
 
   /// Best-effort native generation bump on a regression seen from
   /// Dart. A double without the stub cannot advance it; the context
-  /// is invalidated regardless.
+  /// is invalidated regardless, and the regression is the error the
+  /// caller sees. Only for that path — bridge disposal must not
+  /// swallow a failed bump, see [noteStrictClockBridgeReset].
   static void _tryNativeInvalidate() {
     try {
       ffi.ntsClockInvalidate();
@@ -690,11 +692,20 @@ final class StrictClockContext {
 /// closed, and, when the generated bridge is installed, advances the
 /// process-wide native generation as well.
 ///
+/// The native bump is not best-effort. Contexts in other isolates and
+/// engines fail closed only because this call reaches the Rust
+/// counter, so a dispatch failure propagates to the caller instead of
+/// being swallowed; [NtsBridge.dispose] calls this before tearing the
+/// entrypoint down, so the throw leaves the entrypoint installed. The
+/// isolate epoch is advanced first either way: a bridge whose
+/// invalidate dispatch fails is not one a context should keep
+/// reading through.
+///
 /// Not part of the public API; [NtsBridge.dispose] and
 /// `NtsBridge.debugReset` call it before tearing the entrypoint down.
 void noteStrictClockBridgeReset({required bool invalidateNative}) {
   StrictClockContext._isolateBridgeEpoch++;
   if (invalidateNative) {
-    StrictClockContext._tryNativeInvalidate();
+    ffi.ntsClockInvalidate();
   }
 }

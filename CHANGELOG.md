@@ -93,7 +93,10 @@ tarball.
   `debugReset()` now invalidate every context on the isolate, and
   `dispose()` on a native bridge also advances the process-wide
   generation so contexts in other isolates fail closed on their next
-  read; a raw `NtsRustLib.dispose()` + `init()` that bypasses
+  read — and that bump is not best-effort: if the invalidate dispatch
+  throws, `dispose()` propagates the error and leaves the entrypoint
+  installed rather than tear it down with other isolates still on
+  the old generation; a raw `NtsRustLib.dispose()` + `init()` that bypasses
   `NtsBridge` is caught by the context's api-identity check because
   `init()` builds a fresh API object. A raw `dispose()` followed by
   `initMock(api:)` with the *same* object is not detectable — the

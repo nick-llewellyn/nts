@@ -275,6 +275,17 @@ abstract final class NtsBridge {
   /// without clearing the latch is what makes the first of the two
   /// in-flight windows below recoverable rather than silent.
   ///
+  /// On a native bridge this first advances the process-wide strict
+  /// clock generation so every `StrictClockContext` — in this isolate
+  /// and in every other isolate and engine of the process — fails
+  /// closed on its next read. That bump is a real dispatch, not a
+  /// best-effort one: if it throws, the error propagates and the
+  /// entrypoint is **not** torn down — [state] is unchanged and a
+  /// later [ensureInitialized] still reports the latched result — so
+  /// the caller can retry or surface the failure rather than have a
+  /// disposed bridge leave other isolates on a generation nobody
+  /// retired. Contexts on this isolate are invalidated even then.
+  ///
   /// Await any outstanding [ensureInitialized] before calling this.
   /// Disposing while an attempt is in flight is unsupported, and the
   /// two windows fail differently: before the attempt installs
@@ -293,7 +304,8 @@ abstract final class NtsBridge {
     // away: the native generation bump has to reach the Rust core
     // while the dispatch still works, and other isolates and engines
     // in this process fail closed on their next read rather than
-    // continuing on a source this isolate has just torn down.
+    // continuing on a source this isolate has just torn down. A
+    // failed bump throws out of here before the teardown below.
     noteStrictClockBridgeReset(
       invalidateNative: current == NtsBridgeState.native,
     );

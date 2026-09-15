@@ -324,6 +324,12 @@ class _RecordingApi implements NtsRustLibApi {
   int? strictMicrosOverride;
   // Reports a backend other than the descriptor's on the next read.
   ffi.NtsClockBackend? strictReadBackendOverride;
+  // One-shot: the generation stamped on the next reading, in place of
+  // `strictGeneration`. The pre-check above still compares the bound
+  // generation against `strictGeneration`, so this models a reading
+  // that comes back successfully but from a generation other than the
+  // one it was asked for.
+  int? strictReadGenerationOverride;
   // Sticky: the descriptor every resolution sees until cleared, so a
   // context can be bound to a foreign coordinate.
   ffi.NtsClockDescriptor? strictDescriptorOverride;
@@ -365,10 +371,12 @@ class _RecordingApi implements NtsRustLibApi {
     strictMicrosOverride = null;
     final backend = strictReadBackendOverride ?? strictBackend;
     strictReadBackendOverride = null;
+    final generation = strictReadGenerationOverride ?? strictGeneration;
+    strictReadGenerationOverride = null;
     return ffi.NtsStrictClockReading(
       micros: micros,
       backend: backend,
-      generation: strictGeneration,
+      generation: generation,
     );
   }
 
@@ -767,9 +775,15 @@ class _InvalidateSpyNativeApi extends NtsRustLibApiImpl {
   // this API when the call arrived, `false` if it had been torn down.
   final List<bool> invalidateCallsWhileInstalled = [];
 
+  // Sticky: while set, every invalidate call records itself and then
+  // throws this instead of returning a generation.
+  Object? invalidateThrow;
+
   @override
   int crateApiNtsNtsClockInvalidate() {
     invalidateCallsWhileInstalled.add(NtsRustLib.instance.initialized);
+    final pending = invalidateThrow;
+    if (pending != null) throw pending;
     return invalidateCallsWhileInstalled.length;
   }
 }
@@ -4146,6 +4160,42 @@ void main() {
       expect(api.nextStrictThrow, isNull);
     });
 
+    test('a successful reading stamped with a different generation is '
+        'nativeGeneration, without a second native bump', () {
+      // The typed `generationChanged` pre-check is the native side's
+      // normal refusal; this pins the Dart-side guard behind it, for
+      // a source that answers but from a generation other than the
+      // bound one (a race with a process-wide invalidation that the
+      // pre-check did not see). The reading must be discarded, not
+      // returned under the retired generation.
+      final ctx = StrictClockContext.resolveForTesting();
+      final generationBefore = api.strictGeneration;
+      final invalidatesBefore = api.clockInvalidateCalls;
+      api.strictReadGenerationOverride = ctx.generation + 1;
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockInvalidated>()
+              .having((e) => e.generation, 'generation', ctx.generation)
+              .having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+        ),
+      );
+      expect(ctx.isValid, isFalse);
+      expect(
+        ctx.invalidationReason,
+        StrictClockInvalidationReason.nativeGeneration,
+      );
+      // A lifecycle observation, not a regression: the guard does not
+      // bump the generation itself, and the override was consumed.
+      expect(api.clockInvalidateCalls, invalidatesBefore);
+      expect(api.strictGeneration, generationBefore);
+      expect(api.strictReadGenerationOverride, isNull);
+    });
+
     test('a read reporting a different backend is an unknown source', () {
       final ctx = StrictClockContext.resolveForTesting();
       api.strictReadBackendOverride = ffi.NtsClockBackend.linuxBoottime;
@@ -4426,6 +4476,47 @@ void main() {
         // no-op, so it must not bump the counter a second time.
         NtsBridge.dispose();
         expect(spy.invalidateCallsWhileInstalled, [true]);
+      } finally {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
+      }
+    });
+
+    test('NtsBridge.dispose() on a native bridge propagates a failed '
+        'native bump and leaves the entrypoint installed', () {
+      // The process-wide guarantee is only as good as the bump that
+      // carries it, so a dispatch failure must not be swallowed on the
+      // way to teardown: the caller sees it, and the bridge is still
+      // there to retry against rather than gone with other isolates
+      // left on a generation nobody retired.
+      final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+      final binding = GeneralizedFrbRustBinding(lib);
+      final handler = BaseHandler();
+      final spy = _InvalidateSpyNativeApi(
+        handler: handler,
+        wire: NtsRustLibWire.fromExternalLibrary(lib),
+        generalizedFrbRustBinding: binding,
+        portManager: PortManager(binding, handler),
+      );
+      final failure = StateError('invalidate dispatch failed');
+      NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
+      try {
+        NtsRustLib.initMock(api: spy);
+        expect(NtsBridge.state, NtsBridgeState.native);
+        spy.invalidateThrow = failure;
+        expect(NtsBridge.dispose, throwsA(same(failure)));
+        // Not torn down: the entrypoint still holds the API and the
+        // bridge still classifies it native.
+        expect(NtsRustLib.instance.initialized, isTrue);
+        expect(NtsBridge.state, NtsBridgeState.native);
+        expect(spy.invalidateCallsWhileInstalled, [true]);
+        // Once the dispatch works, the retry disposes normally.
+        spy.invalidateThrow = null;
+        NtsBridge.dispose();
+        expect(NtsBridge.state, NtsBridgeState.uninitialized);
+        expect(spy.invalidateCallsWhileInstalled, [true, true]);
       } finally {
         NtsRustLib.instance.resetState();
         NtsBridge.debugReset();
