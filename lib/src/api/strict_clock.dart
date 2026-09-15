@@ -339,15 +339,21 @@ final class StrictClockContext {
     final ffi.NtsStrictClockReading raw;
     try {
       raw = ffi.ntsStrictClockRead();
-    } on ffi.NtsClockFault catch (fault) {
-      throw _fail(
-        _mapFault(fault, boundGeneration: generation),
-        _reasonFor(fault),
+    } on ffi.NtsClockFault catch (fault, stack) {
+      // Keep the FFI-side stack through the conversion, as the query
+      // entry points do, so the frame that raised the fault is the
+      // one a debugger lands on rather than this catch site.
+      Error.throwWithStackTrace(
+        _fail(_mapFault(fault, boundGeneration: generation), _reasonFor(fault)),
+        stack,
       );
-    } catch (error) {
-      throw _fail(
-        _bridgeFault(error, provenance),
-        StrictClockInvalidationReason.sourceFault,
+    } catch (error, stack) {
+      Error.throwWithStackTrace(
+        _fail(
+          _bridgeFault(error, provenance),
+          StrictClockInvalidationReason.sourceFault,
+        ),
+        stack,
       );
     }
     final gen = raw.generation.toInt();
@@ -492,10 +498,10 @@ final class StrictClockContext {
   static T _guard<T>(T Function() call, StrictClockProvenance provenance) {
     try {
       return call();
-    } on ffi.NtsClockFault catch (fault) {
-      throw _mapFault(fault);
-    } catch (error) {
-      throw _bridgeFault(error, provenance);
+    } on ffi.NtsClockFault catch (fault, stack) {
+      Error.throwWithStackTrace(_mapFault(fault), stack);
+    } catch (error, stack) {
+      Error.throwWithStackTrace(_bridgeFault(error, provenance), stack);
     }
   }
 

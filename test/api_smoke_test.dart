@@ -734,6 +734,30 @@ class _ThrowingNativeApi extends NtsRustLibApiImpl {
   ffi.NtsStrictClockReading crateApiNtsNtsStrictClockRead() => _throwNext();
 }
 
+// One tag per `ffi.NtsClockFault` variant, assigned through an
+// exhaustive switch so the variant-mapping test is checked on both
+// sides: a new variant does not compile until it has an arm and a
+// tag, and a tag without a sample fails the `values` comparison.
+enum _ClockFaultTag {
+  unsupported,
+  syscallFailed,
+  timebaseUnavailable,
+  invalidRaw,
+  conversionOverflow,
+  regression,
+  generationChanged;
+
+  static _ClockFaultTag of(ffi.NtsClockFault fault) => switch (fault) {
+    ffi.NtsClockFault_Unsupported() => unsupported,
+    ffi.NtsClockFault_SyscallFailed() => syscallFailed,
+    ffi.NtsClockFault_TimebaseUnavailable() => timebaseUnavailable,
+    ffi.NtsClockFault_InvalidRaw() => invalidRaw,
+    ffi.NtsClockFault_ConversionOverflow() => conversionOverflow,
+    ffi.NtsClockFault_Regression() => regression,
+    ffi.NtsClockFault_GenerationChanged() => generationChanged,
+  };
+}
+
 // A four-byte little/big-endian `i32` in the codec's native order,
 // matching what `sse_decode_i_32` reads back.
 List<int> _sseI32(int value) =>
@@ -3739,6 +3763,11 @@ void main() {
     test('every NtsClockFault variant maps to its StrictClockError', () {
       final cases = <ffi.NtsClockFault, Matcher>{
         const ffi.NtsClockFault.unsupported(): isA<StrictClockUnsupported>(),
+        const ffi.NtsClockFault.syscallFailed(
+          errno: 22,
+        ): isA<StrictClockSourceFault>()
+            .having((e) => e.kind, 'kind', SourceFaultKind.syscallFailed)
+            .having((e) => e.errno, 'errno', 22),
         const ffi.NtsClockFault.timebaseUnavailable(
           kernReturn: 5,
           numer: 0,
@@ -3771,12 +3800,16 @@ void main() {
           StrictClockInvalidationReason.nativeGeneration,
         ),
       };
+      final seen = <_ClockFaultTag>{};
       for (final entry in cases.entries) {
+        seen.add(_ClockFaultTag.of(entry.key));
         final ctx = StrictClockContext.resolveForTesting();
         api.nextStrictThrow = entry.key;
         expect(ctx.now, throwsA(entry.value), reason: '${entry.key}');
         expect(ctx.isValid, isFalse, reason: '${entry.key}');
       }
+      // Every variant the exhaustive switch knows has a sample above.
+      expect(seen, _ClockFaultTag.values.toSet());
     });
 
     test('a generationChanged fault names the context\'s own generation, '
@@ -3965,6 +3998,49 @@ void main() {
       expect(api.clockInvalidateCalls, invalidates + 1);
     });
 
+    test('elapsedSince against a same-generation reading from another '
+        'context that is ahead is a regression that invalidates the '
+        'receiver and advances the native generation', () {
+      // `now()` only guards against this context's own sequence, so a
+      // fresh read here succeeds and the comparison against the
+      // foreign reading is the only thing that can catch it.
+      final receiver = StrictClockContext.resolveForTesting();
+      final other = StrictClockContext.resolveForTesting();
+      api.strictMicrosOverride =
+          api.crateApiNtsNtsBoottimeMicros() + 10_000_000;
+      final ahead = other.now();
+      final invalidates = api.clockInvalidateCalls;
+      final reads = api.strictReadCalls;
+      expect(
+        () => receiver.elapsedSince(ahead),
+        throwsA(
+          isA<StrictClockRegression>()
+              .having((e) => e.previous, 'previous', ahead.micros)
+              .having((e) => e.observed, 'observed', lessThan(ahead.micros)),
+        ),
+      );
+      // The clock was read: this is the post-read branch, not the
+      // argument check.
+      expect(api.strictReadCalls, reads + 1);
+      expect(receiver.isValid, isFalse);
+      expect(
+        receiver.invalidationReason,
+        StrictClockInvalidationReason.regression,
+      );
+      expect(api.clockInvalidateCalls, invalidates + 1);
+      // The generation advance reaches every context on it.
+      expect(
+        other.now,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.nativeGeneration,
+          ),
+        ),
+      );
+    });
+
     test('a native generation change observed on read invalidates '
         'the context', () {
       final ctx = StrictClockContext.resolveForTesting();
@@ -4011,6 +4087,38 @@ void main() {
         ctx.invalidationReason,
         StrictClockInvalidationReason.unknownSource,
       );
+    });
+
+    test('resolution refuses to bind when the first read reports a '
+        'backend other than the descriptor\'s', () {
+      // Sibling of the post-resolution check above: the override is
+      // armed before resolution, so the binding-time comparison is
+      // the one that fires. Nothing is bound, so there is no context
+      // to invalidate and the next resolution starts clean.
+      api.strictReadBackendOverride = ffi.NtsClockBackend.linuxBoottime;
+      final descriptors = api.descriptorCalls;
+      final reads = api.strictReadCalls;
+      final invalidates = api.clockInvalidateCalls;
+      expect(
+        StrictClockContext.resolveForTesting,
+        throwsA(
+          isA<StrictClockUnknownSource>()
+              .having(
+                (e) => e.expected,
+                'expected',
+                ClockBackend.appleContinuous,
+              )
+              .having(
+                (e) => e.observed,
+                'observed',
+                ClockBackend.linuxBoottime,
+              ),
+        ),
+      );
+      expect(api.descriptorCalls, descriptors + 1);
+      expect(api.strictReadCalls, reads + 1);
+      expect(api.clockInvalidateCalls, invalidates);
+      expect(StrictClockContext.resolveForTesting().isValid, isTrue);
     });
 
     test('elapsedSince rejects a reading from another generation '

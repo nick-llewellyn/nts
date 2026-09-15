@@ -12,6 +12,7 @@
 
 import '../ffi/api/nts.dart' as ffi;
 import 'bridge.dart';
+import 'strict_clock.dart' show StrictClockContext;
 
 /// A sleep-aware monotonic time source.
 ///
@@ -29,10 +30,25 @@ import 'bridge.dart';
 /// - **Windows:** `QueryInterruptTimePrecise` (interrupt time includes
 ///   sleep/hibernation; 100 ns units)
 ///
-/// Each instance resolves its source exactly once, at construction.
-/// The source never changes for the instance's lifetime, so readings
-/// from one instance are always mutually comparable and never mix
-/// epochs. Never compare readings taken from two different instances.
+/// Each instance resolves its source exactly once, at construction,
+/// and never re-resolves it. Never compare readings taken from two
+/// different instances.
+///
+/// **Best-effort, not strict.** The native read behind every instance
+/// is the legacy `ntsBoottimeMicros()` call, which cannot fail: on the
+/// first native fault it switches the whole process, permanently, to a
+/// process-local counter that does *not* count time spent suspended.
+/// That counter is on a different, arbitrary epoch, so an instance
+/// that was reading native values crosses epochs exactly once, at the
+/// fault, and one raw delta spanning it is meaningless; readings
+/// before and after are internally consistent, and the switch never
+/// reverses. Readings carry no marker of which source produced them,
+/// so a caller cannot detect the switch. The fault itself is masked
+/// rather than thrown — the propagation described below concerns
+/// failures of the bridge dispatch, not of the clock source. Callers
+/// that need a source that never silently changes should use
+/// [StrictClockContext], which binds one coordinate and fails closed
+/// on any fault instead of degrading.
 ///
 /// **Initialization is required:** constructing an instance (or first
 /// accessing [instance]) while [NtsBridge.state] is

@@ -469,7 +469,21 @@ impl SequentialReader {
     /// leaves the reader permanently failing: `last` is not updated,
     /// and a regression advances the generation so the mismatch is
     /// reported on every later call.
+    ///
+    /// The bound generation is checked before the source is touched:
+    /// a reader on a retired generation is terminal, so it must not
+    /// take a native read whose fault would advance the generation
+    /// again and be reported in place of the mismatch. The reading's
+    /// own generation is checked afterwards as well, for an
+    /// invalidation that raced the read.
     pub(crate) fn read(&mut self) -> Result<StrictReading, ClockFault> {
+        let live = generation();
+        if live != self.generation {
+            return Err(ClockFault::GenerationChanged {
+                expected: self.generation,
+                observed: live,
+            });
+        }
         let reading = strict_read()?;
         if reading.generation != self.generation {
             return Err(ClockFault::GenerationChanged {
@@ -930,11 +944,21 @@ mod tests {
 
     #[test]
     fn re_resolution_after_fault_yields_a_fresh_valid_reader() {
+        let probes = Rc::new(Cell::new(0u32));
+        let seen = Rc::clone(&probes);
+        let mut script = scripted(vec![
+            Err(ClockFault::SyscallFailed { errno: 1 }),
+            linux(3, 0),
+            // Never reached: a retired reader must not take a native
+            // read, so this fault must not be reported nor advance
+            // the generation a second time.
+            Err(ClockFault::SyscallFailed { errno: 2 }),
+        ]);
         with_raw_override(
-            scripted(vec![
-                Err(ClockFault::SyscallFailed { errno: 1 }),
-                linux(3, 0),
-            ]),
+            move || {
+                seen.set(seen.get() + 1);
+                script()
+            },
             || {
                 let mut stale = SequentialReader::bind();
                 assert!(matches!(
@@ -946,11 +970,21 @@ mod tests {
                 assert_eq!(r.micros, 3_000_000);
                 assert_eq!(r.generation, fresh.generation());
                 assert!(fresh.generation() > stale.generation());
-                // Old reader remains unusable even though the source is fine.
-                assert!(matches!(
+                assert_eq!(probes.get(), 2);
+                // Old reader remains unusable even though the source is
+                // fine, reports the mismatch rather than whatever the
+                // source would do next, and leaves the live generation
+                // — and so the fresh reader — alone.
+                let live = generation();
+                assert_eq!(
                     stale.read(),
-                    Err(ClockFault::GenerationChanged { .. })
-                ));
+                    Err(ClockFault::GenerationChanged {
+                        expected: stale.generation(),
+                        observed: live,
+                    })
+                );
+                assert_eq!(probes.get(), 2, "retired reader must not touch the source");
+                assert_eq!(generation(), live);
             },
         );
     }

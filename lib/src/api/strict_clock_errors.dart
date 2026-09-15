@@ -6,8 +6,14 @@
 
 part of 'strict_clock.dart';
 
-/// Base of every error thrown by [StrictClockContext] and its
-/// resolution entry points. Sealed: `switch` over it is exhaustive.
+/// Base of every clock failure thrown by [StrictClockContext.resolve],
+/// [StrictClockContext.now] and [StrictClockContext.elapsedSince].
+/// Sealed: `switch` over it is exhaustive.
+///
+/// [StrictClockContext.resolveForTesting] throws the same errors once
+/// past its precondition; the [StateError] it throws when the bridge is
+/// not a mock is a test-setup error, not a clock failure, and is not
+/// part of this hierarchy.
 sealed class StrictClockError implements Exception {
   const StrictClockError._();
 

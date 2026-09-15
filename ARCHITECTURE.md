@@ -374,7 +374,15 @@ platform: `clock_gettime(CLOCK_BOOTTIME)` on Android/Linux (via
 bindings are deprecated), and `QueryInterruptTimePrecise` on Windows
 (via `windows-sys`; 100 ns units, available since Windows 10). A
 `cfg`-gated fallback for unsupported targets degrades to
-`Instant`-elapsed-since-process-anchor. The reading crosses the bridge
+`Instant`-elapsed-since-process-anchor. The same fallback is taken on
+a native fault on a supported target, and that decision is latched
+process-wide: once `boottime_micros()` has served a fallback value it
+serves fallback for the rest of the process even if the source
+recovers, so the legacy path crosses epochs at most once (native →
+fallback, at the first fault) rather than on every recovery. The
+function is therefore infallible by construction — a fault is masked,
+not reported — which is why it is documented as best-effort and why
+no strict operation reads it. The reading crosses the bridge
 as the synchronous `ntsBoottimeMicros()` (`#[frb(sync)]`, `i64` so FRB
 maps it to a plain `int` rather than `BigInt`; same rationale as
 `ntsDnsPoolStats`).
@@ -392,8 +400,15 @@ fallback. The split is structural, on `api is BaseApiImpl`, not on the
 initialization route: a hand-written double supplied to `initMock()` or
 to `init()` reads as `mock`, while the *generated* implementation reads
 as `native` however it was installed. Locking
-the source per instance guarantees readings from one instance never
-mix epochs. The shared `MonotonicClock.instance` singleton is the
+the source per instance means the Dart side never re-resolves; it
+does not make readings from one instance epoch-safe, because the
+native side's latched fallback (above) can move a live `native`
+instance from the boot-time epoch to the process-local one exactly
+once, at the first native fault, and the raw readings carry no
+marker of which side of that switch they are on. A consumer that
+needs a source guaranteed not to change under it uses
+`StrictClockContext` (`lib/src/api/strict_clock.dart`), which fails
+closed instead of degrading. The shared `MonotonicClock.instance` singleton is the
 timeline used by `NtsSyncedTime` (anchor + projection), the `getTime`
 total budget, and the bridge admission gate's queue-wait metering and
 deadline sweep, so
