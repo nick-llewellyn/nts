@@ -2234,6 +2234,10 @@ fn nts_query_live_cloudflare() {
 /// or waiter against this client's table.
 #[test]
 fn nts_query_live_cloudflare_via_client() {
+    // Stamped state (`Session::atime`) is kept across calls: hold the
+    // test-sync share so no concurrent test advances the generation
+    // underneath it and retires the cached session as foreign.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let spec = NtsServerSpec {
         host: "time.cloudflare.com".to_owned(),
         port: DEFAULT_KE_PORT,
@@ -3155,6 +3159,10 @@ fn nts_trust_status_snapshot_is_safe_with_no_handshake() {
 /// observability layer.
 #[test]
 fn checkout_cache_hit_preserves_session_trust_backend() {
+    // Stamped state (`Session::atime`) is kept across calls: hold the
+    // test-sync share so no concurrent test advances the generation
+    // underneath it and retires the cached session as foreign.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let spec = NtsServerSpec {
         host: "trust-backend-cache-hit.test".into(),
@@ -4020,6 +4028,10 @@ fn counter_to_i64_saturates_instead_of_wrapping() {
 /// Pins acceptance criterion for issue nts-7kv.
 #[test]
 fn nts_query_inner_increments_custom_counter_for_default_client() {
+    // Stamped state (`Session::atime`) is kept across calls: hold the
+    // test-sync share so no concurrent test advances the generation
+    // underneath it and retires the cached session as foreign.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let host = "custom-counter-bump.invalid";
     let spec = NtsServerSpec {
@@ -5003,6 +5015,10 @@ fn reinstalling_a_cached_key_evicts_nothing() {
 /// idle TTL while still in use.
 #[test]
 fn checkout_cache_hit_refreshes_the_lru_stamp() {
+    // Stamped state (`Session::atime`) is kept across calls: hold the
+    // test-sync share so no concurrent test advances the generation
+    // underneath it and retires the cached session as foreign.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let spec = NtsServerSpec {
         host: "atime-refresh.invalid".into(),
