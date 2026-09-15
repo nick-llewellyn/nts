@@ -4575,21 +4575,21 @@ void main() {
 
     test('StrictClockError subtypes render their message via '
         'toString and the hierarchy is exhaustively switchable', () {
-      const errors = <StrictClockError>[
-        StrictClockUninitialized(),
-        StrictClockMockOnly(),
-        StrictClockUnsupported(),
+      final errors = <StrictClockError>[
+        const StrictClockUninitialized(),
+        const StrictClockMockOnly(),
+        const StrictClockUnsupported(),
         StrictClockSourceFault(kind: SourceFaultKind.invalidRaw, detail: 'd'),
-        StrictClockRegression(previous: 2, observed: 1),
-        StrictClockInvalidated(
+        const StrictClockRegression(previous: 2, observed: 1),
+        const StrictClockInvalidated(
           generation: 7,
           reason: StrictClockInvalidationReason.explicit,
         ),
-        StrictClockUnknownSource(
+        const StrictClockUnknownSource(
           expected: ClockBackend.linuxBoottime,
           observed: ClockBackend.appleContinuous,
         ),
-        StrictClockDescriptorIncompatible(
+        const StrictClockDescriptorIncompatible(
           expected: ClockSourceDescriptor(
             backend: ClockBackend.linuxBoottime,
             semanticsVersion: 1,
@@ -4601,8 +4601,8 @@ void main() {
             conversionVersion: 1,
           ),
         ),
-        StrictClockGenerationIncompatible(expected: 3, actual: 4),
-        StrictClockSourceIncompatible(
+        const StrictClockGenerationIncompatible(expected: 3, actual: 4),
+        const StrictClockSourceIncompatible(
           expected: StrictClockProvenance.native,
           actual: StrictClockProvenance.testInjected,
         ),
@@ -4642,26 +4642,28 @@ void main() {
       });
     });
 
-    test('StrictClockSourceFault carries errno exactly for syscallFailed', () {
-      const ok = StrictClockSourceFault(
+    test('StrictClockSourceFault carries errno exactly for syscallFailed, '
+        'enforced at runtime', () {
+      final ok = StrictClockSourceFault(
         kind: SourceFaultKind.syscallFailed,
         detail: 'd',
         errno: 22,
       );
       expect(ok.errno, 22);
+      // ArgumentError, not an assert: the check holds with asserts off.
       expect(
         () => StrictClockSourceFault(
           kind: SourceFaultKind.syscallFailed,
           detail: 'd',
         ),
-        throwsA(isA<AssertionError>()),
+        throwsA(isA<ArgumentError>().having((e) => e.name, 'name', 'errno')),
       );
       for (final kind in SourceFaultKind.values) {
         if (kind == SourceFaultKind.syscallFailed) continue;
         expect(StrictClockSourceFault(kind: kind, detail: 'd').errno, isNull);
         expect(
           () => StrictClockSourceFault(kind: kind, detail: 'd', errno: 22),
-          throwsA(isA<AssertionError>()),
+          throwsA(isA<ArgumentError>().having((e) => e.name, 'name', 'errno')),
           reason: '${kind.name} must not carry an errno',
         );
       }

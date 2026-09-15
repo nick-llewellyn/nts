@@ -297,13 +297,21 @@ final class StrictClockContext {
 
   /// Resolve a strict context against the native bridge.
   ///
-  /// Throws [StrictClockUninitialized] when the bridge holds nothing,
-  /// [StrictClockMockOnly] when it holds a hand-written double (use
-  /// [resolveForTesting] there), [StrictClockUnsupported] when the
-  /// build has no supported backend, and the read's own error when
-  /// the binding read faults. Performs one strict read to bind the
-  /// generation and to confirm the read backend matches the
-  /// descriptor. Never cached: each call is a fresh resolution.
+  /// Throws [StrictClockUninitialized] when the bridge holds nothing
+  /// and [StrictClockMockOnly] when it holds a hand-written double
+  /// (use [resolveForTesting] there). Otherwise it fetches the
+  /// descriptor and performs one strict read to bind the generation,
+  /// and both calls go through the same fault mapping as [now]: a
+  /// typed native fault surfaces as [StrictClockUnsupported] (no
+  /// supported backend in this build), [StrictClockSourceFault],
+  /// [StrictClockRegression], or [StrictClockInvalidated] with reason
+  /// [StrictClockInvalidationReason.nativeGeneration] when a
+  /// process-wide invalidation races the binding read; a dispatch or
+  /// decode failure on either call surfaces as [StrictClockSourceFault]
+  /// with kind [SourceFaultKind.bridge] or [SourceFaultKind.abiMismatch].
+  /// Finally the read's backend must match the descriptor's, otherwise
+  /// [StrictClockUnknownSource]. Never cached: each call is a fresh
+  /// resolution.
   static StrictClockContext resolve() {
     switch (NtsBridge.state) {
       case NtsBridgeState.uninitialized:
@@ -582,7 +590,7 @@ final class StrictClockContext {
   ) {
     if (provenance == StrictClockProvenance.native &&
         (error is RangeError || error is UnimplementedError)) {
-      return StrictClockSourceFault(
+      return StrictClockSourceFault._(
         kind: SourceFaultKind.abiMismatch,
         detail:
             'the loaded native library and these Dart bindings disagree '
@@ -593,7 +601,7 @@ final class StrictClockContext {
             '`dart run tool/check_bindings.dart` if the Rust API changed)',
       );
     }
-    return StrictClockSourceFault(
+    return StrictClockSourceFault._(
       kind: SourceFaultKind.bridge,
       detail: error.toString(),
     );
@@ -624,7 +632,7 @@ final class StrictClockContext {
     int? boundGeneration,
   }) => switch (f) {
     ffi.NtsClockFault_Unsupported() => const StrictClockUnsupported(),
-    ffi.NtsClockFault_SyscallFailed(:final errno) => StrictClockSourceFault(
+    ffi.NtsClockFault_SyscallFailed(:final errno) => StrictClockSourceFault._(
       kind: SourceFaultKind.syscallFailed,
       detail: 'clock_gettime(CLOCK_BOOTTIME) failed, errno $errno',
       errno: errno,
@@ -634,17 +642,17 @@ final class StrictClockContext {
       :final numer,
       :final denom,
     ) =>
-      StrictClockSourceFault(
+      StrictClockSourceFault._(
         kind: SourceFaultKind.timebaseUnavailable,
         detail:
             'mach_timebase_info kern_return $kernReturn, '
             'numer $numer, denom $denom',
       ),
-    ffi.NtsClockFault_InvalidRaw() => const StrictClockSourceFault(
+    ffi.NtsClockFault_InvalidRaw() => const StrictClockSourceFault._(
       kind: SourceFaultKind.invalidRaw,
       detail: 'raw native sample outside its documented domain',
     ),
-    ffi.NtsClockFault_ConversionOverflow() => const StrictClockSourceFault(
+    ffi.NtsClockFault_ConversionOverflow() => const StrictClockSourceFault._(
       kind: SourceFaultKind.conversionOverflow,
       detail: 'checked conversion to i64 microseconds failed',
     ),

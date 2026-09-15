@@ -82,8 +82,9 @@ tarball.
   provenance and can never be labelled native) and an unsupported
   platform (`StrictClockUnsupported`). Native faults map to
   `StrictClockSourceFault(kind, detail, errno)` (`errno` present exactly
-  for `SourceFaultKind.syscallFailed`, asserted by the constructor) —
-  including
+  for `SourceFaultKind.syscallFailed`; the public constructor rejects
+  any other pairing with `ArgumentError` in every build mode, not
+  under `assert`) — including
   `SourceFaultKind.abiMismatch` when the generated decoder rejects
   the loaded library's wire layout, a classification reserved for
   native contexts since no decoder runs behind a test double —

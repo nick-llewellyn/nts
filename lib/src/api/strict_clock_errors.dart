@@ -95,21 +95,36 @@ enum SourceFaultKind {
 /// A native read (or the bridge carrying it) failed.
 ///
 /// [errno] is present exactly when [kind] is
-/// [SourceFaultKind.syscallFailed]; the constructor asserts it, so a
-/// `switch` on [kind] can rely on the payload's shape.
+/// [SourceFaultKind.syscallFailed]. The public constructor enforces
+/// this at runtime in every build mode, so a `switch` on [kind] can
+/// rely on the payload's shape.
 final class StrictClockSourceFault extends StrictClockError {
   /// Construct the error. [errno] is required for
   /// [SourceFaultKind.syscallFailed] and must be omitted for every
-  /// other [kind].
-  const StrictClockSourceFault({
+  /// other [kind]; any other combination throws [ArgumentError].
+  factory StrictClockSourceFault({
+    required SourceFaultKind kind,
+    required String detail,
+    int? errno,
+  }) {
+    if ((kind == SourceFaultKind.syscallFailed) != (errno != null)) {
+      throw ArgumentError.value(
+        errno,
+        'errno',
+        'required for SourceFaultKind.syscallFailed and not permitted for '
+            'any other kind (kind: ${kind.name})',
+      );
+    }
+    return StrictClockSourceFault._(kind: kind, detail: detail, errno: errno);
+  }
+
+  /// Library-internal: every call site pairs [kind] and [errno] as
+  /// the public constructor requires.
+  const StrictClockSourceFault._({
     required this.kind,
     required String detail,
     this.errno,
-  }) : assert(
-         (kind == SourceFaultKind.syscallFailed) == (errno != null),
-         'errno is carried by syscallFailed and by no other kind',
-       ),
-       _detail = detail,
+  }) : _detail = detail,
        super._();
 
   /// What failed.
