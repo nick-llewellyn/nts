@@ -598,13 +598,20 @@ final class StrictClockContext {
       ),
   };
 
+  // Exhaustive on purpose, like `_mapFault`: a new FFI variant must be
+  // given a reason here, not absorbed into `sourceFault` by a wildcard.
   static StrictClockInvalidationReason _reasonFor(ffi.NtsClockFault f) =>
       switch (f) {
         ffi.NtsClockFault_Regression() =>
           StrictClockInvalidationReason.regression,
         ffi.NtsClockFault_GenerationChanged() =>
           StrictClockInvalidationReason.nativeGeneration,
-        _ => StrictClockInvalidationReason.sourceFault,
+        ffi.NtsClockFault_Unsupported() ||
+        ffi.NtsClockFault_SyscallFailed() ||
+        ffi.NtsClockFault_TimebaseUnavailable() ||
+        ffi.NtsClockFault_InvalidRaw() ||
+        ffi.NtsClockFault_ConversionOverflow() =>
+          StrictClockInvalidationReason.sourceFault,
       };
 }
 

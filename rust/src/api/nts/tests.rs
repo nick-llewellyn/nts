@@ -4940,9 +4940,52 @@ fn strict_clock_read_reports_fault_where_legacy_export_degrades() {
 /// Every internal fault variant has a distinct bridge mirror; a new
 /// internal variant without a mapping fails to compile in `From`, and
 /// this pins the payloads across the boundary.
+///
+/// The `cases` table is guarded on both sides, as the Dart
+/// variant-mapping test is: `Tag::of` is an exhaustive match over
+/// `ClockFault`, so a new variant does not compile until it has an
+/// arm and a tag, and the tags observed from `cases` must equal
+/// `Tag::ALL`, so a tag without a sample fails the set comparison.
 #[test]
 fn strict_clock_fault_mirror_is_lossless() {
     use crate::nts::boottime::ClockFault as F;
+    use std::collections::BTreeSet;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Tag {
+        Unsupported,
+        SyscallFailed,
+        TimebaseUnavailable,
+        InvalidRaw,
+        ConversionOverflow,
+        Regression,
+        GenerationChanged,
+    }
+
+    impl Tag {
+        const ALL: [Tag; 7] = [
+            Tag::Unsupported,
+            Tag::SyscallFailed,
+            Tag::TimebaseUnavailable,
+            Tag::InvalidRaw,
+            Tag::ConversionOverflow,
+            Tag::Regression,
+            Tag::GenerationChanged,
+        ];
+
+        fn of(fault: &F) -> Tag {
+            match fault {
+                F::Unsupported => Tag::Unsupported,
+                F::SyscallFailed { .. } => Tag::SyscallFailed,
+                F::TimebaseUnavailable { .. } => Tag::TimebaseUnavailable,
+                F::InvalidRaw => Tag::InvalidRaw,
+                F::ConversionOverflow => Tag::ConversionOverflow,
+                F::Regression { .. } => Tag::Regression,
+                F::GenerationChanged { .. } => Tag::GenerationChanged,
+            }
+        }
+    }
+
     let cases = [
         (F::Unsupported, NtsClockFault::Unsupported),
         (
@@ -4984,7 +5027,11 @@ fn strict_clock_fault_mirror_is_lossless() {
             },
         ),
     ];
+    let mut seen = BTreeSet::new();
     for (internal, mirrored) in cases {
+        seen.insert(Tag::of(&internal));
         assert_eq!(NtsClockFault::from(internal), mirrored);
     }
+    // Every variant the exhaustive match knows has a sample above.
+    assert_eq!(seen, Tag::ALL.into_iter().collect::<BTreeSet<_>>());
 }
