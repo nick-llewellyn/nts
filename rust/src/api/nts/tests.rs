@@ -3875,6 +3875,182 @@ fn warm_cookies_waiter_expires_on_a_result_published_after_its_deadline() {
     }
 }
 
+/// Warm-up has no caller-side admission read: its entry read *is* the
+/// call-wide budget anchor, so a source fault there is `Admission`
+/// with no backend, not `Session`. Nothing is handshaken.
+#[test]
+fn warm_cookies_entry_read_fault_is_admission_before_any_handshake() {
+    use crate::nts::boottime::with_raw_override;
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let table = SessionTable::new();
+    let spec = NtsServerSpec {
+        host: "warm-entry-read-fault.test".into(),
+        port: 4460,
+    };
+    let outcome = with_raw_override(
+        || Err(ClockFault::SyscallFailed { errno: 5 }),
+        || {
+            let clock = SequentialReader::bind();
+            table.warm_cookies_with(
+                &clock,
+                &spec,
+                Duration::from_secs(10),
+                4,
+                &|_: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
+                    panic!("do_handshake must not run when the entry read faults")
+                },
+            )
+        },
+    );
+    match outcome {
+        Err(NtsError::ClockFault {
+            stage: ClockFaultStage::Admission,
+            fault: NtsClockFault::SyscallFailed { errno: 5 },
+            trust_backend: None,
+            ..
+        }) => {}
+        other => panic!("expected ClockFault(Admission, SyscallFailed 5, None); got {other:?}"),
+    }
+    assert!(
+        !lock_recover(&table.inflight).contains_key(&session_key(&spec)),
+        "an entry-read fault must not leave an inflight slot behind",
+    );
+}
+
+/// Run a single-threaded leader whose strict source succeeds until
+/// `do_handshake` has returned and faults on every read after it —
+/// the first being the install stamp taken under the `map` lock.
+/// The handshaken session carries `backend`, so the returned error
+/// shows whether the install path preserved it.
+fn run_leader_with_faulting_install_read(
+    host: &str,
+    backend: TrustBackend,
+    call: impl FnOnce(&SessionTable, &SequentialReader, &NtsServerSpec, &HandshakeFn<'_>) -> NtsError,
+) -> NtsError {
+    use crate::nts::boottime::{with_raw_override, RawSample};
+    use std::sync::atomic::AtomicBool;
+
+    let table = SessionTable::new();
+    let spec = NtsServerSpec {
+        host: host.into(),
+        port: 4460,
+    };
+    let handshaken = Arc::new(AtomicBool::new(false));
+    let do_handshake = {
+        let handshaken = handshaken.clone();
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, _r: Option<&PhaseReporter>| {
+            let mut session =
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4);
+            session.trust_backend = backend;
+            handshaken.store(true, Ordering::SeqCst);
+            Ok((session, KePhaseTimings::default()))
+        }
+    };
+    let reads = Arc::new(AtomicUsize::new(0));
+    let err = {
+        let handshaken = handshaken.clone();
+        let reads = reads.clone();
+        with_raw_override(
+            move || {
+                let n = reads.fetch_add(1, Ordering::SeqCst) + 1;
+                if handshaken.load(Ordering::SeqCst) {
+                    Err(ClockFault::SyscallFailed { errno: 5 })
+                } else {
+                    Ok(RawSample::Linux {
+                        sec: 1_000 + i64::try_from(n).unwrap(),
+                        nsec: 0,
+                    })
+                }
+            },
+            || {
+                let clock = SequentialReader::bind();
+                call(&table, &clock, &spec, &do_handshake)
+            },
+        )
+    };
+    assert!(
+        handshaken.load(Ordering::SeqCst),
+        "the fault must land after the handshake, not before it",
+    );
+    let key = session_key(&spec);
+    assert!(
+        !lock_recover(&table.map).contains_key(&key),
+        "a faulted install must not leave the session in the table",
+    );
+    assert!(
+        !lock_recover(&table.inflight).contains_key(&key),
+        "a faulted install must not leave an inflight slot behind",
+    );
+    err
+}
+
+/// A clock fault while installing a handshaken query session is
+/// post-handshake: the error carries the backend the handshake
+/// resolved, as the `NoCookies` exits on the same branch do, rather
+/// than the `None` that means no handshake ran.
+#[test]
+fn checkout_install_clock_fault_carries_the_handshake_backend() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let err = run_leader_with_faulting_install_read(
+        "checkout-install-fault-backend.test",
+        TrustBackend::Custom,
+        |table, clock, spec, do_handshake| match table.checkout_with(
+            clock,
+            spec,
+            Duration::from_secs(10),
+            4,
+            do_handshake,
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("a faulted install must fail the checkout"),
+        },
+    );
+    match err {
+        NtsError::ClockFault {
+            stage: ClockFaultStage::Session,
+            fault: NtsClockFault::SyscallFailed { errno: 5 },
+            trust_backend: Some(TrustBackend::Custom),
+            ..
+        } => {}
+        other => {
+            panic!("expected ClockFault(Session, SyscallFailed 5, Some(Custom)); got {other:?}")
+        }
+    }
+}
+
+/// The warm-cookie install path has the same contract: a fault on the
+/// install stamp is attributed to the backend of the handshake that
+/// just completed.
+#[test]
+fn warm_cookies_install_clock_fault_carries_the_handshake_backend() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let err = run_leader_with_faulting_install_read(
+        "warm-install-fault-backend.test",
+        TrustBackend::Custom,
+        |table, clock, spec, do_handshake| match table.warm_cookies_with(
+            clock,
+            spec,
+            Duration::from_secs(10),
+            4,
+            do_handshake,
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("a faulted install must fail the warm-up"),
+        },
+    );
+    match err {
+        NtsError::ClockFault {
+            stage: ClockFaultStage::Session,
+            fault: NtsClockFault::SyscallFailed { errno: 5 },
+            trust_backend: Some(TrustBackend::Custom),
+            ..
+        } => {}
+        other => {
+            panic!("expected ClockFault(Session, SyscallFailed 5, Some(Custom)); got {other:?}")
+        }
+    }
+}
+
 /// Pre-handshake budget exhaustion on a (re-)elected leader: when
 /// a thread enters `warm_cookies_with` with `started.elapsed()`
 /// already exceeding `timeout`, the leader path must surface

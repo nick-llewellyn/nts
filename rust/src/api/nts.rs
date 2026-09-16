@@ -3087,12 +3087,15 @@ impl SessionTable {
                         Ok((session, ke_timings)) => {
                             // Capture the freshly-resolved backend before
                             // `session` moves into the table below; both
-                            // `NoCookies` exit paths in this branch attach
-                            // it so post-handshake failures are
-                            // attributable to the same backend a
-                            // successful sample on this session would
-                            // surface.
+                            // `NoCookies` exit paths and the install-time
+                            // clock faults in this branch attach it so
+                            // post-handshake failures are attributable to
+                            // the same backend a successful sample on this
+                            // session would surface.
                             let session_backend = session.trust_backend;
+                            let install_fault = |fault| {
+                                session_fault(fault).with_trust_backend(Some(session_backend))
+                            };
                             // Refuse to install a 0-cookie session: the
                             // leader plus every waiter would immediately
                             // fall through to NoCookies, and the next
@@ -3148,11 +3151,12 @@ impl SessionTable {
                                 // with the prune below. A fault here
                                 // aborts the install: `session` drops
                                 // (zeroizing its keys) and the fault is
-                                // published to the waiters.
+                                // published to the waiters, carrying the
+                                // handshake's backend.
                                 let now = match clock.instant() {
                                     Ok(now) => now,
                                     Err(fault) => {
-                                        let err = session_fault(fault);
+                                        let err = install_fault(fault);
                                         guard.complete(Err(err.clone()));
                                         return Err(err);
                                     }
@@ -3166,7 +3170,7 @@ impl SessionTable {
                                 // unrelated LRU entry for nothing.
                                 let headroom = usize::from(!g.contains_key(&key));
                                 if let Err(fault) = prune_sessions(&mut g, now, headroom) {
-                                    let err = session_fault(fault);
+                                    let err = install_fault(fault);
                                     guard.complete(Err(err.clone()));
                                     return Err(err);
                                 }
@@ -3324,7 +3328,13 @@ impl SessionTable {
     ) -> Result<(u32, KePhaseTimings, TrustBackend, Vec<u16>), NtsError> {
         let key = session_key(spec);
         let session_fault = NtsError::clock_fault(ClockFaultStage::Session, clock);
-        let started = clock.instant().map_err(&session_fault)?;
+        // Unlike `checkout_with`, whose caller has already anchored the
+        // call-wide budget, this read *is* the warm-up's entry
+        // anchor, so a fault on it is `Admission`; table work from
+        // here on is `Session`.
+        let started = clock
+            .instant()
+            .map_err(NtsError::clock_fault(ClockFaultStage::Admission, clock))?;
         // Phase B: leader-or-waiter election. No Phase A — the
         // contract is "force a fresh handshake," so the cache is
         // intentionally bypassed on the leader path. Waiters
@@ -3385,6 +3395,8 @@ impl SessionTable {
                 ) {
                     Ok((session, ke_timings)) => {
                         let session_backend = session.trust_backend;
+                        let install_fault =
+                            |fault| session_fault(fault).with_trust_backend(Some(session_backend));
                         // Refuse to install a 0-cookie session;
                         // same defensive shape as `checkout_with`.
                         if session.cookies_remaining() == 0 {
@@ -3417,20 +3429,21 @@ impl SessionTable {
                             // install and bounds the prune, and a
                             // fault aborts the install (dropping
                             // `session`, zeroizing its keys) and is
-                            // published to the waiters. Headroom
-                            // included: only a growing insert needs a
-                            // slot freed for it.
+                            // published to the waiters carrying the
+                            // handshake's backend. Headroom included:
+                            // only a growing insert needs a slot freed
+                            // for it.
                             let now = match clock.instant() {
                                 Ok(now) => now,
                                 Err(fault) => {
-                                    let err = session_fault(fault);
+                                    let err = install_fault(fault);
                                     guard.complete(Err(err.clone()));
                                     return Err(err);
                                 }
                             };
                             let headroom = usize::from(!g.contains_key(&key));
                             if let Err(fault) = prune_sessions(&mut g, now, headroom) {
-                                let err = session_fault(fault);
+                                let err = install_fault(fault);
                                 guard.complete(Err(err.clone()));
                                 return Err(err);
                             }
