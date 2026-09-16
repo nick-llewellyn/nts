@@ -722,7 +722,7 @@ impl SequentialReader {
 }
 
 /// Legacy best-effort reading for the bridge's `nts_boottime_micros`
-/// export and the pre-epoch T1 origin token.
+/// export.
 ///
 /// Same platform readers and conversion as [`strict_read`], but on any
 /// fault it degrades to [`instant_fallback_micros`] instead of

@@ -59,7 +59,10 @@ tarball.
   `ntsQuery` / `ntsWarmCookies` call and threads it through the call
   budget, the NTS-KE handshake deadline, the session singleflight,
   idle-TTL, access-time and LRU-prune arithmetic, the replay-guard
-  stamp, the UDP deadlines and the wire receipt; a fault at any of
+  stamp, the UDP deadlines, the wire receipt and the stand-in T1 / T4
+  token used when the system clock reads before the Unix epoch
+  (previously taken on the legacy best-effort boot clock, which can
+  fall back to the process-local `Instant` timeline); a fault at any of
   them fails that call as `NtsError.clockFault` with the matching
   stage instead of substituting a value, and a session entry stamped
   under a retired generation is dropped rather than served
@@ -81,7 +84,10 @@ tarball.
   `clockFault(admission)` and never dispatches); `getTimeStrict`
   meters its 8-second budget on the context, re-reads it after every
   `await` so a bridge reset or native generation change that lands
-  while the call was parked fails the stale completion, and
+  while the call was parked fails the stale completion, fails at once
+  on any native `clockFault` a query returns other than the per-sample
+  `suspendedInFlight` verdict — an earlier accepted sample does not
+  outrank it, and no later sample is dispatched — and
   attributes each sample by `recvClockGeneration` / `recvClockBackend`
   rather than by numerical plausibility: a sample with no stamp is
   `StrictClockMissingReceipt`, one stamped under another generation

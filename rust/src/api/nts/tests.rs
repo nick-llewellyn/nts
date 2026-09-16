@@ -154,7 +154,8 @@ fn unix_duration_round_trips_to_ntp64() {
 
 #[test]
 fn pre_epoch_fallback_is_non_zero_and_monotonic() {
-    let first = pre_epoch_fallback_ntp64();
+    let clock = SequentialReader::bind();
+    let first = pre_epoch_fallback_ntp64(&clock).expect("first token");
     assert_ne!(
         first, 0,
         "an all-zero transmit timestamp is the weak origin-echo token \
@@ -167,9 +168,19 @@ fn pre_epoch_fallback_is_non_zero_and_monotonic() {
         std::hint::spin_loop();
     }
     assert!(
-        pre_epoch_fallback_ntp64() > first,
+        pre_epoch_fallback_ntp64(&clock).expect("second token") > first,
         "fallback must advance so successive queries do not collide",
     );
+}
+
+#[test]
+fn pre_epoch_token_clamps_a_zero_reading_and_orders_by_input() {
+    // A reading of zero is what the encoding's clamp exists for.
+    assert_eq!(pre_epoch_token_ntp64(0), 1);
+    assert_eq!(pre_epoch_token_ntp64(-5), 1);
+    // One microsecond apart on either side of a whole second.
+    assert!(pre_epoch_token_ntp64(999_999) < pre_epoch_token_ntp64(1_000_000));
+    assert!(pre_epoch_token_ntp64(1_000_000) < pre_epoch_token_ntp64(1_000_001));
 }
 
 #[test]
@@ -177,12 +188,27 @@ fn pre_epoch_fallback_stays_below_the_unix_epoch() {
     // The value is a uniqueness token, not a time. Leaving the seconds
     // field small (well under 2_208_988_800, so it reads as the 1900s)
     // means a packet capture cannot mistake it for a plausible reading.
-    let secs_ntp = pre_epoch_fallback_ntp64() >> 32;
+    let clock = SequentialReader::bind();
+    let secs_ntp = pre_epoch_fallback_ntp64(&clock).expect("token") >> 32;
     assert!(
         secs_ntp < NTP_TO_UNIX_EPOCH_SECS,
         "fallback encoded {secs_ntp} NTP seconds, which reads as a \
          post-1970 wall-clock time",
     );
+}
+
+#[test]
+fn pre_epoch_fallback_reports_a_retired_reader_instead_of_falling_back() {
+    // The strict path's no-fallback contract covers this branch too:
+    // a reader whose generation was retired gets the fault, not a
+    // token from the legacy `Instant`-anchored timeline.
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let clock = SequentialReader::bind();
+    crate::nts::boottime::invalidate_generation();
+    assert!(matches!(
+        pre_epoch_fallback_ntp64(&clock),
+        Err(ClockFault::GenerationChanged { .. })
+    ));
 }
 
 #[test]
@@ -354,7 +380,7 @@ fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
         host: host.to_owned(),
         port: server_port,
     };
-    let call_started = system_time_to_ntp64();
+    let call_started = system_time_to_ntp64(&SequentialReader::bind()).expect("call start stamp");
     let result = nts_query_inner_using(
         &table,
         spec,

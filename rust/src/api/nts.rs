@@ -836,8 +836,9 @@ pub enum ClockFaultStage {
     /// Arming the UDP setup or `send`/`recv` deadlines against the
     /// call-wide budget.
     Udp,
-    /// Stamping the wire receipt, bracketing the round trip, or
-    /// recording the replay-guard entry.
+    /// Stamping the wire receipt, bracketing the round trip, deriving
+    /// a pre-epoch stand-in for T1 or T4, or recording the replay-guard
+    /// entry.
     Receipt,
     /// Dart: awaiting the bridge result under the strict budget.
     Await,
@@ -3701,8 +3702,8 @@ thread_local! {
 /// previous value: a query binds once, and a test reads the stamp
 /// immediately after the call it belongs to.
 #[cfg(test)]
-fn record_udp_connect_stamp() {
-    let now = system_time_to_ntp64();
+fn record_udp_connect_stamp(clock: &SequentialReader) {
+    let now = system_time_to_ntp64(clock).expect("UDP connect stamp");
     LAST_UDP_CONNECT_NTP64.with(|c| c.set(Some(now)));
 }
 
@@ -3967,7 +3968,7 @@ where
         match socket.connect(addr) {
             Ok(()) => {
                 #[cfg(test)]
-                record_udp_connect_stamp();
+                record_udp_connect_stamp(clock);
                 return Ok(UdpBindOutcome { socket, dns_micros });
             }
             Err(e) => errors.push(format!("connect {addr}: {e}")),
@@ -4331,8 +4332,12 @@ where
     // T1 cannot move below the build: it is an authenticated field of
     // the packet the seal covers. It could in principle move below the
     // re-arm, but the re-arm has to be the last thing before the `send`
-    // to bound it against the freshest budget reading.
-    let transmit_timestamp = system_time_to_ntp64();
+    // to bound it against the freshest budget reading. A pre-epoch
+    // system clock substitutes a token read on `clock`, so it fails the
+    // query like any other strict read rather than falling back.
+    let transmit_timestamp = system_time_to_ntp64(&clock)
+        .map_err(NtsError::clock_fault(ClockFaultStage::Receipt, &clock))
+        .map_err(attribute_post_handshake)?;
     let req = ClientRequest {
         unique_id: uid.to_vec(),
         cookie: ctx.cookie,
@@ -4399,8 +4404,11 @@ where
     // before parsing/validation — so the microsecond-sensitive
     // offset/peer-delay arithmetic sees the least-biased T4; the
     // boottime stamp only feeds millisecond-scale anchor-lag
-    // arithmetic and tolerates the extra clock-read cost.
-    let destination_timestamp = system_time_to_ntp64();
+    // arithmetic and tolerates the extra clock-read cost. Same
+    // pre-epoch substitute as T1, on the same reader.
+    let destination_timestamp = system_time_to_ntp64(&clock)
+        .map_err(NtsError::clock_fault(ClockFaultStage::Receipt, &clock))
+        .map_err(attribute_post_handshake)?;
     // Wire-level receipt stamp: taken here, before parsing/validation
     // and long before the FFI return, so downstream anchor-lag
     // arithmetic excludes scheduling latency. A strict reading on the
@@ -4621,27 +4629,44 @@ fn nts_warm_cookies_inner(
 /// 1970-or-earlier) falls back to [`pre_epoch_fallback_ntp64`] rather
 /// than returning zero. Both call sites take the same branch on such a
 /// device, so T4 − T1 remains a real elapsed duration.
-fn system_time_to_ntp64() -> u64 {
+/// T1 / T4 wall-clock stamp in NTP64 format. A system clock before
+/// the Unix epoch is substituted by [`pre_epoch_fallback_ntp64`] on
+/// `clock`, which is why this can fault: the substitute is a strict
+/// reading like every other stamp in the operation, not a best-effort
+/// one.
+fn system_time_to_ntp64(clock: &SequentialReader) -> Result<u64, ClockFault> {
     let now = std::time::SystemTime::now();
     match now.duration_since(std::time::UNIX_EPOCH) {
-        Ok(d) => unix_duration_to_ntp64(d),
-        Err(_) => pre_epoch_fallback_ntp64(),
+        Ok(d) => Ok(unix_duration_to_ntp64(d)),
+        Err(_) => pre_epoch_fallback_ntp64(clock),
     }
 }
 
 /// Non-zero stand-in timestamp for a system clock reading before the
 /// Unix epoch.
 ///
-/// Packs the sleep-aware boot clock ([`crate::nts::boottime`]) into the
-/// NTP64 wire *format* — 32 bits of whole seconds, 32 bits of binary
-/// fraction — with elapsed-since-boot substituted for the usual
-/// seconds-since-1900. The result is therefore a well-formed NTP64
-/// field but not a timestamp relative to any epoch: it advances
-/// monotonically at microsecond resolution and is effectively unique
-/// per query, which is all this call site needs. A returned zero is
-/// impossible: the raw encoding is clamped up to 1, which matters on
-/// the `Instant`-anchored fallback path where the first reading of a
-/// process can be zero.
+/// Packs a strict reading on the operation's [`SequentialReader`] —
+/// the sleep-aware boot clock ([`crate::nts::boottime`]), on the
+/// generation the operation is bound to — into the NTP64 wire *format*
+/// via [`pre_epoch_token_ntp64`]. Taking it on `clock` rather than on
+/// the legacy `boottime_micros` keeps the strict path's no-fallback
+/// contract on this branch too: a fault is reported, never papered
+/// over with the process-local `Instant` timeline, so a healthy strict
+/// reader never coexists with a T1 / T4 pair on a substitute epoch.
+/// The value is effectively unique per query, which is all the call
+/// site needs.
+fn pre_epoch_fallback_ntp64(clock: &SequentialReader) -> Result<u64, ClockFault> {
+    Ok(pre_epoch_token_ntp64(clock.read()?.micros))
+}
+
+/// Encode a boot-clock reading as the pre-epoch T1 / T4 token: 32 bits
+/// of whole seconds, 32 bits of binary fraction, with elapsed-since-
+/// boot substituted for the usual seconds-since-1900. The result is
+/// therefore a well-formed NTP64 field but not a timestamp relative to
+/// any epoch: it advances monotonically at microsecond resolution with
+/// its input. A returned zero is impossible: the raw encoding is
+/// clamped up to 1, so a reading of zero still yields a non-zero
+/// origin-echo token.
 ///
 /// Leaving the seconds field small — so a reader interpreting it as
 /// an NTP timestamp lands in the 1900s — rather than shifting it into
@@ -4652,8 +4677,8 @@ fn system_time_to_ntp64() -> u64 {
 /// [`on_wire_statistics`] from such a T1/T4 pair is meaningless either
 /// way, exactly as it was when this returned zero; the emitted sample
 /// time comes from the server's T3.
-fn pre_epoch_fallback_ntp64() -> u64 {
-    let micros = crate::nts::boottime::boottime_micros().max(0) as u64;
+fn pre_epoch_token_ntp64(micros: i64) -> u64 {
+    let micros = micros.max(0) as u64;
     let secs = micros / 1_000_000;
     let frac = ((micros % 1_000_000) << 32) / 1_000_000;
     let raw = ((secs & 0xFFFF_FFFF) << 32) | (frac & 0xFFFF_FFFF);

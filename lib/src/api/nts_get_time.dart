@@ -338,21 +338,19 @@ Future<StrictSyncedTime> _getTimeStrict({
   Duration remainingAt(StrictReading now) =>
       _kGetTimeTimeout - Duration(microseconds: now.micros - start.micros);
 
-  // An `await` that completes with an error still owes the strict
-  // read: a bridge reset or native generation change that landed
-  // while the call was parked fails the call instead of hiding behind
-  // the error. A `clockFault` that retired the context is exempt — it
-  // already carries the native verdict, and a further read could only
-  // restate it as a less specific generation change. A
-  // `suspendedInFlight` verdict is not: it is a per-sample rejection
-  // that leaves the context valid, so it hides a lifecycle event as
-  // readily as a network error would.
-  void readAfterFailure(NtsError err) {
-    if (err is! NtsErrorClockFault ||
-        err.fault is StrictClockSuspendedInFlight) {
-      read(ClockFaultStage.awaitResult);
-    }
-  }
+  // A native `clockFault` other than the per-sample `suspendedInFlight`
+  // verdict fails the call as it stands, whatever the burst has
+  // collected so far: the clock it was bound to could not vouch for
+  // the sample, the fault already carries the native verdict, and a
+  // further read could only restate it as a less specific generation
+  // change. Every other error still owes the strict read for the
+  // `await` it ended: a bridge reset or native generation change that
+  // landed while the call was parked fails the call instead of hiding
+  // behind the error, and a `suspendedInFlight` verdict — a per-sample
+  // rejection that leaves the context valid — hides a lifecycle event
+  // as readily as a network error would.
+  bool failsCall(NtsError err) =>
+      err is NtsErrorClockFault && err.fault is! StrictClockSuspendedInFlight;
 
   final warmBudget = remainingAt(read(ClockFaultStage.awaitResult));
   if (warmBudget < _kMinDispatchBudget) {
@@ -362,7 +360,7 @@ Future<StrictSyncedTime> _getTimeStrict({
   try {
     outcome = await warm(warmBudget);
   } on NtsError catch (err) {
-    readAfterFailure(err);
+    if (!failsCall(err)) read(ClockFaultStage.awaitResult);
     rethrow;
   }
   // The handshake ran and resolved a backend whether or not the read
@@ -392,18 +390,21 @@ Future<StrictSyncedTime> _getTimeStrict({
     try {
       sample = await query(left);
     } on NtsError catch (err, stack) {
-      // Same best-effort posture as the legacy burst, after the
-      // post-`await` read: on the final attempt there is no further
-      // read before `lastError` is rethrown, so this is the one that
-      // keeps a clock event from hiding behind a network error. A
-      // `clockFault` from the query lands here too: if it moved the
-      // generation it is what is rethrown or the next read fails the
-      // call; a per-sample `suspendedInFlight` verdict is exactly what
-      // a retry is for, and still gets the read. An error that resolved
-      // a backend is the latest word on which one this call is running
-      // against.
+      // An error that resolved a backend is the latest word on which
+      // one this call is running against.
       backend = _errorTrustBackend(err) ?? backend;
-      readAfterFailure(err);
+      // A native clock fault is not a burst failure: an earlier
+      // accepted sample does not outrank it, and a later one could not
+      // be vouched for by a clock that has already failed. Only the
+      // per-sample `suspendedInFlight` verdict is exactly what a retry
+      // is for.
+      if (failsCall(err)) rethrow;
+      // Otherwise the same best-effort posture as the legacy burst,
+      // after the post-`await` read: on the final attempt there is no
+      // further read before `lastError` is rethrown, so this is the
+      // one that keeps a clock event from hiding behind a network
+      // error.
+      read(ClockFaultStage.awaitResult);
       lastError = err;
       lastStack = stack;
       continue;

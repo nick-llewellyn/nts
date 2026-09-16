@@ -5548,6 +5548,51 @@ void main() {
         expect(ctx.isValid, isTrue);
       });
 
+      test('any other native clock fault fails the call at once, whether '
+          'a sample already landed or another could still be '
+          'dispatched', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        // The mock does not advance the generation on a scripted
+        // fault, so a context read after it would still succeed: the
+        // fault has to be refused on its own account, not caught by a
+        // later read.
+        ffi.NtsError regressed() => ffi.NtsError.clockFault(
+          stage: ffi.ClockFaultStage.receipt,
+          fault: ffi.NtsClockFault.regression(
+            previous: PlatformInt64Util.from(3_000_000),
+            observed: PlatformInt64Util.from(2_999_000),
+          ),
+          generation: PlatformInt64Util.from(api.strictGeneration),
+          trustBackend: ffi.TrustBackend.platform,
+        );
+        final matcher = clockFault(
+          ClockFaultStage.receipt,
+          isA<StrictClockRegression>()
+              .having((e) => e.previous, 'previous', 3_000_000)
+              .having((e) => e.observed, 'observed', 2_999_000),
+          trustBackend: TrustBackend.platform,
+        );
+
+        // A sample already accepted does not outrank the fault.
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [() => strictSample(), regressed()];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(matcher),
+        );
+        expect(api.queryDispatches, 2);
+
+        // Nor is a later sample dispatched on the failed clock.
+        api.reset();
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [regressed(), () => strictSample()];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(matcher),
+        );
+        expect(api.queryDispatches, 1);
+      });
+
       test('a suspendedInFlight verdict still owes the post-await read, '
           'so a generation advance behind it fails the call as '
           'invalidated rather than as the per-sample verdict', () async {
