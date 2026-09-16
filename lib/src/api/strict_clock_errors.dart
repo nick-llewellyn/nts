@@ -12,14 +12,24 @@ part of 'strict_clock.dart';
 /// Most subtypes are thrown by [StrictClockContext.resolve],
 /// [StrictClockContext.now] and [StrictClockContext.elapsedSince], and
 /// by the [StrictSyncedTime] constructor's anchor check. Three arise
-/// only while a strict acquisition (`ntsGetTimeStrict`,
-/// `NtsClient.getTimeStrict`) attributes a query sample, and reach the
-/// caller as the `fault` of an `NtsError.clockFault` rather than
-/// directly: [StrictClockMissingReceipt] and [StrictClockForeignReceipt]
-/// at `ClockFaultStage.attribution`, and [StrictClockSuspendedInFlight]
-/// at `ClockFaultStage.receipt`. The other subtypes are carried the same
-/// way when the failing read was one the acquisition made on the
-/// caller's behalf.
+/// only while a call acquires a query sample and reach the caller as
+/// the `fault` of an `NtsError.clockFault` rather than directly, and
+/// they differ in which surfaces can raise them:
+///
+/// - [StrictClockSuspendedInFlight], at `ClockFaultStage.receipt`, is
+///   the native core's per-sample verdict that the device slept between
+///   send and receive. The core runs that check for every caller, so
+///   `ntsQuery` surfaces it with or without a `context`, and `ntsGetTime`
+///   and `ntsGetTimeStrict` both tolerate it per sample and rethrow it
+///   only when no sample in the burst landed.
+/// - [StrictClockMissingReceipt] and [StrictClockForeignReceipt], at
+///   `ClockFaultStage.attribution`, are raised only by a strict
+///   acquisition (`ntsGetTimeStrict`, `NtsClient.getTimeStrict`)
+///   attributing a sample to its context; the legacy surfaces never
+///   attribute, so never raise them.
+///
+/// The other subtypes are carried the same way when the failing read
+/// was one the acquisition made on the caller's behalf.
 ///
 /// [StrictClockContext.resolveForTesting] throws the same errors once
 /// past its precondition; the [StateError] it throws when the bridge is
