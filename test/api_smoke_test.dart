@@ -5548,6 +5548,82 @@ void main() {
         expect(ctx.isValid, isTrue);
       });
 
+      test('a suspendedInFlight verdict still owes the post-await read, '
+          'so a generation advance behind it fails the call as '
+          'invalidated rather than as the per-sample verdict', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final suspended = ffi.NtsError.clockFault(
+          stage: ffi.ClockFaultStage.receipt,
+          fault: ffi.NtsClockFault.suspendedInFlight(
+            boottimeMicros: PlatformInt64Util.from(3_000_000),
+            monotonicMicros: PlatformInt64Util.from(20_000),
+          ),
+          generation: PlatformInt64Util.from(api.strictGeneration),
+          trustBackend: ffi.TrustBackend.platform,
+        );
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            throw suspended;
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.platform,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+        expect(ctx.isValid, isFalse);
+      });
+
+      test('a stamp that predates the dispatch of the query returning it '
+          'is a Regression, even when it is above the admission '
+          'reading', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(2);
+        var stale = 0;
+        api.queryScript = [
+          () {
+            // Taken after admission, so it clears `start`; the suspend
+            // offset then moves the clock on so the second dispatch's
+            // reading is strictly above it.
+            stale = api.crateApiNtsNtsBoottimeMicros();
+            api.suspendOffsetMicros += 1_000;
+            throw const ffi.NtsError.network(message: 'eof');
+          },
+          () => strictSample(stampMicros: stale),
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.attribution,
+              isA<StrictClockRegression>().having(
+                (e) => e.observed,
+                'observed',
+                predicate<int>((v) => v == stale),
+              ),
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 2);
+        expect(ctx.isValid, isFalse);
+        expect(
+          ctx.invalidationReason,
+          StrictClockInvalidationReason.regression,
+        );
+      });
+
       test('the returned projection fails closed once the context is '
           'invalidated, and a fresh probe does not revive it', () async {
         final ctx = StrictClockContext.resolveForTesting();

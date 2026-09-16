@@ -335,23 +335,26 @@ Future<StrictSyncedTime> _getTimeStrict({
   final start = read(ClockFaultStage.admission);
   // `now()` enforces monotonicity against `start` on this context, so
   // the difference is never negative and never clamped.
-  Duration remaining() =>
-      _kGetTimeTimeout -
-      Duration(
-        microseconds: read(ClockFaultStage.awaitResult).micros - start.micros,
-      );
+  Duration remainingAt(StrictReading now) =>
+      _kGetTimeTimeout - Duration(microseconds: now.micros - start.micros);
 
   // An `await` that completes with an error still owes the strict
   // read: a bridge reset or native generation change that landed
   // while the call was parked fails the call instead of hiding behind
-  // the error. A `clockFault` is exempt — it already carries the
-  // native verdict, and a further read could only restate it as a
-  // less specific generation change.
+  // the error. A `clockFault` that retired the context is exempt — it
+  // already carries the native verdict, and a further read could only
+  // restate it as a less specific generation change. A
+  // `suspendedInFlight` verdict is not: it is a per-sample rejection
+  // that leaves the context valid, so it hides a lifecycle event as
+  // readily as a network error would.
   void readAfterFailure(NtsError err) {
-    if (err is! NtsErrorClockFault) read(ClockFaultStage.awaitResult);
+    if (err is! NtsErrorClockFault ||
+        err.fault is StrictClockSuspendedInFlight) {
+      read(ClockFaultStage.awaitResult);
+    }
   }
 
-  final warmBudget = remaining();
+  final warmBudget = remainingAt(read(ClockFaultStage.awaitResult));
   if (warmBudget < _kMinDispatchBudget) {
     throw const NtsError.timeout(phase: TimeoutPhase.ntp);
   }
@@ -379,7 +382,11 @@ Future<StrictSyncedTime> _getTimeStrict({
   Object? lastError;
   StackTrace? lastStack;
   for (var i = 0; i < burst; i++) {
-    final left = remaining();
+    // This reading is also the attribution floor for the sample the
+    // query returns: a stamp below it predates the dispatch and cannot
+    // be this query's receipt.
+    final dispatched = read(ClockFaultStage.awaitResult);
+    final left = remainingAt(dispatched);
     if (left < _kMinDispatchBudget) break;
     final NtsTimeSample sample;
     try {
@@ -391,9 +398,10 @@ Future<StrictSyncedTime> _getTimeStrict({
       // keeps a clock event from hiding behind a network error. A
       // `clockFault` from the query lands here too: if it moved the
       // generation it is what is rethrown or the next read fails the
-      // call, and a per-sample `suspendedInFlight` verdict is exactly
-      // what a retry is for. An error that resolved a backend is the
-      // latest word on which one this call is running against.
+      // call; a per-sample `suspendedInFlight` verdict is exactly what
+      // a retry is for, and still gets the read. An error that resolved
+      // a backend is the latest word on which one this call is running
+      // against.
       backend = _errorTrustBackend(err) ?? backend;
       readAfterFailure(err);
       lastError = err;
@@ -413,7 +421,7 @@ Future<StrictSyncedTime> _getTimeStrict({
     final receipt = _attributeReceipt(
       context,
       sample,
-      notBefore: start,
+      notBefore: dispatched,
       trustBackend: backend,
     );
     // Cross-reader ordering check: `elapsedSince` fails on a stamp

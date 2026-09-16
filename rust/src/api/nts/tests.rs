@@ -4896,6 +4896,7 @@ fn seen_uid_cache_reaccepts_after_ttl_expiry() {
 /// holding memory for suspend-time plus the TTL.
 #[test]
 fn seen_uid_cache_ages_across_a_suspend_gap() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let base = BootInstant::from_micros(1_000_000);
     let mut cache = SeenUidCache::new();
     let uid = [0x7Fu8; UID_LEN];
@@ -5126,6 +5127,7 @@ fn make_test_session_at(host: &str, generation: u64, atime: BootInstant) -> Sess
 /// a table that went quiet rather than one under churn.
 #[test]
 fn prune_sessions_drops_entries_past_the_idle_ttl() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let ttl_micros = i64::try_from(SESSION_TABLE_IDLE_TTL.as_micros()).expect("TTL fits in i64");
     let now = BootInstant::from_micros(10 * ttl_micros);
     let mut map = HashMap::new();
@@ -5164,6 +5166,7 @@ fn prune_sessions_drops_entries_past_the_idle_ttl() {
 /// oldest `atime` is the one that goes.
 #[test]
 fn prune_sessions_evicts_least_recently_used_to_make_install_room() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let ttl_micros = i64::try_from(SESSION_TABLE_IDLE_TTL.as_micros()).expect("TTL fits in i64");
     let now = BootInstant::from_micros(10 * ttl_micros);
     let mut map = HashMap::new();
@@ -5401,6 +5404,7 @@ fn checkout_cache_hit_refreshes_the_lru_stamp() {
 /// hold for exactly the case it exists to cover.
 #[test]
 fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let spec = NtsServerSpec {
         host: "ttl-expired.invalid".into(),

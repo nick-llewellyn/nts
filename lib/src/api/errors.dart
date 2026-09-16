@@ -300,12 +300,15 @@ sealed class NtsError implements Exception {
   /// [NtsError.network] convention: the backend resolved before the
   /// failure, or `null` when no handshake had run.
   ///
-  /// Most faults also advance the process-wide generation, so every
-  /// `StrictClockContext` resolved before them fails closed on its
-  /// next read; resolve a new context before retrying. The exception
-  /// is `StrictClockSuspendedInFlight` at [ClockFaultStage.receipt],
-  /// a per-sample verdict that leaves the clock and the context
-  /// valid — retry the query.
+  /// Native source faults and regressions also advance the
+  /// process-wide generation, so every `StrictClockContext` resolved
+  /// before them fails closed on its next read; resolve a new context
+  /// before retrying. Three faults are per-sample verdicts that leave
+  /// the clock and the context valid — retry the query on the same
+  /// context: `StrictClockSuspendedInFlight` at
+  /// [ClockFaultStage.receipt], and `StrictClockMissingReceipt` or
+  /// `StrictClockForeignReceipt` at [ClockFaultStage.attribution],
+  /// which reject the sample's provenance without reading the clock.
   const factory NtsError.clockFault({
     required ClockFaultStage stage,
     required StrictClockError fault,

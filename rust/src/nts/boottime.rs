@@ -225,6 +225,10 @@ pub(crate) mod test_sync {
 
     thread_local! {
         static EXCLUSIVE_HERE: Cell<bool> = const { Cell::new(false) };
+        // Counted `Shared` guards created on this thread and not yet
+        // dropped. Lets the assertions below name the offending thread
+        // rather than pass because some other test holds a guard.
+        static SHARED_HERE: Cell<usize> = const { Cell::new(0) };
     }
 
     const WAIT_LIMIT: Duration = Duration::from_secs(60);
@@ -270,12 +274,17 @@ pub(crate) mod test_sync {
         }
         let mut st = wait_while(lock(), "an exclusive holder to release", |s| s.writer);
         st.readers += 1;
+        drop(st);
+        SHARED_HERE.with(|c| c.set(c.get() + 1));
         Shared { counted: true }
     }
 
     impl Drop for Shared {
         fn drop(&mut self) {
             if self.counted {
+                // A guard is dropped on the thread that took it; an
+                // underflow here means one was moved across threads.
+                SHARED_HERE.with(|c| c.set(c.get() - 1));
                 let mut st = lock();
                 st.readers -= 1;
                 CV.notify_all();
@@ -322,11 +331,28 @@ pub(crate) mod test_sync {
         EXCLUSIVE_HERE.with(|c| c.set(true));
     }
 
+    /// The calling thread holds `exclusive()` or adopted it. Checking
+    /// the process-wide writer flag alone would let a test that forgot
+    /// `exclusive()` pass whenever some *other* test happened to hold
+    /// it — and mutate that test's generation.
     pub(super) fn assert_exclusive_held() {
         assert!(
-            lock().writer,
+            EXCLUSIVE_HERE.with(Cell::get),
             "boottime::test_sync: the clock generation advanced outside `exclusive()`; \
-             wrap the test in `let _x = test_sync::exclusive();`"
+             wrap the test in `let _x = test_sync::exclusive();` (or call \
+             `adopt_exclusive()` on a thread that test spawned)"
+        );
+    }
+
+    /// The calling thread holds `shared()`, or holds or adopted
+    /// `exclusive()`, so the generation it samples cannot move under
+    /// it until the guard drops.
+    pub(super) fn assert_held_here() {
+        assert!(
+            EXCLUSIVE_HERE.with(Cell::get) || SHARED_HERE.with(Cell::get) > 0,
+            "boottime::test_sync: a synthetic BootInstant was stamped outside `shared()`; \
+             an exclusive test elsewhere could advance the generation between two stamps \
+             of one fixture. Wrap the test in `let _s = test_sync::shared();`"
         );
     }
 }
@@ -859,8 +885,17 @@ impl BootInstant {
     /// [`strict_read`], under the current live generation. Exists so
     /// tests can drive deadline and TTL logic across a synthetic
     /// suspend gap without sleeping.
+    ///
+    /// The generation is sampled per call, so a fixture built from
+    /// several of these is only same-generation if nothing advances
+    /// the counter in between. The caller must therefore hold
+    /// [`test_sync::shared`] (or `exclusive`) for the whole fixture;
+    /// this asserts it on the calling thread so a forgotten guard is a
+    /// deterministic panic here, not a `GenerationChanged` flake when
+    /// an exclusive test happens to run alongside.
     #[cfg(test)]
     pub(crate) fn from_micros(micros: i64) -> Self {
+        test_sync::assert_held_here();
         Self {
             micros,
             generation: generation(),
@@ -1037,6 +1072,7 @@ mod tests {
 
     #[test]
     fn boot_instant_difference_matches_offset() {
+        let _shared = test_sync::shared();
         let base = BootInstant::from_micros(1_000_000);
         let later = base + Duration::from_millis(250);
         assert_eq!(
@@ -1047,6 +1083,7 @@ mod tests {
 
     #[test]
     fn boot_instant_difference_saturates_when_reversed() {
+        let _shared = test_sync::shared();
         let base = BootInstant::from_micros(1_000_000);
         let later = base + Duration::from_secs(5);
         assert_eq!(base.saturating_duration_since(later), Duration::ZERO);
@@ -1054,6 +1091,7 @@ mod tests {
 
     #[test]
     fn boot_instant_add_saturates_instead_of_wrapping() {
+        let _shared = test_sync::shared();
         let base = BootInstant::from_micros(i64::MAX - 10);
         let bumped = base + Duration::from_secs(3600);
         assert_eq!(bumped, BootInstant::from_micros(i64::MAX));
@@ -1063,6 +1101,7 @@ mod tests {
 
     #[test]
     fn boot_instant_checked_add_reports_overflow_and_keeps_generation() {
+        let _shared = test_sync::shared();
         let base = BootInstant::from_micros(1_000);
         let later = base.checked_add(Duration::from_millis(5)).unwrap();
         assert_eq!(later.micros(), 6_000);

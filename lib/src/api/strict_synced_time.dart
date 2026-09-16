@@ -107,8 +107,15 @@ final class StrictSyncedTime {
   /// Reading on [descriptor] at which [utcUnixMicros] is valid.
   int get anchorMicros => _anchor.micros;
 
-  /// Whether the bound context can still project. Once `false`, every
-  /// [utcNow] / [elapsedSinceSync] throws [StrictClockInvalidated].
+  /// Whether the bound context has been observed to be invalid. Once
+  /// `false`, every [utcNow] / [elapsedSinceSync] throws
+  /// [StrictClockInvalidated], and it never returns to `true`.
+  ///
+  /// `true` is not a promise that the next projection succeeds: like
+  /// [StrictClockContext.isValid] this reflects only invalidations the
+  /// context has already seen, and stays `true` after a bridge reset or
+  /// a native generation advance from another isolate until the next
+  /// projection performs the checks and throws.
   bool get isValid => _context.isValid;
 
   /// Time elapsed since the anchor on the bound context.
