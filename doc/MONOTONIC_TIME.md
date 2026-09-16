@@ -190,13 +190,16 @@ repairs.
 The whole NTS-KE handshake — DNS lookup, per-address TCP connect
 attempts, the TLS handshake, and the chunked record-exchange read
 loop — runs under a single shrinking deadline: a `Deadline` newtype
-anchored once at `Instant::now() + timeout` at the top of the
-handshake. Each phase consults `remaining()` (saturating at zero)
-before issuing any blocking syscall, and socket-level read/write
-timeouts are re-armed between phases so a slow trickle from the
-server cannot stretch the total wall-clock cost past the caller's
-budget. The same pattern (`UdpDeadline`) covers the UDP setup and
-the final `recv`.
+bound to the call's one absolute endpoint, anchored on the sleep-aware
+boot clock at admission and carried unchanged through the session
+checkout into the handshake rather than re-derived from a fresh
+reading at each layer (which would credit back any preemption or
+suspend between two readings). Each phase consults `remaining()`
+(saturating at zero) before issuing any blocking syscall, and
+socket-level read/write timeouts are re-armed between phases so a
+slow trickle from the server cannot stretch the total wall-clock cost
+past the caller's budget. The same pattern (`UdpDeadline`, bound to
+the same endpoint) covers the UDP setup and the final `recv`.
 
 Anchoring these deadlines to a monotonic source is what makes
 timeouts *neither premature nor delayed*: a backwards clock step

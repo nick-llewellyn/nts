@@ -64,6 +64,12 @@ tarball.
   stage instead of substituting a value, and a session entry stamped
   under a retired generation is dropped rather than served
   ([#354](https://github.com/nick-llewellyn/nts/pull/354)). The
+  call's `timeout` is now one absolute deadline on that reader,
+  anchored at admission and carried unchanged into the session
+  checkout, the NTS-KE handshake and the UDP bind; previously each
+  layer re-anchored a relative remainder from a fresh reading, so a
+  preemption or device suspend between two readings was credited back
+  to the budget and the documented single deadline could overshoot. The
   send/recv pair is additionally bracketed by strict readings, and a
   sample whose sleep-aware span exceeds its monotonic round trip by
   more than 50 ms is rejected as `StrictClockSuspendedInFlight`

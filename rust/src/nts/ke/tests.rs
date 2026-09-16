@@ -1603,17 +1603,21 @@ mod live_integration {
     #[test]
     #[ignore = "requires outbound TCP/4460 to time.cloudflare.com"]
     fn ke_live_cloudflare() {
+        let clock = SequentialReader::bind();
+        let deadline = clock
+            .instant()
+            .and_then(|now| now.checked_add(Duration::from_secs(10)))
+            .expect("strict reading for the handshake deadline");
         let req = KeRequest {
             host: "time.cloudflare.com".to_owned(),
             port: 4460,
             aead_algorithms: vec![aead::AES_SIV_CMAC_256],
-            timeout: Some(Duration::from_secs(10)),
+            deadline: Some(deadline),
             dns_concurrency_cap: crate::nts::dns::DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
             trust_mode: KeTrustMode::PlatformWithFallback,
             verification_time_override: None,
             phase_reporter: None,
         };
-        let clock = SequentialReader::bind();
         let outcome = perform_handshake(&req, &clock).expect("handshake");
         assert_eq!(outcome.aead_id, aead::AES_SIV_CMAC_256);
         assert_eq!(outcome.c2s_key.len(), 32);

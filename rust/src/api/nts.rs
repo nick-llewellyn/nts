@@ -2637,11 +2637,13 @@ fn effective_dns_concurrency_cap(dns_concurrency_cap: u32) -> usize {
 /// through it, so the readings before, inside and after the
 /// handshake form one sequence and a source that steps backwards
 /// across the boundary is a [`ClockFault::Regression`] rather than
-/// two separately-monotonic runs.
+/// two separately-monotonic runs. `deadline` is the operation's
+/// absolute endpoint on that reader, passed through to the KE driver
+/// unchanged so the handshake's budget ends where the caller's does.
 fn establish_session(
     clock: &SequentialReader,
     spec: &NtsServerSpec,
-    timeout: Duration,
+    deadline: BootInstant,
     dns_concurrency_cap: usize,
     trust_mode: KeTrustMode,
     verification_time_ms: Option<i64>,
@@ -2661,7 +2663,7 @@ fn establish_session(
         host: spec.host.clone(),
         port: spec.port,
         aead_algorithms: OFFERED_AEAD_IDS.to_vec(),
-        timeout: Some(timeout),
+        deadline: Some(deadline),
         dns_concurrency_cap,
         trust_mode,
         verification_time_override,
@@ -2814,13 +2816,18 @@ enum Role {
 /// timeout. Tests that drive the leader path can advance it to assert
 /// the waiter observes a specific phase.
 ///
+/// The [`BootInstant`] is the operation's absolute deadline on that
+/// reader — the same endpoint the leader checked before electing to
+/// handshake — so the KE driver binds to it rather than re-anchoring
+/// a relative remainder from a later reading.
+///
 /// The lifetime is the borrow of the operation's [`SequentialReader`]:
 /// the production closure captures it so the handshake deadline reads
 /// in the operation's sequence, and a `'static` object type would
 /// refuse that capture.
 type HandshakeFn<'a> = dyn Fn(
         &NtsServerSpec,
-        Duration,
+        BootInstant,
         usize,
         Option<&PhaseReporter>,
     ) -> Result<(Session, KePhaseTimings), NtsError>
@@ -2866,7 +2873,7 @@ impl SessionTable {
     /// onto one `establish_session` call: the first caller becomes
     /// the singleflight leader, runs the handshake without holding
     /// any lock, and publishes the result; concurrent callers park
-    /// on the slot bounded by their own per-call `timeout` budget,
+    /// on the slot bounded by their own per-call `deadline`,
     /// then re-enter the cookie-take phase against the freshly
     /// installed session. Concurrent callers against *different*
     /// `host:port` keys remain fully parallel — the singleflight
@@ -2875,7 +2882,7 @@ impl SessionTable {
         &self,
         clock: &SequentialReader,
         spec: &NtsServerSpec,
-        timeout: Duration,
+        deadline: BootInstant,
         dns_concurrency_cap: usize,
         trust_mode: KeTrustMode,
         verification_time_ms: Option<i64>,
@@ -2883,13 +2890,13 @@ impl SessionTable {
         self.checkout_with(
             clock,
             spec,
-            timeout,
+            deadline,
             dns_concurrency_cap,
-            &move |s, t, c, reporter| {
+            &move |s, d, c, reporter| {
                 establish_session(
                     clock,
                     s,
-                    t,
+                    d,
                     c,
                     trust_mode.clone(),
                     verification_time_ms,
@@ -2908,12 +2915,19 @@ impl SessionTable {
     /// The closure signature mirrors `establish_session`.
     ///
     /// `clock` is the calling operation's strict reader: every budget
-    /// anchor, idle-TTL check, access-time stamp and waiter wake on
+    /// check, idle-TTL check, access-time stamp and waiter wake on
     /// this path reads through it, so a clock fault anywhere in the
     /// checkout fails the operation as
     /// `NtsError::ClockFault { stage: Session, .. }` instead of serving
     /// a session whose age could not be established or re-arming a
     /// budget that could not be measured. Expiry is still `Timeout`.
+    ///
+    /// `deadline` is the operation's absolute endpoint, anchored by
+    /// the caller from its own admission reading. It is carried
+    /// unchanged to the leader's pre-handshake check, into the
+    /// handshake closure and to the waiter's park, so no layer
+    /// re-anchors a relative remainder from a later reading and
+    /// credits back the time between the two.
     #[expect(
         clippy::too_many_lines,
         reason = "linear singleflight role-election loop: phase A cache hit \
@@ -2931,13 +2945,12 @@ impl SessionTable {
         &self,
         clock: &SequentialReader,
         spec: &NtsServerSpec,
-        timeout: Duration,
+        deadline: BootInstant,
         dns_concurrency_cap: usize,
         do_handshake: &HandshakeFn<'_>,
     ) -> Result<(QueryContext, KePhaseTimings), NtsError> {
         let key = session_key(spec);
         let session_fault = NtsError::clock_fault(ClockFaultStage::Session, clock);
-        let started = clock.instant().map_err(&session_fault)?;
         loop {
             // Phase A: try the cache. Return immediately on a hit with
             // at least one cookie. Drop the `map` lock before any
@@ -3030,43 +3043,33 @@ impl SessionTable {
             match role {
                 Role::Leader(slot) => {
                     let mut guard = LeaderGuard::new(self, key.clone(), slot);
-                    // Derive the *remaining* slice of the caller's
-                    // wall-clock budget for this handshake attempt.
-                    // Re-leader cases — a thread that wakes as a waiter,
-                    // finds the cookie pool drained, and elects itself
-                    // as the next leader — must not start a fresh
-                    // `timeout`-long window; otherwise a single
-                    // `checkout_with` call could overshoot the caller's
-                    // documented budget by up to N rounds × `timeout`
-                    // in the worst case. If the budget is already
-                    // exhausted, surface `DnsTimeout`: at this point no
-                    // record I/O has happened on this thread, and the
-                    // next phase that *would* have run is DNS. This
-                    // matches the convention
-                    // [`UdpDeadline::remaining_or_timeout`] uses for
-                    // pre-DNS budget exhaustion on the UDP path. This is
-                    // the leader's *own* pre-handshake exhaustion
-                    // (operator remediation: raise `dnsConcurrencyCap`
-                    // or `timeoutMs`); it is distinct from the
-                    // parked-waiter case below, which now reports the
-                    // phase the leader was actually in via the slot's
-                    // `PhaseReporter` (NTS-43). Provenance: bd nts-r54,
-                    // nts-tk2t. A strict clock fault on the elapsed
-                    // read is neither: it is published to the waiters
-                    // and returned as `ClockFault { Session }`, so no
-                    // handshake starts on a budget that could not be
-                    // measured.
-                    let elapsed = match clock.elapsed_since(started) {
-                        Ok(d) => d,
-                        Err(fault) => {
-                            let err = session_fault(fault);
-                            guard.complete(Err(err.clone()));
-                            return Err(err);
-                        }
-                    };
-                    let remaining = match timeout.checked_sub(elapsed) {
-                        Some(d) if !d.is_zero() => d,
-                        _ => {
+                    // Check the caller's wall-clock budget before this
+                    // handshake attempt. Re-leader cases — a thread that
+                    // wakes as a waiter, finds the cookie pool drained,
+                    // and elects itself as the next leader — must not
+                    // start a fresh full-length window; the absolute
+                    // `deadline` is handed to the handshake as-is, so
+                    // every round ends where the caller's budget does.
+                    // If the budget is already exhausted, surface
+                    // `DnsTimeout`: at this point no record I/O has
+                    // happened on this thread, and the next phase that
+                    // *would* have run is DNS. This matches the
+                    // convention [`UdpDeadline::remaining_or_timeout`]
+                    // uses for pre-DNS budget exhaustion on the UDP
+                    // path. This is the leader's *own* pre-handshake
+                    // exhaustion (operator remediation: raise
+                    // `dnsConcurrencyCap` or `timeoutMs`); it is
+                    // distinct from the parked-waiter case below, which
+                    // now reports the phase the leader was actually in
+                    // via the slot's `PhaseReporter` (NTS-43).
+                    // Provenance: bd nts-r54, nts-tk2t. A strict clock
+                    // fault on the check is neither: it is published to
+                    // the waiters and returned as
+                    // `ClockFault { Session }`, so no handshake starts
+                    // on a budget that could not be measured.
+                    match clock.remaining_until(deadline) {
+                        Ok(d) if !d.is_zero() => {}
+                        Ok(_) => {
                             guard.complete(Err(NtsError::Timeout {
                                 phase: TimeoutPhase::DnsTimeout,
                                 trust_backend: None,
@@ -3076,13 +3079,14 @@ impl SessionTable {
                                 trust_backend: None,
                             });
                         }
-                    };
-                    let outcome = do_handshake(
-                        spec,
-                        remaining,
-                        dns_concurrency_cap,
-                        Some(&guard.slot.phase),
-                    );
+                        Err(fault) => {
+                            let err = session_fault(fault);
+                            guard.complete(Err(err.clone()));
+                            return Err(err);
+                        }
+                    }
+                    let outcome =
+                        do_handshake(spec, deadline, dns_concurrency_cap, Some(&guard.slot.phase));
                     match outcome {
                         Ok((session, ke_timings)) => {
                             // Capture the freshly-resolved backend before
@@ -3208,10 +3212,10 @@ impl SessionTable {
                 }
                 Role::Waiter(slot) => {
                     // Bound the wait by the caller's per-call wall-clock
-                    // budget. `started` was captured at the top of this
-                    // checkout call, so even if a slow leader runs longer
-                    // than `timeout`, the waiter unparks once *its own*
-                    // budget elapses and surfaces a Timeout. The phase it
+                    // budget. `deadline` is the caller's own endpoint, so
+                    // even if a slow leader runs longer, the waiter
+                    // unparks once *its own* budget elapses and surfaces
+                    // a Timeout. The phase it
                     // reports is read from the leader's advisory
                     // `PhaseReporter` at timeout time (see the `None` arm
                     // below), so a leader and a waiter now agree on the
@@ -3224,7 +3228,6 @@ impl SessionTable {
                     // nts-tk2t. A strict fault on a wake fails this
                     // waiter alone as `ClockFault { Session }`; the
                     // leader and the other waiters are unaffected.
-                    let deadline = started.checked_add(timeout).map_err(&session_fault)?;
                     match slot.wait_until(clock, deadline).map_err(&session_fault)? {
                         // Leader installed a session; loop back to phase
                         // A and pop a cookie. The slot's `Ok` payload
@@ -3311,30 +3314,22 @@ impl SessionTable {
     /// reporting the leader's codes is the accurate answer, matching
     /// how `fresh_cookies` and `trust_backend` already cross that
     /// boundary.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "mirror of `checkout_with`'s leader/waiter election minus \
-                  the cache phase; the strict install (read, prune, stamp, \
-                  insert under one lock) is kept inline so the two leader \
-                  paths stay side-by-side comparable"
-    )]
     fn warm_cookies_with(
         &self,
         clock: &SequentialReader,
         spec: &NtsServerSpec,
-        timeout: Duration,
+        deadline: BootInstant,
         dns_concurrency_cap: usize,
         do_handshake: &HandshakeFn<'_>,
     ) -> Result<(u32, KePhaseTimings, TrustBackend, Vec<u16>), NtsError> {
         let key = session_key(spec);
         let session_fault = NtsError::clock_fault(ClockFaultStage::Session, clock);
-        // Unlike `checkout_with`, whose caller has already anchored the
-        // call-wide budget, this read *is* the warm-up's entry
-        // anchor, so a fault on it is `Admission`; table work from
-        // here on is `Session`.
-        let started = clock
-            .instant()
-            .map_err(NtsError::clock_fault(ClockFaultStage::Admission, clock))?;
+        // `deadline` is the caller's absolute endpoint, anchored from
+        // its admission reading (`nts_warm_cookies_inner`); as in
+        // `checkout_with` it is carried unchanged to the leader's
+        // check, the handshake closure and the waiter's park. Table
+        // work from here on is `Session`.
+        //
         // Phase B: leader-or-waiter election. No Phase A — the
         // contract is "force a fresh handshake," so the cache is
         // intentionally bypassed on the leader path. Waiters
@@ -3366,19 +3361,11 @@ impl SessionTable {
                 // reports the phase the leader was actually in via the
                 // slot's `PhaseReporter` (NTS-43), rather than a blanket
                 // `KeRecordIo`. Provenance: bd nts-r54, nts-tk2t. A
-                // strict clock fault on the elapsed read is published
-                // to the waiters and returned as `ClockFault { Session }`.
-                let elapsed = match clock.elapsed_since(started) {
-                    Ok(d) => d,
-                    Err(fault) => {
-                        let err = session_fault(fault);
-                        guard.complete(Err(err.clone()));
-                        return Err(err);
-                    }
-                };
-                let remaining = match timeout.checked_sub(elapsed) {
-                    Some(d) if !d.is_zero() => d,
-                    _ => {
+                // strict clock fault on the check is published to the
+                // waiters and returned as `ClockFault { Session }`.
+                match clock.remaining_until(deadline) {
+                    Ok(d) if !d.is_zero() => {}
+                    Ok(_) => {
                         let err = NtsError::Timeout {
                             phase: TimeoutPhase::DnsTimeout,
                             trust_backend: None,
@@ -3386,13 +3373,13 @@ impl SessionTable {
                         guard.complete(Err(err.clone()));
                         return Err(err);
                     }
-                };
-                match do_handshake(
-                    spec,
-                    remaining,
-                    dns_concurrency_cap,
-                    Some(&guard.slot.phase),
-                ) {
+                    Err(fault) => {
+                        let err = session_fault(fault);
+                        guard.complete(Err(err.clone()));
+                        return Err(err);
+                    }
+                }
+                match do_handshake(spec, deadline, dns_concurrency_cap, Some(&guard.slot.phase)) {
                     Ok((session, ke_timings)) => {
                         let session_backend = session.trust_backend;
                         let install_fault =
@@ -3473,7 +3460,6 @@ impl SessionTable {
                 }
             }
             Role::Waiter(slot) => {
-                let deadline = started.checked_add(timeout).map_err(&session_fault)?;
                 match slot.wait_until(clock, deadline).map_err(&session_fault)? {
                     Some(Ok(payload)) => {
                         // Return the leader's harvested count
@@ -3519,7 +3505,7 @@ impl SessionTable {
         &self,
         clock: &SequentialReader,
         spec: &NtsServerSpec,
-        timeout: Duration,
+        deadline: BootInstant,
         dns_concurrency_cap: usize,
         trust_mode: KeTrustMode,
         verification_time_ms: Option<i64>,
@@ -3527,13 +3513,13 @@ impl SessionTable {
         self.warm_cookies_with(
             clock,
             spec,
-            timeout,
+            deadline,
             dns_concurrency_cap,
-            &move |s, t, c, reporter| {
+            &move |s, d, c, reporter| {
                 establish_session(
                     clock,
                     s,
-                    t,
+                    d,
                     c,
                     trust_mode.clone(),
                     verification_time_ms,
@@ -3745,15 +3731,15 @@ fn take_udp_connect_stamp() -> Option<u64> {
 /// `NtsError::Network` so the caller (and therefore the Dart side via
 /// FRB) sees the full picture rather than just the last error.
 ///
-/// `timeout` is enforced as a single global deadline that spans every
+/// `deadline` is enforced as a single global deadline that spans every
 /// blocking phase of the UDP setup — bounded DNS lookup (via the
 /// resolver in [`crate::nts::dns`]), the per-address `bind`+`connect`
 /// loop, and the read/write timeouts written onto the returned socket
 /// (which then bound the subsequent `send`/`recv` in [`nts_query`]).
-/// The deadline is anchored once via [`UdpDeadline::new`] and the
+/// It is the call-wide endpoint, bound via [`UdpDeadline::at`], and the
 /// remaining budget is consulted before the lookup and again before
 /// `set_read_timeout`/`set_write_timeout` so the wall-clock cost of
-/// the UDP phase cannot exceed `timeout` regardless of how it is
+/// the UDP phase cannot run past it regardless of how time is
 /// distributed across DNS and I/O. Either an elapsed budget or a
 /// resolver that exceeded its slice surfaces as `NtsError::Timeout`
 /// rather than as a generic network error so the Dart side can
@@ -3765,11 +3751,14 @@ fn take_udp_connect_stamp() -> Option<u64> {
 ///
 /// Single wall-clock budget shared across the UDP setup phase — the
 /// bounded DNS lookup *and* the read/write timeouts written onto the
-/// returned socket. Anchored once from a strict reading plus `total`
-/// at the top of [`bind_connected_udp_using`] so the budget shrinks
-/// monotonically as DNS consumes time, in place of the prior pattern
-/// where the caller's `timeout` was passed verbatim to both phases and
-/// the wall-clock cost of one UDP setup could overshoot it by up to 2x.
+/// returned socket. Bound at the top of [`bind_connected_udp_using`]
+/// to the call-wide endpoint the caller anchored at admission, so the
+/// budget shrinks monotonically as DNS consumes time, in place of the
+/// prior pattern where the caller's `timeout` was passed verbatim to
+/// both phases and the wall-clock cost of one UDP setup could
+/// overshoot it by up to 2x. The endpoint is not re-anchored from a
+/// relative remainder: that would credit back whatever elapsed between
+/// the caller's last reading and this one.
 ///
 /// Anchored on the sleep-aware [`BootInstant`] for the same reason as
 /// the KE-side `Deadline`: `std::time::Instant` freezes across device
@@ -3792,10 +3781,18 @@ struct UdpDeadline<'c> {
 }
 
 impl<'c> UdpDeadline<'c> {
-    /// Anchor a deadline `total` from a fresh strict reading. Callers
-    /// pass the entire caller-visible UDP-phase budget; subsequent
-    /// steps consult [`UdpDeadline::remaining_or_timeout`] before
-    /// issuing any blocking syscall or arming a socket-level timeout.
+    /// Bind the call-wide endpoint `at` to `clock` without reading it.
+    /// Subsequent steps consult [`UdpDeadline::remaining_or_timeout`]
+    /// before issuing any blocking syscall or arming a socket-level
+    /// timeout.
+    fn at(clock: &'c SequentialReader, at: BootInstant) -> Self {
+        Self { clock, at }
+    }
+
+    /// Anchor a deadline `total` from a fresh strict reading.
+    /// Test-only: the deadline unit tests have no call-wide endpoint
+    /// to bind.
+    #[cfg(test)]
     fn new(clock: &'c SequentialReader, total: Duration) -> Result<Self, NtsError> {
         let at = clock
             .instant()
@@ -3859,22 +3856,22 @@ struct UdpBindOutcome {
 /// interval so the T1 stamp's position relative to this bind is
 /// observable on the wire.
 ///
-/// `timeout` is the slice of the call-wide budget left for this leg;
-/// the same single deadline spans the DNS lookup and the UDP I/O, so
-/// the post-bind socket timeouts are armed from what remains after the
-/// lookup rather than from `timeout` afresh.
+/// `deadline` is the call-wide endpoint the caller anchored at
+/// admission; the same single deadline spans the DNS lookup and the
+/// UDP I/O, so the post-bind socket timeouts are armed from what
+/// remains after the lookup rather than from a fresh budget.
 fn bind_connected_udp_using<F>(
     clock: &SequentialReader,
     host: &str,
     port: u16,
-    timeout: Duration,
+    deadline: BootInstant,
     dns_concurrency_cap: usize,
     lookup: F,
 ) -> Result<UdpBindOutcome, NtsError>
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
-    let deadline = UdpDeadline::new(clock, timeout)?;
+    let deadline = UdpDeadline::at(clock, deadline);
     // Pre-DNS budget exhaustion is tagged as `DnsTimeout` because
     // that is the next phase the call would have entered — see the
     // `remaining_or_timeout` rustdoc.
@@ -4199,14 +4196,20 @@ where
     // order on one generation and a fault anywhere fails this call as
     // `ClockFault` at the stage that observed it. Nothing on this
     // path reads the legacy best-effort clock.
+    //
+    // `deadline` is the one absolute endpoint for the call. Checkout,
+    // the KE handshake and the UDP bind all bind to it rather than
+    // re-anchoring a relative remainder from a later reading, which
+    // would credit back any preemption or suspend between the two
+    // readings and let the documented single deadline overshoot.
     let clock = SequentialReader::bind();
-    let started = clock
-        .instant()
-        .map_err(NtsError::clock_fault(ClockFaultStage::Admission, &clock))?;
+    let admission_fault = NtsError::clock_fault(ClockFaultStage::Admission, &clock);
+    let started = clock.instant().map_err(&admission_fault)?;
+    let deadline = started.checked_add(timeout).map_err(&admission_fault)?;
     let (ctx, ke_timings) = table.checkout(
         &clock,
         &spec,
-        timeout,
+        deadline,
         cap,
         trust_mode,
         verification_time_ms,
@@ -4290,16 +4293,15 @@ where
     // connection. The previous hard-coded `0.0.0.0:0` bind silently broke
     // every IPv6-only NTS endpoint (Netnod and several PTB hosts).
     //
-    // Subtract the wall-clock already spent in `checkout` (DNS +
-    // connect + TLS + KE record I/O on a cold query, microseconds on
-    // a warm cache hit) from the caller's budget so the UDP-setup
-    // deadline shares the same anchor. An already-elapsed budget
-    // short-circuits with `Timeout(Ntp)` here — the next blocking
-    // syscall after this point is the AEAD-NTPv4 `send`/`recv`,
-    // which is the same phase `bind_connected_udp_using` would tag
-    // post-DNS (see its `remaining_or_timeout` comment).
-    let udp_budget = remaining_budget_or_ntp_timeout(timeout, udp_elapsed()?)
-        .map_err(attribute_post_handshake)?;
+    // The UDP-setup leg binds to the same call-wide `deadline` as
+    // `checkout` did (DNS + connect + TLS + KE record I/O on a cold
+    // query, microseconds on a warm cache hit), so what it has left is
+    // whatever the handshake did not spend. A budget that is already
+    // elapsed short-circuits with `Timeout(Ntp)` here — the next
+    // blocking syscall after this point is the AEAD-NTPv4
+    // `send`/`recv`, which is the same phase `bind_connected_udp_using`
+    // would tag post-DNS (see its `remaining_or_timeout` comment).
+    remaining_budget_or_ntp_timeout(timeout, udp_elapsed()?).map_err(attribute_post_handshake)?;
     let UdpBindOutcome {
         socket,
         dns_micros: udp_dns_micros,
@@ -4307,7 +4309,7 @@ where
         &clock,
         &ctx.ntpv4_host,
         ctx.ntpv4_port,
-        udp_budget,
+        deadline,
         cap,
         lookup,
     )
@@ -4570,12 +4572,21 @@ fn nts_warm_cookies_inner(
     // perform KE work themselves. See `SessionTable::warm_cookies_with`
     // for the full state-machine documentation. The strict reader is
     // bound per call, as on the query path, so the singleflight budget
-    // and the install stamp share one generation.
+    // and the install stamp share one generation. The entry reading is
+    // the warm-up's admission anchor — a fault on it is `Admission`,
+    // table work from here on is `Session` — and the absolute deadline
+    // derived from it is carried unchanged through the leader's check,
+    // the handshake and the waiter's park.
     let clock = SequentialReader::bind();
+    let admission_fault = NtsError::clock_fault(ClockFaultStage::Admission, &clock);
+    let deadline = clock
+        .instant()
+        .and_then(|now| now.checked_add(timeout))
+        .map_err(&admission_fault)?;
     let (count, ke_timings, trust_backend, ke_warnings) = table.warm_cookies(
         &clock,
         &spec,
-        timeout,
+        deadline,
         cap,
         trust_mode,
         verification_time_ms,

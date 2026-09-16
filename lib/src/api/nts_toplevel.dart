@@ -348,9 +348,11 @@ Future<NtsSyncedTime> ntsGetTime({
 /// otherwise — this entry:
 ///
 /// - meters the 8-second budget on `context`, so a read that faults
-///   fails the call with [NtsError.clockFault] at
-///   [ClockFaultStage.awaitResult] (a spent budget is still
-///   [NtsError.timeout] with [TimeoutPhase.ntp]);
+///   fails the call with [NtsError.clockFault]: at
+///   [ClockFaultStage.admission] for the reading that anchors the
+///   budget before anything is dispatched, and at
+///   [ClockFaultStage.awaitResult] for every later budget read (a
+///   spent budget is still [NtsError.timeout] with [TimeoutPhase.ntp]);
 /// - passes `context` to every underlying [ntsWarmCookies] /
 ///   [ntsQuery], so the bridge gate meters each queue wait on it;
 /// - re-reads `context` after every `await`, so a bridge reset or a
