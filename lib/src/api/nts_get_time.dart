@@ -318,6 +318,12 @@ Future<NtsSyncedTime> _getTime({
 // - The anchor lag is the strict receipt aged on `context`; a stamp
 //   that does not order against the context's own readings is a
 //   regression and fails the call.
+// - A fault's `trustBackend` is the backend most recently resolved by
+//   this call: the warm-up's, then each query's as it completes,
+//   whether with a sample or with a backend-bearing error. Another
+//   consumer can drain or replace the cached session between the
+//   calls, so a query may run on a different backend than the
+//   warm-up did.
 Future<StrictSyncedTime> _getTimeStrict({
   required StrictClockContext context,
   required Future<NtsWarmCookiesOutcome> Function(Duration timeout) warm,
@@ -386,12 +392,18 @@ Future<StrictSyncedTime> _getTimeStrict({
       // `clockFault` from the query lands here too: if it moved the
       // generation it is what is rethrown or the next read fails the
       // call, and a per-sample `suspendedInFlight` verdict is exactly
-      // what a retry is for.
+      // what a retry is for. An error that resolved a backend is the
+      // latest word on which one this call is running against.
+      backend = _errorTrustBackend(err) ?? backend;
       readAfterFailure(err);
       lastError = err;
       lastStack = stack;
       continue;
     }
+    // The sample's backend is the one the query actually ran against,
+    // which need not be the warm-up's if another consumer replaced the
+    // session in between; record it before the read that may fault.
+    backend = sample.trustBackend;
     // The post-`await` read precedes attribution. A missing or foreign
     // stamp says nothing about the context and throws without reading
     // it, so a bridge reset or native generation change that landed
@@ -506,6 +518,23 @@ NtsError _clockFaultError(
   generation: context.generation,
   trustBackend: trustBackend,
 );
+
+/// The backend a failed query resolved before it failed, or `null`
+/// for the variants that carry none or whose handshake never got that
+/// far.
+TrustBackend? _errorTrustBackend(NtsError err) => switch (err) {
+  NtsErrorNetwork(:final trustBackend) ||
+  NtsErrorKeProtocol(:final trustBackend) ||
+  NtsErrorNtpProtocol(:final trustBackend) ||
+  NtsErrorAuthentication(:final trustBackend) ||
+  NtsErrorTimeout(:final trustBackend) ||
+  NtsErrorNoCookies(:final trustBackend) ||
+  NtsErrorClockFault(:final trustBackend) => trustBackend,
+  NtsErrorInvalidSpec() ||
+  NtsErrorTrustBackendUnavailable() ||
+  NtsErrorInternal() ||
+  NtsErrorAbiMismatch() => null,
+};
 
 StrictReading _strictRead(
   StrictClockContext context,

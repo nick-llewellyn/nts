@@ -5079,9 +5079,11 @@ void main() {
       int? generation,
       ffi.NtsClockBackend? backend,
       int? stampMicros,
+      ffi.TrustBackend trustBackend = ffi.TrustBackend.platform,
     }) => _ffiSample(
       utcUnixMicros: utcUnixMicros,
       roundTripMicros: roundTripMicros,
+      trustBackend: trustBackend,
       recvBoottimeMicros: stampMicros ?? api.crateApiNtsNtsBoottimeMicros(),
       recvClockGeneration: generation ?? api.strictGeneration,
       recvClockBackend: backend ?? _RecordingApi.strictBackend,
@@ -5339,6 +5341,92 @@ void main() {
         // Not tolerated as a burst failure: the second query never ran.
         expect(api.queryDispatches, 1);
         expect(ctx.isValid, isFalse);
+      });
+
+      test('a fault after a query reports the backend that query ran '
+          'against, not the warm-up\'s', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        // Another consumer replaced the session between the calls:
+        // the warm-up handshook on the platform verifier, the query
+        // ran on a re-handshaken custom-roots session.
+        api.nextWarm = _ffiWarm(2, trustBackend: ffi.TrustBackend.platform);
+        api.queryScript = [
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            return strictSample(trustBackend: ffi.TrustBackend.custom);
+          },
+          () => strictSample(),
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.custom,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+      });
+
+      test('a fault after a failing query reports the backend the query '
+          'error resolved, not the warm-up\'s', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1, trustBackend: ffi.TrustBackend.platform);
+        api.queryScript = [
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            throw const ffi.NtsError.network(
+              message: 'reset by peer',
+              trustBackend: ffi.TrustBackend.webpkiRoots,
+            );
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.webpkiRoots,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+      });
+
+      test('a query error that resolved no backend keeps the last one '
+          'this call resolved', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1, trustBackend: ffi.TrustBackend.custom);
+        api.queryScript = [
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            // A re-handshake that failed before resolving a backend.
+            throw const ffi.NtsError.timeout(
+              phase: ffi.TimeoutPhase.dnsTimeout,
+            );
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>(),
+              trustBackend: TrustBackend.custom,
+            ),
+          ),
+        );
       });
 
       test(
