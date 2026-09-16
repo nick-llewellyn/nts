@@ -25,6 +25,7 @@ import 'package:nts/nts.dart'
         NtsError,
         NtsErrorAbiMismatch,
         NtsErrorAuthentication,
+        NtsErrorClockFault,
         NtsErrorInternal,
         NtsErrorInvalidSpec,
         NtsErrorKeProtocol,
@@ -496,6 +497,7 @@ class NtsController {
       NtsErrorAuthentication(:final trustBackend) => trustBackend,
       NtsErrorTimeout(:final trustBackend) => trustBackend,
       NtsErrorNoCookies(:final trustBackend) => trustBackend,
+      NtsErrorClockFault(:final trustBackend) => trustBackend,
       NtsErrorInvalidSpec() ||
       NtsErrorTrustBackendUnavailable() ||
       NtsErrorInternal() ||

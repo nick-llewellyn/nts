@@ -194,6 +194,7 @@ class _RecordingApi implements NtsRustLibApi {
     strictMicrosOverride = null;
     strictReadBackendOverride = null;
     strictDescriptorOverride = null;
+    onStrictRead = null;
     // `strictGeneration` is deliberately not reset: like the offset
     // below it only ever advances, mirroring the Rust core's counter.
     // Do NOT reset `_bootSw` or `suspendOffsetMicros` — the mocked
@@ -333,6 +334,10 @@ class _RecordingApi implements NtsRustLibApi {
   // Sticky: the descriptor every resolution sees until cleared, so a
   // context can be bound to a foreign coordinate.
   ffi.NtsClockDescriptor? strictDescriptorOverride;
+  // Fires before each strict read, the strict counterpart of
+  // `onBoottimeRead`: lets a test inject a suspend or arm a fault at a
+  // specific read in a sequence with no suspension point between them.
+  void Function()? onStrictRead;
 
   @override
   ffi.NtsClockDescriptor crateApiNtsNtsClockDescriptor() {
@@ -350,6 +355,7 @@ class _RecordingApi implements NtsRustLibApi {
     PlatformInt64? boundGeneration,
   }) {
     strictReadCalls++;
+    onStrictRead?.call();
     // Mirrors the native pre-check: a caller on a retired generation
     // is refused before the source — here, the scripted fault — is
     // consulted, so `nextStrictThrow` stays armed.
@@ -605,6 +611,8 @@ ffi.NtsTimeSample _ffiSample({
   ffi.PhaseTimings? phaseTimings,
   ffi.TrustBackend trustBackend = ffi.TrustBackend.platform,
   int recvBoottimeMicros = 0,
+  int recvClockGeneration = 0,
+  ffi.NtsClockBackend recvClockBackend = _RecordingApi.strictBackend,
   int offsetMicros = 0,
   int peerDelayMicros = 0,
   int rootDelayMicros = 0,
@@ -620,6 +628,8 @@ ffi.NtsTimeSample _ffiSample({
   phaseTimings: phaseTimings ?? _zeroFfiPhaseTimings(),
   trustBackend: trustBackend,
   recvBoottimeMicros: PlatformInt64Util.from(recvBoottimeMicros),
+  recvClockGeneration: PlatformInt64Util.from(recvClockGeneration),
+  recvClockBackend: recvClockBackend,
   offsetMicros: PlatformInt64Util.from(offsetMicros),
   peerDelayMicros: PlatformInt64Util.from(peerDelayMicros),
   rootDelayMicros: PlatformInt64Util.from(rootDelayMicros),
@@ -799,7 +809,8 @@ enum _ClockFaultTag {
   invalidRaw,
   conversionOverflow,
   regression,
-  generationChanged;
+  generationChanged,
+  suspendedInFlight;
 
   static _ClockFaultTag of(ffi.NtsClockFault fault) => switch (fault) {
     ffi.NtsClockFault_Unsupported() => unsupported,
@@ -809,6 +820,7 @@ enum _ClockFaultTag {
     ffi.NtsClockFault_ConversionOverflow() => conversionOverflow,
     ffi.NtsClockFault_Regression() => regression,
     ffi.NtsClockFault_GenerationChanged() => generationChanged,
+    ffi.NtsClockFault_SuspendedInFlight() => suspendedInFlight,
   };
 }
 
@@ -1673,6 +1685,8 @@ void main() {
         phaseTimings: phase,
         trustBackend: TrustBackend.platform,
         recvBoottimeMicros: 555_000,
+        recvClockGeneration: 3,
+        recvClockBackend: ClockBackend.linuxBoottime,
         offsetMicros: -250,
         peerDelayMicros: 11_000,
         rootDelayMicros: 3_000,
@@ -1689,6 +1703,8 @@ void main() {
         phaseTimings: phase,
         trustBackend: TrustBackend.platform,
         recvBoottimeMicros: 555_000,
+        recvClockGeneration: 3,
+        recvClockBackend: ClockBackend.linuxBoottime,
         offsetMicros: -250,
         peerDelayMicros: 11_000,
         rootDelayMicros: 3_000,
@@ -1714,6 +1730,8 @@ void main() {
         PhaseTimings phaseTimings = phase,
         TrustBackend trustBackend = TrustBackend.platform,
         int recvBoottimeMicros = 555_000,
+        int recvClockGeneration = 3,
+        ClockBackend? recvClockBackend = ClockBackend.linuxBoottime,
         int offsetMicros = -250,
         int peerDelayMicros = 11_000,
         int rootDelayMicros = 3_000,
@@ -1729,6 +1747,8 @@ void main() {
         phaseTimings: phaseTimings,
         trustBackend: trustBackend,
         recvBoottimeMicros: recvBoottimeMicros,
+        recvClockGeneration: recvClockGeneration,
+        recvClockBackend: recvClockBackend,
         offsetMicros: offsetMicros,
         peerDelayMicros: peerDelayMicros,
         rootDelayMicros: rootDelayMicros,
@@ -1746,6 +1766,9 @@ void main() {
         variant(phaseTimings: otherPhase),
         variant(trustBackend: TrustBackend.webpkiRoots),
         variant(recvBoottimeMicros: 0),
+        variant(recvClockGeneration: 0),
+        variant(recvClockBackend: ClockBackend.appleContinuous),
+        variant(recvClockBackend: null),
         variant(offsetMicros: 0),
         variant(peerDelayMicros: 0),
         variant(rootDelayMicros: 0),
@@ -1768,6 +1791,7 @@ void main() {
         'freshCookies: 7, phaseTimings: PhaseTimings(dnsMicros: 1, '
         'connectMicros: 2, tlsHandshakeMicros: 3, keRecordIoMicros: 4), '
         'trustBackend: platform, recvBoottimeMicros: 555000, '
+        'recvClockGeneration: 3, recvClockBackend: linuxBoottime, '
         'offsetMicros: -250, peerDelayMicros: 11000, '
         'rootDelayMicros: 3000, rootDispersionMicros: 1500, '
         'serverPrecision: -20, keWarnings: [1, 2])',
@@ -3853,6 +3877,15 @@ void main() {
           'reason',
           StrictClockInvalidationReason.nativeGeneration,
         ),
+        // Never produced by the strict read export; a bridge that
+        // returns it anyway is out of contract and the context fails
+        // closed as for any other source fault.
+        const ffi.NtsClockFault.suspendedInFlight(
+          boottimeMicros: 5000000,
+          monotonicMicros: 20000,
+        ): isA<StrictClockSuspendedInFlight>()
+            .having((e) => e.boottimeMicros, 'boottimeMicros', 5000000)
+            .having((e) => e.monotonicMicros, 'monotonicMicros', 20000),
       };
       final seen = <_ClockFaultTag>{};
       for (final entry in cases.entries) {
@@ -4697,6 +4730,17 @@ void main() {
           expected: StrictClockProvenance.native,
           actual: StrictClockProvenance.testInjected,
         ),
+        const StrictClockSuspendedInFlight(
+          boottimeMicros: 5_000_000,
+          monotonicMicros: 20_000,
+        ),
+        const StrictClockMissingReceipt(),
+        const StrictClockForeignReceipt(
+          expectedGeneration: 3,
+          observedGeneration: 2,
+          expectedBackend: ClockBackend.linuxBoottime,
+          observedBackend: ClockBackend.linuxBoottime,
+        ),
       ];
       final tags = <String>{};
       for (final e in errors) {
@@ -4714,6 +4758,9 @@ void main() {
           StrictClockDescriptorIncompatible() => 'incompatible',
           StrictClockGenerationIncompatible() => 'generationIncompatible',
           StrictClockSourceIncompatible() => 'sourceIncompatible',
+          StrictClockSuspendedInFlight() => 'suspendedInFlight',
+          StrictClockMissingReceipt() => 'missingReceipt',
+          StrictClockForeignReceipt() => 'foreignReceipt',
         });
       }
       // Two-sided: the switch forces an arm for every subtype, and this
@@ -4730,6 +4777,9 @@ void main() {
         'incompatible',
         'generationIncompatible',
         'sourceIncompatible',
+        'suspendedInFlight',
+        'missingReceipt',
+        'foreignReceipt',
       });
     });
 
@@ -5006,6 +5056,1111 @@ void main() {
       gates[0].complete();
       await Future.wait([holder, stranded]);
       expect(api.queryDispatches, 3);
+    });
+  });
+
+  group('strict acquisition (nts-flr8.4)', () {
+    const spec = NtsServerSpec(host: 'time.example', port: 4460);
+
+    tearDown(() {
+      if (NtsBridge.state == NtsBridgeState.uninitialized) {
+        NtsRustLib.initMock(api: api);
+      }
+    });
+
+    // A sample the strict path attributes to the current context: a
+    // receipt stamped on the shared boottime timeline (so it orders
+    // above the call's admission reading) under the live generation
+    // and the descriptor's backend. Built at return time from inside
+    // a `queryScript` factory so the stamp postdates the call start.
+    ffi.NtsTimeSample strictSample({
+      int utcUnixMicros = 1_000_000,
+      int roundTripMicros = 2000,
+      int? generation,
+      ffi.NtsClockBackend? backend,
+      int? stampMicros,
+      ffi.TrustBackend trustBackend = ffi.TrustBackend.platform,
+    }) => _ffiSample(
+      utcUnixMicros: utcUnixMicros,
+      roundTripMicros: roundTripMicros,
+      trustBackend: trustBackend,
+      recvBoottimeMicros: stampMicros ?? api.crateApiNtsNtsBoottimeMicros(),
+      recvClockGeneration: generation ?? api.strictGeneration,
+      recvClockBackend: backend ?? _RecordingApi.strictBackend,
+    );
+
+    Matcher clockFault(
+      ClockFaultStage stage,
+      Matcher fault, {
+      Object? trustBackend = anything,
+    }) => isA<NtsErrorClockFault>()
+        .having((e) => e.stage, 'stage', stage)
+        .having((e) => e.fault, 'fault', fault)
+        .having((e) => e.trustBackend, 'trustBackend', trustBackend);
+
+    group('happy path', () {
+      test('returns a StrictSyncedTime bound to the context, attributed '
+          'by receipt rather than plausibility', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(3, trustBackend: ffi.TrustBackend.webpkiRoots);
+        api.queryScript = [
+          () => strictSample(utcUnixMicros: 1_000_000, roundTripMicros: 9000),
+          () => strictSample(utcUnixMicros: 2_000_000, roundTripMicros: 4000),
+          () => strictSample(utcUnixMicros: 3_000_000, roundTripMicros: 7000),
+        ];
+        final synced = await ntsGetTimeStrict(spec: spec, context: ctx);
+        expect(api.queryDispatches, 3);
+        expect(synced.samplesUsed, 3);
+        expect(synced.roundTripMicros, 4000);
+        expect(synced.generation, ctx.generation);
+        expect(synced.descriptor, ctx.descriptor);
+        expect(synced.isValid, isTrue);
+        expect(synced.utcUnixMicros, greaterThanOrEqualTo(2_000_000 + 2000));
+        expect(synced.utcUnixMicros, lessThan(2_000_000 + 2000 + 1_000_000));
+        // The anchor is a reading on the context, so the projection
+        // orders against it and advances through simulated suspend.
+        expect(
+          synced.anchorMicros,
+          greaterThanOrEqualTo(synced.referenceMicros),
+        );
+        final before = synced.utcNow();
+        api.suspendOffsetMicros += const Duration(minutes: 2).inMicroseconds;
+        expect(
+          synced.utcNow().difference(before),
+          greaterThanOrEqualTo(const Duration(minutes: 2)),
+        );
+        expect(ctx.isValid, isTrue);
+      });
+
+      test('NtsClient.getTimeStrict threads the context through the '
+          'per-client surface', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final client = NtsClient();
+        addTearDown(client.dispose);
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [() => strictSample()];
+        final synced = await client.getTimeStrict(spec: spec, context: ctx);
+        expect(synced.samplesUsed, 1);
+        expect(api.lastClientWarmTimeoutMs, isNotNull);
+        expect(api.lastClientQueryTimeoutMs, isNotNull);
+      });
+    });
+
+    group('AC2: injected faults leave no usable result or budget', () {
+      test('a fault on the admission read fails before any dispatch and '
+          'no fresh budget is started on a later call', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(8);
+        api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(errno: 5);
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.admission,
+              isA<StrictClockSourceFault>().having(
+                (e) => e.kind,
+                'kind',
+                SourceFaultKind.syscallFailed,
+              ),
+              trustBackend: isNull,
+            ),
+          ),
+        );
+        expect(api.lastWarmTimeoutMs, isNull);
+        expect(api.queryDispatches, 0);
+        expect(ctx.isValid, isFalse);
+        // The one-shot fault is spent; a legacy clock would now read
+        // fine. The strict call must not start over on a fresh budget.
+        final reads = api.strictReadCalls;
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.admission,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.sourceFault,
+              ),
+            ),
+          ),
+        );
+        expect(api.strictReadCalls, reads);
+        expect(api.lastWarmTimeoutMs, isNull);
+      });
+
+      test('a fault that lands while the handshake is awaited fails the '
+          'call at awaitResult and discards the completed handshake', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(8, trustBackend: ffi.TrustBackend.custom);
+        api.asyncGate = () async {
+          api.asyncGate = null;
+          api.nextStrictThrow = const ffi.NtsClockFault.unsupported();
+        };
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockUnsupported>(),
+              // The handshake ran and resolved its backend before the
+              // read faulted; `null` is reserved for "no handshake ran".
+              trustBackend: TrustBackend.custom,
+            ),
+          ),
+        );
+        // The handshake ran and produced eight cookies, but nothing
+        // was built on it: no query dispatched.
+        expect(api.lastWarmTimeoutMs, isNotNull);
+        expect(api.queryDispatches, 0);
+        expect(ctx.isValid, isFalse);
+      });
+
+      test('a bridge reset while the call is parked fails the stale '
+          'completion instead of reading the re-initialized bridge', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(8);
+        final parked = Completer<void>();
+        api.asyncGate = () => parked.future;
+        final call = ntsGetTimeStrict(spec: spec, context: ctx);
+        expect(api.lastWarmTimeoutMs, isNotNull);
+        NtsBridge.dispose();
+        NtsRustLib.initMock(api: api);
+        final reads = api.strictReadCalls;
+        api.asyncGate = null;
+        parked.complete();
+        await expectLater(
+          call,
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.bridgeReset,
+              ),
+            ),
+          ),
+        );
+        // Failed closed on the context's own state, without a read.
+        expect(api.strictReadCalls, reads);
+        expect(api.queryDispatches, 0);
+      });
+
+      test('a bridge reset while a failing handshake is parked surfaces '
+          'as the clock fault, not the handshake error', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextThrow = const ffi.NtsError.network(message: 'eof');
+        final parked = Completer<void>();
+        api.asyncGate = () => parked.future;
+        final call = ntsGetTimeStrict(spec: spec, context: ctx);
+        expect(api.lastWarmTimeoutMs, isNotNull);
+        NtsBridge.dispose();
+        NtsRustLib.initMock(api: api);
+        api.asyncGate = null;
+        parked.complete();
+        await expectLater(
+          call,
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.bridgeReset,
+              ),
+              trustBackend: isNull,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 0);
+      });
+
+      test('a native generation change while the final query is failing '
+          'surfaces as the clock fault, not the query error', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [
+          // The only attempt: no further budget read follows it, so
+          // the catch's own read is what observes the generation.
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            throw const ffi.NtsError.network(message: 'reset by peer');
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.platform,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+        expect(ctx.isValid, isFalse);
+      });
+
+      test('a native generation change while a query is in flight fails '
+          'the call at awaitResult before the sample is attributed, even '
+          'for an in-window stamp', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [
+          // Stamped under the *new* generation: the receipt is real,
+          // numerically fresh, and not this context's. The read owed
+          // for the `await` sees the retired generation first, so the
+          // call reports the clock event rather than its symptom (a
+          // foreign receipt at attribution — see AC5 for that case on
+          // a context whose own reads succeed).
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            return strictSample();
+          },
+          () => strictSample(),
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.platform,
+            ),
+          ),
+        );
+        // Not tolerated as a burst failure: the second query never ran.
+        expect(api.queryDispatches, 1);
+        expect(ctx.isValid, isFalse);
+      });
+
+      test('a fault after a query reports the backend that query ran '
+          'against, not the warm-up\'s', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        // Another consumer replaced the session between the calls:
+        // the warm-up handshook on the platform verifier, the query
+        // ran on a re-handshaken custom-roots session.
+        api.nextWarm = _ffiWarm(2, trustBackend: ffi.TrustBackend.platform);
+        api.queryScript = [
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            return strictSample(trustBackend: ffi.TrustBackend.custom);
+          },
+          () => strictSample(),
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.custom,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+      });
+
+      test('a fault after a failing query reports the backend the query '
+          'error resolved, not the warm-up\'s', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1, trustBackend: ffi.TrustBackend.platform);
+        api.queryScript = [
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            throw const ffi.NtsError.network(
+              message: 'reset by peer',
+              trustBackend: ffi.TrustBackend.webpkiRoots,
+            );
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.webpkiRoots,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+      });
+
+      test('a query error that resolved no backend keeps the last one '
+          'this call resolved', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1, trustBackend: ffi.TrustBackend.custom);
+        api.queryScript = [
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            // A re-handshake that failed before resolving a backend.
+            throw const ffi.NtsError.timeout(
+              phase: ffi.TimeoutPhase.dnsTimeout,
+            );
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>(),
+              trustBackend: TrustBackend.custom,
+            ),
+          ),
+        );
+      });
+
+      test(
+        'a bridge reset while a query is parked is reported at '
+        'awaitResult even when the sample it returns has no receipt',
+        () async {
+          final ctx = StrictClockContext.resolveForTesting();
+          api.nextWarm = _ffiWarm(2);
+          // An unattributable sample is refused without reading the
+          // context; the read owed for the `await` must come first so
+          // the lifecycle fault is not hidden behind MissingReceipt.
+          api.queryScript = [
+            () => strictSample(generation: 0),
+            () => strictSample(),
+          ];
+          var calls = 0;
+          api.asyncGate = () async {
+            // The handshake passes through; reset the bridge while the
+            // first query is parked.
+            if (++calls == 2) {
+              api.asyncGate = null;
+              NtsBridge.dispose();
+              NtsRustLib.initMock(api: api);
+            }
+          };
+          await expectLater(
+            ntsGetTimeStrict(spec: spec, context: ctx),
+            throwsA(
+              clockFault(
+                ClockFaultStage.awaitResult,
+                isA<StrictClockInvalidated>().having(
+                  (e) => e.reason,
+                  'reason',
+                  StrictClockInvalidationReason.bridgeReset,
+                ),
+                trustBackend: TrustBackend.platform,
+              ),
+            ),
+          );
+          expect(api.queryDispatches, 1);
+        },
+      );
+
+      test('a fault on the projection read fails the call after every '
+          'sample was accepted', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [
+          () => strictSample(),
+          // The second query fails on the wire, so the burst ends with
+          // one accepted sample. Two strict reads follow: the
+          // post-`await` read owed by the failed query, which must
+          // still succeed, and then the projection anchor. Arm the
+          // fault for the second one from inside the throw.
+          () {
+            var reads = 0;
+            api.onStrictRead = () {
+              if (++reads == 2) {
+                api.onStrictRead = null;
+                api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(
+                  errno: 22,
+                );
+              }
+            };
+            throw const ffi.NtsError.network(message: 'reset by peer');
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.projection,
+              isA<StrictClockSourceFault>().having((e) => e.errno, 'errno', 22),
+              trustBackend: TrustBackend.platform,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 2);
+        expect(ctx.isValid, isFalse);
+      });
+
+      test('a native suspendedInFlight verdict is a per-sample failure '
+          'the next sample retries, and fails the call only when every '
+          'sample carries it', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        ffi.NtsError suspended() => ffi.NtsError.clockFault(
+          stage: ffi.ClockFaultStage.receipt,
+          fault: ffi.NtsClockFault.suspendedInFlight(
+            boottimeMicros: PlatformInt64Util.from(3_000_000),
+            monotonicMicros: PlatformInt64Util.from(20_000),
+          ),
+          generation: PlatformInt64Util.from(api.strictGeneration),
+          trustBackend: ffi.TrustBackend.platform,
+        );
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [suspended(), () => strictSample()];
+        final synced = await ntsGetTimeStrict(spec: spec, context: ctx);
+        expect(synced.samplesUsed, 1);
+        expect(api.queryDispatches, 2);
+        expect(ctx.isValid, isTrue);
+
+        api.reset();
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [suspended(), suspended()];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.receipt,
+              isA<StrictClockSuspendedInFlight>()
+                  .having((e) => e.boottimeMicros, 'boottime', 3_000_000)
+                  .having((e) => e.monotonicMicros, 'monotonic', 20_000),
+              trustBackend: TrustBackend.platform,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 2);
+        // A wire-level verdict says nothing against the context.
+        expect(ctx.isValid, isTrue);
+      });
+
+      test('any other native clock fault fails the call at once, whether '
+          'a sample already landed or another could still be '
+          'dispatched', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        // The mock does not advance the generation on a scripted
+        // fault, so a context read after it would still succeed: the
+        // fault has to be refused on its own account, not caught by a
+        // later read.
+        ffi.NtsError regressed() => ffi.NtsError.clockFault(
+          stage: ffi.ClockFaultStage.receipt,
+          fault: ffi.NtsClockFault.regression(
+            previous: PlatformInt64Util.from(3_000_000),
+            observed: PlatformInt64Util.from(2_999_000),
+          ),
+          generation: PlatformInt64Util.from(api.strictGeneration),
+          trustBackend: ffi.TrustBackend.platform,
+        );
+        final matcher = clockFault(
+          ClockFaultStage.receipt,
+          isA<StrictClockRegression>()
+              .having((e) => e.previous, 'previous', 3_000_000)
+              .having((e) => e.observed, 'observed', 2_999_000),
+          trustBackend: TrustBackend.platform,
+        );
+
+        // A sample already accepted does not outrank the fault.
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [() => strictSample(), regressed()];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(matcher),
+        );
+        expect(api.queryDispatches, 2);
+
+        // Nor is a later sample dispatched on the failed clock.
+        api.reset();
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [regressed(), () => strictSample()];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(matcher),
+        );
+        expect(api.queryDispatches, 1);
+      });
+
+      test('a suspendedInFlight verdict still owes the post-await read, '
+          'so a generation advance behind it fails the call as '
+          'invalidated rather than as the per-sample verdict', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final suspended = ffi.NtsError.clockFault(
+          stage: ffi.ClockFaultStage.receipt,
+          fault: ffi.NtsClockFault.suspendedInFlight(
+            boottimeMicros: PlatformInt64Util.from(3_000_000),
+            monotonicMicros: PlatformInt64Util.from(20_000),
+          ),
+          generation: PlatformInt64Util.from(api.strictGeneration),
+          trustBackend: ffi.TrustBackend.platform,
+        );
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [
+          () {
+            api.crateApiNtsNtsClockInvalidate();
+            throw suspended;
+          },
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
+              trustBackend: TrustBackend.platform,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+        expect(ctx.isValid, isFalse);
+      });
+
+      test('a stamp that predates the dispatch of the query returning it '
+          'is a Regression, even when it is above the admission '
+          'reading', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(2);
+        var stale = 0;
+        api.queryScript = [
+          () {
+            // Taken after admission, so it clears `start`; the suspend
+            // offset then moves the clock on so the second dispatch's
+            // reading is strictly above it.
+            stale = api.crateApiNtsNtsBoottimeMicros();
+            api.suspendOffsetMicros += 1_000;
+            throw const ffi.NtsError.network(message: 'eof');
+          },
+          () => strictSample(stampMicros: stale),
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.attribution,
+              isA<StrictClockRegression>().having(
+                (e) => e.observed,
+                'observed',
+                predicate<int>((v) => v == stale),
+              ),
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 2);
+        expect(ctx.isValid, isFalse);
+        expect(
+          ctx.invalidationReason,
+          StrictClockInvalidationReason.regression,
+        );
+      });
+
+      test('the returned projection fails closed once the context is '
+          'invalidated, and a fresh probe does not revive it', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [() => strictSample()];
+        final synced = await ntsGetTimeStrict(spec: spec, context: ctx);
+        expect(synced.utcNow(), isA<DateTime>());
+        api.crateApiNtsNtsClockInvalidate();
+        expect(
+          synced.utcNow,
+          throwsA(
+            isA<StrictClockInvalidated>().having(
+              (e) => e.reason,
+              'reason',
+              StrictClockInvalidationReason.nativeGeneration,
+            ),
+          ),
+        );
+        expect(synced.isValid, isFalse);
+        // A new context reads fine on the new generation; the old
+        // projection stays dead.
+        expect(
+          StrictClockContext.resolveForTesting().now().micros,
+          isNonNegative,
+        );
+        expect(synced.elapsedSinceSync, throwsA(isA<StrictClockInvalidated>()));
+      });
+    });
+
+    group('AC3: absent versus foreign receipt', () {
+      test('an absent receipt with an in-window numeric stamp is '
+          'MissingReceipt on the strict path and accepted by the legacy '
+          'path', () async {
+        // Generation 0 is the "never stamped" marker. The numeric
+        // stamp is fresh, so plausibility alone would accept it.
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [() => strictSample(generation: 0)];
+        final legacy = await ntsGetTime(spec: spec);
+        expect(legacy.samplesUsed, 1);
+
+        api.reset();
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(2);
+        api.queryScript = [
+          () => strictSample(generation: 0),
+          () => strictSample(),
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.attribution,
+              isA<StrictClockMissingReceipt>(),
+              trustBackend: TrustBackend.platform,
+            ),
+          ),
+        );
+        // Fails the call, not the sample: the valid second sample was
+        // never requested.
+        expect(api.queryDispatches, 1);
+        // Attribution said nothing about the clock itself.
+        expect(ctx.isValid, isTrue);
+      });
+
+      test('an in-window stamp under a stale generation is '
+          'ForeignReceipt, distinct from MissingReceipt', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1);
+        final stale = ctx.generation - 1;
+        api.queryScript = [() => strictSample(generation: stale)];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.attribution,
+              isA<StrictClockForeignReceipt>()
+                  .having((e) => e.observedGeneration, 'observed', stale)
+                  .having(
+                    (e) => e.expectedGeneration,
+                    'expected',
+                    ctx.generation,
+                  )
+                  .having(
+                    (e) => e.observedBackend,
+                    'observedBackend',
+                    ctx.descriptor.backend,
+                  ),
+            ),
+          ),
+        );
+        expect(ctx.isValid, isTrue);
+      });
+
+      test('an in-window stamp from another backend on the live '
+          'generation is ForeignReceipt naming both backends', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [
+          () => strictSample(backend: ffi.NtsClockBackend.linuxBoottime),
+        ];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.attribution,
+              isA<StrictClockForeignReceipt>()
+                  .having(
+                    (e) => e.expectedBackend,
+                    'expectedBackend',
+                    ClockBackend.appleContinuous,
+                  )
+                  .having(
+                    (e) => e.observedBackend,
+                    'observedBackend',
+                    ClockBackend.linuxBoottime,
+                  ),
+            ),
+          ),
+        );
+      });
+
+      test('a correctly attributed stamp below the admission reading is '
+          'a Regression that invalidates the context', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(1);
+        final below = api.crateApiNtsNtsBoottimeMicros() - 1;
+        api.queryScript = [() => strictSample(stampMicros: below)];
+        final invalidates = api.clockInvalidateCalls;
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            clockFault(
+              ClockFaultStage.attribution,
+              isA<StrictClockRegression>().having(
+                (e) => e.observed,
+                'observed',
+                below,
+              ),
+            ),
+          ),
+        );
+        expect(ctx.isValid, isFalse);
+        expect(
+          ctx.invalidationReason,
+          StrictClockInvalidationReason.regression,
+        );
+        expect(api.clockInvalidateCalls, invalidates + 1);
+      });
+    });
+
+    group('AC4: suspend, expiry versus regression, stale completions, '
+        'shared gate', () {
+      test(
+        'a suspend that spends the budget between the admission read '
+        'and the handshake is timeout(ntp) with nothing dispatched',
+        () async {
+          final ctx = StrictClockContext.resolveForTesting();
+          api.nextWarm = _ffiWarm(8);
+          var reads = 0;
+          api.onStrictRead = () {
+            if (++reads == 2) api.suspendOffsetMicros += 8_000_000;
+          };
+          await expectLater(
+            ntsGetTimeStrict(spec: spec, context: ctx),
+            throwsA(
+              isA<NtsErrorTimeout>()
+                  .having((e) => e.phase, 'phase', TimeoutPhase.ntp)
+                  .having((e) => e.trustBackend, 'trustBackend', isNull),
+            ),
+          );
+          expect(api.lastWarmTimeoutMs, isNull);
+          expect(api.queryDispatches, 0);
+          // Expired, not regressed: the context is still good.
+          expect(ctx.isValid, isTrue);
+        },
+      );
+
+      test('a suspend during the handshake exhausts the burst budget: '
+          'timeout(ntp) attributed to the handshake backend', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        api.nextWarm = _ffiWarm(8, trustBackend: ffi.TrustBackend.custom);
+        api.asyncGate = () async {
+          api.asyncGate = null;
+          api.suspendOffsetMicros += 9_000_000;
+        };
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: ctx),
+          throwsA(
+            isA<NtsErrorTimeout>()
+                .having((e) => e.phase, 'phase', TimeoutPhase.ntp)
+                .having(
+                  (e) => e.trustBackend,
+                  'trustBackend',
+                  TrustBackend.custom,
+                ),
+          ),
+        );
+        expect(api.queryDispatches, 0);
+        expect(ctx.isValid, isTrue);
+      });
+
+      test('a queued strict waiter whose budget a suspend consumed is '
+          'timeout(bridgeSaturation) and never dispatches', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final gate = Completer<void>();
+        api.asyncGate = () => gate.future;
+        final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+        final queued = ntsQuery(
+          spec: spec,
+          context: ctx,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 10),
+        );
+        api.suspendOffsetMicros += const Duration(seconds: 11).inMicroseconds;
+        await expectLater(
+          queued,
+          throwsA(
+            isA<NtsErrorTimeout>().having(
+              (e) => e.phase,
+              'phase',
+              TimeoutPhase.bridgeSaturation,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+        expect(ctx.isValid, isTrue);
+        api.asyncGate = null;
+        gate.complete();
+        await holder;
+      });
+
+      test('a queued strict waiter whose context regresses is '
+          'clockFault(admission), not a timeout', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final gate = Completer<void>();
+        api.asyncGate = () => gate.future;
+        final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+        final enqueuedAt = api.crateApiNtsNtsBoottimeMicros();
+        final queued = ntsQuery(
+          spec: spec,
+          context: ctx,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 10),
+        );
+        // The next strict read is the sweep's: pin it below the
+        // enqueue reading.
+        api.strictMicrosOverride = enqueuedAt - 1;
+        await expectLater(
+          queued,
+          throwsA(
+            clockFault(
+              ClockFaultStage.admission,
+              isA<StrictClockRegression>(),
+              trustBackend: isNull,
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+        expect(ctx.isValid, isFalse);
+        api.asyncGate = null;
+        gate.complete();
+        await holder;
+      });
+
+      test('a queued strict waiter whose context faults while parked '
+          'fails without dispatching, and the slot goes to a legacy '
+          'survivor', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final gate = Completer<void>();
+        api.asyncGate = () => gate.future;
+        final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+        final strictWaiter = ntsQuery(
+          spec: spec,
+          context: ctx,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 30),
+        );
+        final legacyWaiter = ntsQuery(
+          spec: spec,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 30),
+        );
+        api.nextStrictThrow = const ffi.NtsClockFault.unsupported();
+        await expectLater(
+          strictWaiter,
+          throwsA(
+            clockFault(
+              ClockFaultStage.admission,
+              isA<StrictClockUnsupported>(),
+            ),
+          ),
+        );
+        expect(api.queryDispatches, 1);
+        api.asyncGate = null;
+        gate.complete();
+        await Future.wait([holder, legacyWaiter]);
+        expect(api.queryDispatches, 2);
+        expect(api.asyncMaxInFlight, 1);
+      });
+
+      test('a strict waiter whose context faults on the read that charges '
+          'its queue wait releases the slot it was just granted', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final gate = Completer<void>();
+        api.asyncGate = () => gate.future;
+        final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+        final strictWaiter = ntsQuery(
+          spec: spec,
+          context: ctx,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 30),
+        );
+        // Short budget so a leaked slot shows up as this waiter's
+        // `timeout(bridgeSaturation)` rather than a hung test.
+        final legacyWaiter = ntsQuery(
+          spec: spec,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 2),
+        );
+        // The holder's release sweeps the queue: read 1 is the sweep's
+        // verdict, which admits the strict waiter and takes the slot on
+        // its behalf; read 2 charges the queue wait once admitted.
+        var reads = 0;
+        api.onStrictRead = () {
+          if (++reads == 2) {
+            api.nextStrictThrow = const ffi.NtsClockFault.unsupported();
+          }
+        };
+        api.asyncGate = null;
+        gate.complete();
+        await holder;
+        await expectLater(
+          strictWaiter,
+          throwsA(
+            clockFault(
+              ClockFaultStage.admission,
+              isA<StrictClockUnsupported>(),
+            ),
+          ),
+        );
+        expect(reads, 2);
+        await legacyWaiter;
+        expect(api.queryDispatches, 2);
+        expect(api.asyncMaxInFlight, 1);
+      });
+
+      test('an already-invalid context fails at enqueue without taking '
+          'a queue entry', () async {
+        final ctx = StrictClockContext.resolveForTesting()..invalidate();
+        final gate = Completer<void>();
+        api.asyncGate = () => gate.future;
+        final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+        final reads = api.strictReadCalls;
+        await expectLater(
+          ntsQuery(spec: spec, context: ctx, bridgeConcurrencyCap: 1),
+          throwsA(
+            clockFault(
+              ClockFaultStage.admission,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.explicit,
+              ),
+            ),
+          ),
+        );
+        expect(api.strictReadCalls, reads);
+        api.asyncGate = null;
+        gate.complete();
+        await holder;
+        expect(api.queryDispatches, 1);
+      });
+
+      test('a legacy holder releasing admits a strict waiter, whose '
+          'queue wait is charged on its own context', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final gate = Completer<void>();
+        api.asyncGate = () => gate.future;
+        final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+        final queued = ntsWarmCookies(
+          spec: spec,
+          context: ctx,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 30),
+        );
+        // Slept 5s while queued: strict metering charges it. The
+        // forwarded value rounds a live sub-ms remainder up, so the
+        // bound is inclusive.
+        api.suspendOffsetMicros += const Duration(seconds: 5).inMicroseconds;
+        api.asyncGate = null;
+        gate.complete();
+        await Future.wait([holder, queued]);
+        expect(api.lastWarmTimeoutMs, lessThanOrEqualTo(25_000));
+        expect(api.lastWarmTimeoutMs, greaterThan(20_000));
+        expect(ctx.isValid, isTrue);
+      });
+
+      test('a strict call whose context faults while parked does not '
+          'disturb a legacy call sharing the gate', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final gate = Completer<void>();
+        api.asyncGate = () => gate.future;
+        final legacyHolder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+        api.nextWarm = _ffiWarm(1);
+        final strictCall = ntsGetTimeStrict(spec: spec, context: ctx);
+        // `getTime` uses the default cap (4), so its handshake was
+        // admitted alongside the cap-1 legacy holder and is parked on
+        // the same gate. Fault the context while both are parked.
+        api.nextStrictThrow = const ffi.NtsClockFault.unsupported();
+        api.asyncGate = null;
+        gate.complete();
+        await expectLater(
+          strictCall,
+          throwsA(
+            clockFault(
+              ClockFaultStage.awaitResult,
+              isA<StrictClockUnsupported>(),
+            ),
+          ),
+        );
+        await legacyHolder;
+        expect(api.queryDispatches, 1);
+        expect(api.asyncInFlight, 0);
+      });
+    });
+
+    group('AC5: a successful probe cannot certify a foreign acquisition', () {
+      test('a sample acquired under a previous context is rejected by a '
+          'fresh context whose own reads all succeed', () async {
+        final old = StrictClockContext.resolveForTesting();
+        final acquiredUnder = old.generation;
+        // Acquire the receipt under `old`, then retire that generation
+        // as a native invalidate would.
+        final foreign = strictSample(generation: acquiredUnder);
+        api.crateApiNtsNtsClockInvalidate();
+        final fresh = StrictClockContext.resolveForTesting();
+        expect(fresh.generation, acquiredUnder + 1);
+        expect(fresh.now().micros, isNonNegative);
+        expect(old.now, throwsA(isA<StrictClockInvalidated>()));
+
+        api.nextWarm = _ffiWarm(1);
+        api.queryScript = [foreign];
+        await expectLater(
+          ntsGetTimeStrict(spec: spec, context: fresh),
+          throwsA(
+            clockFault(
+              ClockFaultStage.attribution,
+              isA<StrictClockForeignReceipt>().having(
+                (e) => e.observedGeneration,
+                'observed',
+                acquiredUnder,
+              ),
+            ),
+          ),
+        );
+        // `fresh` reads fine before and after; the probe is not the
+        // certificate, the receipt is.
+        expect(fresh.isValid, isTrue);
+        expect(fresh.now().micros, isNonNegative);
+      });
+
+      test('a StrictSyncedTime cannot be anchored on a reading from a '
+          'retired generation', () {
+        // The check is provenance, not identity: a reading from another
+        // context in the same generation is indistinguishable from one
+        // of `b`'s own and is accepted. Retire `a`'s generation so the
+        // anchor is genuinely incompatible.
+        final a = StrictClockContext.resolveForTesting();
+        final anchorA = a.now();
+        api.crateApiNtsNtsClockInvalidate();
+        final b = StrictClockContext.resolveForTesting();
+        expect(b.now().micros, isNonNegative);
+        expect(
+          () => StrictSyncedTime(
+            context: b,
+            anchor: anchorA,
+            utcUnixMicros: 1,
+            referenceMicros: anchorA.micros,
+            roundTripMicros: 0,
+            samplesUsed: 1,
+            trustBackend: TrustBackend.platform,
+          ),
+          throwsA(
+            isA<StrictClockGenerationIncompatible>()
+                .having((e) => e.expected, 'expected', b.generation)
+                .having((e) => e.actual, 'actual', anchorA.generation),
+          ),
+        );
+        // A foreign anchor is the caller's error, not evidence against
+        // the receiving context.
+        expect(b.isValid, isTrue);
+      });
     });
   });
 }

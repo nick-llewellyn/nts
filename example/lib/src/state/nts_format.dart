@@ -15,6 +15,7 @@ import 'package:nts/nts.dart'
         NtsError,
         NtsErrorAbiMismatch,
         NtsErrorAuthentication,
+        NtsErrorClockFault,
         NtsErrorInternal,
         NtsErrorInvalidSpec,
         NtsErrorKeProtocol,
@@ -261,7 +262,7 @@ String formatTrustMismatch(
 /// JSON-shaped payload for a `--require-trust-backend` assertion
 /// failure.
 ///
-/// `error_type` shares the namespace with [errorTypeName]'s ten
+/// `error_type` shares the namespace with [errorTypeName]'s eleven
 /// [NtsError] tags so a consumer switching on the field can tell a
 /// policy-assertion failure from a protocol error without a second
 /// branch. `trust_backend` reuses the key [jsonQuerySuccess] /
@@ -379,22 +380,28 @@ String formatDnsPoolStats(NtsDnsPoolStats before, NtsDnsPoolStats after) =>
 
 /// Severity classification for an [NtsError]. Network / timeout / spec
 /// errors are routine when probing arbitrary hosts and warrant warn;
-/// authentication, KE-/NTP-protocol, internal, ABI-mismatch, and
-/// trust-backend errors are genuinely interesting and stay at error.
-/// The trust-backend
+/// authentication, KE-/NTP-protocol, internal, ABI-mismatch, clock-
+/// fault, and trust-backend errors are genuinely interesting and stay
+/// at error. The trust-backend
 /// case is a deliberate caller-side configuration choice (`PlatformOnly`)
 /// the runtime cannot honour; loud surfacing is appropriate so an
 /// operator notices the misconfiguration rather than treating it as a
 /// transient network blip. The ABI-mismatch case means the loaded
 /// native library does not match these bindings at all, so every
-/// subsequent call will fail the same way until it is rebuilt.
+/// subsequent call will fail the same way until it is rebuilt. The
+/// clock-fault case means the sleep-aware clock the strict call was
+/// bound to could not vouch for the result — a native read failed, the
+/// bridge was reset under the call, or a sample's receipt did not
+/// match the caller's context — which is a platform or lifecycle
+/// condition rather than a network one.
 bool isErrorSeverity(NtsError err) =>
     err is NtsErrorAuthentication ||
     err is NtsErrorKeProtocol ||
     err is NtsErrorNtpProtocol ||
     err is NtsErrorTrustBackendUnavailable ||
     err is NtsErrorInternal ||
-    err is NtsErrorAbiMismatch;
+    err is NtsErrorAbiMismatch ||
+    err is NtsErrorClockFault;
 
 /// Human-readable rendering of an [NtsError] suitable for the live log
 /// or stderr.
@@ -442,6 +449,8 @@ String describeError(NtsError err) => switch (err) {
     'TrustBackendUnavailable: $message',
   NtsErrorInternal(:final message) => 'Internal: $message',
   NtsErrorAbiMismatch(:final message) => 'AbiMismatch: $message',
+  NtsErrorClockFault(:final stage, :final fault) =>
+    'ClockFault (stage ${stage.name}): ${fault.message}',
 };
 
 /// Structured timeout-phase tag for an [NtsError], or `null` for any
@@ -460,12 +469,14 @@ String? timeoutPhaseName(NtsError err) =>
 /// Per-handshake trust-anchor attribution carried by [err], or `null`
 /// when the shape carries none.
 ///
-/// Six variants carry an optional field, so they report the backend
+/// Seven variants carry an optional field, so they report the backend
 /// resolved for the handshake when the failure fired downstream of
 /// config-build and `null` when it fired before. Carrying the field is
 /// not a promise that it is populated: an [NtsErrorTimeout] whose
 /// phase is `bridgeSaturation` never reached FFI dispatch at all, so
-/// its backend is always `null`. The remaining variants
+/// its backend is always `null`, and an [NtsErrorClockFault] raised
+/// at the bridge gate (stage `admission`) precedes dispatch the same
+/// way. The remaining variants
 /// ([NtsErrorInvalidSpec], [NtsErrorTrustBackendUnavailable],
 /// [NtsErrorInternal], [NtsErrorAbiMismatch]) have no field to read at
 /// all, so their `null` says nothing about when they fired: an
@@ -504,6 +515,7 @@ TrustBackend? errorTrustBackend(NtsError err) => switch (err) {
   NtsErrorAuthentication(:final trustBackend) => trustBackend,
   NtsErrorTimeout(:final trustBackend) => trustBackend,
   NtsErrorNoCookies(:final trustBackend) => trustBackend,
+  NtsErrorClockFault(:final trustBackend) => trustBackend,
   NtsErrorInvalidSpec() ||
   NtsErrorTrustBackendUnavailable() ||
   NtsErrorInternal() ||
@@ -524,6 +536,7 @@ String errorTypeName(NtsError err) => switch (err) {
   NtsErrorTrustBackendUnavailable() => 'TrustBackendUnavailable',
   NtsErrorInternal() => 'Internal',
   NtsErrorAbiMismatch() => 'AbiMismatch',
+  NtsErrorClockFault() => 'ClockFault',
 };
 
 /// JSON-shaped success payload for an `ntsQuery` result. Carries

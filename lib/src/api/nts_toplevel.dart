@@ -142,6 +142,20 @@ part of 'nts.dart';
 /// Pre-epoch instants are rejected with [NtsError.invalidSpec] before
 /// dispatch.
 ///
+/// `context`, when non-null, meters this call's bridge-gate queue
+/// wait on that [StrictClockContext] instead of the legacy
+/// [MonotonicClock]: the wait is deducted from `timeout` by a strict
+/// `elapsedSince`, and a read that faults while queued or on
+/// admission fails the call with [NtsError.clockFault] at
+/// [ClockFaultStage.admission] rather than admitting it on a budget
+/// the context can no longer meter. An uncontended call never reads
+/// it. The native core's own timeline (deadlines, session TTLs, the
+/// receipt stamp) is strict for every caller regardless; the returned
+/// sample's [NtsTimeSample.recvClockGeneration] and
+/// [NtsTimeSample.recvClockBackend] let a caller attribute the stamp
+/// to its context, which is what [ntsGetTimeStrict] does for the
+/// whole burst. New in 10.0.
+///
 /// Throws an [NtsError] on every failure path.
 Future<NtsTimeSample> ntsQuery({
   required NtsServerSpec spec,
@@ -149,12 +163,14 @@ Future<NtsTimeSample> ntsQuery({
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
   int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
   DateTime? verificationTime,
+  StrictClockContext? context,
 }) => _dispatch(
   spec: spec,
   timeout: timeout,
   dnsConcurrencyCap: dnsConcurrencyCap,
   bridgeConcurrencyCap: bridgeConcurrencyCap,
   verificationTime: verificationTime,
+  context: context,
   call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicSample(
     await ffi.ntsQuery(
       spec: ffiSpec,
@@ -320,6 +336,81 @@ Future<NtsSyncedTime> ntsGetTime({
   return _getTimeFor(spec: spec, verificationTime: verificationTime);
 }
 
+/// Strict counterpart of [ntsGetTime]: the same warm + burst against
+/// the process-wide default client (or a call-scoped one under a
+/// non-default trust policy), with every clock decision made on
+/// `context` and no fallback at any of them. Returns a
+/// [StrictSyncedTime] bound to that context.
+///
+/// Where [ntsGetTime] meters its budget on [MonotonicClock] and ages
+/// the winning sample by a receipt stamp that passes a numerical
+/// plausibility window — falling back to a Dart-side arrival time
+/// otherwise — this entry:
+///
+/// - meters the 8-second budget on `context`, so a read that faults
+///   fails the call with [NtsError.clockFault]: at
+///   [ClockFaultStage.admission] for the reading that anchors the
+///   budget before anything is dispatched, and at
+///   [ClockFaultStage.awaitResult] for every later budget read (a
+///   spent budget is still [NtsError.timeout] with [TimeoutPhase.ntp]);
+/// - passes `context` to every underlying [ntsWarmCookies] /
+///   [ntsQuery], so the bridge gate meters each queue wait on it;
+/// - re-reads `context` after every `await`, so a bridge reset or a
+///   native generation change that lands while the call was parked
+///   fails it rather than letting a stale completion through;
+/// - attributes each sample by [NtsTimeSample.recvClockGeneration] and
+///   [NtsTimeSample.recvClockBackend] rather than by plausibility. A
+///   sample with no stamp fails the call with
+///   `StrictClockMissingReceipt`, one stamped under another generation
+///   or backend with `StrictClockForeignReceipt`, both at
+///   [ClockFaultStage.attribution]; a stamp that does not order against
+///   the context's own readings is a `StrictClockRegression`. These
+///   fail the whole call, not just the sample: a later successful
+///   read could not certify the sample after the fact;
+/// - anchors the result on a final reading of `context`
+///   ([ClockFaultStage.projection]) and returns a [StrictSyncedTime]
+///   whose `utcNow()` / `elapsedSinceSync()` re-read that context and
+///   throw once it is invalid.
+///
+/// Individual burst failures are tolerated on the same terms as
+/// [ntsGetTime], including a per-sample `StrictClockSuspendedInFlight`
+/// verdict from the native core, which is exactly what the next
+/// sample retries. Validation, tuning, trust-policy handling and state
+/// effects are otherwise identical to [ntsGetTime]. Requires a context
+/// with [StrictClockProvenance.native] in production;
+/// `resolveForTesting` contexts work against a mock bridge whose
+/// samples carry matching stamps. New in 10.0.
+Future<StrictSyncedTime> ntsGetTimeStrict({
+  required NtsServerSpec spec,
+  required StrictClockContext context,
+  TrustMode trustMode = TrustMode.platformWithFallback,
+  List<int>? customRoots,
+  DateTime? verificationTime,
+}) async {
+  _validateGetTime(
+    spec: spec,
+    verificationTimeMs: _verificationMs(verificationTime),
+  );
+  if (trustMode != TrustMode.platformWithFallback || customRoots != null) {
+    final client = NtsClient(trustMode: trustMode, customRoots: customRoots);
+    try {
+      return await _getTimeStrictFor(
+        spec: spec,
+        context: context,
+        verificationTime: verificationTime,
+        client: client,
+      );
+    } finally {
+      client.dispose();
+    }
+  }
+  return _getTimeStrictFor(
+    spec: spec,
+    context: context,
+    verificationTime: verificationTime,
+  );
+}
+
 /// Force a fresh NTS-KE handshake against `spec` and return the cookie
 /// count along with the per-phase wall-clock breakdown of the handshake.
 /// Replaces any cached session for that spec.
@@ -356,6 +447,11 @@ Future<NtsSyncedTime> ntsGetTime({
 /// certificate validation intact. Pre-epoch instants are rejected with
 /// [NtsError.invalidSpec] before dispatch.
 ///
+/// `context` carries the same strict bridge-gate metering described
+/// on [ntsQuery]: the queue wait is deducted on that context and a
+/// fault while queued fails the call with [NtsError.clockFault] at
+/// [ClockFaultStage.admission]. New in 10.0.
+///
 /// Throws an [NtsError] on every failure path.
 Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   required NtsServerSpec spec,
@@ -363,12 +459,14 @@ Future<NtsWarmCookiesOutcome> ntsWarmCookies({
   int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
   int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
   DateTime? verificationTime,
+  StrictClockContext? context,
 }) => _dispatch(
   spec: spec,
   timeout: timeout,
   dnsConcurrencyCap: dnsConcurrencyCap,
   bridgeConcurrencyCap: bridgeConcurrencyCap,
   verificationTime: verificationTime,
+  context: context,
   call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicWarm(
     await ffi.ntsWarmCookies(
       spec: ffiSpec,

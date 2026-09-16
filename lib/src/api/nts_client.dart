@@ -159,6 +159,9 @@ class NtsClient {
   /// the calling isolate (per-client tables do not change which FRB
   /// worker pool the call blocks on).
   ///
+  /// `context` carries the strict bridge-gate metering described on
+  /// [ntsQuery]. New in 10.0.
+  ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsTimeSample> query({
     required NtsServerSpec spec,
@@ -166,12 +169,14 @@ class NtsClient {
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
     int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
     DateTime? verificationTime,
+    StrictClockContext? context,
   }) => _dispatch(
     spec: spec,
     timeout: timeout,
     dnsConcurrencyCap: dnsConcurrencyCap,
     bridgeConcurrencyCap: bridgeConcurrencyCap,
     verificationTime: verificationTime,
+    context: context,
     call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicSample(
       await _inner.query(
         spec: ffiSpec,
@@ -197,6 +202,9 @@ class NtsClient {
   /// unchanged (isolate-wide, shared with the top-level wrappers and
   /// every other client in the calling isolate).
   ///
+  /// `context` carries the strict bridge-gate metering described on
+  /// [ntsQuery]. New in 10.0.
+  ///
   /// Throws an [NtsError] on every failure path.
   Future<NtsWarmCookiesOutcome> warmCookies({
     required NtsServerSpec spec,
@@ -204,12 +212,14 @@ class NtsClient {
     int dnsConcurrencyCap = kDefaultDnsConcurrencyCap,
     int bridgeConcurrencyCap = kDefaultBridgeConcurrencyCap,
     DateTime? verificationTime,
+    StrictClockContext? context,
   }) => _dispatch(
     spec: spec,
     timeout: timeout,
     dnsConcurrencyCap: dnsConcurrencyCap,
     bridgeConcurrencyCap: bridgeConcurrencyCap,
     verificationTime: verificationTime,
+    context: context,
     call: (ffiSpec, ffiTimeoutMs, ffiVerificationMs) async => _publicWarm(
       await _inner.warmCookies(
         spec: ffiSpec,
@@ -245,6 +255,23 @@ class NtsClient {
     DateTime? verificationTime,
   }) =>
       _getTimeFor(spec: spec, verificationTime: verificationTime, client: this);
+
+  /// Per-client equivalent of the top-level [ntsGetTimeStrict]: the
+  /// strict warm + burst against this client's own session table,
+  /// metered, attributed and anchored on `context`. See
+  /// [ntsGetTimeStrict] for the strict contract and [getTime] for the
+  /// state-scope and trust-policy differences from the top-level
+  /// entry, which apply here unchanged. New in 10.0.
+  Future<StrictSyncedTime> getTimeStrict({
+    required NtsServerSpec spec,
+    required StrictClockContext context,
+    DateTime? verificationTime,
+  }) => _getTimeStrictFor(
+    spec: spec,
+    context: context,
+    verificationTime: verificationTime,
+    client: this,
+  );
 
   /// Drop this client's cached session for `spec`'s `host:port`, if
   /// any. The next [query] or [warmCookies] for that spec triggers a

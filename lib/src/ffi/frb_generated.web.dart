@@ -52,6 +52,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
+  NtsClockFault dco_decode_box_autoadd_nts_clock_fault(dynamic raw);
+
+  @protected
   NtsServerSpec dco_decode_box_autoadd_nts_server_spec(dynamic raw);
 
   @protected
@@ -59,6 +62,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
 
   @protected
   TrustMode dco_decode_box_autoadd_trust_mode(dynamic raw);
+
+  @protected
+  ClockFaultStage dco_decode_clock_fault_stage(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -166,6 +172,11 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  NtsClockFault sse_decode_box_autoadd_nts_clock_fault(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   NtsServerSpec sse_decode_box_autoadd_nts_server_spec(
     SseDeserializer deserializer,
   );
@@ -177,6 +188,9 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
 
   @protected
   TrustMode sse_decode_box_autoadd_trust_mode(SseDeserializer deserializer);
+
+  @protected
+  ClockFaultStage sse_decode_clock_fault_stage(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -298,6 +312,12 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_nts_clock_fault(
+    NtsClockFault self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_nts_server_spec(
     NtsServerSpec self,
     SseSerializer serializer,
@@ -312,6 +332,12 @@ abstract class NtsRustLibApiImplPlatform extends BaseApiImpl<NtsRustLibWire> {
   @protected
   void sse_encode_box_autoadd_trust_mode(
     TrustMode self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_clock_fault_stage(
+    ClockFaultStage self,
     SseSerializer serializer,
   );
 

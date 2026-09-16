@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::boottime::BootInstant;
+use super::boottime::{BootInstant, ClockFault, SequentialReader};
 use super::dns::{resolve_with_global, system_lookup, SPAWN_FAILED_PREFIX};
 
 use rustls::client::danger::ServerCertVerifier;
@@ -72,47 +72,90 @@ const TLS_PROTOCOL_VERSIONS: &[&SupportedProtocolVersion] = &[&rustls::version::
 
 /// Single wall-clock budget shared across every blocking phase of one
 /// NTS-KE handshake — DNS lookup, per-address TCP connect attempts, TLS
-/// handshake, and the chunked record-exchange read loop. Captured once
-/// from `BootInstant::now() + total` at the top of `perform_handshake`
-/// so the budget shrinks monotonically as those phases consume time, in
-/// place of the prior pattern where each phase received a fresh
-/// `Duration` and the wall-clock cost of a single handshake could
-/// overshoot the caller's `req.timeout` by 2-3x.
+/// handshake, and the chunked record-exchange read loop. Bound at the
+/// top of `perform_handshake` to the absolute endpoint the caller
+/// supplied in `req.deadline`, so the budget shrinks monotonically as
+/// those phases consume time, in place of the prior pattern where each
+/// phase received a fresh `Duration` and the wall-clock cost of a
+/// single handshake could overshoot the caller's budget by 2-3x. The
+/// endpoint is not re-anchored here: a relative remainder handed down
+/// from the caller's last reading would credit back whatever elapsed
+/// between that reading and this one — a preemption or a device
+/// suspend across the call boundary — and the caller's single deadline
+/// would overshoot by that much.
 ///
-/// Anchored on the sleep-aware [`BootInstant`] rather than
+/// Anchored on the strict sleep-aware clock rather than
 /// `std::time::Instant`: the latter is suspend-frozen on every platform
 /// this package targets, so a handshake interrupted by device sleep
 /// would resume with most of its original budget intact even though the
-/// caller's wall-clock limit had already passed.
-#[derive(Debug, Clone, Copy)]
-struct Deadline(BootInstant);
+/// caller's wall-clock limit had already passed. The deadline borrows
+/// the [`SequentialReader`] of the operation that requested the
+/// handshake rather than binding its own, so every remaining check is
+/// a strict read in that operation's sequence: a clock fault during
+/// the handshake surfaces as [`KeError::ClockFault`] on that check, and
+/// is never collapsed to "no time left". Regression detection is per
+/// reader, so a second reader here would let the source step
+/// backwards across the session/handshake boundary unnoticed — the
+/// caller's reading before the handshake and the first one inside it
+/// would never be compared. Expiry itself is not a fault — a reading
+/// past the deadline is a legal zero remaining.
+#[derive(Debug)]
+struct Deadline<'a> {
+    at: BootInstant,
+    clock: &'a SequentialReader,
+}
 
-impl Deadline {
-    /// Anchor a deadline `total` from `now`. Callers pass the entire
-    /// caller-visible budget (`req.timeout`); subsequent phases consult
-    /// [`Deadline::remaining`] before issuing any blocking syscall.
-    fn new(total: Duration) -> Self {
-        Self(BootInstant::now() + total)
+impl<'a> Deadline<'a> {
+    /// Bind the caller's absolute endpoint `at` to `clock` without
+    /// reading it. Production callers pass `req.deadline`, anchored
+    /// by the operation that requested the handshake; subsequent
+    /// phases consult [`Deadline::remaining`] before issuing any
+    /// blocking syscall.
+    fn at(clock: &'a SequentialReader, at: BootInstant) -> Self {
+        Self { at, clock }
     }
 
-    /// Time left before the deadline expires. Saturates at
-    /// [`Duration::ZERO`] so callers can branch on `is_zero()` without
-    /// handling a negative-duration case.
-    fn remaining(&self) -> Duration {
-        self.0.saturating_duration_since(BootInstant::now())
+    /// Anchor a deadline `total` from a fresh strict reading on
+    /// `clock`. Test-only: the connect helpers that take a relative
+    /// budget have no caller-anchored endpoint to bind.
+    #[cfg(test)]
+    fn new(clock: &'a SequentialReader, total: Duration) -> Result<Self, KeError> {
+        let at = clock
+            .instant()
+            .and_then(|now| now.checked_add(total))
+            .map_err(|fault| KeError::ClockFault {
+                fault,
+                generation: clock.generation(),
+            })?;
+        Ok(Self { at, clock })
+    }
+
+    /// Time left before the deadline expires, from a fresh strict
+    /// reading. Zero once it has elapsed, so callers can branch on
+    /// `is_zero()` without handling a negative-duration case.
+    fn remaining(&self) -> Result<Duration, KeError> {
+        self.clock
+            .remaining_until(self.at)
+            .map_err(|fault| KeError::ClockFault {
+                fault,
+                generation: self.clock.generation(),
+            })
     }
 
     /// Refresh `tcp`'s read+write timeouts so the *next* blocking
     /// syscall on that socket fires no later than the global deadline.
     /// Returns `io::ErrorKind::TimedOut` when the deadline has already
-    /// elapsed; callers that want phase-attributed errors should use
+    /// elapsed and `io::ErrorKind::Other` on a clock fault; callers
+    /// that want typed errors should use
     /// [`Deadline::apply_to_with_phase`] instead. Re-applied between
     /// phases (post-connect, before each write/flush, and once per
     /// iteration of the chunked read loop) so a slow trickle from the
     /// server cannot extend the total wall-clock cost past
-    /// `req.timeout`.
+    /// `req.deadline`.
     fn apply_to(&self, tcp: &TcpStream) -> std::io::Result<()> {
-        let remaining = self.remaining();
+        let remaining = self
+            .remaining()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         if remaining.is_zero() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
@@ -130,10 +173,7 @@ impl Deadline {
     /// `io::ErrorKind::TimedOut → NtsError::Timeout` round-trip
     /// (which loses phase attribution).
     fn apply_to_with_phase(&self, tcp: &TcpStream, phase: KeTimeoutPhase) -> Result<(), KeError> {
-        let remaining = self.remaining();
-        if remaining.is_zero() {
-            return Err(KeError::PhaseTimeout(phase));
-        }
+        let remaining = self.check_or_timeout(phase)?;
         tcp.set_read_timeout(Some(remaining)).map_err(KeError::Io)?;
         tcp.set_write_timeout(Some(remaining))
             .map_err(KeError::Io)?;
@@ -146,7 +186,7 @@ impl Deadline {
     /// budget short-circuits with the phase that *would* have
     /// consumed it, rather than producing a generic timeout.
     fn check_or_timeout(&self, phase: KeTimeoutPhase) -> Result<Duration, KeError> {
-        let remaining = self.remaining();
+        let remaining = self.remaining()?;
         if remaining.is_zero() {
             return Err(KeError::PhaseTimeout(phase));
         }
@@ -361,8 +401,12 @@ pub struct KeRequest {
     /// AEAD algorithm IDs the client offers, in order of preference.
     /// At least one of `aead::AES_SIV_CMAC_*` must be present.
     pub aead_algorithms: Vec<u16>,
-    /// Read/write timeout applied to the underlying TCP socket.
-    pub timeout: Option<Duration>,
+    /// Absolute strict deadline for the whole handshake, anchored by
+    /// the caller on the same [`SequentialReader`] it passes to
+    /// [`perform_handshake`]. Every blocking phase — DNS, connect,
+    /// TLS, record I/O — arms its socket timeout from what remains
+    /// until this instant. `None` leaves the handshake unbounded.
+    pub deadline: Option<BootInstant>,
     /// Per-call ceiling on the process-wide bounded DNS resolver pool
     /// (see [`crate::nts::dns`]). Compared against the global in-flight
     /// counter before the resolver thread is dispatched; saturation
@@ -534,7 +578,7 @@ impl Default for PhaseReporter {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KePhaseTimings {
     /// Time spent inside [`crate::nts::dns::resolve_with_global`] for
-    /// the KE host. `0` for callers that pass `req.timeout = None`
+    /// the KE host. `0` for callers that pass `req.deadline = None`
     /// because the unbounded path bypasses the resolver helper.
     pub dns_micros: i64,
     /// Time spent in the per-address `TcpStream::connect_timeout`
@@ -626,7 +670,7 @@ pub struct KeOutcome {
     pub warnings: Vec<WarningCode>,
     /// Microsecond-resolution per-phase wall-clock breakdown of the
     /// handshake. `0` for any phase the call did not enter (e.g.
-    /// `req.timeout = None` short-circuits the bounded DNS resolver,
+    /// `req.deadline = None` short-circuits the bounded DNS resolver,
     /// leaving `dns_micros` at zero).
     pub phase_timings: KePhaseTimings,
     /// Trust-anchor backend that authenticated this handshake's TLS
@@ -683,6 +727,17 @@ pub enum KeError {
     /// DNS saturation from a slow record I/O without inspecting
     /// free-form strings.
     PhaseTimeout(KeTimeoutPhase),
+    /// The strict sleep-aware clock faulted while the handshake's
+    /// [`Deadline`] was anchoring or checking its budget. `generation`
+    /// is the strict-clock generation the deadline was bound to.
+    /// `From<KeError> for NtsError` maps this to
+    /// `NtsError::ClockFault { stage: Handshake, .. }`. Distinct from
+    /// `PhaseTimeout`: the budget did not run out, the clock that
+    /// measures it could not be trusted.
+    ClockFault {
+        fault: ClockFault,
+        generation: i64,
+    },
     Tls(rustls::Error),
     InvalidServerName,
     Codec(CodecError),
@@ -867,6 +922,10 @@ impl std::fmt::Display for KeError {
         match self {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::PhaseTimeout(p) => write!(f, "NTS-KE timeout in phase {p:?}"),
+            Self::ClockFault { fault, generation } => write!(
+                f,
+                "NTS-KE strict clock fault (generation {generation}): {fault:?}"
+            ),
             Self::Tls(e) => write!(f, "TLS error: {e}"),
             Self::InvalidServerName => f.write_str("hostname is not a valid TLS SNI value"),
             Self::Codec(e) => write!(f, "NTS-KE codec error: {e}"),
@@ -1694,16 +1753,22 @@ fn build_with_custom_roots(
 /// Drive a complete NTS-KE handshake against `req.host:req.port` and return
 /// the negotiated AEAD parameters, exporter-derived keys, and cookie pool.
 ///
-/// `req.timeout`, when set, is enforced as a single global deadline that
-/// spans every blocking phase of the handshake — DNS lookup, per-address
-/// TCP connect, TLS handshake, request write, response read loop. The
-/// deadline is anchored once at the top of the function (via
-/// [`Deadline::new`]) and the remaining budget is re-applied to the
-/// underlying `TcpStream`'s read/write timeouts before each phase, so
-/// the wall-clock cost cannot exceed the caller's budget regardless of
-/// how time is distributed across phases. `req.timeout = None` keeps
-/// the prior unbounded behaviour for callers that opt out of timeout
-/// enforcement entirely.
+/// `req.deadline`, when set, is enforced as a single global deadline
+/// that spans every blocking phase of the handshake — DNS lookup,
+/// per-address TCP connect, TLS handshake, request write, response
+/// read loop. It is the caller's absolute endpoint, bound here via
+/// [`Deadline::at`] rather than re-anchored from a fresh reading, and
+/// the remaining budget is re-applied to the underlying `TcpStream`'s
+/// read/write timeouts before each phase, so the wall-clock cost
+/// cannot exceed the caller's budget regardless of how time is
+/// distributed across phases. `req.deadline = None` keeps the prior
+/// unbounded behaviour for callers that opt out of timeout enforcement
+/// entirely.
+///
+/// `clock` is the calling operation's [`SequentialReader`]; the
+/// deadline reads through it rather than binding a reader of its own,
+/// so the handshake's readings sit in the caller's sequence and a
+/// regression across the boundary is detected (see [`Deadline`]).
 #[expect(
     clippy::too_many_lines,
     reason = "linear handshake driver: deadline construction, TLS config build, \
@@ -1716,7 +1781,10 @@ fn build_with_custom_roots(
               invariants are visible at the call site rather than scattered \
               across helpers"
 )]
-pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
+pub fn perform_handshake(
+    req: &KeRequest,
+    clock: &SequentialReader,
+) -> Result<KeOutcome, KeFailure> {
     if req.aead_algorithms.is_empty() {
         return Err(KeError::MissingAead.into());
     }
@@ -1783,11 +1851,11 @@ pub fn perform_handshake(req: &KeRequest) -> Result<KeOutcome, KeFailure> {
         .map_err(KeError::from)
         .map_err(attribute)?;
 
-    let deadline = req.timeout.map(Deadline::new);
+    let deadline = req.deadline.map(|at| Deadline::at(clock, at));
     let connected = connect_with_deadline_using(
         req.host.as_str(),
         req.port,
-        deadline,
+        deadline.as_ref(),
         req.dns_concurrency_cap,
         reporter,
         system_lookup,
@@ -1980,10 +2048,14 @@ fn connect_with_timeout_using<F>(
 where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
+    let clock = SequentialReader::bind();
+    let deadline = timeout
+        .map(|total| Deadline::new(&clock, total))
+        .transpose()?;
     connect_with_deadline_using(
         host,
         port,
-        timeout.map(Deadline::new),
+        deadline.as_ref(),
         dns_concurrency_cap,
         None,
         lookup,
@@ -2002,7 +2074,7 @@ where
 /// its [`Deadline`] once at the top and thread the same instance
 /// through both this connect step and the subsequent socket-timeout
 /// refreshes during TLS I/O — the previous duration-per-phase API
-/// allowed each phase to consume up to `req.timeout` in isolation.
+/// allowed each phase to consume up to the whole budget in isolation.
 ///
 /// Returns the connected `TcpStream` together with the wall-clock time
 /// spent inside DNS resolution and the per-address connect loop, so
@@ -2018,7 +2090,7 @@ where
 fn connect_with_deadline_using<F>(
     host: &str,
     port: u16,
-    deadline: Option<Deadline>,
+    deadline: Option<&Deadline<'_>>,
     dns_concurrency_cap: usize,
     reporter: Option<&PhaseReporter>,
     lookup: F,
@@ -2094,7 +2166,7 @@ where
 /// the budget shrinks per-iteration. Without this refresh,
 /// `set_read_timeout` would re-arm a fresh `remaining` window for every
 /// chunk and a slow trickle from the server could extend the total
-/// wall-clock cost past the caller's `req.timeout`. A deadline already
+/// wall-clock cost past the caller's `req.deadline`. A deadline already
 /// expired before the next read is surfaced as
 /// `KeError::PhaseTimeout(KeRecordIo)`.
 ///
@@ -2110,7 +2182,7 @@ where
 /// stream.
 fn read_to_end_capped(
     stream: &mut Stream<'_, ClientConnection, TcpStream>,
-    deadline: Option<&Deadline>,
+    deadline: Option<&Deadline<'_>>,
 ) -> Result<Vec<u8>, KeError> {
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];

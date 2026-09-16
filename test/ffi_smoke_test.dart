@@ -23,6 +23,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/src/ffi/api/nts.dart'
     show
+        NtsClockBackend,
         NtsError,
         NtsServerSpec,
         NtsTimeSample,
@@ -53,6 +54,8 @@ class _FakeNtsRustLibApi implements NtsRustLibApi {
     phaseTimings: _zeroPhaseTimings(),
     trustBackend: TrustBackend.platform,
     recvBoottimeMicros: PlatformInt64Util.from(0),
+    recvClockGeneration: PlatformInt64Util.from(0),
+    recvClockBackend: NtsClockBackend.appleContinuous,
     offsetMicros: PlatformInt64Util.from(0),
     peerDelayMicros: PlatformInt64Util.from(0),
     rootDelayMicros: PlatformInt64Util.from(0),

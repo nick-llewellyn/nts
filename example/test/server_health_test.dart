@@ -28,6 +28,7 @@ import 'package:nts/src/ffi/api/nts.dart'
     as ffi
     show
         NtsClient,
+        NtsClockBackend,
         NtsError,
         NtsServerSpec,
         NtsTimeSample,
@@ -866,6 +867,8 @@ class _ScriptedApi extends MockNtsApi {
       phaseTimings: _timings(dnsMicros),
       trustBackend: backend,
       recvBoottimeMicros: PlatformInt64Util.from(0),
+      recvClockGeneration: PlatformInt64Util.from(0),
+      recvClockBackend: ffi.NtsClockBackend.appleContinuous,
       offsetMicros: PlatformInt64Util.from(offset),
       peerDelayMicros: PlatformInt64Util.from(peerDelayMicros),
       rootDelayMicros: PlatformInt64Util.from(0),

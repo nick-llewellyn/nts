@@ -6,9 +6,30 @@
 
 part of 'strict_clock.dart';
 
-/// Base of every clock failure thrown by [StrictClockContext.resolve],
-/// [StrictClockContext.now] and [StrictClockContext.elapsedSince].
-/// Sealed: `switch` over it is exhaustive.
+/// Base of every strict clock failure. Sealed: `switch` over it is
+/// exhaustive.
+///
+/// Most subtypes are thrown by [StrictClockContext.resolve],
+/// [StrictClockContext.now] and [StrictClockContext.elapsedSince], and
+/// by the [StrictSyncedTime] constructor's anchor check. Three arise
+/// only while a call acquires a query sample and reach the caller as
+/// the `fault` of an `NtsError.clockFault` rather than directly, and
+/// they differ in which surfaces can raise them:
+///
+/// - [StrictClockSuspendedInFlight], at `ClockFaultStage.receipt`, is
+///   the native core's per-sample verdict that the device slept between
+///   send and receive. The core runs that check for every caller, so
+///   `ntsQuery` surfaces it with or without a `context`, and `ntsGetTime`
+///   and `ntsGetTimeStrict` both tolerate it per sample and rethrow it
+///   only when no sample in the burst landed.
+/// - [StrictClockMissingReceipt] and [StrictClockForeignReceipt], at
+///   `ClockFaultStage.attribution`, are raised only by a strict
+///   acquisition (`ntsGetTimeStrict`, `NtsClient.getTimeStrict`)
+///   attributing a sample to its context; the legacy surfaces never
+///   attribute, so never raise them.
+///
+/// The other subtypes are carried the same way when the failing read
+/// was one the acquisition made on the caller's behalf.
 ///
 /// [StrictClockContext.resolveForTesting] throws the same errors once
 /// past its precondition; the [StateError] it throws when the bridge is
@@ -270,4 +291,90 @@ final class StrictClockGenerationIncompatible extends StrictClockError {
   String get message =>
       'reading on generation $actual is not comparable with a context on '
       'generation $expected';
+}
+
+/// The device suspended while an NTP reply was in flight.
+///
+/// The Rust core brackets every UDP send/recv pair with strict
+/// readings; when the sleep-aware span exceeds the monotonic round
+/// trip by more than the tolerance, the round trip under-measures the
+/// network delay and the sample is rejected. This is a per-sample
+/// verdict, not a clock fault: the context that observed it stays
+/// valid and the remediation is to retry the query. Only ever carried
+/// as the `fault` of an `NtsError.clockFault`.
+final class StrictClockSuspendedInFlight extends StrictClockError {
+  /// Construct the error.
+  const StrictClockSuspendedInFlight({
+    required this.boottimeMicros,
+    required this.monotonicMicros,
+  }) : super._();
+
+  /// Sleep-aware span from just before the send to just after the
+  /// recv, in microseconds.
+  final int boottimeMicros;
+
+  /// Monotonic round trip measured across the same interval.
+  final int monotonicMicros;
+
+  @override
+  String get message =>
+      'device suspended while the NTP reply was in flight: sleep-aware '
+      'span $boottimeMicros us against a monotonic round trip of '
+      '$monotonicMicros us';
+}
+
+/// A sample carried no strict receipt stamp.
+///
+/// `NtsTimeSample.recvClockGeneration` is `0`, which no build of the
+/// Rust core produces — the live generation starts at `1` — so the
+/// sample was hand-built or crossed a bridge that does not stamp
+/// receipts. A strict acquisition rejects it rather than ageing a
+/// stamp with no provenance; a later successful strict read cannot
+/// certify it after the fact.
+final class StrictClockMissingReceipt extends StrictClockError {
+  /// Construct the error.
+  const StrictClockMissingReceipt() : super._();
+
+  @override
+  String get message =>
+      'sample carries no strict receipt stamp (recvClockGeneration 0) and '
+      'cannot be attributed to a strict clock context';
+}
+
+/// A sample's receipt stamp was taken under a generation or backend
+/// other than the strict context's.
+///
+/// The stamp may be numerically plausible; attribution is by
+/// generation and backend, never by plausibility. A foreign stamp
+/// cannot be aged against the context's readings, so the strict
+/// acquisition fails rather than substituting a Dart-side arrival
+/// time.
+final class StrictClockForeignReceipt extends StrictClockError {
+  /// Construct the error.
+  const StrictClockForeignReceipt({
+    required this.expectedGeneration,
+    required this.observedGeneration,
+    required this.expectedBackend,
+    required this.observedBackend,
+  }) : super._();
+
+  /// Generation the context is bound to.
+  final int expectedGeneration;
+
+  /// Generation the sample's receipt stamp was read under.
+  final int observedGeneration;
+
+  /// Backend the context's descriptor names.
+  final ClockBackend expectedBackend;
+
+  /// Backend the sample's receipt stamp was read from, or `null` when
+  /// the sample carries none.
+  final ClockBackend? observedBackend;
+
+  @override
+  String get message =>
+      'sample receipt stamp is foreign to the strict clock context: '
+      'generation $observedGeneration on '
+      '${observedBackend?.name ?? 'no backend'} against context generation '
+      '$expectedGeneration on ${expectedBackend.name}';
 }

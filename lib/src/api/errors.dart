@@ -31,6 +31,7 @@
 //   removed in 6.0.0 after three major-version lines of deprecation.
 
 import 'models.dart' show TrustBackend;
+import 'strict_clock.dart' show StrictClockError;
 
 /// Phase of an `ntsQuery` or `ntsWarmCookies` call whose wall-clock
 /// budget elapsed.
@@ -109,9 +110,56 @@ enum TimeoutPhase {
   ntp,
 }
 
+/// Where in an `ntsQuery` / `ntsWarmCookies` / `ntsGetTimeStrict`
+/// call a strict clock read failed.
+///
+/// Carried as the `stage` of [NtsError.clockFault]. The first five
+/// stages are Rust-authored and fire inside the native core, which
+/// runs every security-relevant clock read strictly for every caller;
+/// the last three are Dart-authored and only fire on the strict
+/// surfaces (`ntsGetTimeStrict`, `NtsClient.getTimeStrict`, or a
+/// `context` passed to the lower-level wrappers). Rust names the Dart
+/// stages `Await` and `Return`; they are spelled [awaitResult] and
+/// [attribution] here because `await` and `return` are reserved.
+enum ClockFaultStage {
+  /// Binding the call-wide budget on entry (Rust), or admitting the
+  /// call through the Dart bridge gate — the enqueue read, the sweep,
+  /// or the re-read on admission.
+  admission,
+
+  /// Inside the NTS-KE handshake's own deadline: DNS, connect, TLS or
+  /// record I/O.
+  handshake,
+
+  /// Session-table work: the singleflight budget or wait, the idle
+  /// TTL check, the LRU prune, or the access-time refresh.
+  session,
+
+  /// Arming the UDP setup or `send` / `recv` deadlines against the
+  /// call-wide budget.
+  udp,
+
+  /// Stamping the wire receipt, bracketing the round trip (a
+  /// `StrictClockSuspendedInFlight` fault), or recording the
+  /// replay-guard entry.
+  receipt,
+
+  /// Re-reading the strict budget between awaited bridge calls, or
+  /// re-validating the context after one returned.
+  awaitResult,
+
+  /// Attributing a returned sample's receipt stamp to the strict
+  /// context: a missing or foreign stamp, or a stamp that does not
+  /// order against the context's own readings.
+  attribution,
+
+  /// Taking the anchor reading for the returned `StrictSyncedTime`.
+  projection,
+}
+
 /// Failure surface for `ntsQuery` and `ntsWarmCookies`.
 ///
-/// Sealed: every concrete instance is one of the ten variants
+/// Sealed: every concrete instance is one of the eleven variants
 /// declared below, and exhaustive `switch (err) { ... }` on an
 /// `NtsError` value is checked at compile time. Implements [Exception]
 /// so `try { ... } on NtsError catch (err)` and `try { ... } on
@@ -238,6 +286,35 @@ sealed class NtsError implements Exception {
   /// "Initialization has two layers" section of `README.md`.
   const factory NtsError.abiMismatch({required String message}) =
       NtsErrorAbiMismatch;
+
+  /// A strict sleep-aware clock read failed, or a sample could not be
+  /// attributed to the strict clock, and the call failed closed
+  /// rather than continuing on a substitute timeline. New in 10.0.0;
+  /// consumers using exhaustive `switch (err) { ... }` on `NtsError`
+  /// must add an arm for this variant.
+  ///
+  /// `stage` names the read that failed; `fault` is the underlying
+  /// [StrictClockError]; `generation` is the live generation the
+  /// stage was operating under (`0` when the failure pre-dated the
+  /// first strict read of the call). `trustBackend` follows the
+  /// [NtsError.network] convention: the backend resolved before the
+  /// failure, or `null` when no handshake had run.
+  ///
+  /// Native source faults and regressions also advance the
+  /// process-wide generation, so every `StrictClockContext` resolved
+  /// before them fails closed on its next read; resolve a new context
+  /// before retrying. Three faults are per-sample verdicts that leave
+  /// the clock and the context valid — retry the query on the same
+  /// context: `StrictClockSuspendedInFlight` at
+  /// [ClockFaultStage.receipt], and `StrictClockMissingReceipt` or
+  /// `StrictClockForeignReceipt` at [ClockFaultStage.attribution],
+  /// which reject the sample's provenance without reading the clock.
+  const factory NtsError.clockFault({
+    required ClockFaultStage stage,
+    required StrictClockError fault,
+    required int generation,
+    TrustBackend? trustBackend,
+  }) = NtsErrorClockFault;
 }
 
 /// Variant: `spec` (or one of the integer arguments accompanying
@@ -553,4 +630,74 @@ final class NtsErrorAbiMismatch extends NtsError {
 
   @override
   String toString() => 'NtsError.abiMismatch($message)';
+}
+
+/// Variant: a strict clock read failed or a sample could not be
+/// attributed to the strict clock. New in 10.0.0; see
+/// [NtsError.clockFault].
+///
+/// Raised from two layers. The Rust core raises it at the
+/// [ClockFaultStage.admission] through [ClockFaultStage.receipt]
+/// stages for every caller, strict or legacy, because its timeline
+/// (deadlines, session TTLs, replay guard, receipt stamp) is shared
+/// process-wide state and cannot run strict for some callers and
+/// best-effort for others. The Dart wrapper raises it at the
+/// remaining stages only on the strict surfaces, when the
+/// `StrictClockContext` metering the call faults or a returned sample
+/// cannot be attributed to it.
+///
+/// Value semantics compare [stage], [generation], [trustBackend], and
+/// the [fault]'s runtime type and message; `StrictClockError` itself
+/// has no structural equality.
+final class NtsErrorClockFault extends NtsError {
+  /// Read that failed.
+  final ClockFaultStage stage;
+
+  /// Underlying fault.
+  final StrictClockError fault;
+
+  /// Live generation the stage was operating under; `0` when the
+  /// failure pre-dated the call's first strict read.
+  final int generation;
+
+  /// Per-handshake trust-anchor backend resolved before the failure
+  /// fired, or `null` if no handshake had run.
+  final TrustBackend? trustBackend;
+
+  /// Construct a `ClockFault` variant.
+  const NtsErrorClockFault({
+    required this.stage,
+    required this.fault,
+    required this.generation,
+    this.trustBackend,
+  }) : super._();
+
+  @override
+  int get hashCode => Object.hash(
+    NtsErrorClockFault,
+    stage,
+    fault.runtimeType,
+    fault.message,
+    generation,
+    trustBackend,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NtsErrorClockFault &&
+          stage == other.stage &&
+          fault.runtimeType == other.fault.runtimeType &&
+          fault.message == other.fault.message &&
+          generation == other.generation &&
+          trustBackend == other.trustBackend);
+
+  @override
+  String toString() {
+    final backend = trustBackend == null
+        ? ''
+        : ', backend: ${trustBackend!.name}';
+    return 'NtsError.clockFault(${stage.name}: ${fault.message}, '
+        'generation: $generation$backend)';
+  }
 }
