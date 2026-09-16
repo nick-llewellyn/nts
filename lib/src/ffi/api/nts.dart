@@ -854,11 +854,15 @@ class NtsTimeSample {
   /// by [NtsClockDescriptor], never the process-local fallback: a
   /// query whose receipt read faults fails with
   /// [NtsError.clockFault] at [ClockFaultStage.receipt] rather
-  /// than returning a sample stamped on a different epoch. On a
-  /// healthy native clock it is the same value [ntsBoottimeMicros]
-  /// would return, so subtracting it from a later reading taken
-  /// under the same `recv_clock_generation`
-  /// yields the scheduling lag since receipt. The epoch is arbitrary
+  /// than returning a sample stamped on a different epoch.
+  /// Subtracting it from a later strict reading taken under the same
+  /// `recv_clock_generation` on the same `recv_clock_backend` yields
+  /// the scheduling lag since receipt; that provenance comparison is
+  /// the only valid way to age the stamp. Do not difference it
+  /// against [ntsBoottimeMicros]: that export's fallback is
+  /// sticky, so once it has latched the process-local timeline it
+  /// stays there even after the native source recovers, while this
+  /// stamp remains on the native coordinate. The epoch is arbitrary
   /// (per-boot): never persist this value and never compare it
   /// across boots, devices, or processes.
   final PlatformInt64 recvBoottimeMicros;

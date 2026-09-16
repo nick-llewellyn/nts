@@ -182,14 +182,17 @@ class NtsTimeSample {
   ///
   /// A strict read since 10.0: taken under [recvClockGeneration] on
   /// [recvClockBackend], so subtracting it from a later
-  /// `StrictClockContext` reading on the same generation yields the
-  /// scheduling lag since receipt, and a query whose stamp read
-  /// faults fails with `NtsError.clockFault` rather than returning a
-  /// sample stamped on another epoch. On a healthy native clock it is
-  /// the value `MonotonicClock` would read at the same instant. The
-  /// epoch is arbitrary (per-boot): never persist this value and
-  /// never compare it across boots, devices, or processes. New in
-  /// 7.1.
+  /// `StrictClockContext` reading on the same generation and backend
+  /// yields the scheduling lag since receipt, and a query whose stamp
+  /// read faults fails with `NtsError.clockFault` rather than
+  /// returning a sample stamped on another epoch. That provenance
+  /// comparison is the only valid way to age the stamp; do not
+  /// difference it against `MonotonicClock`, whose best-effort source
+  /// latches its process-local fallback for good once it has faulted,
+  /// so the two can sit on different epochs even while the native
+  /// clock is healthy again. The epoch is arbitrary (per-boot): never
+  /// persist this value and never compare it across boots, devices,
+  /// or processes. New in 7.1.
   final int recvBoottimeMicros;
 
   /// Live strict-clock generation [recvBoottimeMicros] was read under
