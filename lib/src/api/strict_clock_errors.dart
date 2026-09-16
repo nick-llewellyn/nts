@@ -6,9 +6,20 @@
 
 part of 'strict_clock.dart';
 
-/// Base of every clock failure thrown by [StrictClockContext.resolve],
-/// [StrictClockContext.now] and [StrictClockContext.elapsedSince].
-/// Sealed: `switch` over it is exhaustive.
+/// Base of every strict clock failure. Sealed: `switch` over it is
+/// exhaustive.
+///
+/// Most subtypes are thrown by [StrictClockContext.resolve],
+/// [StrictClockContext.now] and [StrictClockContext.elapsedSince], and
+/// by the [StrictSyncedTime] constructor's anchor check. Three arise
+/// only while a strict acquisition (`ntsGetTimeStrict`,
+/// `NtsClient.getTimeStrict`) attributes a query sample, and reach the
+/// caller as the `fault` of an `NtsError.clockFault` rather than
+/// directly: [StrictClockMissingReceipt] and [StrictClockForeignReceipt]
+/// at `ClockFaultStage.attribution`, and [StrictClockSuspendedInFlight]
+/// at `ClockFaultStage.receipt`. The other subtypes are carried the same
+/// way when the failing read was one the acquisition made on the
+/// caller's behalf.
 ///
 /// [StrictClockContext.resolveForTesting] throws the same errors once
 /// past its precondition; the [StateError] it throws when the bridge is

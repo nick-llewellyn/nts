@@ -6009,8 +6009,12 @@ void main() {
         expect(fresh.now().micros, isNonNegative);
       });
 
-      test('a StrictSyncedTime cannot be anchored on a reading from '
-          'another context', () {
+      test('a StrictSyncedTime cannot be anchored on a reading from a '
+          'retired generation', () {
+        // The check is provenance, not identity: a reading from another
+        // context in the same generation is indistinguishable from one
+        // of `b`'s own and is accepted. Retire `a`'s generation so the
+        // anchor is genuinely incompatible.
         final a = StrictClockContext.resolveForTesting();
         final anchorA = a.now();
         api.crateApiNtsNtsClockInvalidate();
