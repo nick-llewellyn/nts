@@ -1770,6 +1770,14 @@ impl HandshakeSlot {
     /// the caller rather than re-parked against a budget it can no
     /// longer measure. Each waiter receives an independent `Clone` of
     /// the leader's `Result`.
+    ///
+    /// Every pass, including the one that finds a published result,
+    /// reads the clock before anything is returned. The warm-cookies
+    /// waiter hands the payload straight back without re-entering a
+    /// clock-reading cache path, so this read is the only place a
+    /// generation change during the park, or a result published after
+    /// the waiter's own deadline, can fail or expire the waiter
+    /// instead of being returned as a success.
     fn wait_until(
         &self,
         clock: &SequentialReader,
@@ -1777,9 +1785,6 @@ impl HandshakeSlot {
     ) -> Result<Option<Result<HandshakeSlotOk, NtsError>>, ClockFault> {
         let mut g = lock_recover(&self.result);
         loop {
-            if let Some(r) = g.as_ref() {
-                return Ok(Some(r.clone()));
-            }
             // Sleep-aware remaining: a waiter parked across device
             // suspend must unpark against the caller's wall-clock
             // budget, not an `Instant` budget that froze while the
@@ -1790,6 +1795,9 @@ impl HandshakeSlot {
             let remaining = clock.remaining_until(deadline)?;
             if remaining.is_zero() {
                 return Ok(None);
+            }
+            if let Some(r) = g.as_ref() {
+                return Ok(Some(r.clone()));
             }
             let (next_g, _) = self
                 .cv

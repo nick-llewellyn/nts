@@ -356,8 +356,11 @@ Future<StrictSyncedTime> _getTimeStrict({
     readAfterFailure(err);
     rethrow;
   }
-  read(ClockFaultStage.awaitResult);
+  // The handshake ran and resolved a backend whether or not the read
+  // below accepts its outcome, so a fault here reports that backend:
+  // `null` means no handshake ran, not that one was discarded.
   backend = outcome.trustBackend;
+  read(ClockFaultStage.awaitResult);
   if (outcome.freshCookies < 1) {
     throw NtsError.noCookies(trustBackend: backend);
   }

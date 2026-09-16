@@ -3710,6 +3710,171 @@ fn warm_cookies_waiter_returns_timeout_when_leader_outlasts_deadline() {
     }
 }
 
+/// Drive a warm-cookies waiter whose strict source is scripted: its
+/// entry read and the read that anchors its park succeed, and every
+/// read after that — the first being the wake read against the
+/// leader's published result — returns `wake`. Returns the waiter's
+/// and the leader's outcomes.
+///
+/// The release is ordered after the waiter's second read, and the
+/// waiter holds the slot mutex from that read until it parks, so the
+/// leader cannot publish before the waiter is parked; the leader's
+/// own reads all precede the waiter's wake read, and the leader's
+/// thread has no override. Both outcomes are therefore deterministic.
+type WarmOutcome = Result<(u32, KePhaseTimings, TrustBackend, Vec<u16>), NtsError>;
+
+fn run_warm_waiter_with_scripted_wake_read(
+    host: &str,
+    wake: Result<crate::nts::boottime::RawSample, ClockFault>,
+) -> (WarmOutcome, WarmOutcome) {
+    use crate::nts::boottime::{test_sync, with_raw_override, RawSample};
+
+    let table = Arc::new(SessionTable::new());
+    let spec = NtsServerSpec {
+        host: host.into(),
+        port: 4460,
+    };
+    let release = BoundedRelease::new();
+    let release_handle = release.handle();
+    let do_handshake =
+        move |spec: &NtsServerSpec, _t: Duration, _c: usize, reporter: Option<&PhaseReporter>| {
+            if let Some(r) = reporter {
+                r.enter(KeTimeoutPhase::Tls);
+            }
+            release_handle
+                .wait_release(Duration::from_secs(10))
+                .map_err(|()| NtsError::Internal("BoundedRelease timed out".into()))?;
+            Ok((
+                make_test_session_with_cookies(&spec.host, 123, next_session_generation(), 4),
+                KePhaseTimings::default(),
+            ))
+        };
+
+    let leader = {
+        let table = table.clone();
+        let spec = spec.clone();
+        let do_handshake = do_handshake.clone();
+        thread::spawn(move || {
+            test_sync::adopt_exclusive();
+            let clock = SequentialReader::bind();
+            table.warm_cookies_with(&clock, &spec, Duration::from_secs(10), 4, &do_handshake)
+        })
+    };
+    let key = session_key(&spec);
+    await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+        slot.is_some_and(|s| Arc::strong_count(s) == 2)
+    });
+
+    let reads = Arc::new(AtomicUsize::new(0));
+    let waiter = {
+        let table = table.clone();
+        let spec = spec.clone();
+        let reads = reads.clone();
+        thread::spawn(move || {
+            test_sync::adopt_exclusive();
+            with_raw_override(
+                move || {
+                    let n = reads.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n <= 2 {
+                        Ok(RawSample::Linux {
+                            sec: 1_000 + i64::try_from(n).unwrap(),
+                            nsec: 0,
+                        })
+                    } else {
+                        wake
+                    }
+                },
+                || {
+                    let clock = SequentialReader::bind();
+                    table.warm_cookies_with(
+                        &clock,
+                        &spec,
+                        Duration::from_secs(10),
+                        4,
+                        &|_: &NtsServerSpec,
+                          _t: Duration,
+                          _c: usize,
+                          _r: Option<&PhaseReporter>| {
+                            panic!("waiter must park on the leader's slot, not handshake")
+                        },
+                    )
+                },
+            )
+        })
+    };
+    await_singleflight_state(&table, &key, Duration::from_secs(2), |slot| {
+        slot.is_some_and(|s| Arc::strong_count(s) == 3)
+    });
+    let parked_by = Instant::now() + Duration::from_secs(2);
+    while reads.load(Ordering::SeqCst) < 2 {
+        assert!(
+            Instant::now() < parked_by,
+            "waiter never took the read that anchors its park",
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    release.release();
+    let waiter_outcome = waiter.join().expect("waiter thread panicked");
+    let leader_outcome = leader.join().expect("leader thread panicked");
+    (waiter_outcome, leader_outcome)
+}
+
+/// A warm-cookies waiter reads its strict clock before accepting a
+/// result the leader published while it was parked. The waiter hands
+/// the slot payload straight back without re-entering a clock-reading
+/// path, so this wake read is the only place a source fault during
+/// the park can fail the call; without it the waiter returns the
+/// leader's success on a clock it can no longer vouch for.
+#[test]
+fn warm_cookies_waiter_reads_its_clock_before_accepting_a_published_result() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let (waiter, leader) = run_warm_waiter_with_scripted_wake_read(
+        "warm-waiter-wake-read-faults.test",
+        Err(ClockFault::SyscallFailed { errno: 5 }),
+    );
+    match waiter {
+        Err(NtsError::ClockFault {
+            stage: ClockFaultStage::Session,
+            fault: NtsClockFault::SyscallFailed { errno: 5 },
+            ..
+        }) => {}
+        other => panic!("expected ClockFault(Session, SyscallFailed 5); got {other:?}"),
+    }
+    match leader {
+        Ok((4, ..)) => {}
+        other => panic!("leader's own outcome must be unaffected by a waiter's fault: {other:?}"),
+    }
+}
+
+/// The same wake read expires a waiter whose own deadline passed
+/// before the leader published: the budget is the caller's, and a
+/// result that arrives after it is a `Timeout` in the leader's phase,
+/// not a late success.
+#[test]
+fn warm_cookies_waiter_expires_on_a_result_published_after_its_deadline() {
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let (waiter, leader) = run_warm_waiter_with_scripted_wake_read(
+        "warm-waiter-wake-read-expired.test",
+        // Well past the 10 s budget anchored at ~1 001 s.
+        Ok(crate::nts::boottime::RawSample::Linux {
+            sec: 2_000,
+            nsec: 0,
+        }),
+    );
+    match waiter {
+        Err(NtsError::Timeout {
+            phase: TimeoutPhase::Tls,
+            trust_backend: None,
+        }) => {}
+        other => panic!("expected Timeout(Tls); got {other:?}"),
+    }
+    match leader {
+        Ok((4, ..)) => {}
+        other => panic!("leader's own outcome must be unaffected: {other:?}"),
+    }
+}
+
 /// Pre-handshake budget exhaustion on a (re-)elected leader: when
 /// a thread enters `warm_cookies_with` with `started.elapsed()`
 /// already exceeding `timeout`, the leader path must surface

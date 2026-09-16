@@ -5201,9 +5201,9 @@ void main() {
             clockFault(
               ClockFaultStage.awaitResult,
               isA<StrictClockUnsupported>(),
-              // The read that faulted was the first thing after the
-              // handshake returned; its outcome had not been adopted.
-              trustBackend: isNull,
+              // The handshake ran and resolved its backend before the
+              // read faulted; `null` is reserved for "no handshake ran".
+              trustBackend: TrustBackend.custom,
             ),
           ),
         );
@@ -5712,6 +5712,52 @@ void main() {
         api.asyncGate = null;
         gate.complete();
         await Future.wait([holder, legacyWaiter]);
+        expect(api.queryDispatches, 2);
+        expect(api.asyncMaxInFlight, 1);
+      });
+
+      test('a strict waiter whose context faults on the read that charges '
+          'its queue wait releases the slot it was just granted', () async {
+        final ctx = StrictClockContext.resolveForTesting();
+        final gate = Completer<void>();
+        api.asyncGate = () => gate.future;
+        final holder = ntsQuery(spec: spec, bridgeConcurrencyCap: 1);
+        final strictWaiter = ntsQuery(
+          spec: spec,
+          context: ctx,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 30),
+        );
+        // Short budget so a leaked slot shows up as this waiter's
+        // `timeout(bridgeSaturation)` rather than a hung test.
+        final legacyWaiter = ntsQuery(
+          spec: spec,
+          bridgeConcurrencyCap: 1,
+          timeout: const Duration(seconds: 2),
+        );
+        // The holder's release sweeps the queue: read 1 is the sweep's
+        // verdict, which admits the strict waiter and takes the slot on
+        // its behalf; read 2 charges the queue wait once admitted.
+        var reads = 0;
+        api.onStrictRead = () {
+          if (++reads == 2) {
+            api.nextStrictThrow = const ffi.NtsClockFault.unsupported();
+          }
+        };
+        api.asyncGate = null;
+        gate.complete();
+        await holder;
+        await expectLater(
+          strictWaiter,
+          throwsA(
+            clockFault(
+              ClockFaultStage.admission,
+              isA<StrictClockUnsupported>(),
+            ),
+          ),
+        );
+        expect(reads, 2);
+        await legacyWaiter;
         expect(api.queryDispatches, 2);
         expect(api.asyncMaxInFlight, 1);
       });

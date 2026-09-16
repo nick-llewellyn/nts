@@ -114,17 +114,20 @@ Future<T> _withBridgeSlot<T>({
   // `timeout` verbatim; the queue-wait deduction below only applies
   // to calls that actually queued.
   var remainingTimeout = timeout;
+  // Set only by the queued branch; the deduction itself runs under
+  // the slot's `try` below, because a strict elapsed read can fault.
+  StrictReading? enqueued;
+  int? queueStartMicros;
   if (_bridgeInFlight < bridgeConcurrencyCap) {
     _bridgeInFlight++;
   } else {
     // A strict waiter reads its own context first, so a context that
     // is already invalid fails the call here rather than after a
     // queue wait it could never have been charged for.
-    final enqueued = context == null
+    enqueued = context == null
         ? null
         : _strictRead(context, ClockFaultStage.admission);
-    final queueClock = MonotonicClock.instance;
-    final queueStartMicros = queueClock.nowMicros();
+    queueStartMicros = MonotonicClock.instance.nowMicros();
     final waiter = _BridgeWaiter(
       bridgeConcurrencyCap,
       queueStartMicros + timeout.inMicroseconds,
@@ -150,12 +153,17 @@ Future<T> _withBridgeSlot<T>({
     // on either exit: an admitted or expired entry is dropped by the
     // next compaction pass.
     await waiter.admitted.future;
-    remainingTimeout = enqueued == null
-        ? timeout - queueClock.elapsedSince(queueStartMicros)
-        : timeout -
-              _strictElapsed(context!, enqueued, ClockFaultStage.admission);
   }
+  // The slot is held from here: every exit, including a strict read
+  // that faults while charging the queue wait, must release it or the
+  // queue behind this call never drains.
   try {
+    if (queueStartMicros != null) {
+      remainingTimeout = enqueued == null
+          ? timeout - MonotonicClock.instance.elapsedSince(queueStartMicros)
+          : timeout -
+                _strictElapsed(context!, enqueued, ClockFaultStage.admission);
+    }
     if (remainingTimeout < const Duration(milliseconds: 1)) {
       // The slot was granted at (or a scheduling beat past) the exact
       // moment the budget ran out; dispatching with a zero budget is
