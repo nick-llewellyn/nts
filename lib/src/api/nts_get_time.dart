@@ -392,15 +392,21 @@ Future<StrictSyncedTime> _getTimeStrict({
       lastStack = stack;
       continue;
     }
+    // The post-`await` read precedes attribution. A missing or foreign
+    // stamp says nothing about the context and throws without reading
+    // it, so a bridge reset or native generation change that landed
+    // while the query was parked would otherwise be reported as the
+    // sample's fault rather than the clock's.
+    read(ClockFaultStage.awaitResult);
     final receipt = _attributeReceipt(
       context,
       sample,
       notBefore: start,
       trustBackend: backend,
     );
-    // Post-`await` re-validation and the cross-reader ordering check
-    // in one read: `elapsedSince` fails on a bridge reset, a native
-    // generation change, or a stamp above the context's fresh reading.
+    // Cross-reader ordering check: `elapsedSince` fails on a stamp
+    // above the context's fresh reading (and, reading the context
+    // again, on anything the read above would have failed on).
     _strictElapsed(
       context,
       receipt,

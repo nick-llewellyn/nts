@@ -86,9 +86,11 @@ tarball.
   is anchored on a final reading of the context and its `utcNow()` /
   `elapsedSinceSync()` re-read that context, throwing
   `StrictClockInvalidated` once it is invalid; it cannot be
-  constructed on a reading from another context, and a fresh context
-  that reads successfully certifies nothing acquired under a previous
-  one. The legacy `ntsGetTime` / `NtsSyncedTime` path is unchanged
+  constructed on a reading whose coordinate the context does not
+  share — another bridge incarnation, an incompatible descriptor, or
+  a retired generation (a check of the reading's provenance, not of
+  which context object took it) — and a fresh context that reads
+  successfully certifies nothing acquired under a previous one. The legacy `ntsGetTime` / `NtsSyncedTime` path is unchanged
   and still tolerates an implausible stamp by falling back to a
   Dart-side arrival time; it does not gain strict guarantees.
 

@@ -5305,38 +5305,82 @@ void main() {
       });
 
       test('a native generation change while a query is in flight fails '
-          'the call at attribution, even for an in-window stamp', () async {
+          'the call at awaitResult before the sample is attributed, even '
+          'for an in-window stamp', () async {
         final ctx = StrictClockContext.resolveForTesting();
         api.nextWarm = _ffiWarm(2);
         api.queryScript = [
           // Stamped under the *new* generation: the receipt is real,
-          // numerically fresh, and not this context's.
+          // numerically fresh, and not this context's. The read owed
+          // for the `await` sees the retired generation first, so the
+          // call reports the clock event rather than its symptom (a
+          // foreign receipt at attribution — see AC5 for that case on
+          // a context whose own reads succeed).
           () {
             api.crateApiNtsNtsClockInvalidate();
             return strictSample();
           },
           () => strictSample(),
         ];
-        final expected = ctx.generation;
         await expectLater(
           ntsGetTimeStrict(spec: spec, context: ctx),
           throwsA(
             clockFault(
-              ClockFaultStage.attribution,
-              isA<StrictClockForeignReceipt>()
-                  .having((e) => e.expectedGeneration, 'expected', expected)
-                  .having(
-                    (e) => e.observedGeneration,
-                    'observed',
-                    expected + 1,
-                  ),
+              ClockFaultStage.awaitResult,
+              isA<StrictClockInvalidated>().having(
+                (e) => e.reason,
+                'reason',
+                StrictClockInvalidationReason.nativeGeneration,
+              ),
               trustBackend: TrustBackend.platform,
             ),
           ),
         );
         // Not tolerated as a burst failure: the second query never ran.
         expect(api.queryDispatches, 1);
+        expect(ctx.isValid, isFalse);
       });
+
+      test(
+        'a bridge reset while a query is parked is reported at '
+        'awaitResult even when the sample it returns has no receipt',
+        () async {
+          final ctx = StrictClockContext.resolveForTesting();
+          api.nextWarm = _ffiWarm(2);
+          // An unattributable sample is refused without reading the
+          // context; the read owed for the `await` must come first so
+          // the lifecycle fault is not hidden behind MissingReceipt.
+          api.queryScript = [
+            () => strictSample(generation: 0),
+            () => strictSample(),
+          ];
+          var calls = 0;
+          api.asyncGate = () async {
+            // The handshake passes through; reset the bridge while the
+            // first query is parked.
+            if (++calls == 2) {
+              api.asyncGate = null;
+              NtsBridge.dispose();
+              NtsRustLib.initMock(api: api);
+            }
+          };
+          await expectLater(
+            ntsGetTimeStrict(spec: spec, context: ctx),
+            throwsA(
+              clockFault(
+                ClockFaultStage.awaitResult,
+                isA<StrictClockInvalidated>().having(
+                  (e) => e.reason,
+                  'reason',
+                  StrictClockInvalidationReason.bridgeReset,
+                ),
+                trustBackend: TrustBackend.platform,
+              ),
+            ),
+          );
+          expect(api.queryDispatches, 1);
+        },
+      );
 
       test('a fault on the projection read fails the call after every '
           'sample was accepted', () async {
