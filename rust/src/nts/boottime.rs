@@ -1587,6 +1587,10 @@ mod tests {
 
     #[test]
     fn reading_generation_never_exceeds_live_generation() {
+        // The unbound read samples the live generation on both sides
+        // of the source; hold the share so an exclusive test cannot
+        // advance it in between.
+        let _shared = test_sync::shared();
         with_raw_override(scripted(vec![linux(1, 0)]), || {
             let r: StrictReading = strict_read().unwrap();
             assert!(r.generation <= generation());
@@ -1744,6 +1748,7 @@ mod tests {
 
     #[test]
     fn raw_sample_backend_is_carried_into_reading() {
+        let _shared = test_sync::shared();
         with_raw_override(
             scripted(vec![
                 Ok(RawSample::Apple {
