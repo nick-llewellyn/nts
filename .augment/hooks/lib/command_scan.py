@@ -2282,13 +2282,18 @@ class Scanner:
         `flags` are the long options seen, checked against WRITE_FLAGS before
         the verb tables: `bd ready --claim` writes, `bd ready` does not. A flag
         that was really another option's value -- `--title --claim` -- reads
-        as a write too, which is the same direction again.
+        as a write too, which is the same direction again. So does an operand
+        this scan cannot read behind such a verb: `bd ready "$(printf %s
+        --claim)"` runs the claim, and the substitution is the only place the
+        flag could be hiding.
         """
         if helped:
             return True
         if not operands:
             return False
-        if flags & WRITE_FLAGS.get(operands[0], set()):
+        write_flags = WRITE_FLAGS.get(operands[0])
+        if write_flags and (flags & write_flags
+                            or any(op is UNKNOWN for op in operands[1:])):
             return False
         if operands[0] in READONLY_VERBS:
             return True
