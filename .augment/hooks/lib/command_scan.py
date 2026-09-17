@@ -45,6 +45,13 @@ memories recall export ping preflight lint orphans find-duplicates completion
 # `human` belongs here rather than above because it reads bare and writes under
 # two of its four subcommands: `respond` comments and closes, `dismiss` closes
 # permanently. Judging it by its first word alone stranded both.
+# Flags that turn a read-only verb into a write. `bd ready --claim` atomically
+# claims the first ready issue, so the verb alone cannot judge it: read as the
+# listing it resembles, the claim sat local until some later write synced it.
+WRITE_FLAGS = {
+    "ready": {"--claim"},
+}
+
 READONLY_PAIRS = {
     ("dep", "list"), ("dep", "tree"), ("dep", "cycles"),
     ("label", "list"), ("label", "list-all"),
@@ -2165,6 +2172,7 @@ class Scanner:
         target = None
         store = None
         helped = False
+        flags = set()
         i = start + 1
         end_of_opts = False
         # Whether the word before this one was an option whose arity this scan
@@ -2202,6 +2210,7 @@ class Scanner:
                 continue
             if not end_of_opts and word.startswith("--"):
                 name, sep, inline = word.partition("=")
+                flags.add(name)
                 if sep:
                     # `--opt=value` carries its value, so nothing follows it.
                     if name in BD_DIR_OPTS:
@@ -2256,10 +2265,10 @@ class Scanner:
                 continue
             operands.append(word)
             i += 1
-        return operands, target, store, helped
+        return operands, target, store, helped, flags
 
     @staticmethod
-    def readonly(operands, helped):
+    def readonly(operands, helped, flags=frozenset()):
         """Whether a `bd` invocation with these operands only reads.
 
         The verb is compared whole, so `bd list-add` is not read as `bd list`
@@ -2269,10 +2278,22 @@ class Scanner:
         An operand this scan cannot read matches no entry of either table, so an
         invocation whose verb is unknowable is treated as a write. That is the
         same direction: the cost is a no-op commit, against a stranded one.
+
+        `flags` are the long options seen, checked against WRITE_FLAGS before
+        the verb tables: `bd ready --claim` writes, `bd ready` does not. A flag
+        that was really another option's value -- `--title --claim` -- reads
+        as a write too, which is the same direction again. So does an operand
+        this scan cannot read behind such a verb: `bd ready "$(printf %s
+        --claim)"` runs the claim, and the substitution is the only place the
+        flag could be hiding.
         """
         if helped:
             return True
         if not operands:
+            return False
+        write_flags = WRITE_FLAGS.get(operands[0])
+        if write_flags and (flags & write_flags
+                            or any(op is UNKNOWN for op in operands[1:])):
             return False
         if operands[0] in READONLY_VERBS:
             return True
@@ -3151,8 +3172,8 @@ class Scanner:
         if name != "bd":
             return
 
-        operands, target, store, helped = self.bd_operands(fields, start)
-        if self.readonly(operands, helped):
+        operands, target, store, helped, flags = self.bd_operands(fields, start)
+        if self.readonly(operands, helped, flags):
             return
         self.mutates = True
 

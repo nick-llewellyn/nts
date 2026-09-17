@@ -102,6 +102,10 @@ check skip 'bdx list'
 check skip 'bd list'
 check skip 'bd show CHR-1'
 check skip 'bd ready'
+check skip 'bd ready --label foo'
+check sync 'bd ready --claim'
+check sync 'bd ready --label foo --claim'
+check sync 'bd ready --claim=true'
 check skip 'bd blocked'
 check skip 'bd search foo'
 check skip 'bd stale'
@@ -2191,6 +2195,10 @@ check sync 'bd "$(printf dep)" list'
 check sync 'bd "$(printf list)"'
 # A known read-only verb ahead of an unknown operand still reads as read-only.
 check skip 'bd list "$(printf x)"'
+# Unless the verb has a write flag the unknown operand could be hiding.
+check sync 'bd ready "$(printf %s --claim)"'
+check sync 'bd ready $UNSET_BY_ANY_TEST_XYZ'
+check sync 'bd ready --label foo "$(printf x)"'
 # The `-C` target is still found past an unknown operand.
 check_target '/tmp/store' 'bd -C /tmp/store "$(printf close)" CHR-1'
 
