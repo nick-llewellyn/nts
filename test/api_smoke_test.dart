@@ -5628,6 +5628,114 @@ void main() {
         ),
       );
     });
+
+    test('a token element outside 0..=255 is rejected at construction '
+        'rather than narrowed to a byte', () {
+      for (final bad in [256, -1, 0x1_0000]) {
+        expect(
+          () => BootScope(providerId: hermetic, token: [bad]),
+          throwsA(isA<ArgumentError>().having((e) => e.name, 'name', 'token')),
+          reason: '$bad must not alias a byte',
+        );
+      }
+      // The aliasing the check prevents: 256 would have become 0.
+      expect(BootScope(providerId: hermetic, token: [0]).token, [0]);
+      expect(BootScope(providerId: hermetic, token: [255]).token, [255]);
+    });
+
+    test('a provider that returns a scope under another provider id '
+        'vouches for nothing: export and bind refuse it and the context '
+        'stays valid', () async {
+      final foreign = BootScope(providerId: 'nts.other', token: [1]);
+      final ctx = StrictClockContext.resolveForTesting();
+      final time = acquire(
+        ctx,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      clock = base + 30;
+      final exporting = provider([foreign]);
+      await expectLater(
+        ctx.exportReference(time, provider: exporting),
+        refused(BootScopeUnavailableReason.providerMismatch),
+      );
+      expect(exporting.calls, 1);
+      expect(ctx.isValid, isTrue);
+      // Bind reaches the same refusal once past the reference's own
+      // provider check, which the hermetic-scoped reference passes.
+      final binding = provider([foreign]);
+      await expectLater(
+        ctx.bindReference(reference(base), provider: binding),
+        refused(BootScopeUnavailableReason.providerMismatch),
+      );
+      expect(binding.calls, 1);
+      expect(ctx.isValid, isTrue);
+      expect(() => ctx.now(), returnsNormally);
+    });
+
+    test('an exception from the provider propagates unchanged from '
+        'either scope read; nothing is exported, adopted or '
+        'invalidated', () async {
+      final boom = StateError('provider exploded');
+      for (final failingCall in [1, 2]) {
+        // The scripted coordinate is shared across iterations, so each
+        // one starts above the last one's reads.
+        final start = base + failingCall * 1000;
+        final ctx = StrictClockContext.resolveForTesting();
+        final time = acquire(
+          ctx,
+          receiptMicros: start + 10,
+          anchorMicros: start + 20,
+        );
+        clock = start + 30;
+
+        final exporting = provider([scope()])
+          ..onCall = (call) {
+            if (call == failingCall) throw boom;
+          };
+        var reads = api.strictReadCalls;
+        await expectLater(
+          ctx.exportReference(time, provider: exporting),
+          throwsA(same(boom)),
+          reason: 'export, provider throwing on call $failingCall',
+        );
+        expect(exporting.calls, failingCall);
+        // The first call precedes every read; the second follows the
+        // receipt-ordering read but precedes the post-await one.
+        expect(api.strictReadCalls, reads + failingCall - 1);
+        expect(ctx.isValid, isTrue);
+
+        final binding = provider([scope()])
+          ..onCall = (call) {
+            if (call == failingCall) throw boom;
+          };
+        reads = api.strictReadCalls;
+        await expectLater(
+          ctx.bindReference(reference(base), provider: binding),
+          throwsA(same(boom)),
+          reason: 'bind, provider throwing on call $failingCall',
+        );
+        expect(binding.calls, failingCall);
+        expect(api.strictReadCalls, reads + failingCall - 1);
+        expect(ctx.isValid, isTrue);
+
+        // The context is still usable, and a clean transfer still
+        // works on it.
+        expect(() => ctx.now(), returnsNormally);
+        final exported = await ctx.exportReference(
+          time,
+          provider: provider([scope()]),
+        );
+        expect(
+          await ctx.bindReference(exported, provider: provider([scope()])),
+          isA<StrictReading>().having(
+            (r) => r.micros,
+            'micros',
+            time.referenceMicros,
+          ),
+        );
+      }
+    });
   });
 
   group('bridge admission gate', () {

@@ -46,6 +46,15 @@ part of 'strict_clock.dart';
 /// past its precondition; the [StateError] it throws when the bridge is
 /// not a mock is a test-setup error, not a clock failure, and is not
 /// part of this hierarchy.
+///
+/// Two further failures reach a caller of the transfer surface from
+/// outside this hierarchy, so `catch (StrictClockError)` alone does not
+/// cover them: the [ArgumentError] [StrictClockContext.exportReference]
+/// throws for a [StrictSyncedTime] another context acquired, and
+/// whatever [BootScopeProvider.current] throws, which propagates
+/// unchanged — the transfer is abandoned and nothing is exported,
+/// adopted or invalidated, but the exception is the provider's, not
+/// this package's, and is deliberately neither wrapped nor swallowed.
 sealed class StrictClockError implements Exception {
   const StrictClockError._();
 
@@ -314,9 +323,12 @@ enum BootScopeUnavailableReason {
   /// outcome of every transfer attempted on a native context.
   providerNotApproved,
 
-  /// The reference's scope was issued by a provider other than the one
-  /// offered to bind it; scopes from different providers are never
-  /// compared.
+  /// A scope is attributed to a provider other than the one handling
+  /// the transfer: the reference was issued under a different
+  /// [BootScopeProvider.providerId] than the provider offered to bind
+  /// it, or the provider itself returned a scope labelled with another
+  /// provider's id. Scopes from different providers are never compared,
+  /// and a provider vouches only for its own.
   providerMismatch,
 
   /// The provider returned `null`: the scope cannot be established

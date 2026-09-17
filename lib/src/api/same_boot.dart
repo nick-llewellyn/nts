@@ -79,8 +79,13 @@ abstract interface class BootScopeProvider {
 /// else identify nothing.
 final class BootScope {
   /// Construct a scope. [token] is copied; the copy is unmodifiable.
+  ///
+  /// Every element must be a byte, `0..=255`; anything else throws
+  /// [ArgumentError] in every build mode rather than being narrowed to
+  /// eight bits. Token equality is the epoch identity check, so `[256]`
+  /// must not silently become `[0]`.
   BootScope({required this.providerId, required List<int> token})
-    : token = Uint8List.fromList(token).asUnmodifiableView();
+    : token = _checkedToken(token);
 
   /// Provider whose guarantee the token carries.
   final String providerId;
@@ -101,6 +106,19 @@ final class BootScope {
   @override
   String toString() =>
       'BootScope(providerId: $providerId, token: ${_hex(token)})';
+
+  static Uint8List _checkedToken(List<int> token) {
+    for (final byte in token) {
+      if (byte < 0 || byte > 255) {
+        throw ArgumentError.value(
+          byte,
+          'token',
+          'every element must be a byte in 0..=255',
+        );
+      }
+    }
+    return Uint8List.fromList(token).asUnmodifiableView();
+  }
 
   static bool _bytesEqual(Uint8List a, Uint8List b) {
     if (a.length != b.length) return false;

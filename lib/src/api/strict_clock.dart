@@ -518,8 +518,11 @@ final class StrictClockContext {
   /// [kApprovedBootScopeProviders], or it carries
   /// [kHermeticBootScopeProviderId] on a `testInjected` context — a
   /// claimed id alone approves nothing on a native one) — before the
-  /// provider is consulted; a first `current()` scope,
-  /// non-null; a strict read proving this generation is still live and
+  /// provider is consulted; a first `current()` scope, non-null and
+  /// under [provider]'s own [BootScopeProvider.providerId] (a scope
+  /// labelled with another provider's id is
+  /// [BootScopeUnavailableReason.providerMismatch], never carried); a
+  /// strict read proving this generation is still live and
   /// the receipt still orders before now (a receipt that does not is a
   /// [StrictClockRegression] and invalidates the context, as in
   /// [elapsedSince]); a second `current()` equal to the first; a final
@@ -566,7 +569,8 @@ final class StrictClockContext {
   /// [provider] approved for this context's provenance (by instance,
   /// as in [exportReference]) and the issuer of [reference]'s scope —
   /// both before the provider is consulted; a
-  /// first `current()` scope, non-null and equal to the reference's; a
+  /// first `current()` scope, non-null, under [provider]'s own id and
+  /// equal to the reference's; a
   /// strict read on this context at or after the reference
   /// ([BootScopeUnavailableReason.referenceAhead] otherwise); a second
   /// `current()` equal to the first; a final strict read after that
@@ -643,10 +647,22 @@ final class StrictClockContext {
     }
   }
 
+  // A provider vouches only for scopes under its own id: a scope it
+  // returns labelled with another provider's id is refused rather than
+  // carried, so a faulty approved provider cannot mint a reference
+  // attributed to a different approved guarantee — which bind would
+  // then compare against that other provider, contrary to the rule
+  // that scopes from different providers are never compared.
   static BootScope _requireScope(BootScope? scope, BootScopeProvider provider) {
     if (scope == null) {
       throw StrictClockBootScopeUnavailable(
         reason: BootScopeUnavailableReason.unavailable,
+        providerId: provider.providerId,
+      );
+    }
+    if (scope.providerId != provider.providerId) {
+      throw StrictClockBootScopeUnavailable(
+        reason: BootScopeUnavailableReason.providerMismatch,
         providerId: provider.providerId,
       );
     }
