@@ -247,7 +247,7 @@ tarball.
   `testInjected` context accepts. `StrictSyncedTime`'s constructor
   now takes `reference:` as a `StrictReading` rather than a bare
   `referenceMicros:` integer, so only an attributed receipt can be
-  exported. ([#TBD](https://github.com/nick-llewellyn/nts/pull/TBD))
+  exported. ([#355](https://github.com/nick-llewellyn/nts/pull/355))
 
 ### Internal
 
