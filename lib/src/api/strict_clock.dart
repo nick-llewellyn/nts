@@ -625,12 +625,14 @@ final class StrictClockContext {
 
   // Approval is by instance: `kApprovedBootScopeProviders` holds
   // package-constructed providers and a caller cannot put its own
-  // there, so `providerId` is never trusted on its own. The hermetic id
-  // is the one exception, and only on a context that can never be
-  // labelled native.
+  // there, so `providerId` is never trusted on its own. Membership is
+  // tested with `identical`, not `Set.contains`, so a caller's
+  // `operator ==` cannot compare its own provider equal to an approved
+  // one. The hermetic id is the one exception, and only on a context
+  // that can never be labelled native.
   void _checkProviderApproved(BootScopeProvider provider) {
     final approved =
-        kApprovedBootScopeProviders.contains(provider) ||
+        kApprovedBootScopeProviders.any((p) => identical(p, provider)) ||
         (provenance == StrictClockProvenance.testInjected &&
             provider.providerId == kHermeticBootScopeProviderId);
     if (!approved) {
