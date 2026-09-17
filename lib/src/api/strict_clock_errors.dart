@@ -14,9 +14,15 @@ part of 'strict_clock.dart';
 /// the transfer surface [StrictClockContext.exportReference] and
 /// [StrictClockContext.bindReference] — which also validate the
 /// reference's coordinate ([StrictClockDescriptorIncompatible]) and
-/// its boot scope ([StrictClockBootScopeUnavailable], the one subtype
-/// that leaves the context valid) — and by the [StrictSyncedTime]
-/// constructor's anchor check. Three arise
+/// its boot scope ([StrictClockBootScopeUnavailable]) — and by the
+/// [StrictSyncedTime] constructor's anchor and reference checks.
+/// Neither of those two transfer refusals invalidates the context, as
+/// the incompatibility subtypes raised without reading the clock
+/// ([StrictClockSourceIncompatible],
+/// [StrictClockDescriptorIncompatible],
+/// [StrictClockGenerationIncompatible]) likewise do not: they report
+/// that a reading or a scope could not be matched, not that the clock
+/// failed. Three arise
 /// only while a call acquires a query sample and reach the caller as
 /// the `fault` of an `NtsError.clockFault` rather than directly, and
 /// they differ in which surfaces can raise them:
