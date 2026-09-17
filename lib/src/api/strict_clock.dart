@@ -514,9 +514,11 @@ final class StrictClockContext {
   /// export instant, so a delayed export changes nothing.
   ///
   /// Order of checks: this context's lifecycle; [provider] approved
-  /// for this context's provenance ([kApprovedBootScopeProviders], or
-  /// [kHermeticBootScopeProviderId] on a `testInjected` context) —
-  /// before the provider is consulted; a first `current()` scope,
+  /// for this context's provenance (the instance is in
+  /// [kApprovedBootScopeProviders], or it carries
+  /// [kHermeticBootScopeProviderId] on a `testInjected` context — a
+  /// claimed id alone approves nothing on a native one) — before the
+  /// provider is consulted; a first `current()` scope,
   /// non-null; a strict read proving this generation is still live and
   /// the receipt still orders before now (a receipt that does not is a
   /// [StrictClockRegression] and invalidates the context, as in
@@ -561,8 +563,9 @@ final class StrictClockContext {
   /// [reference]'s descriptor compatible with this one
   /// ([StrictClockDescriptorIncompatible] otherwise — an inexact
   /// mapping between coordinates is rejected, never converted);
-  /// [provider] approved for this context's provenance and the issuer
-  /// of [reference]'s scope — both before the provider is consulted; a
+  /// [provider] approved for this context's provenance (by instance,
+  /// as in [exportReference]) and the issuer of [reference]'s scope —
+  /// both before the provider is consulted; a
   /// first `current()` scope, non-null and equal to the reference's; a
   /// strict read on this context at or after the reference
   /// ([BootScopeUnavailableReason.referenceAhead] otherwise); a second
@@ -620,16 +623,20 @@ final class StrictClockContext {
     );
   }
 
+  // Approval is by instance: `kApprovedBootScopeProviders` holds
+  // package-constructed providers and a caller cannot put its own
+  // there, so `providerId` is never trusted on its own. The hermetic id
+  // is the one exception, and only on a context that can never be
+  // labelled native.
   void _checkProviderApproved(BootScopeProvider provider) {
-    final id = provider.providerId;
     final approved =
-        kApprovedBootScopeProviders.contains(id) ||
+        kApprovedBootScopeProviders.contains(provider) ||
         (provenance == StrictClockProvenance.testInjected &&
-            id == kHermeticBootScopeProviderId);
+            provider.providerId == kHermeticBootScopeProviderId);
     if (!approved) {
       throw StrictClockBootScopeUnavailable(
         reason: BootScopeUnavailableReason.providerNotApproved,
-        providerId: id,
+        providerId: provider.providerId,
       );
     }
   }

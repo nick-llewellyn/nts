@@ -220,9 +220,11 @@ tarball.
   prove nothing. Both calls check, in order, the context's lifecycle;
   the reference's descriptor (`bindReference` rejects an incompatible
   one as `StrictClockDescriptorIncompatible` — an inexact mapping is
-  refused, never converted); that the provider's id is in
-  `kApprovedBootScopeProviders` and, on bind, issued the reference's
-  scope — both before the provider is consulted; a first
+  refused, never converted); that the provider *instance* is in
+  `kApprovedBootScopeProviders` — approval is by instance, never by
+  the `providerId` a caller's implementation claims — and, on bind,
+  issued the reference's scope — both before the provider is
+  consulted; a first
   `provider.current()`, which must be non-null and, on bind, equal to
   the reference's scope; a strict read on the context (a receipt the
   producer's clock has fallen below is a `StrictClockRegression`; a
@@ -242,7 +244,12 @@ tarball.
   strict reads are unaffected. Approval is a reviewed addition to
   that constant, not a runtime registration; a caller-supplied
   boolean, a stored identifier, an uptime comparison or a hashed
-  counter is not accepted as scope. Tests exercise the path against
+  counter is not accepted as scope. `SameBootReference`'s public
+  constructor, which exists so a consumer can rebuild one from
+  storage it has authenticated, rejects a `referenceMicros` outside
+  the coordinate's `0..=2^63-1` domain with `ArgumentError` in every
+  build mode, so a corrupt record cannot be bound as a reading no
+  clock could have produced. Tests exercise the path against
   a mock bridge through `kHermeticBootScopeProviderId`, which only a
   `testInjected` context accepts. `StrictSyncedTime`'s constructor
   now takes `reference:` as a `StrictReading` rather than a bare

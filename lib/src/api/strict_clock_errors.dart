@@ -296,10 +296,11 @@ final class StrictClockGenerationIncompatible extends StrictClockError {
 /// Why a same-boot transfer was refused; see
 /// [StrictClockBootScopeUnavailable].
 enum BootScopeUnavailableReason {
-  /// The provider's id is not in [kApprovedBootScopeProviders] (or, on
-  /// a `testInjected` context, is not the hermetic id). Checked before
-  /// the provider is consulted. With the shipped empty allowlist this
-  /// is the outcome of every transfer attempted on a native context.
+  /// The provider instance is not in [kApprovedBootScopeProviders]
+  /// (or, on a `testInjected` context, does not carry the hermetic
+  /// id). Checked before the provider is consulted; the id it claims
+  /// is not a credential. With the shipped empty allowlist this is the
+  /// outcome of every transfer attempted on a native context.
   providerNotApproved,
 
   /// The reference's scope was issued by a provider other than the one

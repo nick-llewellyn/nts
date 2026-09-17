@@ -17,14 +17,23 @@
 
 part of 'strict_clock.dart';
 
-/// Provider ids whose [BootScope] a native [StrictClockContext] accepts
-/// as same-boot evidence. **Empty.** No boot-identity source has been
-/// evidenced for any supported platform: Android
-/// `Settings.Global.BOOT_COUNT` is a candidate pending counter, reset
-/// and installation-lineage validation, and no iOS cold-restore
-/// identity is available to apps. Approval is a reviewed addition to
-/// this constant, never a runtime registration.
-const Set<String> kApprovedBootScopeProviders = <String>{};
+/// The [BootScopeProvider] instances whose [BootScope] a native
+/// [StrictClockContext] accepts as same-boot evidence. **Empty.** No
+/// boot-identity source has been evidenced for any supported platform:
+/// Android `Settings.Global.BOOT_COUNT` is a candidate pending counter,
+/// reset and installation-lineage validation, and no iOS cold-restore
+/// identity is available to apps.
+///
+/// Approval is by instance, not by [BootScopeProvider.providerId]: an
+/// approved provider is a `final class` in this library with a private
+/// constructor and one package-held instance, and it is that instance
+/// that appears here. A caller's own implementation of the public
+/// interface is refused whatever `providerId` it claims, so adding an
+/// id to an allowlist could not be impersonated even if one existed.
+/// Approval is a reviewed addition to this constant, never a runtime
+/// registration.
+const Set<BootScopeProvider> kApprovedBootScopeProviders =
+    <BootScopeProvider>{};
 
 /// Provider id a [StrictClockProvenance.testInjected] context accepts
 /// so the transfer path can be exercised hermetically against a mock
@@ -42,16 +51,21 @@ const String kHermeticBootScopeProviderId = 'nts.hermetic-test';
 /// and differ whenever that epoch resets, or [current] must return
 /// `null`. It is consulted only by [StrictClockContext.exportReference]
 /// and [StrictClockContext.bindReference], never by a strict read, and
-/// only after [providerId] has been found in
+/// only after the instance itself has been found in
 /// [kApprovedBootScopeProviders] — an unapproved provider is rejected
-/// before [current] is called. Binding the scope to a non-migrating
+/// before [current] is called, and [providerId] is a label for the
+/// scopes it issues and for error reports, not a credential. The
+/// interface is public so the types can be named and a test can script
+/// one under [kHermeticBootScopeProviderId]; implementing it outside
+/// this library approves nothing. Binding the scope to a non-migrating
 /// installation or key lineage, where the provider's guarantee requires
 /// it, is the provider's responsibility; an exception thrown by
 /// [current] propagates to the caller and nothing is adopted.
 abstract interface class BootScopeProvider {
-  /// Stable identifier of this provider's guarantee, matched against
-  /// [kApprovedBootScopeProviders] and stored on every [BootScope] it
-  /// returns.
+  /// Stable identifier of this provider's guarantee, stored on every
+  /// [BootScope] it returns and reported on every refusal. A label,
+  /// not a credential: approval is membership of the instance in
+  /// [kApprovedBootScopeProviders].
   String get providerId;
 
   /// The scope the process is currently in, or `null` when it cannot
@@ -111,18 +125,32 @@ final class BootScope {
 /// per-process lifecycle token and serialised metadata never
 /// reinstates one. How this value is stored, authenticated and aged
 /// is the consumer's; the public constructor exists so a consumer can
-/// rebuild one from storage it has already authenticated.
+/// rebuild one from storage it has already authenticated, and it
+/// rejects a value outside the coordinate's domain so that a corrupt
+/// record cannot be bound as a reading no clock could have produced.
 final class SameBootReference {
   /// Construct a reference from authenticated storage.
-  const SameBootReference({
+  ///
+  /// [referenceMicros] must lie in the coordinate's documented domain,
+  /// `0..=2^63-1` (see [ClockSourceDescriptor]); a negative value
+  /// throws [ArgumentError] in every build mode, not under `assert`.
+  SameBootReference({
     required this.referenceMicros,
     required this.descriptor,
     required this.scope,
-  });
+  }) {
+    if (referenceMicros < 0) {
+      throw ArgumentError.value(
+        referenceMicros,
+        'referenceMicros',
+        'must be in the coordinate domain 0..=2^63-1',
+      );
+    }
+  }
 
   /// The producer's wire receipt in microseconds on [descriptor] — the
   /// physical receipt, not a normalised model reference and not the
-  /// export instant.
+  /// export instant. Never negative.
   final int referenceMicros;
 
   /// Coordinate the reference is on.

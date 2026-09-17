@@ -4957,7 +4957,31 @@ void main() {
     test('no boot-scope provider is approved, and the hermetic id is '
         'not an approval', () {
       expect(kApprovedBootScopeProviders, isEmpty);
-      expect(kApprovedBootScopeProviders, isNot(contains(hermetic)));
+      expect(
+        kApprovedBootScopeProviders.map((p) => p.providerId),
+        isNot(contains(hermetic)),
+      );
+      // Approval is by instance; a caller-built provider is not a
+      // member whatever id it claims.
+      expect(
+        kApprovedBootScopeProviders.contains(provider([scope()])),
+        isFalse,
+      );
+    });
+
+    test('a reference outside the coordinate domain is rejected at '
+        'construction, in every build mode', () {
+      expect(
+        () => SameBootReference(
+          referenceMicros: -1,
+          descriptor: descriptor,
+          scope: scope(),
+        ),
+        throwsA(
+          isA<ArgumentError>().having((e) => e.name, 'name', 'referenceMicros'),
+        ),
+      );
+      expect(reference(0).referenceMicros, 0);
     });
 
     test('AC1: local strict reads keep working while every transfer '
@@ -6844,25 +6868,40 @@ void main() {
         final anchorA = a.now();
         api.crateApiNtsNtsClockInvalidate();
         final b = StrictClockContext.resolveForTesting();
-        expect(b.now().micros, isNonNegative);
+        final anchorB = b.now();
+        expect(anchorB.micros, isNonNegative);
+        final foreign = isA<StrictClockGenerationIncompatible>()
+            .having((e) => e.expected, 'expected', b.generation)
+            .having((e) => e.actual, 'actual', anchorA.generation);
         expect(
           () => StrictSyncedTime(
             context: b,
             anchor: anchorA,
+            reference: anchorB,
+            utcUnixMicros: 1,
+            roundTripMicros: 0,
+            samplesUsed: 1,
+            trustBackend: TrustBackend.platform,
+          ),
+          throwsA(foreign),
+        );
+        // The reference is checked on its own: a valid anchor does not
+        // carry a retired receipt through, so an exported reference is
+        // always one this context's coordinate attributed.
+        expect(
+          () => StrictSyncedTime(
+            context: b,
+            anchor: anchorB,
             reference: anchorA,
             utcUnixMicros: 1,
             roundTripMicros: 0,
             samplesUsed: 1,
             trustBackend: TrustBackend.platform,
           ),
-          throwsA(
-            isA<StrictClockGenerationIncompatible>()
-                .having((e) => e.expected, 'expected', b.generation)
-                .having((e) => e.actual, 'actual', anchorA.generation),
-          ),
+          throwsA(foreign),
         );
-        // A foreign anchor is the caller's error, not evidence against
-        // the receiving context.
+        // A foreign anchor or reference is the caller's error, not
+        // evidence against the receiving context.
         expect(b.isValid, isTrue);
       });
     });
