@@ -10,8 +10,13 @@ part of 'strict_clock.dart';
 /// exhaustive.
 ///
 /// Most subtypes are thrown by [StrictClockContext.resolve],
-/// [StrictClockContext.now] and [StrictClockContext.elapsedSince], and
-/// by the [StrictSyncedTime] constructor's anchor check. Three arise
+/// [StrictClockContext.now] and [StrictClockContext.elapsedSince], by
+/// the transfer surface [StrictClockContext.exportReference] and
+/// [StrictClockContext.bindReference] — which also validate the
+/// reference's coordinate ([StrictClockDescriptorIncompatible]) and
+/// its boot scope ([StrictClockBootScopeUnavailable], the one subtype
+/// that leaves the context valid) — and by the [StrictSyncedTime]
+/// constructor's anchor check. Three arise
 /// only while a call acquires a query sample and reach the caller as
 /// the `fault` of an `NtsError.clockFault` rather than directly, and
 /// they differ in which surfaces can raise them:

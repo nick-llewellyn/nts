@@ -851,7 +851,9 @@ class _ScriptedNativeApi extends NtsRustLibApiImpl {
 // Scripted `BootScopeProvider`: `current()` answers with the next
 // scripted entry (the last one is sticky) and counts its calls, so a
 // test can assert the provider was never consulted, or that a change
-// mid-bracket was observed.
+// mid-bracket was observed. `onCall`, given the 1-based call number,
+// runs while the await is in flight, so a test can change the context
+// underneath the caller without changing the scope it reports.
 class _ScriptedBootScopeProvider implements BootScopeProvider {
   _ScriptedBootScopeProvider(this.providerId, List<BootScope?> responses)
     : _responses = List.of(responses);
@@ -861,10 +863,12 @@ class _ScriptedBootScopeProvider implements BootScopeProvider {
 
   final List<BootScope?> _responses;
   int calls = 0;
+  void Function(int call)? onCall;
 
   @override
   Future<BootScope?> current() async {
     calls++;
+    onCall?.call(calls);
     return _responses.length > 1 ? _responses.removeAt(0) : _responses.single;
   }
 }
@@ -5271,6 +5275,93 @@ void main() {
       );
       expect(present.calls, 1);
       expect(ctx.isValid, isFalse);
+    });
+
+    test('AC2: a producer retired while the second scope read is in '
+        'flight fails the export on the read that follows it, and mints '
+        'nothing', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final time = acquire(
+        ctx,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      clock = base + 30;
+      // The scope is the same on both reads, so the bracket itself is
+      // satisfied; the generation advances during the second `current()`
+      // await, which only a read after that await can catch.
+      final present = provider([scope()])
+        ..onCall = (call) {
+          if (call == 2) {
+            api.nextStrictThrow = const ffi.NtsClockFault.generationChanged(
+              expected: 1,
+              observed: 2,
+            );
+          }
+        };
+      await expectLater(
+        ctx.exportReference(time, provider: present),
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.nativeGeneration,
+          ),
+        ),
+      );
+      expect(present.calls, 2);
+      expect(ctx.isValid, isFalse);
+    });
+
+    test('AC2: a receiver retired while the second scope read is in '
+        'flight fails the bind on the read that follows it, and adopts '
+        'nothing', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      clock = base + 30;
+      final present = provider([scope()])
+        ..onCall = (call) {
+          if (call == 2) {
+            api.nextStrictThrow = const ffi.NtsClockFault.generationChanged(
+              expected: 1,
+              observed: 2,
+            );
+          }
+        };
+      await expectLater(
+        ctx.bindReference(reference(base), provider: present),
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.nativeGeneration,
+          ),
+        ),
+      );
+      expect(present.calls, 2);
+      expect(ctx.isValid, isFalse);
+    });
+
+    test('export and bind each read the clock once more after the '
+        'second scope read', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final time = acquire(
+        ctx,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      clock = base + 30;
+      // Export: the receipt-ordering read, then the post-await read.
+      var reads = api.strictReadCalls;
+      final exported = await ctx.exportReference(
+        time,
+        provider: provider([scope()]),
+      );
+      expect(api.strictReadCalls, reads + 2);
+      // Bind: the reference-ordering read, then the post-await read.
+      reads = api.strictReadCalls;
+      await ctx.bindReference(exported, provider: provider([scope()]));
+      expect(api.strictReadCalls, reads + 2);
+      expect(ctx.isValid, isTrue);
     });
 
     test('AC2: a receiver whose re-resolution fails does not bind, and '
