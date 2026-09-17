@@ -293,6 +293,68 @@ final class StrictClockGenerationIncompatible extends StrictClockError {
       'generation $expected';
 }
 
+/// Why a same-boot transfer was refused; see
+/// [StrictClockBootScopeUnavailable].
+enum BootScopeUnavailableReason {
+  /// The provider's id is not in [kApprovedBootScopeProviders] (or, on
+  /// a `testInjected` context, is not the hermetic id). Checked before
+  /// the provider is consulted. With the shipped empty allowlist this
+  /// is the outcome of every transfer attempted on a native context.
+  providerNotApproved,
+
+  /// The reference's scope was issued by a provider other than the one
+  /// offered to bind it; scopes from different providers are never
+  /// compared.
+  providerMismatch,
+
+  /// The provider returned `null`: the scope cannot be established
+  /// right now.
+  unavailable,
+
+  /// The provider's scope on the receiving side is not the one the
+  /// reference was exported under: a different boot, or a lineage the
+  /// provider does not vouch for.
+  mismatch,
+
+  /// The provider reported one scope before the clock was checked and
+  /// a different one (or none) after it; nothing bracketed by that
+  /// change is adopted.
+  changed,
+
+  /// The provider vouched for the scope but the coordinate refutes it:
+  /// the reference lies beyond the receiving context's current
+  /// reading, which cannot happen within one counter epoch.
+  referenceAhead,
+}
+
+/// Same-boot transfer refused because boot scope could not be
+/// established for it.
+///
+/// Thrown by [StrictClockContext.exportReference] and
+/// [StrictClockContext.bindReference]. It is a verdict on the transfer,
+/// not on the clock: the context stays valid and its local strict reads
+/// are unaffected. The package ships no approved provider, so on a
+/// native context every transfer ends here with
+/// [BootScopeUnavailableReason.providerNotApproved].
+final class StrictClockBootScopeUnavailable extends StrictClockError {
+  /// Construct the error.
+  const StrictClockBootScopeUnavailable({
+    required this.reason,
+    required this.providerId,
+  }) : super._();
+
+  /// Why the transfer was refused.
+  final BootScopeUnavailableReason reason;
+
+  /// Id of the provider offered for the transfer.
+  final String providerId;
+
+  @override
+  String get message =>
+      'same-boot transfer unavailable (${reason.name}) under boot-scope '
+      'provider "$providerId"';
+}
+
 /// The device suspended while an NTP reply was in flight.
 ///
 /// The Rust core brackets every UDP send/recv pair with strict

@@ -195,6 +195,7 @@ class _RecordingApi implements NtsRustLibApi {
     strictReadBackendOverride = null;
     strictDescriptorOverride = null;
     onStrictRead = null;
+    otherLiveGenerations.clear();
     // `strictGeneration` is deliberately not reset: like the offset
     // below it only ever advances, mirroring the Rust core's counter.
     // Do NOT reset `_bootSw` or `suspendOffsetMicros` — the mocked
@@ -338,6 +339,14 @@ class _RecordingApi implements NtsRustLibApi {
   // `onBoottimeRead`: lets a test inject a suspend or arm a fault at a
   // specific read in a sequence with no suspension point between them.
   void Function()? onStrictRead;
+  // Generations other than `strictGeneration` that a bound read is
+  // still honoured on, stamped with the bound value. A hermetic
+  // stand-in for a second process whose Rust counter is independent of
+  // this one: the same-boot tests resolve a producer, move
+  // `strictGeneration` on, park the producer's generation here and
+  // resolve a receiver, so both stay live on different generations
+  // without either having been invalidated.
+  final Set<int> otherLiveGenerations = <int>{};
 
   @override
   ffi.NtsClockDescriptor crateApiNtsNtsClockDescriptor() {
@@ -359,10 +368,11 @@ class _RecordingApi implements NtsRustLibApi {
     // Mirrors the native pre-check: a caller on a retired generation
     // is refused before the source — here, the scripted fault — is
     // consulted, so `nextStrictThrow` stays armed.
-    if (boundGeneration != null &&
-        boundGeneration.toInt() != strictGeneration) {
+    final bound = boundGeneration?.toInt();
+    final onOtherLive = bound != null && otherLiveGenerations.contains(bound);
+    if (bound != null && bound != strictGeneration && !onOtherLive) {
       throw ffi.NtsClockFault.generationChanged(
-        expected: boundGeneration,
+        expected: PlatformInt64Util.from(bound),
         observed: PlatformInt64Util.from(strictGeneration),
       );
     }
@@ -377,7 +387,9 @@ class _RecordingApi implements NtsRustLibApi {
     strictMicrosOverride = null;
     final backend = strictReadBackendOverride ?? strictBackend;
     strictReadBackendOverride = null;
-    final generation = strictReadGenerationOverride ?? strictGeneration;
+    final generation =
+        strictReadGenerationOverride ??
+        (onOtherLive ? bound : strictGeneration);
     strictReadGenerationOverride = null;
     return ffi.NtsStrictClockReading(
       micros: micros,
@@ -795,6 +807,65 @@ class _InvalidateSpyNativeApi extends NtsRustLibApiImpl {
     final pending = invalidateThrow;
     if (pending != null) throw pending;
     return invalidateCallsWhileInstalled.length;
+  }
+}
+
+// A generated implementation — so `NtsBridge.state` reads `native` and
+// `StrictClockContext.resolve()` labels its context `native` — whose
+// strict clock entry points answer from scripted values instead of
+// dispatching. Nothing crosses the boundary. Used to show that the
+// hermetic boot-scope provider id is refused on a native context: the
+// only production-labelled context this suite can construct.
+class _ScriptedNativeApi extends NtsRustLibApiImpl {
+  _ScriptedNativeApi({
+    required super.handler,
+    required super.wire,
+    required super.generalizedFrbRustBinding,
+    required super.portManager,
+  });
+
+  int micros = 1_000_000;
+  int generation = 1;
+
+  @override
+  ffi.NtsClockDescriptor crateApiNtsNtsClockDescriptor() =>
+      const ffi.NtsClockDescriptor(
+        backend: ffi.NtsClockBackend.appleContinuous,
+        semanticsVersion: 1,
+        conversionVersion: 1,
+      );
+
+  @override
+  ffi.NtsStrictClockReading crateApiNtsNtsStrictClockRead({
+    PlatformInt64? boundGeneration,
+  }) => ffi.NtsStrictClockReading(
+    micros: micros,
+    backend: ffi.NtsClockBackend.appleContinuous,
+    generation: generation,
+  );
+
+  @override
+  int crateApiNtsNtsClockInvalidate() => ++generation;
+}
+
+// Scripted `BootScopeProvider`: `current()` answers with the next
+// scripted entry (the last one is sticky) and counts its calls, so a
+// test can assert the provider was never consulted, or that a change
+// mid-bracket was observed.
+class _ScriptedBootScopeProvider implements BootScopeProvider {
+  _ScriptedBootScopeProvider(this.providerId, List<BootScope?> responses)
+    : _responses = List.of(responses);
+
+  @override
+  final String providerId;
+
+  final List<BootScope?> _responses;
+  int calls = 0;
+
+  @override
+  Future<BootScope?> current() async {
+    calls++;
+    return _responses.length > 1 ? _responses.removeAt(0) : _responses.single;
   }
 }
 
@@ -4741,6 +4812,10 @@ void main() {
           expectedBackend: ClockBackend.linuxBoottime,
           observedBackend: ClockBackend.linuxBoottime,
         ),
+        const StrictClockBootScopeUnavailable(
+          reason: BootScopeUnavailableReason.providerNotApproved,
+          providerId: 'example',
+        ),
       ];
       final tags = <String>{};
       for (final e in errors) {
@@ -4761,6 +4836,7 @@ void main() {
           StrictClockSuspendedInFlight() => 'suspendedInFlight',
           StrictClockMissingReceipt() => 'missingReceipt',
           StrictClockForeignReceipt() => 'foreignReceipt',
+          StrictClockBootScopeUnavailable() => 'bootScopeUnavailable',
         });
       }
       // Two-sided: the switch forces an arm for every subtype, and this
@@ -4780,6 +4856,7 @@ void main() {
         'suspendedInFlight',
         'missingReceipt',
         'foreignReceipt',
+        'bootScopeUnavailable',
       });
     });
 
@@ -4808,6 +4885,633 @@ void main() {
           reason: '${kind.name} must not carry an errno',
         );
       }
+    });
+  });
+
+  group('same-boot boundary (nts-flr8.5)', () {
+    // Hermetic evidence only. Every context here is `testInjected`, the
+    // "second process" is the mock honouring a parked generation, and
+    // the boot scope comes from a scripted provider under the hermetic
+    // id that only a `testInjected` context accepts. What these cases
+    // prove is the package's checks — ordering, bracketing, refusal
+    // paths, exactness — not any platform's boot identity.
+    const hermetic = kHermeticBootScopeProviderId;
+    const utcMs = 1_700_000_000_000;
+    const descriptor = ClockSourceDescriptor(
+      backend: ClockBackend.appleContinuous,
+      semanticsVersion: 1,
+      conversionVersion: 1,
+    );
+    BootScope scope([int tag = 1]) =>
+        BootScope(providerId: hermetic, token: [0xB0, 0x07, tag]);
+    _ScriptedBootScopeProvider provider(List<BootScope?> responses) =>
+        _ScriptedBootScopeProvider(hermetic, responses);
+
+    // A scripted coordinate: every strict read returns `clock` until
+    // the test advances it. `base` sits above the shared stopwatch
+    // timeline (which carries the suspend offset accumulated by earlier
+    // tests) and on a whole millisecond, so the fixture's ms-normalised
+    // model reference is exact.
+    late int base;
+    late int clock;
+    setUp(() {
+      final now = api.crateApiNtsNtsBoottimeMicros();
+      base = (now ~/ 1000 + 1) * 1000 + 10_000_000;
+      clock = base;
+      api.onStrictRead = () => api.strictMicrosOverride = clock;
+    });
+
+    StrictSyncedTime acquire(
+      StrictClockContext ctx, {
+      required int receiptMicros,
+      required int anchorMicros,
+    }) {
+      clock = receiptMicros;
+      final receipt = ctx.now();
+      clock = anchorMicros;
+      final anchor = ctx.now();
+      return StrictSyncedTime(
+        context: ctx,
+        anchor: anchor,
+        reference: receipt,
+        utcUnixMicros: utcMs * 1000 + (anchorMicros - receiptMicros),
+        roundTripMicros: 0,
+        samplesUsed: 1,
+        trustBackend: TrustBackend.platform,
+      );
+    }
+
+    SameBootReference reference(int micros, {BootScope? under}) =>
+        SameBootReference(
+          referenceMicros: micros,
+          descriptor: descriptor,
+          scope: under ?? scope(),
+        );
+
+    Matcher refused(BootScopeUnavailableReason reason, {String? id}) => throwsA(
+      isA<StrictClockBootScopeUnavailable>()
+          .having((e) => e.reason, 'reason', reason)
+          .having((e) => e.providerId, 'providerId', id ?? hermetic),
+    );
+
+    test('no boot-scope provider is approved, and the hermetic id is '
+        'not an approval', () {
+      expect(kApprovedBootScopeProviders, isEmpty);
+      expect(kApprovedBootScopeProviders, isNot(contains(hermetic)));
+    });
+
+    test('AC1: local strict reads keep working while every transfer '
+        'refuses an unavailable scope', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final time = acquire(
+        ctx,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      final absent = provider([null]);
+      clock = base + 30;
+      await expectLater(
+        ctx.exportReference(time, provider: absent),
+        refused(BootScopeUnavailableReason.unavailable),
+      );
+      await expectLater(
+        ctx.bindReference(reference(base + 5), provider: absent),
+        refused(BootScopeUnavailableReason.unavailable),
+      );
+      expect(absent.calls, 2);
+      // The clock is fine: the refusal is a verdict on the transfer.
+      expect(ctx.isValid, isTrue);
+      expect(ctx.invalidationReason, isNull);
+      clock = base + 40;
+      expect(ctx.now().micros, base + 40);
+      expect(time.utcNow().microsecondsSinceEpoch, utcMs * 1000 + 30);
+    });
+
+    test('AC1: an unapproved provider is refused before it is consulted, '
+        'whatever token it would have offered', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final time = acquire(
+        ctx,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      const candidate = 'android.settings.global.boot_count';
+      final same = BootScope(providerId: candidate, token: [7]);
+      final unapproved = _ScriptedBootScopeProvider(candidate, [same]);
+      final reads = api.strictReadCalls;
+      await expectLater(
+        ctx.exportReference(time, provider: unapproved),
+        refused(BootScopeUnavailableReason.providerNotApproved, id: candidate),
+      );
+      await expectLater(
+        ctx.bindReference(
+          reference(base + 5, under: same),
+          provider: unapproved,
+        ),
+        refused(BootScopeUnavailableReason.providerNotApproved, id: candidate),
+      );
+      expect(unapproved.calls, 0);
+      expect(api.strictReadCalls, reads);
+      expect(ctx.isValid, isTrue);
+    });
+
+    test('AC1: the hermetic id is refused on a native context, so a test '
+        'provider cannot label production portable', () async {
+      final lib = ExternalLibrary.process(iKnowHowToUseIt: true);
+      final binding = GeneralizedFrbRustBinding(lib);
+      final handler = BaseHandler();
+      final nativeApi = _ScriptedNativeApi(
+        handler: handler,
+        wire: NtsRustLibWire.fromExternalLibrary(lib),
+        generalizedFrbRustBinding: binding,
+        portManager: PortManager(binding, handler),
+      );
+      NtsRustLib.instance.resetState();
+      NtsBridge.debugReset();
+      try {
+        NtsRustLib.initMock(api: nativeApi);
+        expect(NtsBridge.state, NtsBridgeState.native);
+        final ctx = StrictClockContext.resolve();
+        expect(ctx.provenance, StrictClockProvenance.native);
+        final present = provider([scope()]);
+        await expectLater(
+          ctx.bindReference(reference(nativeApi.micros - 1), provider: present),
+          refused(BootScopeUnavailableReason.providerNotApproved),
+        );
+        expect(present.calls, 0);
+        expect(ctx.isValid, isTrue);
+      } finally {
+        NtsRustLib.instance.resetState();
+        NtsBridge.debugReset();
+        NtsRustLib.initMock(api: api);
+      }
+    });
+
+    test('AC2: a descriptor mismatch is rejected before the provider is '
+        'consulted; no conversion is attempted', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final present = provider([scope()]);
+      final foreign = <ClockSourceDescriptor>[
+        const ClockSourceDescriptor(
+          backend: ClockBackend.linuxBoottime,
+          semanticsVersion: 1,
+          conversionVersion: 1,
+        ),
+        const ClockSourceDescriptor(
+          backend: ClockBackend.appleContinuous,
+          semanticsVersion: 2,
+          conversionVersion: 1,
+        ),
+        const ClockSourceDescriptor(
+          backend: ClockBackend.appleContinuous,
+          semanticsVersion: 1,
+          conversionVersion: 2,
+        ),
+      ];
+      final reads = api.strictReadCalls;
+      for (final d in foreign) {
+        await expectLater(
+          ctx.bindReference(
+            SameBootReference(
+              referenceMicros: base,
+              descriptor: d,
+              scope: scope(),
+            ),
+            provider: present,
+          ),
+          throwsA(
+            isA<StrictClockDescriptorIncompatible>()
+                .having((e) => e.expected, 'expected', descriptor)
+                .having((e) => e.actual, 'actual', d),
+          ),
+          reason: '$d',
+        );
+      }
+      expect(present.calls, 0);
+      expect(api.strictReadCalls, reads);
+      expect(ctx.isValid, isTrue);
+    });
+
+    test('AC2: a reference issued under another provider is refused '
+        'before the provider is consulted', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final present = provider([scope()]);
+      final other = BootScope(providerId: 'other', token: [0xB0, 0x07, 1]);
+      await expectLater(
+        ctx.bindReference(reference(base, under: other), provider: present),
+        refused(BootScopeUnavailableReason.providerMismatch),
+      );
+      expect(present.calls, 0);
+    });
+
+    test('AC2: a current scope other than the one the reference was '
+        'exported under is refused before the clock is read', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final elsewhere = provider([scope(2)]);
+      final reads = api.strictReadCalls;
+      await expectLater(
+        ctx.bindReference(
+          reference(base, under: scope(1)),
+          provider: elsewhere,
+        ),
+        refused(BootScopeUnavailableReason.mismatch),
+      );
+      expect(elsewhere.calls, 1);
+      expect(api.strictReadCalls, reads);
+      expect(ctx.isValid, isTrue);
+    });
+
+    test('AC2: a scope that changes across the bracket refuses export '
+        'and bind alike, and nothing is adopted', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final time = acquire(
+        ctx,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      clock = base + 30;
+      for (final script in [
+        [scope(1), scope(2)],
+        [scope(1), null],
+      ]) {
+        final changing = provider(script);
+        await expectLater(
+          ctx.exportReference(time, provider: changing),
+          refused(BootScopeUnavailableReason.changed),
+          reason: 'export $script',
+        );
+        expect(changing.calls, 2);
+        final changingAgain = provider(script);
+        await expectLater(
+          ctx.bindReference(
+            reference(base, under: scope(1)),
+            provider: changingAgain,
+          ),
+          refused(BootScopeUnavailableReason.changed),
+          reason: 'bind $script',
+        );
+        expect(changingAgain.calls, 2);
+      }
+      expect(ctx.isValid, isTrue);
+    });
+
+    test('AC2: an invalidated producer cannot export — explicitly, after '
+        'a fault, or after a bridge reset — and the provider is never '
+        'consulted', () async {
+      final present = provider([scope()]);
+
+      final explicit = StrictClockContext.resolveForTesting();
+      final t1 = acquire(
+        explicit,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      explicit.invalidate();
+      await expectLater(
+        explicit.exportReference(t1, provider: present),
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.explicit,
+          ),
+        ),
+      );
+
+      // Each context seeds its watermark from the clock at resolution,
+      // so the readings step forward across the three sub-cases.
+      final faulted = StrictClockContext.resolveForTesting();
+      final t2 = acquire(
+        faulted,
+        receiptMicros: base + 30,
+        anchorMicros: base + 40,
+      );
+      api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(errno: 5);
+      expect(faulted.now, throwsA(isA<StrictClockSourceFault>()));
+      await expectLater(
+        faulted.exportReference(t2, provider: present),
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.sourceFault,
+          ),
+        ),
+      );
+
+      final reset = StrictClockContext.resolveForTesting();
+      final t3 = acquire(
+        reset,
+        receiptMicros: base + 50,
+        anchorMicros: base + 60,
+      );
+      NtsBridge.debugReset();
+      await expectLater(
+        reset.exportReference(t3, provider: present),
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.bridgeReset,
+          ),
+        ),
+      );
+      expect(present.calls, 0);
+    });
+
+    test('AC2: a producer whose generation is retired between the scope '
+        'reads fails the export on that read; the reference is not '
+        'minted', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final time = acquire(
+        ctx,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      clock = base + 30;
+      final present = provider([scope()]);
+      // Armed for the liveness read that follows the first scope read.
+      api.nextStrictThrow = const ffi.NtsClockFault.generationChanged(
+        expected: 1,
+        observed: 2,
+      );
+      await expectLater(
+        ctx.exportReference(time, provider: present),
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.nativeGeneration,
+          ),
+        ),
+      );
+      expect(present.calls, 1);
+      expect(ctx.isValid, isFalse);
+    });
+
+    test('AC2: a receiver whose re-resolution fails does not bind, and '
+        'is invalidated as any failed read invalidates', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final present = provider([scope()]);
+      api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(errno: 5);
+      await expectLater(
+        ctx.bindReference(reference(base), provider: present),
+        throwsA(
+          isA<StrictClockSourceFault>().having(
+            (e) => e.kind,
+            'kind',
+            SourceFaultKind.syscallFailed,
+          ),
+        ),
+      );
+      expect(present.calls, 1);
+      expect(ctx.isValid, isFalse);
+      // Terminal: the same bind on the same context is refused without
+      // touching the provider again.
+      await expectLater(
+        ctx.bindReference(reference(base), provider: present),
+        throwsA(isA<StrictClockInvalidated>()),
+      );
+      expect(present.calls, 1);
+    });
+
+    test('AC2: a foreign, unproven reference — one the coordinate refutes '
+        '— is refused even under a vouching provider, and the second '
+        'scope read is skipped', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final present = provider([scope()]);
+      clock = base + 100;
+      await expectLater(
+        ctx.bindReference(reference(base + 101), provider: present),
+        refused(BootScopeUnavailableReason.referenceAhead),
+      );
+      expect(present.calls, 1);
+      expect(ctx.isValid, isTrue);
+      // The boundary is inclusive: a reference at exactly now binds.
+      final bound = await ctx.bindReference(
+        reference(base + 100),
+        provider: provider([scope()]),
+      );
+      expect(bound.micros, base + 100);
+    });
+
+    test('AC2: a receipt that orders after the producer context\'s '
+        'current reading is a regression at export, not a reference', () async {
+      // Reachable only by a hand-built StrictSyncedTime: the acquisition
+      // path anchors after the receipt. Export still refuses to mint it.
+      final ctx = StrictClockContext.resolveForTesting();
+      clock = base + 50;
+      final anchor = ctx.now();
+      final other = StrictClockContext.resolveForTesting();
+      clock = base + 60;
+      final lateReceipt = other.now();
+      final time = StrictSyncedTime(
+        context: ctx,
+        anchor: anchor,
+        reference: lateReceipt,
+        utcUnixMicros: 1,
+        roundTripMicros: 0,
+        samplesUsed: 1,
+        trustBackend: TrustBackend.platform,
+      );
+      final present = provider([scope()]);
+      clock = base + 55;
+      await expectLater(
+        ctx.exportReference(time, provider: present),
+        throwsA(
+          isA<StrictClockRegression>()
+              .having((e) => e.previous, 'previous', base + 60)
+              .having((e) => e.observed, 'observed', base + 55),
+        ),
+      );
+      expect(ctx.isValid, isFalse);
+    });
+
+    test('export is refused for a StrictSyncedTime another context '
+        'acquired, even on the same generation and coordinate', () async {
+      final producer = StrictClockContext.resolveForTesting();
+      final bystander = StrictClockContext.resolveForTesting();
+      expect(bystander.generation, producer.generation);
+      final time = acquire(
+        producer,
+        receiptMicros: base + 10,
+        anchorMicros: base + 20,
+      );
+      final present = provider([scope()]);
+      await expectLater(
+        bystander.exportReference(time, provider: present),
+        throwsA(isA<ArgumentError>().having((e) => e.name, 'name', 'time')),
+      );
+      expect(present.calls, 0);
+      expect(bystander.isValid, isTrue);
+    });
+
+    test('AC3: equal tokens or an ordered coordinate alone establish '
+        'nothing', () async {
+      final ctx = StrictClockContext.resolveForTesting();
+      final token = [0xB0, 0x07, 1];
+      // Identical tokens under an unapproved provider.
+      final unapproved = _ScriptedBootScopeProvider('unapproved', [
+        BootScope(providerId: 'unapproved', token: token),
+      ]);
+      await expectLater(
+        ctx.bindReference(
+          reference(
+            base,
+            under: BootScope(providerId: 'unapproved', token: token),
+          ),
+          provider: unapproved,
+        ),
+        refused(
+          BootScopeUnavailableReason.providerNotApproved,
+          id: 'unapproved',
+        ),
+      );
+      // Identical tokens under the approved provider, incompatible
+      // coordinate.
+      await expectLater(
+        ctx.bindReference(
+          SameBootReference(
+            referenceMicros: base,
+            descriptor: const ClockSourceDescriptor(
+              backend: ClockBackend.linuxBoottime,
+              semanticsVersion: 1,
+              conversionVersion: 1,
+            ),
+            scope: scope(),
+          ),
+          provider: provider([scope()]),
+        ),
+        throwsA(isA<StrictClockDescriptorIncompatible>()),
+      );
+      // Ordered coordinate (reference well below now), no scope.
+      clock = base + 1_000_000;
+      await expectLater(
+        ctx.bindReference(reference(base), provider: provider([null])),
+        refused(BootScopeUnavailableReason.unavailable),
+      );
+      expect(ctx.isValid, isTrue);
+    });
+
+    test('AC3/AC4 (hermetic evidence only): the C6 fixture — the exact '
+        'receipt survives a delayed export and repeated binding on '
+        'receivers with different generations, the producer need not '
+        'outlive it, and the model projection never resets age', () async {
+      // Fixture, offset by `base`: physical receipt 1,234,567 us; the
+      // consumer's ms-normalised model reference 1,234,000 us; export
+      // at 4,000,111 us; receivers at 5,000,123 us and 6,000,456 us.
+      final receipt = base + 1_234_567;
+      final model = base + 1_234_000;
+      final producer = StrictClockContext.resolveForTesting();
+      final time = acquire(
+        producer,
+        receiptMicros: receipt,
+        anchorMicros: base + 1_300_000,
+      );
+      expect(time.referenceMicros, receipt);
+
+      // Delayed export: the reference is the receipt, not the anchor and
+      // not the export instant.
+      clock = base + 4_000_111;
+      final exported = await producer.exportReference(
+        time,
+        provider: provider([scope()]),
+      );
+      expect(exported.referenceMicros, receipt);
+      expect(exported.descriptor, descriptor);
+      expect(exported.scope, scope());
+
+      // A second process: the producer's generation stays live on its
+      // own counter while this side's counter has moved on, so the
+      // receiver resolves under a different generation with neither
+      // side invalidated.
+      api.otherLiveGenerations.add(producer.generation);
+      api.strictGeneration += 7;
+      clock = base + 5_000_123;
+      final receiver = StrictClockContext.resolveForTesting();
+      expect(receiver.generation, isNot(producer.generation));
+      expect(producer.now().micros, base + 5_000_123);
+
+      final bound = await receiver.bindReference(
+        exported,
+        provider: provider([scope()]),
+      );
+      expect(bound.micros, receipt);
+      expect(bound.generation, receiver.generation);
+      expect(bound.descriptor, descriptor);
+      // Consumer-side mapping onto the model reference: exact integer
+      // arithmetic on the receiver's own reads, no rounding.
+      final age1 =
+          receiver.elapsedSince(bound).inMicroseconds + (receipt - model);
+      expect(age1, 3_766_123);
+      expect(utcMs * 1000 + age1, 1_700_000_003_766_123);
+
+      // Another restore later, on a fresh receiver, after the producer
+      // process is gone: its generation is no longer honoured anywhere.
+      api.otherLiveGenerations.clear();
+      api.strictGeneration += 3;
+      clock = base + 6_000_456;
+      expect(
+        producer.now,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.nativeGeneration,
+          ),
+        ),
+      );
+      final receiver2 = StrictClockContext.resolveForTesting();
+      expect(receiver2.generation, isNot(receiver.generation));
+      final bound2 = await receiver2.bindReference(
+        exported,
+        provider: provider([scope()]),
+      );
+      expect(bound2.micros, receipt);
+      final age2 =
+          receiver2.elapsedSince(bound2).inMicroseconds + (receipt - model);
+      expect(age2, 4_766_456);
+      expect(utcMs * 1000 + age2, 1_700_000_004_766_456);
+
+      // The serialised reference carries no generation to reinstate.
+      expect('$exported', isNot(contains('generation')));
+    });
+
+    test('BootScope and SameBootReference are value types; the token is '
+        'copied and unmodifiable', () {
+      final token = [1, 2, 3];
+      final a = BootScope(providerId: 'p', token: token);
+      token[0] = 9;
+      expect(a.token, [1, 2, 3]);
+      expect(() => a.token[0] = 0, throwsUnsupportedError);
+      final b = BootScope(providerId: 'p', token: [1, 2, 3]);
+      expect(a, b);
+      expect(a.hashCode, b.hashCode);
+      expect(a, isNot(BootScope(providerId: 'q', token: [1, 2, 3])));
+      expect(a, isNot(BootScope(providerId: 'p', token: [1, 2])));
+      expect('$a', 'BootScope(providerId: p, token: 010203)');
+      final r1 = SameBootReference(
+        referenceMicros: 5,
+        descriptor: descriptor,
+        scope: a,
+      );
+      final r2 = SameBootReference(
+        referenceMicros: 5,
+        descriptor: descriptor,
+        scope: b,
+      );
+      expect(r1, r2);
+      expect(r1.hashCode, r2.hashCode);
+      expect(
+        r1,
+        isNot(
+          SameBootReference(
+            referenceMicros: 6,
+            descriptor: descriptor,
+            scope: a,
+          ),
+        ),
+      );
     });
   });
 
@@ -6145,8 +6849,8 @@ void main() {
           () => StrictSyncedTime(
             context: b,
             anchor: anchorA,
+            reference: anchorA,
             utcUnixMicros: 1,
-            referenceMicros: anchorA.micros,
             roundTripMicros: 0,
             samplesUsed: 1,
             trustBackend: TrustBackend.platform,

@@ -15,6 +15,8 @@
 // Consumers never import generated FFI types: every FFI value is
 // converted at this boundary.
 
+import 'dart:typed_data' show Uint8List;
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64Util;
 import 'package:meta/meta.dart' show visibleForTesting;
@@ -24,6 +26,7 @@ import '../ffi/frb_generated.dart' show NtsRustLib;
 import 'bridge.dart';
 import 'models.dart' show NtsTimeSample, TrustBackend;
 
+part 'same_boot.dart';
 part 'strict_clock_errors.dart';
 part 'strict_synced_time.dart';
 
@@ -498,6 +501,160 @@ final class StrictClockContext {
   /// [StrictClockInvalidationReason.explicit].
   void invalidate() {
     _invalidated ??= StrictClockInvalidationReason.explicit;
+  }
+
+  /// Export [time]'s wire receipt as a [SameBootReference] under
+  /// [provider]'s current boot scope.
+  ///
+  /// [time] must have been acquired by this context (`getTimeStrict`
+  /// on this context); anything else is an [ArgumentError], because a
+  /// reference is only ever minted by the context that produced it.
+  /// The reference exported is the exact receipt
+  /// ([StrictSyncedTime.referenceMicros]), never the anchor or the
+  /// export instant, so a delayed export changes nothing.
+  ///
+  /// Order of checks: this context's lifecycle; [provider] approved
+  /// for this context's provenance ([kApprovedBootScopeProviders], or
+  /// [kHermeticBootScopeProviderId] on a `testInjected` context) —
+  /// before the provider is consulted; a first `current()` scope,
+  /// non-null; a strict read proving this generation is still live and
+  /// the receipt still orders before now (a receipt that does not is a
+  /// [StrictClockRegression] and invalidates the context, as in
+  /// [elapsedSince]); a second `current()` equal to the first; a final
+  /// strict read after that await. A refusal at the scope steps is a
+  /// [StrictClockBootScopeUnavailable] and leaves the context valid; a
+  /// lifecycle or read failure is the usual [StrictClockError] and
+  /// invalidates it. With the shipped empty allowlist a native context
+  /// refuses every export with
+  /// [BootScopeUnavailableReason.providerNotApproved].
+  Future<SameBootReference> exportReference(
+    StrictSyncedTime time, {
+    required BootScopeProvider provider,
+  }) async {
+    _checkLifecycle();
+    if (!identical(time._context, this)) {
+      throw ArgumentError.value(
+        time,
+        'time',
+        'was not acquired by this context; a reference is exported only by '
+            'the context that produced it',
+      );
+    }
+    _checkProviderApproved(provider);
+    final before = _requireScope(await provider.current(), provider);
+    elapsedSince(time._reference);
+    final after = await provider.current();
+    _requireUnchanged(before, after, provider);
+    now();
+    return SameBootReference(
+      referenceMicros: time._reference.micros,
+      descriptor: descriptor,
+      scope: before,
+    );
+  }
+
+  /// Bind [reference], exported by another context in the same boot,
+  /// as a [StrictReading] on this context's coordinate and generation,
+  /// so [elapsedSince] can age it.
+  ///
+  /// Order of checks: this context's lifecycle;
+  /// [reference]'s descriptor compatible with this one
+  /// ([StrictClockDescriptorIncompatible] otherwise — an inexact
+  /// mapping between coordinates is rejected, never converted);
+  /// [provider] approved for this context's provenance and the issuer
+  /// of [reference]'s scope — both before the provider is consulted; a
+  /// first `current()` scope, non-null and equal to the reference's; a
+  /// strict read on this context at or after the reference
+  /// ([BootScopeUnavailableReason.referenceAhead] otherwise); a second
+  /// `current()` equal to the first; a final strict read after that
+  /// await. The producer's generation is not an input: the two sides
+  /// are independent processes and equal generations would prove
+  /// nothing. The returned reading carries *this* context's generation
+  /// and source; the receiver's own reads are what age it, and the
+  /// consumer maps it onto its own model reference. A refusal at the
+  /// scope steps leaves the context valid; a read failure invalidates
+  /// it as any read would. With the shipped empty allowlist a native
+  /// context refuses every bind with
+  /// [BootScopeUnavailableReason.providerNotApproved].
+  Future<StrictReading> bindReference(
+    SameBootReference reference, {
+    required BootScopeProvider provider,
+  }) async {
+    _checkLifecycle();
+    if (!reference.descriptor.isCompatibleWith(descriptor)) {
+      throw StrictClockDescriptorIncompatible(
+        expected: descriptor,
+        actual: reference.descriptor,
+      );
+    }
+    _checkProviderApproved(provider);
+    if (reference.scope.providerId != provider.providerId) {
+      throw StrictClockBootScopeUnavailable(
+        reason: BootScopeUnavailableReason.providerMismatch,
+        providerId: provider.providerId,
+      );
+    }
+    final before = _requireScope(await provider.current(), provider);
+    if (before != reference.scope) {
+      throw StrictClockBootScopeUnavailable(
+        reason: BootScopeUnavailableReason.mismatch,
+        providerId: provider.providerId,
+      );
+    }
+    final current = now();
+    if (reference.referenceMicros > current.micros) {
+      throw StrictClockBootScopeUnavailable(
+        reason: BootScopeUnavailableReason.referenceAhead,
+        providerId: provider.providerId,
+      );
+    }
+    final after = await provider.current();
+    _requireUnchanged(before, after, provider);
+    now();
+    return StrictReading._(
+      micros: reference.referenceMicros,
+      generation: generation,
+      descriptor: descriptor,
+      provenance: provenance,
+      source: _source,
+    );
+  }
+
+  void _checkProviderApproved(BootScopeProvider provider) {
+    final id = provider.providerId;
+    final approved =
+        kApprovedBootScopeProviders.contains(id) ||
+        (provenance == StrictClockProvenance.testInjected &&
+            id == kHermeticBootScopeProviderId);
+    if (!approved) {
+      throw StrictClockBootScopeUnavailable(
+        reason: BootScopeUnavailableReason.providerNotApproved,
+        providerId: id,
+      );
+    }
+  }
+
+  static BootScope _requireScope(BootScope? scope, BootScopeProvider provider) {
+    if (scope == null) {
+      throw StrictClockBootScopeUnavailable(
+        reason: BootScopeUnavailableReason.unavailable,
+        providerId: provider.providerId,
+      );
+    }
+    return scope;
+  }
+
+  static void _requireUnchanged(
+    BootScope before,
+    BootScope? after,
+    BootScopeProvider provider,
+  ) {
+    if (after != before) {
+      throw StrictClockBootScopeUnavailable(
+        reason: BootScopeUnavailableReason.changed,
+        providerId: provider.providerId,
+      );
+    }
   }
 
   void _checkReadingBelongs(StrictReading reading) {

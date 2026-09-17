@@ -26,30 +26,33 @@ part of 'strict_clock.dart';
 /// Like `NtsSyncedTime`, this is a live clock, not a value: no
 /// equality, no serialisation, no restore across launches.
 final class StrictSyncedTime {
-  /// Bind a projection to [context] at [anchor].
+  /// Bind a projection to [context] at [anchor], recording [reference]
+  /// as the receipt it was aged from.
   ///
-  /// [anchor] must be *compatible* with [context]: taken on the same
-  /// bridge incarnation, under a compatible descriptor, in the same
-  /// generation. That is what a reading carries, and it is all the
-  /// constructor can check — a reading from another context resolved
-  /// on the same isolate in the same generation is indistinguishable
-  /// from one of [context]'s own, and is accepted. The check is
-  /// therefore a provenance check, not an identity check: it rejects
-  /// a reading from a torn-down bridge, a different clock source, or
-  /// a retired generation, each of which throws
-  /// [StrictClockSourceIncompatible],
+  /// [anchor] and [reference] must be *compatible* with [context]:
+  /// taken on the same bridge incarnation, under a compatible
+  /// descriptor, in the same generation. That is what a reading
+  /// carries, and it is all the constructor can check — a reading from
+  /// another context resolved on the same isolate in the same
+  /// generation is indistinguishable from one of [context]'s own, and
+  /// is accepted. The check is therefore a provenance check, not an
+  /// identity check: it rejects a reading from a torn-down bridge, a
+  /// different clock source, or a retired generation, each of which
+  /// throws [StrictClockSourceIncompatible],
   /// [StrictClockDescriptorIncompatible] or
   /// [StrictClockGenerationIncompatible] synchronously, without
-  /// invalidating [context]. [utcUnixMicros] must be the compensated UTC valid
-  /// at that reading. Intended for the wrapper layer and for test
-  /// fixtures; production code receives instances from
-  /// `ntsGetTimeStrict`, whose anchor is a reading on the very
-  /// context it binds.
+  /// invalidating [context]. [reference] is a [StrictReading] rather
+  /// than a bare integer so that [StrictClockContext.exportReference]
+  /// can only ever export a receipt that was attributed to a strict
+  /// context. [utcUnixMicros] must be the compensated UTC valid at
+  /// [anchor]. Intended for the wrapper layer and for test fixtures;
+  /// production code receives instances from `ntsGetTimeStrict`, whose
+  /// anchor and reference are readings on the very context it binds.
   StrictSyncedTime({
     required StrictClockContext context,
     required StrictReading anchor,
+    required StrictReading reference,
     required this.utcUnixMicros,
-    required this.referenceMicros,
     required this.roundTripMicros,
     required this.samplesUsed,
     required this.trustBackend,
@@ -58,12 +61,15 @@ final class StrictSyncedTime {
     int? errorBoundMicros,
   }) : _context = context,
        _anchor = anchor,
+       _reference = reference,
        errorBoundMicros = errorBoundMicros ?? roundTripMicros ~/ 2 {
     context._checkReadingBelongs(anchor);
+    context._checkReadingBelongs(reference);
   }
 
   final StrictClockContext _context;
   final StrictReading _anchor;
+  final StrictReading _reference;
 
   /// One-way-delay-compensated server UTC as microseconds since the
   /// Unix epoch, valid at [anchorMicros].
@@ -71,10 +77,13 @@ final class StrictSyncedTime {
 
   /// The winning sample's wire-level receipt stamp on the context's
   /// coordinate: `NtsTimeSample.recvBoottimeMicros` as read by the
-  /// native worker under [generation]. The compensated UTC was aged
-  /// from this instant to [anchorMicros]; it is exposed so a caller
-  /// can audit that lag. Same-boot only, never persist.
-  final int referenceMicros;
+  /// native worker under [generation] and attributed to the context.
+  /// The compensated UTC was aged from this instant to [anchorMicros];
+  /// it is exposed so a caller can audit that lag, and it is the value
+  /// [StrictClockContext.exportReference] carries into a
+  /// [SameBootReference]. Never persist it on its own: outside an
+  /// exported reference it is meaningful only under this context.
+  int get referenceMicros => _reference.micros;
 
   /// Round-trip time of the winning sample, in microseconds.
   final int roundTripMicros;
