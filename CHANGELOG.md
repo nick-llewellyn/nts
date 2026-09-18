@@ -206,10 +206,11 @@ tarball.
 
 - The same-boot compatibility boundary, delivered as explicitly
   unavailable. `StrictClockContext.exportReference(time, provider:)`
-  turns a `StrictSyncedTime` this context acquired into a
-  `SameBootReference` — the exact wire receipt
-  (`StrictSyncedTime.referenceMicros`, never the anchor or the export
-  instant), the context's `ClockSourceDescriptor`, and the `BootScope`
+  turns a `StrictSyncedTime` bound to this context into a
+  `SameBootReference` — that instance's reference reading
+  (`StrictSyncedTime.referenceMicros`, the wire receipt on an instance
+  from `getTimeStrict`, never the anchor or the export instant), the
+  context's `ClockSourceDescriptor`, and the `BootScope`
   a `BootScopeProvider` reported — and
   `bindReference(reference, provider:)` on a context in another
   engine or process of the same boot returns a `StrictReading` on the

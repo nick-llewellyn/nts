@@ -5364,6 +5364,34 @@ void main() {
       expect(ctx.isValid, isTrue);
     });
 
+    test('export carries the bound instance\'s reference reading, not a '
+        'reading it takes itself', () async {
+      // The public StrictSyncedTime constructor means wire-receipt
+      // provenance is the claim of whoever built the instance: export
+      // checks the binding and exports that instance's reference,
+      // whatever reading was bound as it.
+      final ctx = StrictClockContext.resolveForTesting();
+      clock = base + 10;
+      final bound = ctx.now();
+      clock = base + 20;
+      final time = StrictSyncedTime(
+        context: ctx,
+        anchor: ctx.now(),
+        reference: bound,
+        utcUnixMicros: 1,
+        roundTripMicros: 0,
+        samplesUsed: 1,
+        trustBackend: TrustBackend.platform,
+      );
+      clock = base + 30;
+      final exported = await ctx.exportReference(
+        time,
+        provider: provider([scope()]),
+      );
+      expect(exported.referenceMicros, base + 10);
+      expect(exported.referenceMicros, time.referenceMicros);
+    });
+
     test('AC2: a receiver whose re-resolution fails does not bind, and '
         'is invalidated as any failed read invalidates', () async {
       final ctx = StrictClockContext.resolveForTesting();

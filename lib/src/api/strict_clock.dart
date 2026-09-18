@@ -503,15 +503,25 @@ final class StrictClockContext {
     _invalidated ??= StrictClockInvalidationReason.explicit;
   }
 
-  /// Export [time]'s wire receipt as a [SameBootReference] under
+  /// Export [time]'s reference reading as a [SameBootReference] under
   /// [provider]'s current boot scope.
   ///
-  /// [time] must have been acquired by this context (`getTimeStrict`
-  /// on this context); anything else is an [ArgumentError], because a
-  /// reference is only ever minted by the context that produced it.
-  /// The reference exported is the exact receipt
-  /// ([StrictSyncedTime.referenceMicros]), never the anchor or the
-  /// export instant, so a delayed export changes nothing.
+  /// [time] must be bound to this context; anything else is an
+  /// [ArgumentError], because a reference is only ever minted by the
+  /// context that produced it. What is exported is that instance's
+  /// reference ([StrictSyncedTime.referenceMicros]), never the anchor
+  /// and never the export instant, so a delayed export changes
+  /// nothing. For an instance from `getTimeStrict` — the production
+  /// path — that reading is the winning sample's wire receipt. The
+  /// [StrictSyncedTime] constructor is public, so a wrapper-layer or
+  /// test-fixture instance may bind any reading this context's
+  /// coordinate attributed, and that reading is what is exported:
+  /// wire-receipt provenance is a claim of whoever built the instance,
+  /// not something this method can verify on top of the binding. What
+  /// holds either way is what the checks below establish — the
+  /// exported instant was attributed to this context, on this
+  /// coordinate and generation, and orders at or before a read taken
+  /// during the export.
   ///
   /// Order of checks: this context's lifecycle; [provider] approved
   /// for this context's provenance (the instance is in

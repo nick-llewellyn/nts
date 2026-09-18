@@ -43,8 +43,10 @@ final class StrictSyncedTime {
   /// [StrictClockGenerationIncompatible] synchronously, without
   /// invalidating [context]. [reference] is a [StrictReading] rather
   /// than a bare integer so that [StrictClockContext.exportReference]
-  /// can only ever export a receipt that was attributed to a strict
-  /// context. [utcUnixMicros] must be the compensated UTC valid at
+  /// can only ever export an instant a strict context attributed —
+  /// that it is a *wire* receipt is guaranteed by the acquisition
+  /// path, not by the constructor, which cannot tell one compatible
+  /// reading from another. [utcUnixMicros] must be the compensated UTC valid at
   /// [anchor]. Intended for the wrapper layer and for test fixtures;
   /// production code receives instances from `ntsGetTimeStrict`, whose
   /// anchor and reference are readings on the very context it binds.
@@ -75,11 +77,15 @@ final class StrictSyncedTime {
   /// Unix epoch, valid at [anchorMicros].
   final int utcUnixMicros;
 
-  /// The winning sample's wire-level receipt stamp on the context's
-  /// coordinate: `NtsTimeSample.recvBoottimeMicros` as read by the
-  /// native worker under [generation] and attributed to the context.
-  /// The compensated UTC was aged from this instant to [anchorMicros];
-  /// it is exposed so a caller can audit that lag, and it is the value
+  /// The reading the compensated UTC was aged from, on the context's
+  /// coordinate. On an instance from `ntsGetTimeStrict` it is the
+  /// winning sample's wire-level receipt stamp —
+  /// `NtsTimeSample.recvBoottimeMicros` as read by the native worker
+  /// under [generation] and attributed to the context; on a
+  /// hand-built one it is whatever compatible reading the caller bound
+  /// as `reference`, since the constructor checks provenance and not
+  /// how the reading was obtained. It is exposed so a caller can audit
+  /// the lag to [anchorMicros], and it is the value
   /// [StrictClockContext.exportReference] carries into a
   /// [SameBootReference]. Never persist it on its own: outside an
   /// exported reference it is meaningful only under this context.

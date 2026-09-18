@@ -137,7 +137,8 @@ final class BootScope {
 /// Produced by [StrictClockContext.exportReference] from a
 /// [StrictSyncedTime] the exporting context acquired, and consumed by
 /// [StrictClockContext.bindReference] on an independently resolved
-/// context. Carries the exact wire receipt ([referenceMicros]) on its
+/// context. Carries the producer's reference instant
+/// ([referenceMicros]) on its
 /// [descriptor] together with the [scope] the producer was in; it
 /// deliberately carries **no** generation, because a generation is a
 /// per-process lifecycle token and serialised metadata never
@@ -166,9 +167,12 @@ final class SameBootReference {
     }
   }
 
-  /// The producer's wire receipt in microseconds on [descriptor] — the
-  /// physical receipt, not a normalised model reference and not the
-  /// export instant. Never negative.
+  /// The producer's reference instant in microseconds on [descriptor]
+  /// — for a [StrictSyncedTime] from `getTimeStrict` the physical wire
+  /// receipt, never a normalised model reference and never the export
+  /// instant. A hand-built [StrictSyncedTime] can bind any reading its
+  /// context attributed, so what an export carries is that instance's
+  /// reference reading, whatever the producer bound. Never negative.
   final int referenceMicros;
 
   /// Coordinate the reference is on.
