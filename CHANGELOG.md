@@ -241,8 +241,11 @@ tarball.
   source has been evidenced for any supported platform (Android
   `Settings.Global.BOOT_COUNT` is a candidate pending validation; iOS
   exposes no cold-restore identity to apps), so every native context
-  refuses every export and bind with `providerNotApproved` and local
-  strict reads are unaffected. Approval is a reviewed addition to
+  refuses with `providerNotApproved` every export and bind that
+  reaches the provider step — the earlier checks above still refuse
+  their own cases first, a foreign `time` with `ArgumentError` and an
+  incompatible reference with `StrictClockDescriptorIncompatible` —
+  and local strict reads are unaffected. Approval is a reviewed addition to
   that constant, not a runtime registration; a caller-supplied
   boolean, a stored identifier, an uptime comparison or a hashed
   counter is not accepted as scope. `SameBootReference`'s public

@@ -320,7 +320,9 @@ enum BootScopeUnavailableReason {
   /// (or, on a `testInjected` context, does not carry the hermetic
   /// id). Checked before the provider is consulted; the id it claims
   /// is not a credential. With the shipped empty allowlist this is the
-  /// outcome of every transfer attempted on a native context.
+  /// outcome of every transfer on a native context that reaches the
+  /// provider step; the checks before it (export's binding check, bind's
+  /// descriptor check) refuse their own cases first and differently.
   providerNotApproved,
 
   /// A scope is attributed to a provider other than the one handling
@@ -358,8 +360,11 @@ enum BootScopeUnavailableReason {
 /// [StrictClockContext.bindReference]. It is a verdict on the transfer,
 /// not on the clock: the context stays valid and its local strict reads
 /// are unaffected. The package ships no approved provider, so on a
-/// native context every transfer ends here with
-/// [BootScopeUnavailableReason.providerNotApproved].
+/// native context every transfer that reaches the provider step ends
+/// here with [BootScopeUnavailableReason.providerNotApproved]; one
+/// refused by an earlier check — a [StrictSyncedTime] bound to another
+/// context ([ArgumentError]), a reference on an incompatible coordinate
+/// ([StrictClockDescriptorIncompatible]) — does not.
 final class StrictClockBootScopeUnavailable extends StrictClockError {
   /// Construct the error.
   const StrictClockBootScopeUnavailable({

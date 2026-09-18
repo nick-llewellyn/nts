@@ -9,9 +9,13 @@
 // provider reading current trusted OS state, that both sides are in
 // one counter epoch. The types here define that boundary. The package
 // ships **no** approved provider: `kApprovedBootScopeProviders` is
-// empty, so `StrictClockContext.exportReference` and `bindReference`
-// fail closed with `StrictClockBootScopeUnavailable` on every native
-// context. That is the delivered capability — explicitly unavailable —
+// empty, so on every native context `StrictClockContext.exportReference`
+// and `bindReference` fail closed with
+// `StrictClockBootScopeUnavailable` as soon as the provider is
+// examined — a call refused by the checks that precede it (a `time`
+// bound to another context, a reference on an incompatible coordinate)
+// fails earlier and differently. That is the delivered capability —
+// explicitly unavailable —
 // not a gap to be worked around with a caller-supplied boolean, a
 // stored identifier, an uptime comparison or a hashed counter.
 
@@ -135,7 +139,7 @@ final class BootScope {
 /// A strict receipt made transferable within one boot.
 ///
 /// Produced by [StrictClockContext.exportReference] from a
-/// [StrictSyncedTime] the exporting context acquired, and consumed by
+/// [StrictSyncedTime] bound to the exporting context, and consumed by
 /// [StrictClockContext.bindReference] on an independently resolved
 /// context. Carries the producer's reference instant
 /// ([referenceMicros]) on its

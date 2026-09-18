@@ -523,7 +523,9 @@ final class StrictClockContext {
   /// coordinate and generation, and orders at or before a read taken
   /// during the export.
   ///
-  /// Order of checks: this context's lifecycle; [provider] approved
+  /// Order of checks: this context's lifecycle; [time] bound to this
+  /// context ([ArgumentError] otherwise, before the provider is
+  /// examined at all); [provider] approved
   /// for this context's provenance (the instance is in
   /// [kApprovedBootScopeProviders], or it carries
   /// [kHermeticBootScopeProviderId] on a `testInjected` context — a
@@ -540,8 +542,9 @@ final class StrictClockContext {
   /// [StrictClockBootScopeUnavailable] and leaves the context valid; a
   /// lifecycle or read failure is the usual [StrictClockError] and
   /// invalidates it. With the shipped empty allowlist a native context
-  /// refuses every export with
-  /// [BootScopeUnavailableReason.providerNotApproved].
+  /// refuses every export that gets as far as the provider step with
+  /// [BootScopeUnavailableReason.providerNotApproved]; a [time] bound
+  /// to another context still fails earlier, with [ArgumentError].
   Future<SameBootReference> exportReference(
     StrictSyncedTime time, {
     required BootScopeProvider provider,
@@ -551,8 +554,8 @@ final class StrictClockContext {
       throw ArgumentError.value(
         time,
         'time',
-        'was not acquired by this context; a reference is exported only by '
-            'the context that produced it',
+        'is not bound to this context; a reference is exported only by the '
+            'context the value was attributed to',
       );
     }
     _checkProviderApproved(provider);
@@ -591,8 +594,10 @@ final class StrictClockContext {
   /// consumer maps it onto its own model reference. A refusal at the
   /// scope steps leaves the context valid; a read failure invalidates
   /// it as any read would. With the shipped empty allowlist a native
-  /// context refuses every bind with
-  /// [BootScopeUnavailableReason.providerNotApproved].
+  /// context refuses every bind that gets as far as the provider step
+  /// with [BootScopeUnavailableReason.providerNotApproved]; a
+  /// [reference] on an incompatible coordinate still fails earlier,
+  /// with [StrictClockDescriptorIncompatible].
   Future<StrictReading> bindReference(
     SameBootReference reference, {
     required BootScopeProvider provider,
