@@ -219,9 +219,11 @@ tarball.
   reset, a re-anchor or any rounding. Neither side's `generation` is
   an input: it is a per-process lifecycle token and equality would
   prove nothing. Both calls check, in order, the context's lifecycle;
-  the reference's descriptor (`bindReference` rejects an incompatible
-  one as `StrictClockDescriptorIncompatible` — an inexact mapping is
-  refused, never converted); that the provider *instance* is in
+  then the one argument check each has — `exportReference` that `time`
+  is bound to this context (`ArgumentError` otherwise),
+  `bindReference` that the reference's descriptor is compatible
+  (`StrictClockDescriptorIncompatible` otherwise — an inexact mapping
+  is refused, never converted); then that the provider *instance* is in
   `kApprovedBootScopeProviders` — approval is by instance, never by
   the `providerId` a caller's implementation claims — and, on bind,
   issued the reference's scope — both before the provider is
@@ -242,10 +244,9 @@ tarball.
   `Settings.Global.BOOT_COUNT` is a candidate pending validation; iOS
   exposes no cold-restore identity to apps), so every native context
   refuses with `providerNotApproved` every export and bind that
-  reaches the provider step — the earlier checks above still refuse
-  their own cases first, a foreign `time` with `ArgumentError` and an
-  incompatible reference with `StrictClockDescriptorIncompatible` —
-  and local strict reads are unaffected. Approval is a reviewed addition to
+  reaches the provider step — the two argument checks above still
+  refuse their own cases first — and local strict reads are
+  unaffected. Approval is a reviewed addition to
   that constant, not a runtime registration; a caller-supplied
   boolean, a stored identifier, an uptime comparison or a hashed
   counter is not accepted as scope. `SameBootReference`'s public
