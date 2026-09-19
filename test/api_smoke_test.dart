@@ -7133,4 +7133,169 @@ void main() {
       });
     });
   });
+
+  group('adversarial cross-layer regressions (nts-flr8.6)', () {
+    // Hermetic evidence only, like the groups above: every context is
+    // `testInjected` and the boot scope comes from a scripted provider
+    // under the hermetic id. Native multi-engine and physical-device
+    // evidence is the platform-validation bead's, not this group's.
+    const hermetic = kHermeticBootScopeProviderId;
+    const descriptor = ClockSourceDescriptor(
+      backend: ClockBackend.appleContinuous,
+      semanticsVersion: 1,
+      conversionVersion: 1,
+    );
+    BootScope scope() => BootScope(providerId: hermetic, token: const [0x6]);
+    _ScriptedBootScopeProvider provider() =>
+        _ScriptedBootScopeProvider(hermetic, [scope()]);
+
+    // A scripted coordinate: every strict read returns `clock`. `base`
+    // sits above the shared stopwatch timeline and on a whole
+    // millisecond, so the fixture's ms-normalised model reference is
+    // exact.
+    late int base;
+    late int clock;
+    setUp(() {
+      base =
+          (api.crateApiNtsNtsBoottimeMicros() ~/ 1000 + 1) * 1000 + 20_000_000;
+      clock = base;
+      api.onStrictRead = () => api.strictMicrosOverride = clock;
+    });
+
+    tearDown(() {
+      if (NtsBridge.state == NtsBridgeState.uninitialized) {
+        NtsRustLib.initMock(api: api);
+      }
+      NtsBridge.debugReset();
+    });
+
+    test('a zero reading is a value, not an absence', () {
+      // The Dart counterpart of the Rust `zero_and_equal_readings_are_valid`
+      // case: `0` is the coordinate's origin, and nothing on this
+      // surface may read it as a missing sample. Absence is carried by
+      // the generation, never by the magnitude.
+      clock = 0;
+      final ctx = StrictClockContext.resolveForTesting();
+      final a = ctx.now();
+      final b = ctx.now();
+      expect(a.micros, 0);
+      expect(b, a);
+      expect(ctx.elapsedSince(a), Duration.zero);
+      expect(ctx.isValid, isTrue);
+      // The origin is an exportable reference too: the domain check is
+      // `>= 0`, so `0` is not a sentinel there either.
+      expect(
+        SameBootReference(
+          referenceMicros: 0,
+          descriptor: descriptor,
+          scope: scope(),
+        ).referenceMicros,
+        0,
+      );
+    });
+
+    test('a fault the strict surface reports leaves the legacy clock '
+        'handing out values a caller cannot tell apart', () {
+      // The Dart statement of the two contracts on one seam, and the
+      // reason no strict operation accepts a legacy value: at the
+      // moment the strict context fails closed, `MonotonicClock` is
+      // still returning bare integers with no provenance and no
+      // failure mode, so a caller mixing the two sees nothing wrong.
+      final ctx = StrictClockContext.resolveForTesting();
+      final legacyBefore = MonotonicClock.instance.nowMicros();
+      api.nextStrictThrow = const ffi.NtsClockFault.syscallFailed(errno: 5);
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockSourceFault>()
+              .having((e) => e.kind, 'kind', SourceFaultKind.syscallFailed)
+              .having((e) => e.errno, 'errno', 5),
+        ),
+      );
+      expect(ctx.isValid, isFalse);
+      final legacyAfter = MonotonicClock.instance.nowMicros();
+      expect(legacyAfter, greaterThanOrEqualTo(legacyBefore));
+      // The refusal is terminal on the strict side while the legacy
+      // side keeps going, so the divergence is permanent, not a blip.
+      expect(
+        ctx.now,
+        throwsA(
+          isA<StrictClockInvalidated>().having(
+            (e) => e.reason,
+            'reason',
+            StrictClockInvalidationReason.sourceFault,
+          ),
+        ),
+      );
+      expect(
+        MonotonicClock.instance.nowMicros(),
+        greaterThanOrEqualTo(legacyAfter),
+      );
+    });
+
+    test('C6: the sub-millisecond residue survives every hop, and a '
+        'repeated import on one receiver neither resets nor '
+        'double-counts the age', () async {
+      // The consumer's ms-normalised model reference (1,234,000 us) is
+      // 567 us below the physical receipt (1,234,567 us). The package
+      // never learns of that grid: it carries the physical value
+      // unrounded through export, bind and ageing, so the residue
+      // stays the consumer's to hold and an inexact mapping stays the
+      // consumer's to reject — nothing here silently repairs one.
+      final receipt = base + 1_234_567;
+      final model = base + 1_234_000;
+      final producer = StrictClockContext.resolveForTesting();
+      clock = receipt;
+      final reference = producer.now();
+      clock = base + 1_300_000;
+      final time = StrictSyncedTime(
+        context: producer,
+        anchor: producer.now(),
+        reference: reference,
+        utcUnixMicros: 1_700_000_000_000 * 1000,
+        roundTripMicros: 0,
+        samplesUsed: 1,
+        trustBackend: TrustBackend.platform,
+      );
+
+      clock = base + 4_000_111;
+      final exported = await producer.exportReference(
+        time,
+        provider: provider(),
+      );
+      expect(exported.referenceMicros, receipt);
+      expect(exported.referenceMicros - model, 567);
+
+      // A second process: the producer's generation stays live on its
+      // own counter while this side's has moved on.
+      api.otherLiveGenerations.add(producer.generation);
+      api.strictGeneration += 5;
+      clock = base + 5_000_123;
+      final receiver = StrictClockContext.resolveForTesting();
+      final first = await receiver.bindReference(
+        exported,
+        provider: provider(),
+      );
+      expect(first.micros, receipt);
+      final age1 =
+          receiver.elapsedSince(first).inMicroseconds + (receipt - model);
+      expect(age1, 3_766_123);
+
+      // The same reference imported again on the same receiver. The
+      // bind is a pure mapping of the exported coordinate, so it
+      // yields the same reading and the age advances by exactly the
+      // time the clock moved — no reset to zero, no second helping of
+      // the span already counted.
+      clock = base + 5_500_000;
+      final second = await receiver.bindReference(
+        exported,
+        provider: provider(),
+      );
+      expect(second, first);
+      final age2 =
+          receiver.elapsedSince(second).inMicroseconds + (receipt - model);
+      expect(age2 - age1, 5_500_000 - 5_000_123);
+      expect(age2, 4_266_000);
+    });
+  });
 }

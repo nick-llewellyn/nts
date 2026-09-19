@@ -1827,4 +1827,149 @@ mod tests {
             None => assert_eq!(strict_read(), Err(ClockFault::Unsupported)),
         }
     }
+
+    // ---- adversarial regressions -------------------------------------
+
+    #[test]
+    fn an_unsupported_source_is_refused_on_every_call_and_never_latches() {
+        // On a supported host the `Unsupported` arm is unreachable, so
+        // its runtime handling is only observable through the seam:
+        // every call is refused on its own terms, with no sticky state
+        // that would let a later call be answered without probing.
+        let _x = test_sync::exclusive();
+        let probes = Rc::new(Cell::new(0u32));
+        let seen = Rc::clone(&probes);
+        with_raw_override(
+            move || {
+                seen.set(seen.get() + 1);
+                Err(ClockFault::Unsupported)
+            },
+            || {
+                let before = generation();
+                for _ in 0..3 {
+                    assert_eq!(strict_read(), Err(ClockFault::Unsupported));
+                }
+                assert_eq!(probes.get(), 3, "one probe per strict call");
+                assert_eq!(
+                    generation(),
+                    before + 3,
+                    "each refusal retires its own generation"
+                );
+                // The legacy export degrades on the same seam rather
+                // than reporting: the two contracts differ on this
+                // fault exactly as they do on every other.
+                assert!(super::boottime_micros() >= 0);
+            },
+        );
+    }
+
+    #[test]
+    fn strict_re_probes_an_intermittently_faulting_source_on_every_call() {
+        // Fault, recovery, fault, recovery. The strict path remembers
+        // neither outcome: a success after a fault is reported as
+        // readily as the fault was, and nothing is served from memory.
+        let _x = test_sync::exclusive();
+        let probes = Rc::new(Cell::new(0u32));
+        let seen = Rc::clone(&probes);
+        let mut script = scripted(vec![
+            Err(ClockFault::SyscallFailed { errno: 4 }),
+            linux(1, 0),
+            Err(ClockFault::SyscallFailed { errno: 4 }),
+            linux(2, 0),
+        ]);
+        with_raw_override(
+            move || {
+                seen.set(seen.get() + 1);
+                script()
+            },
+            || {
+                assert_eq!(strict_read(), Err(ClockFault::SyscallFailed { errno: 4 }));
+                assert_eq!(strict_read().map(|r| r.micros), Ok(1_000_000));
+                assert_eq!(strict_read(), Err(ClockFault::SyscallFailed { errno: 4 }));
+                assert_eq!(strict_read().map(|r| r.micros), Ok(2_000_000));
+                assert_eq!(probes.get(), 4);
+            },
+        );
+    }
+
+    #[test]
+    fn a_degenerate_apple_timebase_is_reported_per_call_and_never_cached() {
+        // The Apple reader caches a *successful* timebase probe only
+        // (see `platform_raw_read`). A kern failure and either
+        // degenerate ratio are reported on the call that saw them, and
+        // the next read converts normally — a failed probe never
+        // becomes a permanent silent state.
+        let _x = test_sync::exclusive();
+        let apple = |numer, denom| {
+            Ok(RawSample::Apple {
+                ticks: 24,
+                numer,
+                denom,
+            })
+        };
+        with_raw_override(
+            scripted(vec![
+                Err(ClockFault::TimebaseUnavailable {
+                    kern_return: 5,
+                    numer: 0,
+                    denom: 0,
+                }),
+                apple(0, 3),
+                apple(125, 0),
+                apple(125, 3),
+            ]),
+            || {
+                assert_eq!(
+                    strict_read(),
+                    Err(ClockFault::TimebaseUnavailable {
+                        kern_return: 5,
+                        numer: 0,
+                        denom: 0,
+                    })
+                );
+                assert_eq!(strict_read(), Err(ClockFault::InvalidRaw));
+                assert_eq!(strict_read(), Err(ClockFault::InvalidRaw));
+                assert_eq!(
+                    strict_read().map(|r| (r.micros, r.backend)),
+                    Ok((1, ClockBackend::AppleContinuous))
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn a_latched_legacy_value_is_not_on_the_strict_coordinate() {
+        // Once the legacy path has latched it serves the suspend-frozen
+        // process-local counter while the strict path keeps reporting
+        // the native source. Both are observable at the same moment and
+        // are far apart, which is why no strict operation may mix them:
+        // a delta taken across the two measures nothing.
+        use super::legacy_fallback;
+        let _x = test_sync::exclusive();
+        // ~31 years of uptime, unreachable by the fallback anchor (set
+        // when the first fallback value is served), so the two epochs
+        // are told apart by value alone rather than by a tolerance.
+        const NATIVE_SEC: i64 = 1_000_000_000;
+        const NATIVE_MICROS: i64 = NATIVE_SEC * 1_000_000;
+        with_raw_override(
+            scripted(vec![
+                Err(ClockFault::SyscallFailed { errno: 22 }),
+                linux(NATIVE_SEC, 0),
+            ]),
+            || {
+                // An earlier test may have run on this thread; start
+                // from the unlatched state the assertions describe.
+                // `with_raw_override` restores the entry value on exit.
+                legacy_fallback::restore(false);
+                let legacy = super::boottime_micros();
+                assert!(legacy_fallback::is_latched());
+                assert!(legacy < NATIVE_MICROS / 2, "expected the fallback epoch");
+                assert_eq!(strict_read().map(|r| r.micros), Ok(NATIVE_MICROS));
+                assert!(
+                    super::boottime_micros() < NATIVE_MICROS / 2,
+                    "the legacy export must stay on the epoch it latched onto"
+                );
+            },
+        );
+    }
 }
