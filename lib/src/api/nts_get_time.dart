@@ -461,7 +461,7 @@ Future<StrictSyncedTime> _getTimeStrict({
     anchor: anchor,
     utcUnixMicros:
         best.utcUnixMicros + stats.delayMicros ~/ 2 + anchorLagMicros,
-    referenceMicros: bestReceipt.micros,
+    reference: bestReceipt,
     roundTripMicros: best.roundTripMicros,
     samplesUsed: samplesUsed,
     trustBackend: best.trustBackend,

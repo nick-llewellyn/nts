@@ -204,6 +204,63 @@ tarball.
   lifecycle token and proves nothing across processes. No I/O on the
   read path. ([#353](https://github.com/nick-llewellyn/nts/pull/353))
 
+- The same-boot compatibility boundary, delivered as explicitly
+  unavailable. `StrictClockContext.exportReference(time, provider:)`
+  turns a `StrictSyncedTime` bound to this context into a
+  `SameBootReference` — that instance's reference reading
+  (`StrictSyncedTime.referenceMicros`, the wire receipt on an instance
+  from `getTimeStrict`, never the anchor or the export instant), the
+  context's `ClockSourceDescriptor`, and the `BootScope`
+  a `BootScopeProvider` reported — and
+  `bindReference(reference, provider:)` on a context in another
+  engine or process of the same boot returns a `StrictReading` on the
+  receiver's own coordinate and generation that `elapsedSince` can
+  age, so a receipt outlives the process that took it without an age
+  reset, a re-anchor or any rounding. Neither side's `generation` is
+  an input: it is a per-process lifecycle token and equality would
+  prove nothing. Both calls check, in order, the context's lifecycle;
+  then the one argument check each has — `exportReference` that `time`
+  is bound to this context (`ArgumentError` otherwise),
+  `bindReference` that the reference's descriptor is compatible
+  (`StrictClockDescriptorIncompatible` otherwise — an inexact mapping
+  is refused, never converted); then that the provider *instance* is in
+  `kApprovedBootScopeProviders` — approval is by instance, never by
+  the `providerId` a caller's implementation claims — and, on bind,
+  issued the reference's scope — both before the provider is
+  consulted; a first
+  `provider.current()`, which must be non-null and, on bind, equal to
+  the reference's scope; a strict read on the context (a receipt the
+  producer's clock has fallen below is a `StrictClockRegression`; a
+  reference ahead of the receiver's clock is refused); a second
+  `current()` equal to the first; and a final strict read after that
+  await. A refusal at any scope step is
+  `StrictClockBootScopeUnavailable(reason, providerId)` with a
+  `BootScopeUnavailableReason` (`providerNotApproved`,
+  `providerMismatch`, `unavailable`, `mismatch`, `changed`,
+  `referenceAhead`) and leaves the context valid; a lifecycle or read
+  failure is the usual `StrictClockError` and invalidates it.
+  `kApprovedBootScopeProviders` ships **empty**: no boot-identity
+  source has been evidenced for any supported platform (Android
+  `Settings.Global.BOOT_COUNT` is a candidate pending validation; iOS
+  exposes no cold-restore identity to apps), so every native context
+  refuses with `providerNotApproved` every export and bind that
+  reaches the provider step — the two argument checks above still
+  refuse their own cases first — and local strict reads are
+  unaffected. Approval is a reviewed addition to
+  that constant, not a runtime registration; a caller-supplied
+  boolean, a stored identifier, an uptime comparison or a hashed
+  counter is not accepted as scope. `SameBootReference`'s public
+  constructor, which exists so a consumer can rebuild one from
+  storage it has authenticated, rejects a `referenceMicros` outside
+  the coordinate's `0..=2^63-1` domain with `ArgumentError` in every
+  build mode, so a corrupt record cannot be bound as a reading no
+  clock could have produced. Tests exercise the path against
+  a mock bridge through `kHermeticBootScopeProviderId`, which only a
+  `testInjected` context accepts. `StrictSyncedTime`'s constructor
+  now takes `reference:` as a `StrictReading` rather than a bare
+  `referenceMicros:` integer, so only an attributed receipt can be
+  exported. ([#355](https://github.com/nick-llewellyn/nts/pull/355))
+
 ### Internal
 
 - The Dolt bead store now syncs to DoltHub automatically in Auggie

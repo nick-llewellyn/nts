@@ -1,8 +1,10 @@
 // Error hierarchy for the strict clock. Part of strict_clock.dart.
 //
-// Every failure a `StrictClockContext` can raise is a subtype of the
-// sealed `StrictClockError`, so a caller can exhaustively `switch` on
-// it. None of these carry generated FFI types.
+// Almost every failure a `StrictClockContext` can raise is a subtype
+// of the sealed `StrictClockError`, so a caller can exhaustively
+// `switch` on it; the two exceptions are on the transfer surface and
+// are documented on `StrictClockError` itself. None of these carry
+// generated FFI types.
 
 part of 'strict_clock.dart';
 
@@ -10,8 +12,19 @@ part of 'strict_clock.dart';
 /// exhaustive.
 ///
 /// Most subtypes are thrown by [StrictClockContext.resolve],
-/// [StrictClockContext.now] and [StrictClockContext.elapsedSince], and
-/// by the [StrictSyncedTime] constructor's anchor check. Three arise
+/// [StrictClockContext.now] and [StrictClockContext.elapsedSince], by
+/// the transfer surface [StrictClockContext.exportReference] and
+/// [StrictClockContext.bindReference] — which also validate the
+/// reference's coordinate ([StrictClockDescriptorIncompatible]) and
+/// its boot scope ([StrictClockBootScopeUnavailable]) — and by the
+/// [StrictSyncedTime] constructor's anchor and reference checks.
+/// Neither of those two transfer refusals invalidates the context, as
+/// the incompatibility subtypes raised without reading the clock
+/// ([StrictClockSourceIncompatible],
+/// [StrictClockDescriptorIncompatible],
+/// [StrictClockGenerationIncompatible]) likewise do not: they report
+/// that a reading or a scope could not be matched, not that the clock
+/// failed. Three arise
 /// only while a call acquires a query sample and reach the caller as
 /// the `fault` of an `NtsError.clockFault` rather than directly, and
 /// they differ in which surfaces can raise them:
@@ -35,6 +48,15 @@ part of 'strict_clock.dart';
 /// past its precondition; the [StateError] it throws when the bridge is
 /// not a mock is a test-setup error, not a clock failure, and is not
 /// part of this hierarchy.
+///
+/// Two further failures reach a caller of the transfer surface from
+/// outside this hierarchy, so `catch (StrictClockError)` alone does not
+/// cover them: the [ArgumentError] [StrictClockContext.exportReference]
+/// throws for a [StrictSyncedTime] bound to another context, and
+/// whatever [BootScopeProvider.current] throws, which propagates
+/// unchanged — the transfer is abandoned and nothing is exported,
+/// adopted or invalidated, but the exception is the provider's, not
+/// this package's, and is deliberately neither wrapped nor swallowed.
 sealed class StrictClockError implements Exception {
   const StrictClockError._();
 
@@ -291,6 +313,77 @@ final class StrictClockGenerationIncompatible extends StrictClockError {
   String get message =>
       'reading on generation $actual is not comparable with a context on '
       'generation $expected';
+}
+
+/// Why a same-boot transfer was refused; see
+/// [StrictClockBootScopeUnavailable].
+enum BootScopeUnavailableReason {
+  /// The provider instance is not in [kApprovedBootScopeProviders]
+  /// (or, on a `testInjected` context, does not carry the hermetic
+  /// id). Checked before the provider is consulted; the id it claims
+  /// is not a credential. With the shipped empty allowlist this is the
+  /// outcome of every transfer on a native context that reaches the
+  /// provider step; the checks before it (export's binding check, bind's
+  /// descriptor check) refuse their own cases first and differently.
+  providerNotApproved,
+
+  /// A scope is attributed to a provider other than the one handling
+  /// the transfer: the reference was issued under a different
+  /// [BootScopeProvider.providerId] than the provider offered to bind
+  /// it, or the provider itself returned a scope labelled with another
+  /// provider's id. Scopes from different providers are never compared,
+  /// and a provider vouches only for its own.
+  providerMismatch,
+
+  /// The provider returned `null`: the scope cannot be established
+  /// right now.
+  unavailable,
+
+  /// The provider's scope on the receiving side is not the one the
+  /// reference was exported under: a different boot, or a lineage the
+  /// provider does not vouch for.
+  mismatch,
+
+  /// The provider reported one scope before the clock was checked and
+  /// a different one (or none) after it; nothing bracketed by that
+  /// change is adopted.
+  changed,
+
+  /// The provider vouched for the scope but the coordinate refutes it:
+  /// the reference lies beyond the receiving context's current
+  /// reading, which cannot happen within one counter epoch.
+  referenceAhead,
+}
+
+/// Same-boot transfer refused because boot scope could not be
+/// established for it.
+///
+/// Thrown by [StrictClockContext.exportReference] and
+/// [StrictClockContext.bindReference]. It is a verdict on the transfer,
+/// not on the clock: the context stays valid and its local strict reads
+/// are unaffected. The package ships no approved provider, so on a
+/// native context every transfer that reaches the provider step ends
+/// here with [BootScopeUnavailableReason.providerNotApproved]; one
+/// refused by an earlier check — a [StrictSyncedTime] bound to another
+/// context ([ArgumentError]), a reference on an incompatible coordinate
+/// ([StrictClockDescriptorIncompatible]) — does not.
+final class StrictClockBootScopeUnavailable extends StrictClockError {
+  /// Construct the error.
+  const StrictClockBootScopeUnavailable({
+    required this.reason,
+    required this.providerId,
+  }) : super._();
+
+  /// Why the transfer was refused.
+  final BootScopeUnavailableReason reason;
+
+  /// Id of the provider offered for the transfer.
+  final String providerId;
+
+  @override
+  String get message =>
+      'same-boot transfer unavailable (${reason.name}) under boot-scope '
+      'provider "$providerId"';
 }
 
 /// The device suspended while an NTP reply was in flight.
