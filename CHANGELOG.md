@@ -48,24 +48,6 @@ tarball.
   covers them. A sample from a real bridge always carries a non-zero
   generation. ([#354](https://github.com/nick-llewellyn/nts/pull/354))
 
-### Security
-
-- `rustls` moves to 0.23.45, clearing RUSTSEC-2026-0285
-  (GHSA-2mjx-qc3c-rqvc). Versions `>= 0.23.13, < 0.23.45` accepted a
-  TLS 1.3 handshake message sent at the wrong encryption level when it
-  followed a key-changing message in the same record — a plaintext
-  `EncryptedExtensions` packed in alongside the `ServerHello`, for
-  instance. RFC 8446 §5.1 requires handshake messages not to span a key
-  change, and requires an `unexpected_message` alert when they do. The
-  transcript stays authenticated, so this is not a handshake-forgery or
-  message-alteration path; the effect is that a peer could send in
-  plaintext handshake messages that should have been encrypted without
-  the connection being refused. It matters here because `rustls` is the
-  TLS stack that performs the NTS-KE handshake. Lockfile-only — the
-  declared `0.23` constraint already admitted the fix, so no manifest or
-  source change was needed.
-  ([#358](https://github.com/nick-llewellyn/nts/pull/358))
-
 ### Added
 
 - Strict acquisition: `ntsGetTimeStrict` and `NtsClient.getTimeStrict`
@@ -278,6 +260,26 @@ tarball.
   now takes `reference:` as a `StrictReading` rather than a bare
   `referenceMicros:` integer, so only an attributed receipt can be
   exported. ([#355](https://github.com/nick-llewellyn/nts/pull/355))
+
+## 9.4.0
+
+### Security
+
+- `rustls` moves to 0.23.45, clearing RUSTSEC-2026-0285
+  (GHSA-2mjx-qc3c-rqvc). Versions `>= 0.23.13, < 0.23.45` accepted a
+  TLS 1.3 handshake message sent at the wrong encryption level when it
+  followed a key-changing message in the same record — a plaintext
+  `EncryptedExtensions` packed in alongside the `ServerHello`, for
+  instance. RFC 8446 §5.1 requires handshake messages not to span a key
+  change, and requires an `unexpected_message` alert when they do. The
+  transcript stays authenticated, so this is not a handshake-forgery or
+  message-alteration path; the effect is that a peer could send in
+  plaintext handshake messages that should have been encrypted without
+  the connection being refused. It matters here because `rustls` is the
+  TLS stack that performs the NTS-KE handshake. Lockfile-only — the
+  declared `0.23` constraint already admitted the fix, so no manifest or
+  source change was needed.
+  ([#358](https://github.com/nick-llewellyn/nts/pull/358))
 
 ### Internal
 
