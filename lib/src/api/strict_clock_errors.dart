@@ -1,8 +1,10 @@
 // Error hierarchy for the strict clock. Part of strict_clock.dart.
 //
-// Every failure a `StrictClockContext` can raise is a subtype of the
-// sealed `StrictClockError`, so a caller can exhaustively `switch` on
-// it. None of these carry generated FFI types.
+// Almost every failure a `StrictClockContext` can raise is a subtype
+// of the sealed `StrictClockError`, so a caller can exhaustively
+// `switch` on it; the two exceptions are on the transfer surface and
+// are documented on `StrictClockError` itself. None of these carry
+// generated FFI types.
 
 part of 'strict_clock.dart';
 
@@ -50,7 +52,7 @@ part of 'strict_clock.dart';
 /// Two further failures reach a caller of the transfer surface from
 /// outside this hierarchy, so `catch (StrictClockError)` alone does not
 /// cover them: the [ArgumentError] [StrictClockContext.exportReference]
-/// throws for a [StrictSyncedTime] another context acquired, and
+/// throws for a [StrictSyncedTime] bound to another context, and
 /// whatever [BootScopeProvider.current] throws, which propagates
 /// unchanged — the transfer is abandoned and nothing is exported,
 /// adopted or invalidated, but the exception is the provider's, not
