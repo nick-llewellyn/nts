@@ -7233,7 +7233,8 @@ void main() {
       );
     });
 
-    test('C6: the sub-millisecond residue survives every hop, and a '
+    test('C6: the sub-millisecond residue survives every hop, an inexact '
+        'consumer mapping is rejected rather than rounded, and a '
         'repeated import on one receiver neither resets nor '
         'double-counts the age', () async {
       // The consumer's ms-normalised model reference (1,234,000 us) is
@@ -7242,6 +7243,7 @@ void main() {
       // unrounded through export, bind and ageing, so the residue
       // stays the consumer's to hold and an inexact mapping stays the
       // consumer's to reject — nothing here silently repairs one.
+      const utcMicros = 1_700_000_000_000 * 1000;
       final receipt = base + 1_234_567;
       final model = base + 1_234_000;
       final producer = StrictClockContext.resolveForTesting();
@@ -7252,7 +7254,7 @@ void main() {
         context: producer,
         anchor: producer.now(),
         reference: reference,
-        utcUnixMicros: 1_700_000_000_000 * 1000,
+        utcUnixMicros: utcMicros,
         roundTripMicros: 0,
         samplesUsed: 1,
         trustBackend: TrustBackend.platform,
@@ -7266,6 +7268,26 @@ void main() {
       expect(exported.referenceMicros, receipt);
       expect(exported.referenceMicros - model, 567);
 
+      // The rejection the residue makes possible. A consumer whose
+      // model grid is whole milliseconds and which refuses to guess
+      // must be able to *see* that the receipt does not sit on it. The
+      // package hands over the physical value, so the mapping fails
+      // where it should; a surface that had rounded to fit would have
+      // made this rejection unreachable and the error silent.
+      int toModelMs(int micros) {
+        if (micros % 1000 != 0) {
+          throw ArgumentError.value(
+            micros,
+            'micros',
+            'not representable on the model millisecond grid',
+          );
+        }
+        return micros ~/ 1000;
+      }
+
+      expect(() => toModelMs(exported.referenceMicros), throwsArgumentError);
+      expect(toModelMs(model), model ~/ 1000);
+
       // A second process: the producer's generation stays live on its
       // own counter while this side's has moved on.
       api.otherLiveGenerations.add(producer.generation);
@@ -7277,16 +7299,21 @@ void main() {
         provider: provider(),
       );
       expect(first.micros, receipt);
+      // The refusal survives the round trip: binding did not quietly
+      // snap the coordinate onto the consumer's grid on the way.
+      expect(() => toModelMs(first.micros), throwsArgumentError);
       final age1 =
           receiver.elapsedSince(first).inMicroseconds + (receipt - model);
       expect(age1, 3_766_123);
+      expect(utcMicros + age1, 1_700_000_003_766_123);
 
-      // The same reference imported again on the same receiver. The
-      // bind is a pure mapping of the exported coordinate, so it
-      // yields the same reading and the age advances by exactly the
-      // time the clock moved — no reset to zero, no second helping of
-      // the span already counted.
-      clock = base + 5_500_000;
+      // The same reference imported again on the same receiver, at the
+      // fixture's second restore instant. The bind is a pure mapping of
+      // the exported coordinate, so it yields the same reading and the
+      // age advances by exactly the time the clock moved — no reset to
+      // zero, no second helping of the span already counted, and the
+      // projection lands on the fixture's value rather than near it.
+      clock = base + 6_000_456;
       final second = await receiver.bindReference(
         exported,
         provider: provider(),
@@ -7294,8 +7321,9 @@ void main() {
       expect(second, first);
       final age2 =
           receiver.elapsedSince(second).inMicroseconds + (receipt - model);
-      expect(age2 - age1, 5_500_000 - 5_000_123);
-      expect(age2, 4_266_000);
+      expect(age2 - age1, 6_000_456 - 5_000_123);
+      expect(age2, 4_766_456);
+      expect(utcMicros + age2, 1_700_000_004_766_456);
     });
   });
 }
