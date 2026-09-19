@@ -5851,3 +5851,31 @@ fn strict_clock_fault_mirror_is_lossless() {
     // Every variant the exhaustive match knows has a sample above.
     assert_eq!(seen, Tag::ALL.into_iter().collect::<BTreeSet<_>>());
 }
+
+/// A source that cannot be read is refused on every strict call, bound
+/// or unbound, and never as an integer. The descriptor is a
+/// compile-time fact and must not move with it: a consumer that saw
+/// the backend or either version change would read a coordinate change
+/// where only a read failed.
+#[test]
+fn a_faulting_source_refuses_every_strict_read_and_leaves_the_descriptor_alone() {
+    use crate::nts::boottime::{generation, with_raw_override, ClockFault};
+    let _exclusive = crate::nts::boottime::test_sync::exclusive();
+    let baseline = nts_clock_descriptor();
+    with_raw_override(
+        || Err(ClockFault::Unsupported),
+        || {
+            assert_eq!(nts_strict_clock_read(None), Err(NtsClockFault::Unsupported));
+            assert_eq!(
+                nts_strict_clock_read(Some(generation())),
+                Err(NtsClockFault::Unsupported)
+            );
+            assert_eq!(nts_clock_descriptor(), baseline);
+            // The legacy export on the same seam still hands back an
+            // integer the caller cannot tell from a native reading.
+            // That is the contract the strict surface exists to
+            // replace, not a second strict result.
+            assert!(nts_boottime_micros() >= 0);
+        },
+    );
+}

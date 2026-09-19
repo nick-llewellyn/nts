@@ -456,6 +456,52 @@ fn platform_raw_read() -> Result<RawSample, ClockFault> {
     Ok(RawSample::Linux { sec, nsec })
 }
 
+/// `mach_timebase_info` ratio: `(numer, denom)` scaling mach ticks to
+/// nanoseconds.
+///
+/// Held as a plain pair rather than the mach2 struct so that
+/// [`cached_timebase`] — and its tests — compile on targets where
+/// `mach2` is not a dependency.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+type Timebase = (u32, u32);
+
+/// `KERN_SUCCESS`, mirrored for the same reason as [`Timebase`]. Kept
+/// honest by `mirrored_kern_success_matches_mach2` on Apple targets.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+const KERN_SUCCESS: i32 = 0;
+
+/// Resolve the Apple timebase through `cache`, probing only when the
+/// cache is empty.
+///
+/// `mach_timebase_info` is constant for the process lifetime, so a
+/// *successful* probe is cached and the hot path is one clock read
+/// plus a mul/div. A non-success `kern_return`, or a zero in either
+/// field — which would make the scale undefined — is reported on the
+/// call that saw it and is deliberately **not** cached: the next call
+/// probes again, so a fault never becomes a permanent silent state.
+///
+/// Split out of [`platform_raw_read`] so the cache decision is
+/// reachable without the kernel call, and so it is compiled and tested
+/// on every target rather than only on Apple ones.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+fn cached_timebase(
+    cache: &std::sync::OnceLock<Timebase>,
+    probe: impl FnOnce() -> (i32, Timebase),
+) -> Result<Timebase, ClockFault> {
+    if let Some(tb) = cache.get() {
+        return Ok(*tb);
+    }
+    let (kern_return, (numer, denom)) = probe();
+    if kern_return != KERN_SUCCESS || numer == 0 || denom == 0 {
+        return Err(ClockFault::TimebaseUnavailable {
+            kern_return,
+            numer,
+            denom,
+        });
+    }
+    Ok(*cache.get_or_init(|| (numer, denom)))
+}
+
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 #[expect(
     unsafe_code,
@@ -465,29 +511,13 @@ fn platform_raw_read() -> Result<RawSample, ClockFault> {
               only route to the suspend-inclusive clock"
 )]
 fn platform_raw_read() -> Result<RawSample, ClockFault> {
-    use std::sync::OnceLock;
-    // mach_timebase_info is constant for the process lifetime, so a
-    // *successful* probe is cached and the hot path is one clock read
-    // plus a mul/div. A failed or degenerate probe is deliberately not
-    // cached: it is reported on this call, and the next call probes
-    // again, so a fault never becomes a permanent silent state.
-    static TIMEBASE: OnceLock<mach2::mach_time::mach_timebase_info> = OnceLock::new();
-    let tb = match TIMEBASE.get() {
-        Some(tb) => *tb,
-        None => {
-            let mut info = mach2::mach_time::mach_timebase_info { numer: 0, denom: 0 };
-            // SAFETY: valid out-pointer to a mach_timebase_info.
-            let kr = unsafe { mach2::mach_time::mach_timebase_info(&raw mut info) };
-            if kr != mach2::kern_return::KERN_SUCCESS || info.numer == 0 || info.denom == 0 {
-                return Err(ClockFault::TimebaseUnavailable {
-                    kern_return: kr,
-                    numer: info.numer,
-                    denom: info.denom,
-                });
-            }
-            *TIMEBASE.get_or_init(|| info)
-        }
-    };
+    static TIMEBASE: std::sync::OnceLock<Timebase> = std::sync::OnceLock::new();
+    let (numer, denom) = cached_timebase(&TIMEBASE, || {
+        let mut info = mach2::mach_time::mach_timebase_info { numer: 0, denom: 0 };
+        // SAFETY: valid out-pointer to a mach_timebase_info.
+        let kr = unsafe { mach2::mach_time::mach_timebase_info(&raw mut info) };
+        (kr, (info.numer, info.denom))
+    })?;
     // SAFETY: no preconditions. mach_continuous_time (unlike
     // mach_absolute_time) includes time the system spent asleep —
     // Apple-documented suspend-inclusive monotonic source. It returns
@@ -496,8 +526,8 @@ fn platform_raw_read() -> Result<RawSample, ClockFault> {
     let ticks = unsafe { mach2::mach_time::mach_continuous_time() };
     Ok(RawSample::Apple {
         ticks,
-        numer: tb.numer,
-        denom: tb.denom,
+        numer,
+        denom,
     })
 }
 
@@ -1129,8 +1159,9 @@ mod tests {
     // ---- strict path -------------------------------------------------
 
     use super::{
-        generation, invalidate_generation, platform_backend, strict_read, test_sync,
-        with_raw_override, ClockBackend, ClockFault, RawSample, SequentialReader, StrictReading,
+        cached_timebase, generation, invalidate_generation, platform_backend, strict_read,
+        test_sync, with_raw_override, ClockBackend, ClockFault, RawSample, SequentialReader,
+        StrictReading, Timebase, KERN_SUCCESS,
     };
     use std::cell::Cell;
     use std::rc::Rc;
@@ -1826,5 +1857,210 @@ mod tests {
             Some(_) => assert!(strict_read().is_ok(), "seam must be restored"),
             None => assert_eq!(strict_read(), Err(ClockFault::Unsupported)),
         }
+    }
+
+    // ---- adversarial regressions -------------------------------------
+
+    #[test]
+    fn an_unsupported_source_is_refused_on_every_call_and_never_latches() {
+        // On a supported host the `Unsupported` arm is unreachable, so
+        // its runtime handling is only observable through the seam:
+        // every call is refused on its own terms, with no sticky state
+        // that would let a later call be answered without probing.
+        let _x = test_sync::exclusive();
+        let probes = Rc::new(Cell::new(0u32));
+        let seen = Rc::clone(&probes);
+        with_raw_override(
+            move || {
+                seen.set(seen.get() + 1);
+                Err(ClockFault::Unsupported)
+            },
+            || {
+                let before = generation();
+                for _ in 0..3 {
+                    assert_eq!(strict_read(), Err(ClockFault::Unsupported));
+                }
+                assert_eq!(probes.get(), 3, "one probe per strict call");
+                assert_eq!(
+                    generation(),
+                    before + 3,
+                    "each refusal retires its own generation"
+                );
+                // The legacy export degrades on the same seam rather
+                // than reporting: the two contracts differ on this
+                // fault exactly as they do on every other.
+                assert!(super::boottime_micros() >= 0);
+            },
+        );
+    }
+
+    #[test]
+    fn strict_re_probes_an_intermittently_faulting_source_on_every_call() {
+        // Fault, recovery, fault, recovery. The strict path remembers
+        // neither outcome: a success after a fault is reported as
+        // readily as the fault was, and nothing is served from memory.
+        let _x = test_sync::exclusive();
+        let probes = Rc::new(Cell::new(0u32));
+        let seen = Rc::clone(&probes);
+        let mut script = scripted(vec![
+            Err(ClockFault::SyscallFailed { errno: 4 }),
+            linux(1, 0),
+            Err(ClockFault::SyscallFailed { errno: 4 }),
+            linux(2, 0),
+        ]);
+        with_raw_override(
+            move || {
+                seen.set(seen.get() + 1);
+                script()
+            },
+            || {
+                assert_eq!(strict_read(), Err(ClockFault::SyscallFailed { errno: 4 }));
+                assert_eq!(strict_read().map(|r| r.micros), Ok(1_000_000));
+                assert_eq!(strict_read(), Err(ClockFault::SyscallFailed { errno: 4 }));
+                assert_eq!(strict_read().map(|r| r.micros), Ok(2_000_000));
+                assert_eq!(probes.get(), 4);
+            },
+        );
+    }
+
+    /// Probe returning `outcome` and counting its own invocations.
+    fn counted_probe(
+        calls: &Cell<u32>,
+        outcome: (i32, Timebase),
+    ) -> impl FnOnce() -> (i32, Timebase) + '_ {
+        move || {
+            calls.set(calls.get() + 1);
+            outcome
+        }
+    }
+
+    #[test]
+    fn a_failed_timebase_probe_is_reported_per_call_and_never_cached() {
+        // `with_raw_override` replaces `platform_raw_read` wholesale, so
+        // the cache decision is unreachable through that seam. Drive it
+        // directly, against a local cache rather than the process-wide
+        // one, so the assertions are about the decision and not about
+        // which test ran first.
+        let calls = Cell::new(0u32);
+        let cache = std::sync::OnceLock::new();
+        // A kern failure and either degenerate ratio are each reported
+        // on the call that saw them, carrying what the kernel wrote.
+        for (kr, numer, denom) in [(5, 0, 0), (KERN_SUCCESS, 0, 3), (KERN_SUCCESS, 125, 0)] {
+            assert_eq!(
+                cached_timebase(&cache, counted_probe(&calls, (kr, (numer, denom)))),
+                Err(ClockFault::TimebaseUnavailable {
+                    kern_return: kr,
+                    numer,
+                    denom,
+                })
+            );
+        }
+        assert_eq!(calls.get(), 3, "every failure re-probes");
+        assert!(cache.get().is_none(), "no failure may be cached");
+        // The source recovers: the next call probes again and succeeds,
+        // so a transient failure never became a permanent silent state.
+        assert_eq!(
+            cached_timebase(&cache, counted_probe(&calls, (KERN_SUCCESS, (125, 3)))),
+            Ok((125, 3))
+        );
+        assert_eq!(calls.get(), 4);
+    }
+
+    #[test]
+    fn a_successful_timebase_probe_is_cached_and_not_repeated() {
+        let calls = Cell::new(0u32);
+        let cache = std::sync::OnceLock::new();
+        assert_eq!(
+            cached_timebase(&cache, counted_probe(&calls, (KERN_SUCCESS, (125, 3)))),
+            Ok((125, 3))
+        );
+        // A later probe that would fault is never consulted: the cached
+        // ratio answers, which is what makes the hot path one clock read
+        // plus a mul/div.
+        for _ in 0..3 {
+            assert_eq!(
+                cached_timebase(&cache, counted_probe(&calls, (5, (0, 0)))),
+                Ok((125, 3))
+            );
+        }
+        assert_eq!(calls.get(), 1, "a cached timebase must not re-probe");
+    }
+
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    #[test]
+    fn mirrored_kern_success_matches_mach2() {
+        assert_eq!(KERN_SUCCESS, mach2::kern_return::KERN_SUCCESS);
+    }
+
+    #[test]
+    fn a_timebase_fault_does_not_latch_the_strict_path() {
+        // The per-call contract as the bridge sees it: a timebase fault
+        // is reported with the kernel's own fields, and the next read
+        // converts and attributes normally.
+        let _x = test_sync::exclusive();
+        with_raw_override(
+            scripted(vec![
+                Err(ClockFault::TimebaseUnavailable {
+                    kern_return: 5,
+                    numer: 0,
+                    denom: 0,
+                }),
+                Ok(RawSample::Apple {
+                    ticks: 24,
+                    numer: 125,
+                    denom: 3,
+                }),
+            ]),
+            || {
+                assert_eq!(
+                    strict_read(),
+                    Err(ClockFault::TimebaseUnavailable {
+                        kern_return: 5,
+                        numer: 0,
+                        denom: 0,
+                    })
+                );
+                assert_eq!(
+                    strict_read().map(|r| (r.micros, r.backend)),
+                    Ok((1, ClockBackend::AppleContinuous))
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn a_latched_legacy_value_is_not_on_the_strict_coordinate() {
+        // Once the legacy path has latched it serves the suspend-frozen
+        // process-local counter while the strict path keeps reporting
+        // the native source. Both are observable at the same moment and
+        // are far apart, which is why no strict operation may mix them:
+        // a delta taken across the two measures nothing.
+        use super::legacy_fallback;
+        let _x = test_sync::exclusive();
+        // ~31 years of uptime, unreachable by the fallback anchor (set
+        // when the first fallback value is served), so the two epochs
+        // are told apart by value alone rather than by a tolerance.
+        const NATIVE_SEC: i64 = 1_000_000_000;
+        const NATIVE_MICROS: i64 = NATIVE_SEC * 1_000_000;
+        with_raw_override(
+            scripted(vec![
+                Err(ClockFault::SyscallFailed { errno: 22 }),
+                linux(NATIVE_SEC, 0),
+            ]),
+            || {
+                // An earlier test may have run on this thread; start
+                // from the unlatched state the assertions describe.
+                // `with_raw_override` restores the entry value on exit.
+                legacy_fallback::restore(false);
+                let legacy = super::boottime_micros();
+                assert!(legacy_fallback::is_latched());
+                assert!(legacy < NATIVE_MICROS / 2, "expected the fallback epoch");
+                assert_eq!(strict_read().map(|r| r.micros), Ok(NATIVE_MICROS));
+                assert!(
+                    super::boottime_micros() < NATIVE_MICROS / 2,
+                    "the legacy export must stay on the epoch it latched onto"
+                );
+            },
+        );
     }
 }
