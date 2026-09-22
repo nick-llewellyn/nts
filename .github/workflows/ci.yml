@@ -708,6 +708,12 @@ jobs:
           # cross-platform.yml introduced it "newly" from the diff's
           # perspective, since this action reviews added deps only.
           #
+          # SonarSource/sonarqube-scan-action is also LGPL-3.0, same
+          # carve-out shape as Swatinem/rust-cache above: it never ships
+          # to a consumer, so the copyleft terms impose no distribution
+          # obligation. Surfaced by the github-actions group bump in
+          # Dependabot PR #362.
+          #
           # One casing per package is enough. purl matching was
           # case-sensitive at the time this list was written
           # (actions/dependency-review-action#991), which mattered
@@ -719,11 +725,15 @@ jobs:
           # v4.9.0, so the pinned v5.0.0 above matches either casing.
           # Restore the duplicates if the pin is ever moved backwards.
           #
-          # flutter_rust_bridge and code_assets are the two non-action
-          # entries, and the reason they are listed is narrower than
-          # what listing them does. FRB is MIT and code_assets is
-          # BSD-3-Clause (the Dart project's standard header) -- both
-          # already permitted by `allow-licenses` above; pub.dev
+          # flutter_rust_bridge, code_assets, and file_picker are the
+          # non-action entries, and the reason they are listed is
+          # narrower than what listing them does. FRB is MIT,
+          # code_assets is BSD-3-Clause (the Dart project's standard
+          # header), and file_picker is also MIT (hand-verified against
+          # https://github.com/miguelpruivo/flutter_file_picker/blob/file_picker-v13.1.0/LICENSE
+          # -- the immutable tag for the exact version bumped in
+          # Dependabot PR #361, rather than the mutable `master` ref)
+          # -- all three already permitted by `allow-licenses` above; pub.dev
           # publishes the field lowercased (`mit`, `bsd-3-clause`),
           # which is not a valid SPDX identifier, so the action cannot
           # *validate* it and fails closed with "could not detect the
@@ -738,8 +748,10 @@ jobs:
           # identifiers.
           allow-dependencies-licenses: >-
             pkg:githubactions/Swatinem/rust-cache,
+            pkg:githubactions/SonarSource/sonarqube-scan-action,
             pkg:pub/flutter_rust_bridge,
-            pkg:pub/code_assets
+            pkg:pub/code_assets,
+            pkg:pub/file_picker
 
   cargo-deny:
     # Rust supply-chain policy gate (NTS-72): runs the `bans`,
