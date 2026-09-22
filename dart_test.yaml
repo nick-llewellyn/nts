@@ -10,6 +10,15 @@
 # To run the live suite, override the skip and target the directory:
 #
 #   fvm flutter test --run-skipped test/live/
+#
+# The `clock-evidence` tag marks the opt-in native strict-clock probes
+# under `tool/clock_evidence/` (see
+# tool/clock_evidence/native_lifecycle_probe_test.dart). Those live
+# outside `test/`, so `flutter test` never globs them; the tag is
+# declared here so the run is explicit either way, and so the tag does
+# not trip the runner's unknown-tag warning.
 tags:
   live:
     skip: "live network suite; run: flutter test --run-skipped test/live/"
+  clock-evidence:
+    skip: "native clock evidence probes; run: flutter test --run-skipped tool/clock_evidence/"
