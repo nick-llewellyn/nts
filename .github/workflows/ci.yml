@@ -730,9 +730,10 @@ jobs:
           # narrower than what listing them does. FRB is MIT,
           # code_assets is BSD-3-Clause (the Dart project's standard
           # header), and file_picker is also MIT (hand-verified against
-          # https://github.com/miguelpruivo/flutter_file_picker/blob/master/LICENSE
-          # at the 13.1.0 bump in Dependabot PR #361) -- all three
-          # already permitted by `allow-licenses` above; pub.dev
+          # https://github.com/miguelpruivo/flutter_file_picker/blob/file_picker-v13.1.0/LICENSE
+          # -- the immutable tag for the exact version bumped in
+          # Dependabot PR #361, rather than the mutable `master` ref)
+          # -- all three already permitted by `allow-licenses` above; pub.dev
           # publishes the field lowercased (`mit`, `bsd-3-clause`),
           # which is not a valid SPDX identifier, so the action cannot
           # *validate* it and fails closed with "could not detect the
