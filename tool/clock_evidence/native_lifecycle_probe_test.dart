@@ -31,15 +31,19 @@ library;
 //      (from `rust/`).
 //   2. `flutter test --run-skipped tool/clock_evidence/`
 //
-// Each probe prints an `evidence:` line. Paste it into the matching
+// Each phase prints an `evidence:` line, free of `|` so it pastes
+// straight into a Markdown table cell. Paste it into the matching
 // `evidence` cell of `evidence_matrix.md` and flip that row to `pass`,
 // naming the host or device it ran on.
 //
-// ## Ordering
+// ## One test, four phases
 //
-// The teardown probe runs last and is terminal: `NtsBridge.dispose()`
-// retires the process-wide generation and `NtsRustLib.init()` refuses a
-// second call, so nothing can resolve a native context after it.
+// The teardown phase is terminal: `NtsBridge.dispose()` retires the
+// process-wide generation and `NtsRustLib.init()` refuses a second
+// call, so nothing can resolve a native context after it. Splitting the
+// phases into separate tests would make them depend on declaration
+// order, which the runner is free to randomize, so they are one
+// sequential test instead.
 
 import 'dart:io' show Platform, stdout;
 
@@ -59,8 +63,11 @@ String get _host =>
     '${Platform.operatingSystem} '
     '${Platform.operatingSystemVersion}';
 
+/// Emit one matrix-ready line. No `|`: the line is meant to be pasted
+/// into a Markdown table cell, and a pipe there would split it into
+/// extra columns and be rejected by the validator.
 void _record(String dimension, String detail) {
-  stdout.writeln('evidence: $dimension | $_host | $detail');
+  stdout.writeln('evidence: $dimension :: $_host :: $detail');
 }
 
 void main() {
@@ -68,87 +75,76 @@ void main() {
   // FFI / Native Assets path, as in `test/live/nts_live_test.dart`.
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('strict clock native probes', () {
-    setUpAll(() async {
-      await NtsBridge.ensureInitialized();
-      expect(
-        NtsBridge.state,
-        NtsBridgeState.native,
-        reason:
-            'these probes are evidence only over a native bridge; '
-            'build the release dylib first',
-      );
-    });
+  // One test, run in phases, rather than four. The teardown phase is
+  // terminal -- `NtsBridge.dispose()` retires the process-wide
+  // generation and `NtsRustLib.init()` refuses a second call -- so
+  // separate tests would depend on declaration order, which the runner
+  // is free to randomize.
+  test('strict clock native lifecycle probe', () async {
+    await NtsBridge.ensureInitialized();
+    expect(
+      NtsBridge.state,
+      NtsBridgeState.native,
+      reason:
+          'these probes are evidence only over a native bridge; '
+          'build the release dylib first',
+    );
 
-    // native-runtime-read
-    test('resolves a native context on the expected backend', () {
-      final ctx = StrictClockContext.resolve();
-      expect(ctx.provenance, StrictClockProvenance.native);
-      expect(ctx.descriptor.backend, _expectedBackend);
-      expect(ctx.descriptor.semanticsVersion, 1);
-      expect(ctx.descriptor.conversionVersion, 1);
+    // Phase 1 -- native-runtime-read: the bridge resolves a native
+    // context on the backend this target must select.
+    final ctx = StrictClockContext.resolve();
+    expect(ctx.provenance, StrictClockProvenance.native);
+    expect(ctx.descriptor.backend, _expectedBackend);
+    expect(ctx.descriptor.semanticsVersion, 1);
+    expect(ctx.descriptor.conversionVersion, 1);
 
-      final reading = ctx.now();
-      expect(reading.micros, greaterThanOrEqualTo(0));
-      expect(reading.generation, ctx.generation);
-      expect(reading.descriptor, ctx.descriptor);
-      _record(
-        'native-runtime-read',
-        'backend=${reading.descriptor.backend.name} '
-            'micros=${reading.micros} generation=${reading.generation}',
-      );
-    });
+    final reading = ctx.now();
+    expect(reading.micros, greaterThanOrEqualTo(0));
+    expect(reading.generation, ctx.generation);
+    expect(reading.descriptor, ctx.descriptor);
+    _record(
+      'native-runtime-read',
+      'backend=${reading.descriptor.backend.name} '
+          'micros=${reading.micros} generation=${reading.generation}',
+    );
 
-    // native-runtime-read: the coordinate advances and never goes back.
-    test('readings are non-decreasing across a measured interval', () async {
-      final ctx = StrictClockContext.resolve();
-      final start = ctx.now();
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      final elapsed = ctx.elapsedSince(start);
+    // Phase 2 -- native-runtime-read: the coordinate advances over a
+    // measured interval and never goes back. A delay is not a suspend;
+    // this settles nothing about the `suspend-resume` row.
+    final start = ctx.now();
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    final elapsed = ctx.elapsedSince(start);
+    expect(elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 200)));
+    expect(elapsed, lessThan(const Duration(seconds: 5)));
+    _record(
+      'native-runtime-read',
+      'elapsed over a 250ms delay = ${elapsed.inMicroseconds}us',
+    );
 
-      expect(elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 200)));
-      expect(elapsed, lessThan(const Duration(seconds: 5)));
-      // A delay is not a suspend. This settles nothing about the
-      // `suspend-resume` row.
-      _record(
-        'native-runtime-read',
-        'elapsed over a 250ms delay = ${elapsed.inMicroseconds}us',
-      );
-    });
+    // Phase 3 -- descriptor-compatibility, within one process on one
+    // boot. Two independent contexts describe the same coordinate, so a
+    // reading from one is a valid earlier bound for the other.
+    final second = StrictClockContext.resolve();
+    expect(second.descriptor, ctx.descriptor);
+    expect(second.descriptor.isCompatibleWith(ctx.descriptor), isTrue);
+    expect(second.generation, ctx.generation);
+    expect(() => second.elapsedSince(ctx.now()), returnsNormally);
+    _record(
+      'descriptor-compatibility',
+      'two contexts in one process agree on ${ctx.descriptor}',
+    );
 
-    // descriptor-compatibility, within one process on one boot.
-    test('independent contexts agree on descriptor and generation', () {
-      final first = StrictClockContext.resolve();
-      final second = StrictClockContext.resolve();
-
-      expect(second.descriptor, first.descriptor);
-      expect(second.descriptor.isCompatibleWith(first.descriptor), isTrue);
-      expect(second.generation, first.generation);
-      // Same incarnation, same generation: a reading from one context is
-      // a valid earlier bound for the other.
-      expect(() => second.elapsedSince(first.now()), returnsNormally);
-      _record(
-        'descriptor-compatibility',
-        'two contexts agree: ${first.descriptor} '
-            'generation=${first.generation}',
-      );
-    });
-
-    // bridge-teardown. Terminal: keep this probe last.
-    test('dispose invalidates a live context', () {
-      final ctx = StrictClockContext.resolve();
-      expect(ctx.isValid, isTrue);
-
-      NtsBridge.dispose();
-
-      expect(ctx.now, throwsA(isA<StrictClockInvalidated>()));
-      expect(ctx.isValid, isFalse);
-      expect(ctx.invalidationReason, StrictClockInvalidationReason.bridgeReset);
-      _record(
-        'bridge-teardown',
-        'dispose() invalidated a live context with '
-            '${ctx.invalidationReason?.name}',
-      );
-    });
+    // Phase 4 -- bridge-teardown. Terminal: nothing can resolve a
+    // native context after this.
+    expect(ctx.isValid, isTrue);
+    NtsBridge.dispose();
+    expect(ctx.now, throwsA(isA<StrictClockInvalidated>()));
+    expect(ctx.isValid, isFalse);
+    expect(ctx.invalidationReason, StrictClockInvalidationReason.bridgeReset);
+    _record(
+      'bridge-teardown',
+      'dispose() invalidated a live context in the calling engine with '
+          '${ctx.invalidationReason?.name}',
+    );
   });
 }

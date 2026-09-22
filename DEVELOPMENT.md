@@ -255,10 +255,17 @@ dart run tool/clock_evidence/check_evidence_matrix.dart
 flutter test --run-skipped tool/clock_evidence/
 ```
 
-Each probe prints an `evidence:` line naming the host it ran on; paste
-it into the matching cell and flip that row to `pass`. The teardown
-probe runs last and is terminal — `NtsBridge.dispose()` retires the
-process-wide generation, and `NtsRustLib.init()` refuses a second call.
+Each phase prints an `evidence:` line naming the host it ran on, free
+of `|` so it pastes straight into a table cell; paste it into the
+matching cell and flip that row to `pass`. The four phases are one
+sequential test rather than four, because the teardown phase is
+terminal — `NtsBridge.dispose()` retires the process-wide generation,
+and `NtsRustLib.init()` refuses a second call — and separate tests
+would depend on a declaration order the runner may randomize.
+
+The validator's parser and coverage rules are covered hermetically by
+`test/check_evidence_matrix_test.dart`, which runs in the normal gate.
+The matrix's *contents* are not, and cannot be.
 
 Neither command is in CI, and that is deliberate. A green CI run is not
 evidence that a physical device did anything, so wiring the matrix into

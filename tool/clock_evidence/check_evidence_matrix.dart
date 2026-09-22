@@ -69,8 +69,14 @@ String get _errorPrefix => Platform.environment.containsKey('GITHUB_ACTIONS')
     ? '::error::'
     : 'error: ';
 
-class _Row {
-  _Row({
+/// One data row of one platform table.
+///
+/// Public, like [parseEvidenceRows] and [checkEvidenceCoverage], because
+/// `test/check_evidence_matrix_test.dart` drives the parser and the
+/// coverage rules directly -- the same seam
+/// `tool/check_doc_snippets.dart` exposes to its own suite.
+class EvidenceRow {
+  EvidenceRow({
     required this.platform,
     required this.dimension,
     required this.status,
@@ -111,8 +117,8 @@ void main(List<String> args) {
   }
 
   final problems = <String>[];
-  final rows = _parse(file.readAsLinesSync(), problems);
-  _checkCoverage(rows, problems);
+  final rows = parseEvidenceRows(file.readAsLinesSync(), problems);
+  checkEvidenceCoverage(rows, problems);
 
   if (problems.isNotEmpty) {
     for (final problem in problems) {
@@ -134,8 +140,8 @@ void main(List<String> args) {
 }
 
 /// Collect every data row of every `## <platform>` table.
-List<_Row> _parse(List<String> lines, List<String> problems) {
-  final rows = <_Row>[];
+List<EvidenceRow> parseEvidenceRows(List<String> lines, List<String> problems) {
+  final rows = <EvidenceRow>[];
   var platform = '';
   for (var i = 0; i < lines.length; i++) {
     final line = lines[i].trim();
@@ -170,7 +176,7 @@ List<_Row> _parse(List<String> lines, List<String> problems) {
       continue;
     }
     rows.add(
-      _Row(
+      EvidenceRow(
         platform: platform,
         dimension: cells[0],
         status: cells[1],
@@ -185,9 +191,9 @@ List<_Row> _parse(List<String> lines, List<String> problems) {
 
 /// Every platform carries every dimension exactly once, and every row
 /// carries the justification its status requires.
-void _checkCoverage(List<_Row> rows, List<String> problems) {
+void checkEvidenceCoverage(List<EvidenceRow> rows, List<String> problems) {
   for (final platform in _platforms) {
-    final byDimension = <String, List<_Row>>{};
+    final byDimension = <String, List<EvidenceRow>>{};
     for (final row in rows.where((r) => r.platform == platform)) {
       byDimension.putIfAbsent(row.dimension, () => []).add(row);
     }
@@ -196,7 +202,7 @@ void _checkCoverage(List<_Row> rows, List<String> problems) {
       continue;
     }
     for (final dimension in _dimensions) {
-      final found = byDimension[dimension] ?? const <_Row>[];
+      final found = byDimension[dimension] ?? const <EvidenceRow>[];
       if (found.isEmpty) {
         problems.add(
           '$_matrixPath: $platform is missing dimension "$dimension"',
@@ -235,7 +241,7 @@ void _checkCoverage(List<_Row> rows, List<String> problems) {
 
 /// Human-readable summary. Outstanding rows are listed in full so the
 /// remaining work is visible without opening the matrix.
-void _report(List<_Row> rows, List<_Row> outstanding) {
+void _report(List<EvidenceRow> rows, List<EvidenceRow> outstanding) {
   stdout.writeln('strict clock evidence matrix: ${rows.length} rows');
   for (final platform in _platforms) {
     final forPlatform = rows.where((r) => r.platform == platform);
