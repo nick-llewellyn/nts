@@ -375,12 +375,20 @@ PY
    (inline or hidden), each with its `path:line` (step 4's
    `original_line` when `line` is `null`), source review id, and
    adjudication (fix / fix differently / decline). First decide, for
-   each label step 3 printed, whether its block is a **container** or a
-   **finding**, from the block's structure in the raw file, never from
-   its label text: a container's content after its `<summary>` is a
-   list of items — bullets or nested `<details>` blocks (printed
-   indented beneath it) — one per finding; a finding's content is the
-   finding's own prose. Finding titles are free-form and can end in
+   each label step 3 printed, whether its block is a **container**, a
+   **finding**, or **informational**, from the block's structure in the
+   raw file, never from its label text: a container's content after its
+   `<summary>` is a list of items — bullets or nested `<details>` blocks
+   (printed indented beneath it) — one per finding; a finding's content
+   is the finding's own prose; an informational block is anything else,
+   typically an overview that mixes prose with a restatement of the
+   review's findings. Attested as `What changed in this PR` on this
+   repo: a verdict paragraph, a change list, and one bullet per finding
+   repeating the review's inline comments by `path:line`. An
+   informational block gets no ledger row and no count check, but it
+   must still be read: check every finding it names against the ledger,
+   and give any finding the ledger does not already cover a
+   hidden-finding row of its own. Finding titles are free-form and can end in
    `(N)` too (`Handle all (3) cases`), so a trailing count is read only
    once a block is known to be a container; a container with no
    trailing count is a failure under the rules below, and a finding
@@ -480,7 +488,7 @@ PY
    (push-triggered re-reviews were recorded in August 2026; the rule
    now has them off), so read it rather than assuming:
    ```bash
-   gh api repos/<owner>/<repo>/rulesets --jq '.[].id' < /dev/null |
+   gh api repos/<owner>/<repo>/rulesets --paginate --jq '.[].id' < /dev/null |
      while read -r id; do
        gh api "repos/<owner>/<repo>/rulesets/$id" < /dev/null \
          --jq 'select(.enforcement=="active") | .rules[] | select(.type=="copilot_code_review") | .parameters.review_on_push'
@@ -531,7 +539,11 @@ newly introduced section disappear in the first place. Concretely:
   `Open (7)` or `Previously missed (2)` — is the container, not a
   finding; only the individual findings nested inside it get rows.
   Container status comes from that structure (step 5), never from a
-  trailing `(N)` alone, since a finding title can end in one too. But which count that container
+  trailing `(N)` alone, since a finding title can end in one too. An
+  informational block (step 5), such as an overview, is neither: it
+  gets no row and no count check, but every finding it names must be
+  matched to a ledger row, and one that matches none gets its own
+  hidden-finding row. But which count that container
   cross-checks against is not fixed by its label text — see step 5:
   a container whose nested items link to this review's inline comments
   reconciles against step 4's count for this review, one whose items
@@ -544,8 +556,8 @@ newly introduced section disappear in the first place. Concretely:
   correct ledger look wrong. Finding a label outside the known set,
   aggregate or not, is not a warning to log and continue past; treat it
   the same as any other checklist failure — stop and read the section,
-  classify it as header or finding (and, if header, which population it
-  aggregates), before going further.
+  classify it as container, finding, or informational (and, if a
+  container, which population it aggregates), before going further.
 - **No silent fallback on an empty, missing, or truncated `body`.** If
   step 2's fetch returns an empty string, `null`, or a response that
   looks paginated/truncated, that is a fetch failure, not "this review
@@ -589,10 +601,15 @@ newly introduced section disappear in the first place. Concretely:
   is clean. Surface the failure and re-run the step; a checklist step
   that fails closed (stops the workflow) is correct behavior here,
   not a bug to route around.
-- **A tag structure step 3 cannot parse — mismatched
-  `<details>`/`<summary>` counts, a differently-cased or
-  differently-spelled tag, an unfamiliar nesting — is itself a
-  finding.** Do not fall back to reading the rendered web page as a
+- **A tag structure step 3 cannot parse — any `PARSE FAILURE` it
+  exits with: a closing tag that does not match the innermost open
+  one, an unclosed tag, code fence, or HTML comment, a missing, empty,
+  or misplaced `<summary>`, or a near-miss tag name beginning `detail`
+  or `summar` — is itself a
+  finding.** Letter case and attributes are not failures: step 3
+  accepts `<DETAILS>` and `<details open>` as ordinary tags. Nor is an
+  `IN CODE SPAN` / `IN CODE FENCE` / `IN HTML COMMENT` line, which is
+  text to read in context rather than a failure. Do not fall back to reading the rendered web page as a
   substitute (see step 2's rationale for why) and do not assume the
   section is decorative. Record the parse failure in the ledger, flag
   it explicitly to the user, and treat the review as unaccounted-for
