@@ -187,21 +187,25 @@ if not body.strip():
 markup = re.sub(r'```.*?```', '', body, flags=re.S)
 markup = re.sub(r'`[^`\n]*`', '', markup)
 token_re = re.compile(r'<(/?)\s*(details|summary)\b[^>]*>', re.I)
-stack = []
+stack = []  # each frame: [tag, content_start, tag_start, has_summary]
 labels = []
 for m in token_re.finditer(markup):
     closing, tag = bool(m.group(1)), m.group(2).lower()
     if not closing:
-        stack.append((tag, m.end()))
+        if tag == 'summary' and stack and stack[-1][0] == 'details':
+            stack[-1][3] = True
+        stack.append([tag, m.end(), m.start(), False])
         continue
     if not stack or stack[-1][0] != tag:
         top = stack[-1][0] if stack else 'nothing open'
         sys.exit(f'PARSE FAILURE: </{tag}> at offset {m.start()} closes {top}')
-    open_tag, start = stack.pop()
+    open_tag, content_start, tag_start, has_summary = stack.pop()
     if open_tag == 'summary':
-        labels.append(markup[start:m.start()])
+        labels.append(markup[content_start:m.start()])
+    elif open_tag == 'details' and not has_summary:
+        sys.exit(f'PARSE FAILURE: <details> at offset {tag_start} closed with no <summary>')
 if stack:
-    sys.exit(f'PARSE FAILURE: unclosed tag(s): {[t for t, _ in stack]}')
+    sys.exit(f'PARSE FAILURE: unclosed tag(s): {[f[0] for f in stack]}')
 if not labels and re.search(r'<\s*details\b', markup, re.I):
     sys.exit('PARSE FAILURE: <details> present, no parsable <summary>')
 for m in labels:
@@ -230,6 +234,20 @@ PY
    parsing" rules below require this step to detect, and cannot detect
    on its behalf. The same-count-but-swapped-order case above is
    exactly what a pure open/close tally cannot see and a stack can.
+
+   The missing-summary check is per `<details>` frame, not a single
+   global check run once at the end. Each `details` frame records
+   whether a `summary` opened inside it before that frame closes; a
+   frame that closes with the flag still false is a parse failure
+   naming the offset of its own opening tag. This matters because a
+   body can contain one well-formed block — `<details><summary>...
+   </summary>...</details>` — followed by a second, malformed one,
+   `<details>hidden finding</details>`, with no `<summary>` at all. The
+   first block already produces a label, so a check that only asks "is
+   the labels list non-empty?" at the very end passes the whole body,
+   silently accepting the second block's missing summary. Tracking the
+   flag per frame instead of aggregating across the whole body is what
+   catches that.
 
    **Scope this does not cover.** The tokenizer matches tags spelled
    literally `details` or `summary` (case-insensitive, attributes
@@ -261,11 +279,19 @@ PY
    a false parse failure trains the reader to wave the check through,
    which costs more than the check buys.
 
-4. **Fetch inline review comments separately:**
+4. **Fetch inline review comments separately, including each
+   comment's body:**
    ```bash
    gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate \
-     --jq '.[] | {id, path, line, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
+     --jq '.[] | {id, path, line, body, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
    ```
+   `body` is not optional in this projection: it is the finding text
+   that step 5 must adjudicate and step 6 must answer. A projection
+   that drops it — keeping only `id`/`path`/`line`/`review` — retrieves
+   metadata sufficient to *count* comments but not to *read* them,
+   which silently defeats the "read every finding" hard rule at the
+   top of this section while still looking like a complete fetch.
+
    A review whose `/comments` carry no rows for that
    `pull_request_review_id` is **not** automatically suppressed-only —
    it may instead have raised no findings at all (a body reading
@@ -277,14 +303,28 @@ PY
 
 5. **Build a ledger before replying to anything:** one row per finding
    (inline or hidden), each with its `path:line`, source review id, and
-   adjudication (fix / fix differently / decline). Confirm the ledger's
-   hidden-finding count matches the `(N)` in whichever `<summary>` label
-   step 3 flagged as aggregating them. That label's own text has
-   changed across rounds of this repo's history — `Suppressed comments
-   (N)`, `Previously missed (N)`, and `Open (N)` are all attested on
-   real reviews — so treat the label as data step 3 extracted, never as
-   a string to hardcode here. A count mismatch means step 3 missed an
-   entry or double-counted one, and the ledger is not trustworthy yet.
+   adjudication (fix / fix differently / decline). An aggregate
+   `<summary>` label carrying a `(N)` is a container step 3 flagged for
+   reconciliation, but reconciling it correctly requires first
+   classifying *what population it aggregates* — its label text alone
+   does not say. `Suppressed comments (N)`, `Previously missed (N)`,
+   and `Open (N)` are all attested labels on real reviews, but they are
+   not interchangeable: on one review, `Open (N)` nested items that
+   each linked to a `#discussion_r<id>` anchor — i.e., findings already
+   fetched as inline comments in step 4 — while `Previously missed (N)`
+   nested body-only bullets with no comment object of their own. Do not
+   assume any specific label name (`Open` included) always means
+   "hidden findings with no comment object"; that was true for
+   `Previously missed` and `Suppressed comments` on the reviews seen so
+   far, but is a property to verify per section, not to infer from the
+   name. Classify each aggregate section by its nested items' contents:
+   a section whose items link to `#discussion_r...` anchors reconciles
+   its count against step 4's inline-comment count for that review, not
+   against this ledger's hidden-finding row count; a section whose
+   items carry no such link is the one this ledger's hidden-finding row
+   count must match. A count mismatch, once reconciled against the
+   correct population, means step 3 missed an entry or double-counted
+   one, and the ledger is not trustworthy yet.
 
 6. **Answer every ledger row** — a threaded reply for an inline
    comment, a *new* inline comment (cited to the finding's `path:line`)
@@ -293,18 +333,29 @@ PY
    can cite a real commit SHA.
 
 7. **Resolving threads and re-checking mergeability comes only after
-   every ledger row has a reply.** Neither follows automatically from
-   having answered every finding: resolving a thread, like merging
-   (the hard rule in "Agent merge policy" below), still requires the
-   user's own explicit go-ahead — unless the user's own request already
-   asked for a clean, merge-ready PR, in which case resolving the
-   threads you just answered is part of fulfilling that request. A new
-   inline comment for a hidden finding opens its own thread; clearing
-   it is not a separate, optional step from answering the finding.
+   every ledger row has a reply, and only after step 8's refresh gate
+   below has just been re-run clean for this pass.** Neither follows
+   automatically from having answered every finding: resolving a
+   thread, like merging (the hard rule in "Agent merge policy" below),
+   still requires the user's own explicit go-ahead — unless the user's
+   own request already asked for a clean, merge-ready PR, in which case
+   resolving the threads you just answered is part of fulfilling that
+   request. A new inline comment for a hidden finding opens its own
+   thread; clearing it is not a separate, optional step from answering
+   the finding.
 
-8. **Immediately before requesting merge permission, re-run steps 1–4
-   and check the result actually covers the PR's current head SHA —
-   don't assume a re-run does:**
+8. **Re-run this refresh-and-reconciliation gate at three separate
+   points, not once:** immediately before resolving any thread,
+   immediately before requesting merge permission, and immediately
+   again right before executing the merge itself. Treat each of the
+   three as its own mandatory pass whose result does not carry forward
+   to the next — a review or a push can land in the window between any
+   two of them, and the gap between "permission requested" and "merge
+   executed" can be arbitrarily long if the user does not respond
+   immediately.
+
+   At each pass, re-run steps 1–4 and check the result actually covers
+   the PR's current head SHA — don't assume a re-run does:
    ```bash
    gh pr view <n> --json headRefOid --jq .headRefOid < /dev/null
    ```
@@ -314,9 +365,19 @@ PY
    rebase — can trigger a fresh Copilot review the ledger never
    accounted for. Also check for a review still in `PENDING` state at
    the head SHA and wait for it to submit rather than treating an
-   in-flight review as equivalent to no review. The checklist is a gate
-   on the state at merge time, not a one-time pass earlier in the
-   session.
+   in-flight review as equivalent to no review.
+
+   SHA coverage is necessary but not sufficient: it means the ledger
+   includes *a* review at the current head, not that every finding in
+   that review has been reconciled. **If a pass surfaces a review or
+   comment the ledger does not already cover — new or otherwise — stop
+   and run steps 5–6 for it (add ledger rows, answer them) before
+   continuing to whichever of the three points triggered this pass.** A
+   fresh review discovered mid-gate and left unreconciled is the exact
+   failure this checklist exists to close, only deferred to a later
+   re-run instead of skipped outright. The checklist is a gate on the
+   state at each of these three moments, not a one-time pass earlier in
+   the session.
 
 ### Strict parsing — no silent fallbacks
 
@@ -336,38 +397,50 @@ newly introduced section disappear in the first place. Concretely:
   returns — including one that has never appeared on this repo before
   — must be read before the checklist can call this review accounted
   for. Not every label earns a ledger row, though: an aggregate section
-  header (`Open (7)`, `Previously missed (2)`, any label carrying the
-  `(N)` that step 5 cross-checks against a row count) is the container,
-  not a finding — only the individual findings nested inside it get
-  rows, per step 5's one-row-per-finding ledger. Adding the header
-  itself as a row inflates the count step 5 checks and makes a correct
-  ledger look wrong. Finding a label outside the known set, aggregate
-  or not, is not a warning to log and continue past; treat it the same
-  as any other checklist failure — stop and read the section, classify
-  it as header or finding, before going further.
+  header — any label carrying a `(N)`, e.g. `Open (7)` or `Previously
+  missed (2)` — is the container, not a finding; only the individual
+  findings nested inside it get rows. But which count that container
+  cross-checks against is not fixed by its label text — see step 5:
+  a container whose nested items already link to `#discussion_r...`
+  anchors (already-fetched inline comments) reconciles against step
+  4's count, while one whose nested items carry no such link is what
+  step 5's one-row-per-finding ledger count must match. Adding the
+  header itself as a row, or cross-checking it against the wrong
+  population, inflates or corrupts the count step 5 checks and makes a
+  correct ledger look wrong. Finding a label outside the known set,
+  aggregate or not, is not a warning to log and continue past; treat it
+  the same as any other checklist failure — stop and read the section,
+  classify it as header or finding (and, if header, which population it
+  aggregates), before going further.
 - **No silent fallback on an empty, missing, or truncated `body`.** If
   step 2's fetch returns an empty string, `null`, or a response that
   looks paginated/truncated, that is a fetch failure, not "this review
   had no findings." Re-fetch or fix the query before treating the
   review as accounted for; do not let an empty body pass the checklist
   by default.
-- **Assert the hidden-finding count; don't just eyeball it.** Step 5's
-  cross-check must fail loudly when the ledger's row count disagrees
-  with the `(N)` in whichever label step 3 flagged as aggregating
-  hidden findings — read from that extraction, never hardcoded, since
-  the label text itself is exactly what has changed release over
-  release (see step 5), e.g.:
+- **Assert every aggregate section's count against its correct
+  population; don't just eyeball it.** Step 5's cross-check must fail
+  loudly when a container's `(N)` disagrees with whatever count it was
+  classified against — the ledger's hidden-finding row count for a
+  container whose nested items carry no `#discussion_r...` link, or
+  step 4's inline-comment count for a container whose nested items do.
+  Which check applies is read from the classification step 5 requires,
+  never hardcoded by label name, since the label text itself is exactly
+  what has changed release over release and a given name (`Open`
+  included) is not reliably tied to one population or the other:
   ```bash
-  n_header=$(echo "$hidden_label" | grep -o '([0-9]*)' | tr -d '()')
-  n_ledger=<count of hidden-finding rows recorded for this review>
-  [ "$n_header" = "$n_ledger" ] || { echo "MISMATCH: header=$n_header ledger=$n_ledger" >&2; exit 1; }
+  n_header=$(echo "$section_label" | grep -o '([0-9]*)' | tr -d '()')
+  n_actual=<count of ledger rows, or step-4 comments, for the population this container was classified as>
+  [ "$n_header" = "$n_actual" ] || { echo "MISMATCH: header=$n_header actual=$n_actual" >&2; exit 1; }
   ```
-  where `$hidden_label` is one of the labels step 3 extracted (e.g.
-  `Suppressed comments (3)`, `Previously missed (3)`, `Open (7)`). A
-  mismatch means the ledger is wrong and must be corrected before any
-  reply goes out — it is never acceptable to round the two numbers
-  together, defer the discrepancy, or proceed on the larger/smaller of
-  the two as a guess.
+  where `$section_label` is one of the labels step 3 extracted (e.g.
+  `Suppressed comments (3)`, `Previously missed (3)`, `Open (7)`) — any
+  of them may aggregate either population, so the classification must
+  come before the count comparison, not be inferred from the label
+  string. A mismatch means the ledger is wrong, or the classification
+  was wrong, and must be corrected before any reply goes out — it is
+  never acceptable to round the two numbers together, defer the
+  discrepancy, or proceed on the larger/smaller of the two as a guess.
 - **A non-zero exit code or an API error from any command in steps
   1–4 is a parse failure, not "no findings."** Do not interpret a
   failed `gh api` call, a `jq` parse error, or an empty match set from
