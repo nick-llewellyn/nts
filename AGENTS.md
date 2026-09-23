@@ -198,6 +198,66 @@ reply-writing step, needs a mechanical checklist rather than a skim.
    review the ledger never accounted for; the checklist is a gate on
    the state at merge time, not a one-time pass earlier in the session.
 
+### Strict parsing — no silent fallbacks
+
+The checklist above only closes the gap it targets if each step's
+output is checked against an explicit expectation and treated as a
+hard stop when it isn't met. A script (or an agent skimming output)
+that tolerates an empty body, an unrecognized `<summary>` label, or a
+suppressed-count mismatch by quietly moving on has reintroduced the
+exact "skim and hope" failure this section exists to replace —
+best-effort parsing and silent fallbacks are what let a renamed or
+newly introduced section disappear in the first place. Concretely:
+
+- **No hardcoded allowlist of expected `<summary>` labels.** Step 3's
+  grep must not be followed by logic that only reacts to
+  `Suppressed comments` and ignores every other match. Every distinct
+  label the grep returns — including one that has never appeared on
+  this repo before — is a new, unaccounted-for section until a human
+  or agent has read it and added it to the ledger. Finding a label
+  outside that known set is not a warning to log and continue past;
+  treat it the same as any other checklist failure — stop and read the
+  section before going further.
+- **No silent fallback on an empty, missing, or truncated `body`.** If
+  step 2's fetch returns an empty string, `null`, or a response that
+  looks paginated/truncated, that is a fetch failure, not "this review
+  had no findings." Re-fetch or fix the query before treating the
+  review as accounted for; do not let an empty body pass the checklist
+  by default.
+- **Assert the suppressed count; don't just eyeball it.** Step 5's
+  cross-check must fail loudly when the ledger's suppressed-row count
+  disagrees with the `Suppressed comments (N)` header, e.g.:
+  ```bash
+  n_header=$(grep -o 'Suppressed comments ([0-9]*)' /tmp/review-body.txt | grep -o '[0-9]*')
+  n_ledger=<count of suppressed rows recorded for this review>
+  [ "$n_header" = "$n_ledger" ] || { echo "MISMATCH: header=$n_header ledger=$n_ledger" >&2; exit 1; }
+  ```
+  A mismatch means the ledger is wrong and must be corrected before
+  any reply goes out — it is never acceptable to round the two numbers
+  together, defer the discrepancy, or proceed on the larger/smaller of
+  the two as a guess.
+- **A non-zero exit code or an API error from any command in steps
+  1–4 is a parse failure, not "no findings."** Do not interpret a
+  failed `gh api` call, a `jq` parse error, or an empty match set from
+  a command that should have matched something as evidence the review
+  is clean. Surface the failure and re-run the step; a checklist step
+  that fails closed (stops the workflow) is correct behavior here,
+  not a bug to route around.
+- **A tag structure the grep in step 3 cannot parse — mismatched
+  `<details>`/`<summary>` counts, a differently-cased or
+  differently-spelled tag, an unfamiliar nesting — is itself a
+  finding.** Do not fall back to reading the rendered web page as a
+  substitute (see step 2's rationale for why) and do not assume the
+  section is decorative. Record the parse failure in the ledger, flag
+  it explicitly to the user, and treat the review as unaccounted-for
+  until it is resolved by hand.
+
+The underlying principle: every step in the checklist has a
+pass/fail condition, and "I didn't see anything unusual" is not the
+same as verifying the condition. GitHub is free to keep changing this
+UI; the checklist survives that only if unrecognized output halts the
+workflow instead of being silently absorbed as "nothing new here."
+
 ### Mechanics reference
 
 The Augment skill `copilot-review-replies`
