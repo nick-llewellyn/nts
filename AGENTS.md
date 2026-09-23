@@ -165,25 +165,74 @@ reply-writing step, needs a mechanical checklist rather than a skim.
    body and discards it has examined nothing.
 
 3. **Extract every `<summary>` label from the fetched body with a
-   parser, not a `grep -o '<summary>[^<]*</summary>'`-style pattern —
-   Copilot's `<summary>` elements routinely nest markup (`<strong>`,
-   `<picture>`) that such a pattern silently fails to match:**
+   parser that validates the tag structure before it reports labels —
+   not a `grep -o '<summary>[^<]*</summary>'`-style pattern, and not a
+   bare extraction either. Copilot's `<summary>` elements routinely
+   nest markup (`<strong>`, `<picture>`) that such a pattern silently
+   fails to match, and an extraction with no structural check reports a
+   short list for a malformed body exactly as it does for a clean one:**
    ```bash
-   python3 -c "
-import re
+   python3 - <<'PY'
+import re, sys
 body = open('/tmp/review-<review-id>.txt').read()
-for m in re.findall(r'<summary>(.*?)</summary>', body, re.S):
+if not body.strip():
+    sys.exit('PARSE FAILURE: empty review body')
+# Finding prose quotes tag names inside code spans; drop those first so
+# they are not counted as structure.
+markup = re.sub(r'```.*?```', '', body, flags=re.S)
+markup = re.sub(r'`[^`\n]*`', '', markup)
+d_open = len(re.findall(r'<details\b[^>]*>', markup, re.I))
+d_close = len(re.findall(r'</\s*details\s*>', markup, re.I))
+s_open = len(re.findall(r'<summary\b[^>]*>', markup, re.I))
+s_close = len(re.findall(r'</\s*summary\s*>', markup, re.I))
+labels = re.findall(r'<summary\b[^>]*>(.*?)</\s*summary\s*>', markup, re.S | re.I)
+if d_open != d_close or s_open != s_close or len(labels) != s_open:
+    sys.exit(f'PARSE FAILURE: details {d_open}/{d_close}, '
+             f'summary {s_open}/{s_close}, labels {len(labels)}')
+if d_open and not labels:
+    sys.exit('PARSE FAILURE: <details> present, no parsable <summary>')
+for m in labels:
     print(re.sub(r'<[^>]+>', '', m).strip())
-"
+PY
    ```
    Treat every label this prints as a section to account for, including
    one that has never appeared before. Extracting the tag structure
    itself, rather than grepping for one specific header string, is what
-   survives the next time GitHub renames or adds a section — and
-   matching non-greedily (`.*?` with `re.S`) rather than stopping at the
-   first `<` is what survives GitHub nesting markup inside the label
-   itself, which it already does today (e.g.
-   `<summary><strong>Open (7)</strong></summary>`).
+   survives the next time GitHub renames or adds a section; matching
+   non-greedily (`.*?` with `re.S`) rather than stopping at the first
+   `<` is what survives GitHub nesting markup inside the label itself,
+   which it already does today (e.g.
+   `<summary><strong>Open (7)</strong></summary>`); and `re.I` plus
+   `\b[^>]*` on the open tags is what keeps a differently-cased or
+   attribute-carrying tag (`<DETAILS>`, `<details open>`) from dropping
+   out of the count unnoticed.
+
+   The three reconciliations before the loop are the point of the
+   snippet, not boilerplate: unbalanced `<details>` or `<summary>`
+   counts, or fewer extracted labels than opening `<summary>` tags,
+   mean the body's structure is not what this parser models, so its
+   output is not evidence of anything. Each exits non-zero with a
+   message rather than printing a partial list, because a partial list
+   is indistinguishable from a complete one at a glance — which is the
+   failure the "Strict parsing" rules below require this step to
+   detect, and cannot detect on its behalf.
+
+   Note that `<details>` blocks nest: a hidden-findings section can
+   carry one collapsed block per finding inside it, so the label list
+   legitimately mixes section headers (`Previously missed (1)`) with
+   individual finding titles. Both are labels to account for; neither
+   is noise to filter.
+
+   The code-span strip before the counting is load-bearing for the same
+   reason: a finding whose prose quotes `<details>` or `<summary>`
+   inside backticks contributes an opening tag with no closing one, and
+   the reconciliation then reports a mismatch that is an artifact of the
+   finding's own text rather than of the body's structure. Attested on
+   this repo — a review of this very section quoted both tag names and
+   pushed the raw counts to `details 4/3, summary 5/3`. Strip fenced
+   blocks and inline spans first; a false parse failure trains the
+   reader to wave the check through, which costs more than the check
+   buys.
 
 4. **Fetch inline review comments separately:**
    ```bash
