@@ -165,12 +165,17 @@ reply-writing step, needs a mechanical checklist rather than a skim.
    body and discards it has examined nothing.
 
 3. **Extract every `<summary>` label from the fetched body with a
-   parser that validates the tag structure before it reports labels —
-   not a `grep -o '<summary>[^<]*</summary>'`-style pattern, and not a
-   bare extraction either. Copilot's `<summary>` elements routinely
-   nest markup (`<strong>`, `<picture>`) that such a pattern silently
-   fails to match, and an extraction with no structural check reports a
-   short list for a malformed body exactly as it does for a clean one:**
+   stack-aware parser that only reports a label when its opening and
+   closing tags nest correctly — not a
+   `grep -o '<summary>[^<]*</summary>'`-style pattern, and not an
+   aggregate open/close *count* reconciliation either. Copilot's
+   `<summary>` elements routinely nest markup (`<strong>`, `<picture>`),
+   and matching tags by count rather than by nesting order accepts
+   malformed input: `<details><summary>Hidden (1)</details></summary>`
+   has one opening and one closing `<details>` and one opening and one
+   closing `<summary>` — its counts balance — yet the closing tags are
+   swapped, so it is not the structure this checklist assumes. A stack
+   catches that; a tally of counts does not:**
    ```bash
    python3 - <<'PY'
 import re, sys
@@ -181,15 +186,23 @@ if not body.strip():
 # they are not counted as structure.
 markup = re.sub(r'```.*?```', '', body, flags=re.S)
 markup = re.sub(r'`[^`\n]*`', '', markup)
-d_open = len(re.findall(r'<details\b[^>]*>', markup, re.I))
-d_close = len(re.findall(r'</\s*details\s*>', markup, re.I))
-s_open = len(re.findall(r'<summary\b[^>]*>', markup, re.I))
-s_close = len(re.findall(r'</\s*summary\s*>', markup, re.I))
-labels = re.findall(r'<summary\b[^>]*>(.*?)</\s*summary\s*>', markup, re.S | re.I)
-if d_open != d_close or s_open != s_close or len(labels) != s_open:
-    sys.exit(f'PARSE FAILURE: details {d_open}/{d_close}, '
-             f'summary {s_open}/{s_close}, labels {len(labels)}')
-if d_open and not labels:
+token_re = re.compile(r'<(/?)\s*(details|summary)\b[^>]*>', re.I)
+stack = []
+labels = []
+for m in token_re.finditer(markup):
+    closing, tag = bool(m.group(1)), m.group(2).lower()
+    if not closing:
+        stack.append((tag, m.end()))
+        continue
+    if not stack or stack[-1][0] != tag:
+        top = stack[-1][0] if stack else 'nothing open'
+        sys.exit(f'PARSE FAILURE: </{tag}> at offset {m.start()} closes {top}')
+    open_tag, start = stack.pop()
+    if open_tag == 'summary':
+        labels.append(markup[start:m.start()])
+if stack:
+    sys.exit(f'PARSE FAILURE: unclosed tag(s): {[t for t, _ in stack]}')
+if not labels and re.search(r'<\s*details\b', markup, re.I):
     sys.exit('PARSE FAILURE: <details> present, no parsable <summary>')
 for m in labels:
     print(re.sub(r'<[^>]+>', '', m).strip())
@@ -198,41 +211,55 @@ PY
    Treat every label this prints as a section to account for, including
    one that has never appeared before. Extracting the tag structure
    itself, rather than grepping for one specific header string, is what
-   survives the next time GitHub renames or adds a section; matching
-   non-greedily (`.*?` with `re.S`) rather than stopping at the first
-   `<` is what survives GitHub nesting markup inside the label itself,
-   which it already does today (e.g.
+   survives the next time GitHub renames or adds a section; letting the
+   stack — not a regex lookahead — decide where a label ends is what
+   survives GitHub nesting markup inside the label itself, which it
+   already does today (e.g.
    `<summary><strong>Open (7)</strong></summary>`); and `re.I` plus
-   `\b[^>]*` on the open tags is what keeps a differently-cased or
-   attribute-carrying tag (`<DETAILS>`, `<details open>`) from dropping
-   out of the count unnoticed.
+   `\b[^>]*` on the tag tokens is what keeps a differently-cased or
+   attribute-carrying tag (`<DETAILS>`, `<details open>`) from being
+   missed by the tokenizer.
 
-   The three reconciliations before the loop are the point of the
-   snippet, not boilerplate: unbalanced `<details>` or `<summary>`
-   counts, or fewer extracted labels than opening `<summary>` tags,
-   mean the body's structure is not what this parser models, so its
-   output is not evidence of anything. Each exits non-zero with a
-   message rather than printing a partial list, because a partial list
-   is indistinguishable from a complete one at a glance — which is the
-   failure the "Strict parsing" rules below require this step to
-   detect, and cannot detect on its behalf.
+   The stack is the point of the snippet, not boilerplate: a closing
+   tag that doesn't match the innermost open tag, or a tag left open at
+   end of input, means the body's structure is not what this parser
+   models, so its output is not evidence of anything. Each exits
+   non-zero with a message identifying the offending tag rather than
+   printing a partial list, because a partial list is indistinguishable
+   from a complete one at a glance — which is the failure the "Strict
+   parsing" rules below require this step to detect, and cannot detect
+   on its behalf. The same-count-but-swapped-order case above is
+   exactly what a pure open/close tally cannot see and a stack can.
+
+   **Scope this does not cover.** The tokenizer matches tags spelled
+   literally `details` or `summary` (case-insensitive, attributes
+   allowed). A tag that doesn't contain that literal string — a typo
+   such as `<detail>` with no trailing `s` — isn't a `details` tag to
+   this parser and isn't tokenized at all, so a body built entirely
+   from such a typo parses as if the tag were never there, rather than
+   failing. Closing that fully would need a general HTML parser
+   tolerant of arbitrary malformed tag names, which is more machinery
+   than this checklist step warrants. If a review body ever looks
+   inconsistent with what step 3 reports — e.g. the web UI's rendered
+   nesting implies a `<details>` wrapper the parser didn't count — read
+   the raw fetched file by hand before trusting the extraction.
 
    Note that `<details>` blocks nest: a hidden-findings section can
    carry one collapsed block per finding inside it, so the label list
    legitimately mixes section headers (`Previously missed (1)`) with
-   individual finding titles. Both are labels to account for; neither
-   is noise to filter.
+   individual finding titles. Both are labels to account for — see
+   step 5 for which of them earn a ledger row.
 
-   The code-span strip before the counting is load-bearing for the same
+   The code-span strip before tokenizing is load-bearing for the same
    reason: a finding whose prose quotes `<details>` or `<summary>`
-   inside backticks contributes an opening tag with no closing one, and
-   the reconciliation then reports a mismatch that is an artifact of the
-   finding's own text rather than of the body's structure. Attested on
-   this repo — a review of this very section quoted both tag names and
-   pushed the raw counts to `details 4/3, summary 5/3`. Strip fenced
-   blocks and inline spans first; a false parse failure trains the
-   reader to wave the check through, which costs more than the check
-   buys.
+   inside backticks would otherwise contribute a stray tag with no
+   matching partner, and the stack would report a parse failure that is
+   an artifact of the finding's own text rather than of the body's
+   structure. Attested on this repo — an earlier, count-only version of
+   this parser falsely failed on a review whose own prose quoted both
+   tag names in backticks. Strip fenced blocks and inline spans first;
+   a false parse failure trains the reader to wave the check through,
+   which costs more than the check buys.
 
 4. **Fetch inline review comments separately:**
    ```bash
@@ -307,11 +334,17 @@ newly introduced section disappear in the first place. Concretely:
   known label (`Suppressed comments`, `Open`, or any other single
   string) and ignores every other match. Every distinct label step 3
   returns — including one that has never appeared on this repo before
-  — is a new, unaccounted-for section until a human or agent has read
-  it and added it to the ledger. Finding a label outside that known set
-  is not a warning to log and continue past; treat it the same as any
-  other checklist failure — stop and read the section before going
-  further.
+  — must be read before the checklist can call this review accounted
+  for. Not every label earns a ledger row, though: an aggregate section
+  header (`Open (7)`, `Previously missed (2)`, any label carrying the
+  `(N)` that step 5 cross-checks against a row count) is the container,
+  not a finding — only the individual findings nested inside it get
+  rows, per step 5's one-row-per-finding ledger. Adding the header
+  itself as a row inflates the count step 5 checks and makes a correct
+  ledger look wrong. Finding a label outside the known set, aggregate
+  or not, is not a warning to log and continue past; treat it the same
+  as any other checklist failure — stop and read the section, classify
+  it as header or finding, before going further.
 - **No silent fallback on an empty, missing, or truncated `body`.** If
   step 2's fetch returns an empty string, `null`, or a response that
   looks paginated/truncated, that is a fetch failure, not "this review
