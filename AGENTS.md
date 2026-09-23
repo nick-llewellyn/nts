@@ -222,7 +222,12 @@ while m := re.search(r'<!--|`+', markup[pos:]):
     hidden.append((kind, start, end))
     markup = markup[:start] + re.sub(r'[^\n]', ' ', markup[start:end]) + markup[end:]
     pos = end
-tag_re = re.compile(r'<(/?)\s*([a-z][a-z0-9-]*)[^>]*>', re.I)
+# Quoted attribute values may contain '>'; consume them whole.
+tag_re = re.compile(r'''<(/?)\s*([a-z][a-z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>''', re.I)
+starts = {m.start() for m in tag_re.finditer(markup)}
+for m in re.finditer(r'<\s*/?\s*(?:detail|summar)', markup, re.I):
+    if m.start() not in starts:
+        fail(f'unparsable tag at {at(m.start())} (unbalanced quote?)')
 stack = []  # each frame: [tag, content_start, tag_start, has_summary]
 labels = []
 for m in tag_re.finditer(markup):
@@ -248,7 +253,7 @@ for m in tag_re.finditer(markup):
         fail(f'</{tag}> at {at(m.start())} closes {top}')
     open_tag, content_start, tag_start, has_summary = stack.pop()
     if open_tag == 'summary':
-        text = html.unescape(re.sub(r'<[^>]+>', '', markup[content_start:m.start()]))
+        text = html.unescape(tag_re.sub('', markup[content_start:m.start()]))
         label = ' '.join(text.split())
         if not label:
             fail(f'empty <summary> at {at(tag_start)}')
@@ -275,10 +280,14 @@ PY
    stack — not a regex lookahead — decide where a label ends is what
    survives GitHub nesting markup inside the label itself, which it
    already does today (e.g.
-   `<summary><strong>Open (7)</strong></summary>`); and `re.I` plus
-   `[^>]*` on the tag tokens is what keeps a differently-cased or
-   attribute-carrying tag (`<DETAILS>`, `<details open>`) from being
-   missed by the tokenizer. Labels are printed with inner markup
+   `<summary><strong>Open (7)</strong></summary>`); and `re.I` plus a
+   quote-aware attribute pattern on the tag tokens is what keeps a
+   differently-cased or attribute-carrying tag (`<DETAILS>`,
+   `<details open>`, `<details title="a>b">`) from being missed or cut
+   short at a `>` inside a quoted value. The same pattern strips inner
+   markup from labels. A `details`/`summary`-like opener the pattern
+   cannot match — typically an unbalanced quote — is a parse failure,
+   not a skipped tag. Labels are printed with inner markup
    removed, HTML entities decoded (`&amp;` → `&`), and whitespace
    collapsed, so they read as the web UI renders them, and indented two
    spaces per enclosing `<details>`, so a label nested inside another
@@ -376,15 +385,28 @@ PY
    comment's body:**
    ```bash
    gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate \
-     --jq '.[] | {id, path, line, original_line, original_commit_id, body, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
+     --jq '.[] | {id, path, subject_type, line, original_line, original_commit_id, body, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
    ```
-   `line` is `null` for an *outdated* comment — one whose diff location
-   a later commit invalidated so GitHub can no longer map it onto the
-   current diff. A later push alone does not outdate a comment: one
-   whose hunk survives keeps a current `line`. Where `line` is `null`,
-   record `original_line` at `original_commit_id` as the
-   finding's location in that case, and read the current file to find
-   where that code now lives; a `null` line is not a missing location.
+   A `null` `line` has two meanings, told apart by `subject_type`. With
+   `subject_type == "file"` it is a current file-level comment, attached
+   to `path` as a whole: record it as a `path`-only ledger row. With
+   `subject_type == "line"` it is an *outdated* comment — one whose diff
+   location a later commit invalidated so GitHub can no longer map it
+   onto the current diff. A later push alone does not outdate a comment:
+   one whose hunk survives keeps a current `line`. For an outdated
+   comment, record `original_line` at `original_commit_id` as the
+   finding's location, and read the current file to find where that
+   code now lives; a `null` line is not a missing location.
+
+   Also fetch top-level PR comments, because step 6 records some replies
+   there and a ledger rebuilt without them sees the finding but not its
+   answer:
+   ```bash
+   gh api repos/<owner>/<repo>/issues/<n>/comments --paginate \
+     --jq '.[] | {id, user: .user.login, created_at, body}' < /dev/null
+   ```
+   Match each against the ledger by the review id and section label the
+   step 6 fallback requires it to cite.
    `body` is not optional in this projection: it is the finding text
    that step 5 must adjudicate and step 6 must answer. A projection
    that drops it — keeping only `id`/`path`/`line`/`review` — retrieves
@@ -403,7 +425,8 @@ PY
 
 5. **Build a ledger before replying to anything:** one row per finding
    (inline or hidden), each with its `path:line` (step 4's
-   `original_line` when `line` is `null`), source review id, and
+   `original_line` for an outdated comment, `path` alone for a
+   file-level one), source review id, and
    adjudication (fix / fix differently / decline). First decide, for
    each label step 3 printed, whether its block is a **container**, a
    **finding**, or **informational**, from the block's structure in the
@@ -656,9 +679,11 @@ newly introduced section disappear in the first place. Concretely:
   exits with: a closing tag that does not match the innermost open
   one, an unclosed tag, code fence, or HTML comment, a missing, empty,
   or misplaced `<summary>`, a `<details>` opened inside a `<summary>`,
-  or a near-miss tag name beginning `detail` or `summar` — is itself a
+  a near-miss tag name beginning `detail` or `summar`, or such a tag
+  left unparsable by an unbalanced quote — is itself a
   finding.** Letter case and attributes are not failures: step 3
-  accepts `<DETAILS>` and `<details open>` as ordinary tags. Nor is an
+  accepts `<DETAILS>`, `<details open>`, and `<details title="a>b">`
+  as ordinary tags. Nor is an
   `IN CODE SPAN` / `IN CODE FENCE` / `IN HTML COMMENT` line, which is
   text to read in context rather than a failure. Do not fall back to reading the rendered web page as a
   substitute (see step 2's rationale for why) and do not assume the
