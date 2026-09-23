@@ -80,6 +80,7 @@ class EvidenceRow {
     required this.platform,
     required this.dimension,
     required this.status,
+    required this.method,
     required this.evidence,
     required this.nextAction,
     required this.line,
@@ -88,6 +89,7 @@ class EvidenceRow {
   final String platform;
   final String dimension;
   final String status;
+  final String method;
   final String evidence;
   final String nextAction;
   final int line;
@@ -180,6 +182,7 @@ List<EvidenceRow> parseEvidenceRows(List<String> lines, List<String> problems) {
         platform: platform,
         dimension: cells[0],
         status: cells[1],
+        method: cells[2],
         evidence: cells[3],
         nextAction: cells[4],
         line: i + 1,
@@ -189,8 +192,9 @@ List<EvidenceRow> parseEvidenceRows(List<String> lines, List<String> problems) {
   return rows;
 }
 
-/// Every platform carries every dimension exactly once, and every row
-/// carries the justification its status requires.
+/// Every platform carries every dimension exactly once, every row names
+/// the method it was settled by, and every row carries the
+/// justification its status requires.
 void checkEvidenceCoverage(List<EvidenceRow> rows, List<String> problems) {
   for (final platform in _platforms) {
     final byDimension = <String, List<EvidenceRow>>{};
@@ -230,6 +234,9 @@ void checkEvidenceCoverage(List<EvidenceRow> rows, List<String> problems) {
   }
   for (final row in rows) {
     final where = '$_matrixPath:${row.line}: ${row.platform}/${row.dimension}';
+    if (row.method.isEmpty) {
+      problems.add('$where records no method');
+    }
     if (_settled.contains(row.status) && row.evidence.isEmpty) {
       problems.add('$where is "${row.status}" but records no evidence');
     }

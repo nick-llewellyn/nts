@@ -24,12 +24,22 @@ library;
 // `skip:`. The required hermetic gate therefore cannot reach it by
 // either route.
 //
-// To run it:
+// To run it on a host (macOS, Linux, Windows):
 //
 //   1. Build the native release dylib so its FRB content-hash matches
 //      the committed bindings:  `cargo build --release -p nts_rust`
 //      (from `rust/`).
 //   2. `flutter test --run-skipped tool/clock_evidence/`
+//
+// That pair only works on a host: step 1 places a host-target dylib
+// where `NtsRustLib.init()` looks (`rust/target/release/`), and
+// `flutter test` never runs the Native Assets hook (`hook/build.dart`)
+// that would cross-compile one for Android or iOS. There is no
+// documented procedure yet for collecting the `android`/`ios` rows
+// this file settles on host -- `flutter run -d <device>` invokes that
+// hook and packages a device library, but it launches the app, not
+// this test runner, and the two packaging paths do not currently
+// meet. See `DEVELOPMENT.md`'s evidence-harness section.
 //
 // Each phase prints an `evidence:` line, free of `|` so it pastes
 // straight into a Markdown table cell. Paste it into the matching

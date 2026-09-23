@@ -42,6 +42,7 @@ void main() {
       expect(rows.single.platform, 'android');
       expect(rows.single.dimension, 'source-contract');
       expect(rows.single.status, 'pass');
+      expect(rows.single.method, 'source review');
       expect(rows.single.evidence, 'seen in boottime.rs');
       expect(rows.single.nextAction, isEmpty);
     });
@@ -154,6 +155,13 @@ void main() {
         ..._table('solaris', completeRows()),
       ]);
       expect(problems, [contains('unknown platform section "## solaris"')]);
+    });
+
+    test('reports a row with no method', () {
+      final rows = completeRows()
+        ..[0] = '| source-contract | pass |  | observed | |';
+      final problems = problemsFor(allPlatforms(androidRows: rows));
+      expect(problems, [contains('records no method')]);
     });
 
     test('reports a pass with no evidence', () {

@@ -255,6 +255,25 @@ dart run tool/clock_evidence/check_evidence_matrix.dart
 flutter test --run-skipped tool/clock_evidence/
 ```
 
+That build+run pair is **host-only** (macOS, Linux, Windows): the
+explicit `cargo build --release` places a host-target dylib where
+`NtsRustLib.init()` looks (`rust/target/release/`), and `flutter test`
+never invokes the Native Assets hook (`hook/build.dart`) that would
+otherwise cross-compile it. It settles the `macos`/`linux`/`windows`
+device-independent rows the matrix marks `method: host`.
+
+The matrix's `android`/`ios` rows point at the same probe file but
+mark it `method: device`, and this repo has no documented procedure
+for running it there yet: `flutter run -d <device>` does invoke the
+Native Assets hook and produces a target `.so`/`.dylib`, but that
+builds and launches the *app*, not `flutter test`'s host-side test
+runner — the two don't share a packaging path today. Collecting an
+`android`/`ios` row means writing that procedure (most likely an
+integration/driver test bundled into the app, per
+[`hook/build.dart`](hook/build.dart)'s Native Assets wiring) rather
+than reusing this command block; the matrix's own next-action cells
+name the physical step, not the harness for it.
+
 Each phase prints an `evidence:` line naming the host it ran on, free
 of `|` so it pastes straight into a table cell; paste it into the
 matching cell and flip that row to `pass`. The four phases are one
