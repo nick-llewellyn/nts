@@ -195,22 +195,33 @@ def blank(text, pattern, kind, flags=0):
         hidden.append((kind, m.start(), m.end()))
         return re.sub(r'[^\n]', ' ', m.group(0))
     return re.sub(pattern, sub, text, flags=flags)
-fence = r'^ {0,3}((`)\2{2,}|(~)\3{2,})[^\n]*\n.*?^ {0,3}\1(?:\2|\3)*[ \t]*$'
+# A backtick fence's info string cannot contain a backtick; such a line
+# is a code span, not a fence.
+fence = r'^ {0,3}(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)\n.*?^ {0,3}(?:\1`*|\2~*)[ \t]*$'
 markup = blank(body, fence, 'CODE FENCE', re.S | re.M)
-m = re.search(r'^ {0,3}(`{3,}|~{3,})', markup, re.M)
+m = re.search(r'^ {0,3}(`{3,}[^`\n]*$|~{3,})', markup, re.M)
 if m:
     fail(f'unclosed code fence at {at(m.start())}')
-# HTML comments and code spans in one left-to-right pass: whichever opens
-# first wins, so a `<!--` inside a code span, or a backtick inside a
-# comment, does not affect the other construct.
+# HTML comments, autolinks, backslash escapes and code spans in one
+# left-to-right pass: whichever opens first wins, so a `<!--` inside a
+# code span, or a backtick inside a comment, does not affect the other.
+autolink = (r'<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>'
+            r"|<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9]"
+            r'(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+            r'(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>')
+token = re.compile(r'<!--|' + autolink + r'|\\[!-/:-@\[-`{-~]|`+')
 pos = 0
-while m := re.search(r'<!--|`+', markup[pos:]):
-    start, opener = pos + m.start(), m.group(0)
+while m := token.search(markup, pos):
+    start, opener = m.start(), m.group(0)
     if opener == '<!--':
         end = markup.find('-->', start + 4)
         if end < 0:
             fail(f'unclosed HTML comment at {at(start)}')
         kind, end = 'HTML COMMENT', end + 3
+    elif opener[0] == '<':
+        kind, end = 'AUTOLINK', m.end()
+    elif opener[0] == '\\':
+        kind, end = 'ESCAPE', m.end()
     else:
         eol = markup.find('\n', start)
         eol = len(markup) if eol < 0 else eol
@@ -222,12 +233,13 @@ while m := re.search(r'<!--|`+', markup[pos:]):
     hidden.append((kind, start, end))
     markup = markup[:start] + re.sub(r'[^\n]', ' ', markup[start:end]) + markup[end:]
     pos = end
-# Quoted attribute values may contain '>'; consume them whole.
-tag_re = re.compile(r'''<(/?)\s*([a-z][a-z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>''', re.I)
+# Attributes must follow whitespace or '/'; quoted attribute values may
+# contain '>', so consume them whole.
+tag_re = re.compile(r'''<(/?)\s*([a-z][a-z0-9-]*)((?:[\s/](?:[^>"']|"[^"]*"|'[^']*')*)?)>''', re.I)
 starts = {m.start() for m in tag_re.finditer(markup)}
 for m in re.finditer(r'<\s*/?\s*(?:detail|summar)', markup, re.I):
     if m.start() not in starts:
-        fail(f'unparsable tag at {at(m.start())} (unbalanced quote?)')
+        fail(f'unparsable tag at {at(m.start())} (unbalanced quote or invalid tag syntax?)')
 stack = []  # each frame: [tag, content_start, tag_start, has_summary]
 labels = []
 for m in tag_re.finditer(markup):
@@ -261,6 +273,8 @@ for m in tag_re.finditer(markup):
             if kind == 'CODE SPAN':
                 ticks = len(body[s:e]) - len(body[s:e].lstrip('`'))
                 parts.append(body[s + ticks:e - ticks])
+            elif kind in ('AUTOLINK', 'ESCAPE'):
+                parts.append(body[s + 1:e - (kind == 'AUTOLINK')])
             elif kind == 'CODE FENCE':
                 parts.append(' ' + body[s:e] + ' ')
             a = e
@@ -297,11 +311,12 @@ PY
    `<details open>`, `<details title="a>b">`) from being missed or cut
    short at a `>` inside a quoted value. The same pattern strips inner
    markup from labels. A `details`/`summary`-like opener the pattern
-   cannot match — typically an unbalanced quote — is a parse failure,
+   cannot match — typically an unbalanced quote, or a name followed by
+   something other than whitespace or `/` — is a parse failure,
    not a skipped tag. Labels are printed with inner markup
-   removed, HTML entities decoded (`&amp;` → `&`), code-span content
-   kept (masking hides it from the stack, not from the label), HTML
-   comments dropped, and whitespace
+   removed, HTML entities decoded (`&amp;` → `&`), code-span,
+   autolink, and escaped-character text kept (masking hides it from the
+   stack, not from the label), HTML comments dropped, and whitespace
    collapsed, so they read as the web UI renders them, and indented two
    spaces per enclosing `<details>`, so a label nested inside another
    block is visibly distinct from a top-level one (see step 5).
@@ -351,8 +366,8 @@ PY
 
    **Scope this does not cover.** The masking follows CommonMark
    closely enough for review bodies, not exactly: it does not model
-   indented (four-space) code blocks, backslash-escaped backticks, or
-   code spans that wrap across lines. If a review body ever looks
+   indented (four-space) code blocks, raw HTML blocks, or code spans
+   that wrap across lines. If a review body ever looks
    inconsistent with what step 3 reports — e.g. the web UI's rendered
    nesting implies a `<details>` wrapper the parser didn't count — read
    the raw fetched file by hand before trusting the extraction.
@@ -371,12 +386,19 @@ PY
    structure. Attested on this repo — an earlier, count-only version of
    this parser falsely failed on a review whose own prose quoted both
    tag names in backticks. Fenced blocks (backtick or tilde, any fence
-   length), HTML comments, and inline code spans (any backtick run
-   length) are masked, because GitHub renders none of them as markup.
-   Comments and code spans are found in one left-to-right pass, and
-   whichever opens first wins: a code span quoting `` `<!--` `` is not a
-   comment opener, and a backtick inside a comment does not start a
-   code span. Masking comments in a separate pass first made a review
+   length), HTML comments, autolinks, backslash escapes, and inline
+   code spans (any backtick run length) are masked, because GitHub
+   renders none of them as markup. A backtick line whose info string
+   contains a backtick (```` ```<summary>``` ````) is a code span, not a
+   fence opener, as CommonMark specifies; treating it as a fence made a
+   valid review fail as an unclosed fence (attested on this PR, review
+   5295693766). Likewise an email autolink (`<summary@example.com>`)
+   and an escaped `\<summary>` are text, not tags.
+   Comments, autolinks, escapes, and code spans are found in one
+   left-to-right pass, and whichever opens first wins: a code span
+   quoting `` `<!--` `` is not a comment opener, a backtick inside a
+   comment does not start a code span, and `` \` `` is a literal
+   backtick. Masking comments in a separate pass first made a review
    that quoted `` `<!--` `` fail as an unclosed comment (attested on
    this PR, review 5295401637).
    Each is replaced with same-length whitespace rather than deleted, so
@@ -693,11 +715,12 @@ newly introduced section disappear in the first place. Concretely:
   one, an unclosed tag, code fence, or HTML comment, a missing, empty,
   or misplaced `<summary>`, a `<details>` opened inside a `<summary>`,
   a near-miss tag name beginning `detail` or `summar`, or such a tag
-  left unparsable by an unbalanced quote — is itself a
+  left unparsable by an unbalanced quote or a name not followed by
+  whitespace or `/` — is itself a
   finding.** Letter case and attributes are not failures: step 3
   accepts `<DETAILS>`, `<details open>`, and `<details title="a>b">`
-  as ordinary tags. Nor is an
-  `IN CODE SPAN` / `IN CODE FENCE` / `IN HTML COMMENT` line, which is
+  as ordinary tags. Nor is an `IN CODE SPAN` / `IN CODE FENCE` /
+  `IN HTML COMMENT` / `IN AUTOLINK` line, which is
   text to read in context rather than a failure. Do not fall back to reading the rendered web page as a
   substitute (see step 2's rationale for why) and do not assume the
   section is decorative. Record the parse failure in the ledger, flag
