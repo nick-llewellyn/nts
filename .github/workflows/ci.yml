@@ -86,6 +86,14 @@ jobs:
               - 'pubspec.yaml'
               - 'analysis_options.yaml'
               - 'sonar-project.properties'
+              # Dart under `tool/` is analyzed and formatted by the
+              # `build` job like everything else, and `dart_test.yaml`
+              # decides what the suite runs. Without these, a diff
+              # touching only them passes the `Dart tests gate` by skip
+              # -- the same way an `example/`-only diff did before the
+              # entry above was added.
+              - 'tool/**.dart'
+              - 'dart_test.yaml'
             ci:
               - '.github/workflows/**'
             docs:

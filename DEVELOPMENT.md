@@ -44,7 +44,7 @@ else mandatory. The load-bearing facts:
 
 ## Working with the Rust bridge
 
-Five tools, distinct roles.
+Six tools, distinct roles.
 
 | Tool | Purpose | When to run |
 |------|---------|-------------|
@@ -53,6 +53,7 @@ Five tools, distinct roles.
 | `flutter_rust_bridge_codegen` | Underlying generator, invoked by the script above — not run directly | Never on its own; see [Regenerate bindings](#regenerate-bindings) |
 | `hook/build.dart` (Native Assets) | Compile + bundle the dylib for Flutter | Automatically on `flutter build` |
 | `tool/check_doc_snippets.dart` | Validate Dart code snippets in documentation | Before pushing changes that touch docs or public API |
+| `tool/clock_evidence/` | Record and audit the strict clock's platform evidence | After collecting device evidence; see [Strict clock evidence harness](#strict-clock-evidence-harness-toolclock_evidence) |
 
 
 ### Regenerate bindings
@@ -232,6 +233,72 @@ flutter test --run-skipped test/live/
 `--run-skipped` is required: pointing `flutter test test/live/` at the
 directory without it still skips, because the tag-skip config applies
 regardless of the path selector.
+
+### Strict clock evidence harness (`tool/clock_evidence/`)
+
+The strict clock (`lib/src/api/strict_clock.dart`,
+`rust/src/nts/boottime.rs`) makes platform claims that no hermetic test
+can settle: that the coordinate survives a device suspend, that it
+resets across a reboot, that an RTC change does not move it. The
+harness under `tool/clock_evidence/` is where those claims are recorded
+and audited.
+
+| File | Role |
+|------|------|
+| `evidence_matrix.md` | The record: one row per platform × dimension, each with a status, the method used, the evidence, and — for anything not yet settled — a next action. |
+| `check_evidence_matrix.dart` | Structural validator over that file. Fails on a missing platform or dimension, a duplicated row, an unknown status, a `pass` with no evidence, or an outstanding row with no next action. |
+| `native_lifecycle_probe_test.dart` | Opt-in probes over a real native bridge. Settles `native-runtime-read`; narrows `descriptor-compatibility` and `bridge-teardown`, which also need a relaunch and a second engine respectively. |
+
+```bash
+dart run tool/clock_evidence/check_evidence_matrix.dart
+(cd rust && cargo build --release -p nts_rust)
+flutter test --run-skipped tool/clock_evidence/
+```
+
+That build+run pair is **host-only** (macOS, Linux, Windows): the
+explicit `cargo build --release` places a host-target dylib where
+`NtsRustLib.init()` looks (`rust/target/release/`), and `flutter test`
+never invokes the Native Assets hook (`hook/build.dart`) that would
+otherwise cross-compile it. It settles the `macos`/`linux`/`windows`
+device-independent rows the matrix marks `method: host`.
+
+The matrix's `android`/`ios` rows point at the same probe file but
+mark it `method: device`, and this repo has no documented procedure
+for running it there yet: `flutter run -d <device>` does invoke the
+Native Assets hook and produces a target `.so`/`.dylib`, but that
+builds and launches the *app*, not `flutter test`'s host-side test
+runner — the two don't share a packaging path today. Collecting an
+`android`/`ios` row means writing that procedure (most likely an
+integration/driver test bundled into the app, per
+[`hook/build.dart`](hook/build.dart)'s Native Assets wiring) rather
+than reusing this command block; the matrix's own next-action cells
+name the physical step, not the harness for it.
+
+Each phase prints an `evidence:` line naming the host it ran on, free
+of `|` so it pastes straight into a table cell; paste it into the
+matching cell and flip that row to `pass`. The four phases are one
+sequential test rather than four, because the teardown phase is
+terminal — `NtsBridge.dispose()` retires the process-wide generation,
+and `NtsRustLib.init()` refuses a second call — and separate tests
+would depend on a declaration order the runner may randomize.
+
+The validator's parser and coverage rules are covered hermetically by
+`test/check_evidence_matrix_test.dart`, which runs in the normal gate.
+The matrix's *contents* are not, and cannot be.
+
+Neither command is in CI, and that is deliberate. A green CI run is not
+evidence that a physical device did anything, so wiring the matrix into
+a required check would make it satisfiable by editing a Markdown file.
+`--require-complete` turns every outstanding row into an error; that is
+the `nts-flr8.7` close gate, run by hand when the evidence is in.
+
+The dimensions the probe suite does not cover — `multi-engine`,
+`process-relaunch`, and every physical row from `suspend-resume` down —
+are absent rather than approximated. A thread sleep is not a suspend, a
+simulator is not a device, and an in-process teardown is not a process
+death. Per the `nts-flr8` delivery policy an unavailable proof stays
+`pending` or `blocked` with a next action; it is never promoted to
+`pass` on the strength of a substitute.
 
 ### Cross-platform live probes (weekly, advisory)
 
