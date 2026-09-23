@@ -218,6 +218,9 @@ for m in tag_re.finditer(markup):
         if tag == 'summary':
             if not stack or stack[-1][0] != 'details' or stack[-1][3]:
                 fail(f'<summary> at {at(m.start())} is not the first summary directly inside a <details>')
+            before = re.sub(r'<!--.*?-->', '', body[stack[-1][1]:m.start()], flags=re.S)
+            if before.strip():
+                fail(f'<summary> at {at(m.start())} is preceded by content inside its <details>')
             stack[-1][3] = True
         stack.append([tag, m.end(), m.start(), False])
         continue
@@ -230,7 +233,8 @@ for m in tag_re.finditer(markup):
         label = ' '.join(text.split())
         if not label:
             fail(f'empty <summary> at {at(tag_start)}')
-        labels.append(label)
+        depth = sum(f[0] == 'details' for f in stack) - 1
+        labels.append('  ' * depth + label)
     elif not has_summary:
         fail(f'<details> at {at(tag_start)} closed with no <summary>')
 if stack:
@@ -257,7 +261,9 @@ PY
    attribute-carrying tag (`<DETAILS>`, `<details open>`) from being
    missed by the tokenizer. Labels are printed with inner markup
    removed, HTML entities decoded (`&amp;` → `&`), and whitespace
-   collapsed, so they read as the web UI renders them.
+   collapsed, so they read as the web UI renders them, and indented two
+   spaces per enclosing `<details>`, so a label nested inside another
+   block is visibly distinct from a top-level one (see step 5).
 
    The stack is the point of the snippet, not boilerplate: a closing
    tag that doesn't match the innermost open tag, or a tag left open at
@@ -271,9 +277,11 @@ PY
    on its behalf. The same-count-but-swapped-order case above is
    exactly what a pure open/close tally cannot see and a stack can.
    Placement is checked too: a `<summary>` must be the first summary
-   directly inside an open `<details>`, so an orphan `<summary>`, a
-   second summary in one block, or a summary nested in a summary fails
-   rather than printing a merged or unattached label. An empty summary
+   directly inside an open `<details>`, with nothing but whitespace or
+   HTML comments before it, so an orphan `<summary>`, a second summary
+   in one block, a summary nested in a summary, or one preceded by
+   other content (`<details><div>x</div><summary>…`) fails rather than
+   printing a merged, unattached, or misplaced label. An empty summary
    fails for the same reason — a blank label cannot be reconciled.
 
    The missing-summary check is per `<details>` frame, not a single
@@ -366,11 +374,20 @@ PY
 5. **Build a ledger before replying to anything:** one row per finding
    (inline or hidden), each with its `path:line` (step 4's
    `original_line` when `line` is `null`), source review id, and
-   adjudication (fix / fix differently / decline). An aggregate
-   `<summary>` label carrying a `(N)` is a container step 3 flagged for
-   reconciliation, but reconciling it correctly requires first
-   classifying *what population it aggregates* — its label text alone
-   does not say. `Suppressed comments (N)`, `Previously missed (N)`,
+   adjudication (fix / fix differently / decline). First decide, for
+   each label step 3 printed, whether its block is a **container** or a
+   **finding**, from the block's structure in the raw file, never from
+   its label text: a container's content after its `<summary>` is a
+   list of items — bullets or nested `<details>` blocks (printed
+   indented beneath it) — one per finding; a finding's content is the
+   finding's own prose. Finding titles are free-form and can end in
+   `(N)` too (`Handle all (3) cases`), so a trailing count is read only
+   once a block is known to be a container; a container with no
+   trailing count is a failure under the rules below, and a finding
+   whose title happens to end in `(N)` is still a finding and gets a
+   row. A container is then flagged for reconciliation, but reconciling
+   it correctly requires first classifying *what population it
+   aggregates* — its label text alone does not say. `Suppressed comments (N)`, `Previously missed (N)`,
    and `Open (N)` are all attested labels on real reviews, but they are
    not interchangeable: on one review, `Open (N)` nested items that
    each linked to a `#discussion_r<id>` anchor — i.e., findings already
@@ -458,9 +475,22 @@ PY
    If no review's `commit_id` matches the current head and no review is
    in flight, the head is **unreviewed**, not reviewed: commits pushed
    after the last review — a fix, a rebase — have not been read by
-   Copilot. On this repo Copilot reviews only on an explicit request
-   (every review so far followed a `review_requested` event, none a
-   push), so waiting does not end this state. Once the ledger covers
+   Copilot. Whether waiting can end this state depends on the repo's
+   Copilot review rule, which has changed over this repo's life
+   (push-triggered re-reviews were recorded in August 2026; the rule
+   now has them off), so read it rather than assuming:
+   ```bash
+   gh api repos/<owner>/<repo>/rulesets --jq '.[].id' < /dev/null |
+     while read -r id; do
+       gh api "repos/<owner>/<repo>/rulesets/$id" < /dev/null \
+         --jq 'select(.enforcement=="active") | .rules[] | select(.type=="copilot_code_review") | .parameters.review_on_push'
+     done
+   ```
+   If any active rule prints `true`, a push requests a review
+   automatically: re-check `requested_reviewers` above and wait for
+   that review rather than declaring the head unreviewed. If every rule
+   prints `false`, or none prints anything, Copilot reviews only on an
+   explicit request and waiting does not end this state. Once the ledger covers
    every review that exists, the gate passes for those reviews; report
    to the user that the head commit is unreviewed, name the commits
    since the last reviewed `commit_id`, and ask whether to request a
@@ -497,9 +527,11 @@ newly introduced section disappear in the first place. Concretely:
   returns — including one that has never appeared on this repo before
   — must be read before the checklist can call this review accounted
   for. Not every label earns a ledger row, though: an aggregate section
-  header — any label carrying a `(N)`, e.g. `Open (7)` or `Previously
-  missed (2)` — is the container, not a finding; only the individual
-  findings nested inside it get rows. But which count that container
+  header — a block whose content is a list of per-finding items, e.g.
+  `Open (7)` or `Previously missed (2)` — is the container, not a
+  finding; only the individual findings nested inside it get rows.
+  Container status comes from that structure (step 5), never from a
+  trailing `(N)` alone, since a finding title can end in one too. But which count that container
   cross-checks against is not fixed by its label text — see step 5:
   a container whose nested items link to this review's inline comments
   reconciles against step 4's count for this review, one whose items
