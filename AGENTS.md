@@ -93,6 +93,123 @@ Operational notes:
   that section as the source of truth when reconciling repo
   settings.
 
+## Copilot PR Review Handling (mandatory — read before merging or clearing discussions on any PR Copilot reviewed)
+
+> **Hard rule:** Do not merge a PR, and do not treat its review
+> discussion as clean, until every Copilot finding — inline comment,
+> suppressed finding, and any other section the Copilot integration
+> renders inside the review body — has been read, adjudicated, and
+> answered. `mergeStateStatus: CLEAN` and green CI are necessary, not
+> sufficient: neither signal reads the review body text, so neither can
+> tell you a collapsed section went unread.
+
+### Why this exists
+
+GitHub's Copilot code-review UI renders findings in more than one
+shape, and the set of shapes has changed over the life of this repo:
+
+- an **inline review comment** — a first-class comment object tied to a
+  diff line, visible without expanding anything;
+- a **suppressed finding** — text-only, nested inside a collapsed
+  `<details><summary>Suppressed comments (N)</summary>` block in the
+  review body, with no comment object of its own;
+- other **collapsed `<details>` sections** the integration has
+  introduced, and may introduce again, that render collapsed by default
+  in the web UI's markdown but are present as plain text in the API's
+  `body` field regardless of render state.
+
+The failure mode this section exists to close: skimming the rendered PR
+page, or even the review body's visible text, reads only the expanded
+portions and silently skips whatever the web UI collapsed. On this
+repo the same PR round-tripped through this exact miss twice on one
+review round: three findings surfaced as "previously missed" in a
+follow-up pass over code the first pass had already looked at (PR
+#366), because the first read never expanded or grepped the `<details>`
+block. A recurring miss means the review-*reading* step, not just the
+reply-writing step, needs a mechanical checklist rather than a skim.
+
+### Mandatory checklist (every review, every round, before merge)
+
+1. **Enumerate every Copilot review on the PR, not just the latest.**
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<n>/reviews \
+     --jq '.[] | select(.user.login|test("opilot")) | {id, submitted_at, state}' < /dev/null
+   ```
+   Match on `test("opilot")` — the bot login has varied across accounts
+   (`Copilot`, `copilot-pull-request-reviewer[bot]`,
+   `github-copilot[bot]`); an exact-match filter silently returns
+   nothing and looks indistinguishable from "no findings."
+
+2. **Fetch the raw `body` of every one of those reviews via the API**,
+   never by reading the rendered web page:
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<n>/reviews/<review-id> --jq '.body' < /dev/null
+   ```
+   The API body is the literal markdown/HTML source, including
+   `<details>` blocks the web UI renders collapsed. Reading the web UI
+   instead means trusting its default collapsed state to have shown you
+   everything, which is the assumption this whole section rejects.
+
+3. **Grep every fetched body for the `<details>`/`<summary>` tag
+   structure itself, not just the known `Suppressed comments` header:**
+   ```bash
+   grep -o '<summary>[^<]*</summary>' /tmp/review-body.txt
+   ```
+   Treat every `<summary>` hit as a section to account for, including
+   one whose label has never appeared before. Searching for the tag
+   structure rather than one specific header text is what survives the
+   next time GitHub renames or adds a section.
+
+4. **Fetch inline review comments separately:**
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate \
+     --jq '.[] | {id, path, line, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
+   ```
+   A review whose `/comments` carry no rows for that
+   `pull_request_review_id` is suppressed-only — every finding it
+   raised lives only in the body text pulled in step 2.
+
+5. **Build a ledger before replying to anything:** one row per finding
+   (inline or suppressed), each with its `path:line`, source review id,
+   and adjudication (fix / fix differently / decline). Confirm the
+   ledger's suppressed-finding count matches every review's
+   `Suppressed comments (N)` header — a mismatch means step 3's grep
+   missed an entry or double-counted one, and the ledger is not
+   trustworthy yet.
+
+6. **Answer every ledger row** — a threaded reply for an inline
+   comment, a *new* inline comment (cited to the finding's `path:line`)
+   for a suppressed one, a top-level PR comment only as a last resort
+   for a finding that names no file. Reply after the fix lands, so the
+   reply can cite a real commit SHA.
+
+7. **Resolving threads and re-checking mergeability comes only after
+   every ledger row has a reply**, and still requires the same explicit
+   permission that gates resolving or merging generally (see the
+   skill's Notes, below) — unless the user's own request already asked
+   for a clean, merge-ready PR, in which case resolving the threads you
+   just answered is part of fulfilling that request. A new inline
+   comment for a suppressed finding opens its own thread; clearing it is
+   not a separate, optional step from answering the finding.
+
+8. **Immediately before requesting merge permission, re-run steps 1–4
+   against the PR's current head SHA.** A commit pushed after the
+   ledger was built — a fix, a rebase — can trigger a fresh Copilot
+   review the ledger never accounted for; the checklist is a gate on
+   the state at merge time, not a one-time pass earlier in the session.
+
+### Mechanics reference
+
+The Augment skill `copilot-review-replies`
+(`~/.augment/skills/copilot-review-replies/SKILL.md`) codifies steps
+4–7 above with copy-pasteable commands: the payload shape for each
+reply endpoint, the endpoint asymmetry between fetching and posting a
+review comment, and adjudication guidance (fix / fix differently /
+decline — Copilot is confidently wrong often enough that accepting
+every finding degrades the branch). Use it in an Augment session; the
+checklist above is written to stand on its own for any agent or human
+running this workflow without it.
+
 ## Agent merge policy (read this before any `gh pr merge`)
 
 > **Hard rule:** An agent must **never** call `gh pr merge` (or
