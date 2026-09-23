@@ -133,16 +133,22 @@ reply-writing step, needs a mechanical checklist rather than a skim.
 1. **Enumerate every Copilot review on the PR, not just the latest.**
    ```bash
    gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate \
-     --jq '.[] | select(.user.login|test("opilot")) | {id, commit_id, submitted_at, state}' < /dev/null
+     --jq '.[] | select(.user.login|test("opilot";"i")) | {id, commit_id, submitted_at, state}' < /dev/null
    ```
    Always pass `--paginate` — the endpoint's default page size can omit
    older reviews on a long-lived PR, silently truncating the
    enumeration everything else in this checklist depends on. Match on
-   `test("opilot")` — the bot login has varied across accounts
+   `test("opilot";"i")` — the bot login has varied across accounts
    (`Copilot`, `copilot-pull-request-reviewer[bot]`,
-   `github-copilot[bot]`); an exact-match filter silently returns
-   nothing and looks indistinguishable from "no findings." Keep each
-   review's `commit_id` in the ledger — step 8 needs it.
+   `github-copilot[bot]`), and a single PR can carry more than one
+   casing at once: the reviews endpoint reports
+   `copilot-pull-request-reviewer[bot]` while `/comments` reports
+   `Copilot` for the same review. Dropping the leading `C` already
+   covers those three, but `jq`'s `test` is case-sensitive by default,
+   so the `"i"` flag is what keeps a future casing from being missed.
+   An exact-match filter silently returns nothing and looks
+   indistinguishable from "no findings." Keep each review's `commit_id`
+   in the ledger — step 8 needs it.
 
 2. **Fetch the raw `body` of every one of those reviews via the API,
    and save each to a file**, never by reading the rendered web page:
