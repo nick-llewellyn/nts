@@ -132,33 +132,52 @@ reply-writing step, needs a mechanical checklist rather than a skim.
 
 1. **Enumerate every Copilot review on the PR, not just the latest.**
    ```bash
-   gh api repos/<owner>/<repo>/pulls/<n>/reviews \
-     --jq '.[] | select(.user.login|test("opilot")) | {id, submitted_at, state}' < /dev/null
+   gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate \
+     --jq '.[] | select(.user.login|test("opilot")) | {id, commit_id, submitted_at, state}' < /dev/null
    ```
-   Match on `test("opilot")` — the bot login has varied across accounts
+   Always pass `--paginate` — the endpoint's default page size can omit
+   older reviews on a long-lived PR, silently truncating the
+   enumeration everything else in this checklist depends on. Match on
+   `test("opilot")` — the bot login has varied across accounts
    (`Copilot`, `copilot-pull-request-reviewer[bot]`,
    `github-copilot[bot]`); an exact-match filter silently returns
-   nothing and looks indistinguishable from "no findings."
+   nothing and looks indistinguishable from "no findings." Keep each
+   review's `commit_id` in the ledger — step 8 needs it.
 
-2. **Fetch the raw `body` of every one of those reviews via the API**,
-   never by reading the rendered web page:
+2. **Fetch the raw `body` of every one of those reviews via the API,
+   and save each to a file**, never by reading the rendered web page:
    ```bash
-   gh api repos/<owner>/<repo>/pulls/<n>/reviews/<review-id> --jq '.body' < /dev/null
+   gh api repos/<owner>/<repo>/pulls/<n>/reviews/<review-id> --jq '.body' < /dev/null \
+     > "/tmp/review-<review-id>.txt"
    ```
    The API body is the literal markdown/HTML source, including
    `<details>` blocks the web UI renders collapsed. Reading the web UI
    instead means trusting its default collapsed state to have shown you
    everything, which is the assumption this whole section rejects.
+   Persist the body to a file rather than only printing it — step 3
+   scans the file this command produces, and a command that fetches the
+   body and discards it has examined nothing.
 
-3. **Grep every fetched body for the `<details>`/`<summary>` tag
-   structure itself, not just the known `Suppressed comments` header:**
+3. **Extract every `<summary>` label from the fetched body with a
+   parser, not a `grep -o '<summary>[^<]*</summary>'`-style pattern —
+   Copilot's `<summary>` elements routinely nest markup (`<strong>`,
+   `<picture>`) that such a pattern silently fails to match:**
    ```bash
-   grep -o '<summary>[^<]*</summary>' /tmp/review-body.txt
+   python3 -c "
+import re
+body = open('/tmp/review-<review-id>.txt').read()
+for m in re.findall(r'<summary>(.*?)</summary>', body, re.S):
+    print(re.sub(r'<[^>]+>', '', m).strip())
+"
    ```
-   Treat every `<summary>` hit as a section to account for, including
-   one whose label has never appeared before. Searching for the tag
-   structure rather than one specific header text is what survives the
-   next time GitHub renames or adds a section.
+   Treat every label this prints as a section to account for, including
+   one that has never appeared before. Extracting the tag structure
+   itself, rather than grepping for one specific header string, is what
+   survives the next time GitHub renames or adds a section — and
+   matching non-greedily (`.*?` with `re.S`) rather than stopping at the
+   first `<` is what survives GitHub nesting markup inside the label
+   itself, which it already does today (e.g.
+   `<summary><strong>Open (7)</strong></summary>`).
 
 4. **Fetch inline review comments separately:**
    ```bash
@@ -166,37 +185,56 @@ reply-writing step, needs a mechanical checklist rather than a skim.
      --jq '.[] | {id, path, line, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
    ```
    A review whose `/comments` carry no rows for that
-   `pull_request_review_id` is suppressed-only — every finding it
-   raised lives only in the body text pulled in step 2.
+   `pull_request_review_id` is **not** automatically suppressed-only —
+   it may instead have raised no findings at all (a body reading
+   `Findings: None`, with no hidden-findings label for step 3 to have
+   found). Do not infer either shape from the comment count alone: read
+   the body pulled in steps 2–3 for that review to tell "zero findings"
+   apart from "findings exist but every one landed in a collapsed
+   section" — only the second shape needs a ledger row.
 
 5. **Build a ledger before replying to anything:** one row per finding
-   (inline or suppressed), each with its `path:line`, source review id,
-   and adjudication (fix / fix differently / decline). Confirm the
-   ledger's suppressed-finding count matches every review's
-   `Suppressed comments (N)` header — a mismatch means step 3's grep
-   missed an entry or double-counted one, and the ledger is not
-   trustworthy yet.
+   (inline or hidden), each with its `path:line`, source review id, and
+   adjudication (fix / fix differently / decline). Confirm the ledger's
+   hidden-finding count matches the `(N)` in whichever `<summary>` label
+   step 3 flagged as aggregating them. That label's own text has
+   changed across rounds of this repo's history — `Suppressed comments
+   (N)`, `Previously missed (N)`, and `Open (N)` are all attested on
+   real reviews — so treat the label as data step 3 extracted, never as
+   a string to hardcode here. A count mismatch means step 3 missed an
+   entry or double-counted one, and the ledger is not trustworthy yet.
 
 6. **Answer every ledger row** — a threaded reply for an inline
    comment, a *new* inline comment (cited to the finding's `path:line`)
-   for a suppressed one, a top-level PR comment only as a last resort
-   for a finding that names no file. Reply after the fix lands, so the
-   reply can cite a real commit SHA.
+   for a hidden one, a top-level PR comment only as a last resort for a
+   finding that names no file. Reply after the fix lands, so the reply
+   can cite a real commit SHA.
 
 7. **Resolving threads and re-checking mergeability comes only after
-   every ledger row has a reply**, and still requires the same explicit
-   permission that gates resolving or merging generally (see the
-   skill's Notes, below) — unless the user's own request already asked
-   for a clean, merge-ready PR, in which case resolving the threads you
-   just answered is part of fulfilling that request. A new inline
-   comment for a suppressed finding opens its own thread; clearing it is
-   not a separate, optional step from answering the finding.
+   every ledger row has a reply.** Neither follows automatically from
+   having answered every finding: resolving a thread, like merging
+   (the hard rule in "Agent merge policy" below), still requires the
+   user's own explicit go-ahead — unless the user's own request already
+   asked for a clean, merge-ready PR, in which case resolving the
+   threads you just answered is part of fulfilling that request. A new
+   inline comment for a hidden finding opens its own thread; clearing
+   it is not a separate, optional step from answering the finding.
 
 8. **Immediately before requesting merge permission, re-run steps 1–4
-   against the PR's current head SHA.** A commit pushed after the
-   ledger was built — a fix, a rebase — can trigger a fresh Copilot
-   review the ledger never accounted for; the checklist is a gate on
-   the state at merge time, not a one-time pass earlier in the session.
+   and check the result actually covers the PR's current head SHA —
+   don't assume a re-run does:**
+   ```bash
+   gh pr view <n> --json headRefOid --jq .headRefOid < /dev/null
+   ```
+   Compare that value against the `commit_id` step 1 now records for
+   each review. If no review's `commit_id` matches the current head,
+   the ledger is stale: a commit pushed after it was built — a fix, a
+   rebase — can trigger a fresh Copilot review the ledger never
+   accounted for. Also check for a review still in `PENDING` state at
+   the head SHA and wait for it to submit rather than treating an
+   in-flight review as equivalent to no review. The checklist is a gate
+   on the state at merge time, not a one-time pass earlier in the
+   session.
 
 ### Strict parsing — no silent fallbacks
 
@@ -204,36 +242,42 @@ The checklist above only closes the gap it targets if each step's
 output is checked against an explicit expectation and treated as a
 hard stop when it isn't met. A script (or an agent skimming output)
 that tolerates an empty body, an unrecognized `<summary>` label, or a
-suppressed-count mismatch by quietly moving on has reintroduced the
+hidden-finding-count mismatch by quietly moving on has reintroduced the
 exact "skim and hope" failure this section exists to replace —
 best-effort parsing and silent fallbacks are what let a renamed or
 newly introduced section disappear in the first place. Concretely:
 
 - **No hardcoded allowlist of expected `<summary>` labels.** Step 3's
-  grep must not be followed by logic that only reacts to
-  `Suppressed comments` and ignores every other match. Every distinct
-  label the grep returns — including one that has never appeared on
-  this repo before — is a new, unaccounted-for section until a human
-  or agent has read it and added it to the ledger. Finding a label
-  outside that known set is not a warning to log and continue past;
-  treat it the same as any other checklist failure — stop and read the
-  section before going further.
+  extraction must not be followed by logic that only reacts to one
+  known label (`Suppressed comments`, `Open`, or any other single
+  string) and ignores every other match. Every distinct label step 3
+  returns — including one that has never appeared on this repo before
+  — is a new, unaccounted-for section until a human or agent has read
+  it and added it to the ledger. Finding a label outside that known set
+  is not a warning to log and continue past; treat it the same as any
+  other checklist failure — stop and read the section before going
+  further.
 - **No silent fallback on an empty, missing, or truncated `body`.** If
   step 2's fetch returns an empty string, `null`, or a response that
   looks paginated/truncated, that is a fetch failure, not "this review
   had no findings." Re-fetch or fix the query before treating the
   review as accounted for; do not let an empty body pass the checklist
   by default.
-- **Assert the suppressed count; don't just eyeball it.** Step 5's
-  cross-check must fail loudly when the ledger's suppressed-row count
-  disagrees with the `Suppressed comments (N)` header, e.g.:
+- **Assert the hidden-finding count; don't just eyeball it.** Step 5's
+  cross-check must fail loudly when the ledger's row count disagrees
+  with the `(N)` in whichever label step 3 flagged as aggregating
+  hidden findings — read from that extraction, never hardcoded, since
+  the label text itself is exactly what has changed release over
+  release (see step 5), e.g.:
   ```bash
-  n_header=$(grep -o 'Suppressed comments ([0-9]*)' /tmp/review-body.txt | grep -o '[0-9]*')
-  n_ledger=<count of suppressed rows recorded for this review>
+  n_header=$(echo "$hidden_label" | grep -o '([0-9]*)' | tr -d '()')
+  n_ledger=<count of hidden-finding rows recorded for this review>
   [ "$n_header" = "$n_ledger" ] || { echo "MISMATCH: header=$n_header ledger=$n_ledger" >&2; exit 1; }
   ```
-  A mismatch means the ledger is wrong and must be corrected before
-  any reply goes out — it is never acceptable to round the two numbers
+  where `$hidden_label` is one of the labels step 3 extracted (e.g.
+  `Suppressed comments (3)`, `Previously missed (3)`, `Open (7)`). A
+  mismatch means the ledger is wrong and must be corrected before any
+  reply goes out — it is never acceptable to round the two numbers
   together, defer the discrepancy, or proceed on the larger/smaller of
   the two as a guess.
 - **A non-zero exit code or an API error from any command in steps
@@ -243,7 +287,7 @@ newly introduced section disappear in the first place. Concretely:
   is clean. Surface the failure and re-run the step; a checklist step
   that fails closed (stops the workflow) is correct behavior here,
   not a bug to route around.
-- **A tag structure the grep in step 3 cannot parse — mismatched
+- **A tag structure step 3 cannot parse — mismatched
   `<details>`/`<summary>` counts, a differently-cased or
   differently-spelled tag, an unfamiliar nesting — is itself a
   finding.** Do not fall back to reading the rendered web page as a
