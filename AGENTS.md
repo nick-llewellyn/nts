@@ -253,8 +253,19 @@ for m in tag_re.finditer(markup):
         fail(f'</{tag}> at {at(m.start())} closes {top}')
     open_tag, content_start, tag_start, has_summary = stack.pop()
     if open_tag == 'summary':
-        text = html.unescape(tag_re.sub('', markup[content_start:m.start()]))
-        label = ' '.join(text.split())
+        # Structure comes from the masked text; the label text restores
+        # each code span's content, as the web UI renders it.
+        a, b, parts = content_start, m.start(), []
+        for kind, s, e in sorted(h for h in hidden if content_start <= h[1] < b):
+            parts.append(html.unescape(tag_re.sub('', markup[a:s])))
+            if kind == 'CODE SPAN':
+                ticks = len(body[s:e]) - len(body[s:e].lstrip('`'))
+                parts.append(body[s + ticks:e - ticks])
+            elif kind == 'CODE FENCE':
+                parts.append(' ' + body[s:e] + ' ')
+            a = e
+        parts.append(html.unescape(tag_re.sub('', markup[a:b])))
+        label = ' '.join(''.join(parts).split())
         if not label:
             fail(f'empty <summary> at {at(tag_start)}')
         depth = sum(f[0] == 'details' for f in stack) - 1
@@ -288,7 +299,9 @@ PY
    markup from labels. A `details`/`summary`-like opener the pattern
    cannot match — typically an unbalanced quote — is a parse failure,
    not a skipped tag. Labels are printed with inner markup
-   removed, HTML entities decoded (`&amp;` → `&`), and whitespace
+   removed, HTML entities decoded (`&amp;` → `&`), code-span content
+   kept (masking hides it from the stack, not from the label), HTML
+   comments dropped, and whitespace
    collapsed, so they read as the web UI renders them, and indented two
    spaces per enclosing `<details>`, so a label nested inside another
    block is visibly distinct from a top-level one (see step 5).
