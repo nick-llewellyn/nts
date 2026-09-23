@@ -200,11 +200,28 @@ markup = blank(body, fence, 'CODE FENCE', re.S | re.M)
 m = re.search(r'^ {0,3}(`{3,}|~{3,})', markup, re.M)
 if m:
     fail(f'unclosed code fence at {at(m.start())}')
-markup = blank(markup, r'<!--.*?-->', 'HTML COMMENT', re.S)
-m = re.search(r'<!--', markup)
-if m:
-    fail(f'unclosed HTML comment at {at(m.start())}')
-markup = blank(markup, r'(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)', 'CODE SPAN')
+# HTML comments and code spans in one left-to-right pass: whichever opens
+# first wins, so a `<!--` inside a code span, or a backtick inside a
+# comment, does not affect the other construct.
+pos = 0
+while m := re.search(r'<!--|`+', markup[pos:]):
+    start, opener = pos + m.start(), m.group(0)
+    if opener == '<!--':
+        end = markup.find('-->', start + 4)
+        if end < 0:
+            fail(f'unclosed HTML comment at {at(start)}')
+        kind, end = 'HTML COMMENT', end + 3
+    else:
+        eol = markup.find('\n', start)
+        eol = len(markup) if eol < 0 else eol
+        close = re.compile(f'(?<!`){opener}(?!`)').search(markup, start + len(opener), eol)
+        if not close:
+            pos = start + len(opener)  # unmatched backticks are literal text
+            continue
+        kind, end = 'CODE SPAN', close.end()
+    hidden.append((kind, start, end))
+    markup = markup[:start] + re.sub(r'[^\n]', ' ', markup[start:end]) + markup[end:]
+    pos = end
 tag_re = re.compile(r'<(/?)\s*([a-z][a-z0-9-]*)[^>]*>', re.I)
 stack = []  # each frame: [tag, content_start, tag_start, has_summary]
 labels = []
@@ -215,11 +232,13 @@ for m in tag_re.finditer(markup):
             fail(f'unrecognized tag <{m.group(1)}{m.group(2)}> at {at(m.start())}')
         continue
     if not closing:
+        if tag == 'details' and any(f[0] == 'summary' for f in stack):
+            fail(f'<details> at {at(m.start())} is inside an open <summary>')
         if tag == 'summary':
             if not stack or stack[-1][0] != 'details' or stack[-1][3]:
                 fail(f'<summary> at {at(m.start())} is not the first summary directly inside a <details>')
-            before = re.sub(r'<!--.*?-->', '', body[stack[-1][1]:m.start()], flags=re.S)
-            if before.strip():
+            a, b = stack[-1][1], m.start()
+            if markup[a:b].strip() or any(k != 'HTML COMMENT' and s < b and e > a for k, s, e in hidden):
                 fail(f'<summary> at {at(m.start())} is preceded by content inside its <details>')
             stack[-1][3] = True
         stack.append([tag, m.end(), m.start(), False])
@@ -281,7 +300,10 @@ PY
    HTML comments before it, so an orphan `<summary>`, a second summary
    in one block, a summary nested in a summary, or one preceded by
    other content (`<details><div>x</div><summary>…`) fails rather than
-   printing a merged, unattached, or misplaced label. An empty summary
+   printing a merged, unattached, or misplaced label. A `<details>`
+   opened while a `<summary>` is still open fails for the same reason:
+   `<details><summary>Outer <details><summary>Inner</summary></details></summary></details>`
+   would otherwise print both `Inner` and a corrupted `Outer Inner`. An empty summary
    fails for the same reason — a blank label cannot be reconciled.
 
    The missing-summary check is per `<details>` frame, not a single
@@ -329,6 +351,12 @@ PY
    tag names in backticks. Fenced blocks (backtick or tilde, any fence
    length), HTML comments, and inline code spans (any backtick run
    length) are masked, because GitHub renders none of them as markup.
+   Comments and code spans are found in one left-to-right pass, and
+   whichever opens first wins: a code span quoting `` `<!--` `` is not a
+   comment opener, and a backtick inside a comment does not start a
+   code span. Masking comments in a separate pass first made a review
+   that quoted `` `<!--` `` fail as an unclosed comment (attested on
+   this PR, review 5295401637).
    Each is replaced with same-length whitespace rather than deleted, so
    every reported offset indexes the raw file; an unclosed fence or
    comment is a parse failure, because everything after it would
@@ -627,8 +655,8 @@ newly introduced section disappear in the first place. Concretely:
 - **A tag structure step 3 cannot parse — any `PARSE FAILURE` it
   exits with: a closing tag that does not match the innermost open
   one, an unclosed tag, code fence, or HTML comment, a missing, empty,
-  or misplaced `<summary>`, or a near-miss tag name beginning `detail`
-  or `summar` — is itself a
+  or misplaced `<summary>`, a `<details>` opened inside a `<summary>`,
+  or a near-miss tag name beginning `detail` or `summar` — is itself a
   finding.** Letter case and attributes are not failures: step 3
   accepts `<DETAILS>` and `<details open>` as ordinary tags. Nor is an
   `IN CODE SPAN` / `IN CODE FENCE` / `IN HTML COMMENT` line, which is
