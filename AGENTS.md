@@ -350,9 +350,11 @@ PY
    gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate \
      --jq '.[] | {id, path, line, original_line, original_commit_id, body, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
    ```
-   `line` is `null` for an *outdated* comment — one whose line a later
-   commit changed — which is every comment on a PR pushed to after the
-   review. Record `original_line` at `original_commit_id` as the
+   `line` is `null` for an *outdated* comment — one whose diff location
+   a later commit invalidated so GitHub can no longer map it onto the
+   current diff. A later push alone does not outdate a comment: one
+   whose hunk survives keeps a current `line`. Where `line` is `null`,
+   record `original_line` at `original_commit_id` as the
    finding's location in that case, and read the current file to find
    where that code now lives; a `null` line is not a missing location.
    `body` is not optional in this projection: it is the finding text
@@ -410,7 +412,10 @@ PY
    - **This review's inline comments** — items link to
      `#discussion_r<id>` anchors whose ids step 4 attributes to *this*
      review (`review` equals this review's id). Reconcile the count
-     against step 4's inline-comment count for this review.
+     against step 4's inline-comment count for this review, counting
+     only top-level rows (`in_reply_to` is `null`): a threaded reply is
+     discussion on a finding, not a finding, and counting replies
+     inflates the total once findings have been answered.
    - **Earlier reviews' comments** — items link to `#discussion_r<id>`
      anchors whose ids step 4 attributes to an *earlier* review.
      Attested as `Resolved since last review (N)`: on this repo, one
@@ -433,8 +438,11 @@ PY
 6. **Answer every ledger row** — a threaded reply for an inline
    comment, a *new* inline comment (cited to the finding's `path:line`)
    for a hidden one, a top-level PR comment only as a last resort for a
-   finding that names no file. Reply after the fix lands, so the reply
-   can cite a real commit SHA. GitHub rejects a new inline comment
+   finding that names no file. For a finding adjudicated fix or fix
+   differently, reply after the fix lands, so the reply can cite a real
+   commit SHA; for a declined finding there is no fix to wait for, so
+   reply once the rationale for declining is settled, stating that
+   rationale. GitHub rejects a new inline comment
    (HTTP 422) on a line outside the PR's current diff; a hidden finding
    on such a line gets a top-level PR comment instead, which must cite
    the finding's `path:line`, its source review id, and the section
@@ -488,16 +496,29 @@ PY
    (push-triggered re-reviews were recorded in August 2026; the rule
    now has them off), so read it rather than assuming:
    ```bash
-   gh api repos/<owner>/<repo>/rulesets --paginate --jq '.[].id' < /dev/null |
-     while read -r id; do
-       gh api "repos/<owner>/<repo>/rulesets/$id" < /dev/null \
-         --jq 'select(.enforcement=="active") | .rules[] | select(.type=="copilot_code_review") | .parameters.review_on_push'
-     done
+   ids=$(gh api repos/<owner>/<repo>/rulesets --paginate --jq '.[].id' < /dev/null) ||
+     { echo "FETCH FAILED: rulesets list" >&2; exit 1; }
+   while read -r id; do
+     [ -n "$id" ] || continue
+     gh api "repos/<owner>/<repo>/rulesets/$id" < /dev/null \
+       --jq 'select(.enforcement=="active") | .rules[] | select(.type=="copilot_code_review") | .parameters.review_on_push' ||
+       { echo "FETCH FAILED: ruleset $id" >&2; exit 1; }
+   done <<< "$ids"
    ```
+   The list is captured before the loop rather than piped into it, so
+   a failed list call stops with an error instead of running zero
+   iterations and printing nothing — which would read as the
+   explicit-request case below. A `FETCH FAILED` line is a parse
+   failure under the rules below, not an answer.
    If any active rule prints `true`, a push requests a review
-   automatically: re-check `requested_reviewers` above and wait for
-   that review rather than declaring the head unreviewed. If every rule
-   prints `false`, or none prints anything, Copilot reviews only on an
+   automatically: re-check `requested_reviewers` above, and wait for
+   that review rather than declaring the head unreviewed. If the
+   re-check reads zero, re-run step 1 before deciding anything — the
+   automatic review may have been requested and submitted since step 1
+   ran, leaving no request to wait for and a stale review list. If the
+   re-run shows a review at the head, reconcile it as below; if not,
+   the head is unreviewed. If every rule prints `false`, or none prints
+   anything and no command failed, Copilot reviews only on an
    explicit request and waiting does not end this state. Once the ledger covers
    every review that exists, the gate passes for those reviews; report
    to the user that the head commit is unreviewed, name the commits
@@ -546,7 +567,8 @@ newly introduced section disappear in the first place. Concretely:
   hidden-finding row. But which count that container
   cross-checks against is not fixed by its label text — see step 5:
   a container whose nested items link to this review's inline comments
-  reconciles against step 4's count for this review, one whose items
+  reconciles against step 4's top-level (non-reply) count for this
+  review, one whose items
   link to earlier reviews' comments reconciles against its own linked
   ids and adds no rows, and one whose nested items carry no such link
   is what step 5's one-row-per-finding ledger count must match. Adding
@@ -569,7 +591,8 @@ newly introduced section disappear in the first place. Concretely:
   loudly when a container's `(N)` disagrees with whatever count it was
   classified against — the ledger's hidden-finding row count for a
   container whose nested items carry no `#discussion_r...` link, step
-  4's inline-comment count for this review when they link this
+  4's top-level (non-reply) inline-comment count for this review when
+  they link this
   review's comments, or the number of linked ids when they link an
   earlier review's.
   Which check applies is read from the classification step 5 requires,
