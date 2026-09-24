@@ -93,6 +93,702 @@ Operational notes:
   that section as the source of truth when reconciling repo
   settings.
 
+## Copilot PR Review Handling (mandatory — read before merging or clearing discussions on any PR Copilot reviewed)
+
+> **Hard rule:** Do not merge a PR, and do not treat its review
+> discussion as clean, until every Copilot finding — inline comment,
+> suppressed finding, and any other section the Copilot integration
+> renders inside the review body — has been read, adjudicated, and
+> answered. `mergeStateStatus: CLEAN` and green CI are necessary, not
+> sufficient: neither signal reads the review body text, so neither can
+> tell you a collapsed section went unread.
+
+### Why this exists
+
+GitHub's Copilot code-review UI renders findings in more than one
+shape, and the set of shapes has changed over the life of this repo:
+
+- an **inline review comment** — a first-class comment object tied to a
+  diff line, visible without expanding anything;
+- a **suppressed finding** — text-only, nested inside a collapsed
+  `<details><summary>Suppressed comments (N)</summary>` block in the
+  review body, with no comment object of its own;
+- other **collapsed `<details>` sections** the integration has
+  introduced, and may introduce again, that render collapsed by default
+  in the web UI's markdown but are present as plain text in the API's
+  `body` field regardless of render state.
+
+The failure mode this section exists to close: skimming the rendered PR
+page, or even the review body's visible text, reads only the expanded
+portions and silently skips whatever the web UI collapsed. On this
+repo the same PR round-tripped through this exact miss twice on one
+review round: three findings surfaced as "previously missed" in a
+follow-up pass over code the first pass had already looked at (PR
+#366), because the first read never expanded or grepped the `<details>`
+block. A recurring miss means the review-*reading* step, not just the
+reply-writing step, needs a mechanical checklist rather than a skim.
+
+### Mandatory checklist (every review, every round, before merge)
+
+1. **Enumerate every Copilot review on the PR, not just the latest.**
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<n>/reviews --paginate \
+     --jq '.[] | select(.user.login|test("opilot";"i")) | {id, commit_id, submitted_at, state}' < /dev/null
+   ```
+   Always pass `--paginate` — the endpoint's default page size can omit
+   older reviews on a long-lived PR, silently truncating the
+   enumeration everything else in this checklist depends on. Match on
+   `test("opilot";"i")` — the bot login has varied across accounts
+   (`Copilot`, `copilot-pull-request-reviewer[bot]`,
+   `github-copilot[bot]`), and a single PR can carry more than one
+   casing at once: the reviews endpoint reports
+   `copilot-pull-request-reviewer[bot]` while `/comments` reports
+   `Copilot` for the same review. Dropping the leading `C` already
+   covers those three, but `jq`'s `test` is case-sensitive by default,
+   so the `"i"` flag is what keeps a future casing from being missed.
+   An exact-match filter silently returns nothing and looks
+   indistinguishable from "no findings." Keep each review's `commit_id`
+   in the ledger — step 8 needs it.
+
+2. **Fetch the raw `body` of every one of those reviews via the API,
+   and save each to a file**, never by reading the rendered web page:
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<n>/reviews/<review-id> --jq '.body' < /dev/null \
+     > "/tmp/review-<review-id>.txt"
+   ```
+   The API body is the literal markdown/HTML source, including
+   `<details>` blocks the web UI renders collapsed. Reading the web UI
+   instead means trusting its default collapsed state to have shown you
+   everything, which is the assumption this whole section rejects.
+   Persist the body to a file rather than only printing it — step 3
+   scans the file this command produces, and a command that fetches the
+   body and discards it has examined nothing.
+
+3. **Extract every `<summary>` label from the fetched body with a
+   stack-aware parser that only reports a label when its opening and
+   closing tags nest correctly — not a
+   `grep -o '<summary>[^<]*</summary>'`-style pattern, and not an
+   aggregate open/close *count* reconciliation either. Copilot's
+   `<summary>` elements routinely nest markup (`<strong>`, `<picture>`),
+   and matching tags by count rather than by nesting order accepts
+   malformed input: `<details><summary>Hidden (1)</details></summary>`
+   has one opening and one closing `<details>` and one opening and one
+   closing `<summary>` — its counts balance — yet the closing tags are
+   swapped, so it is not the structure this checklist assumes. A stack
+   catches that; a tally of counts does not:**
+   ```bash
+   python3 - <<'PY'
+import html, re, sys
+body = open('/tmp/review-<review-id>.txt').read()
+def fail(msg):
+    sys.exit(f'PARSE FAILURE: {msg}')
+def at(pos):
+    return f'offset {pos} (line {body.count(chr(10), 0, pos) + 1})'
+if not body.strip():
+    fail('empty review body')
+# Blank out what GitHub does not render as markup -- fenced blocks, HTML
+# comments, inline code spans -- with same-length whitespace, so every
+# offset reported below still indexes the raw file.
+hidden = []  # (kind, start, end) of every blanked region
+def blank(text, pattern, kind, flags=0):
+    def sub(m):
+        hidden.append((kind, m.start(), m.end()))
+        return re.sub(r'[^\n]', ' ', m.group(0))
+    return re.sub(pattern, sub, text, flags=flags)
+# A fence may sit inside blockquotes and list items, so the blockquote
+# and list markers before it are skipped. A backtick fence's info string
+# cannot contain a backtick; such a line is a code span, not a fence.
+lead = r'^(?:[ \t]*(?:>[ \t]?|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+))*[ \t]*'
+fence = lead + r'(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)\n.*?' + lead + r'(?:\1`*|\2~*)[ \t]*$'
+markup = blank(body, fence, 'CODE FENCE', re.S | re.M)
+m = re.search(lead + r'(`{3,}[^`\n]*$|~{3,})', markup, re.M)
+if m:
+    fail(f'unclosed code fence at {at(m.start())}')
+# HTML comments, autolinks, backslash escapes and code spans in one
+# left-to-right pass: whichever opens first wins, so a `<!--` inside a
+# code span, or a backtick inside a comment, does not affect the other.
+autolink = (r'<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>'
+            r"|<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9]"
+            r'(?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+            r'(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*>')
+token = re.compile(r'<!--|' + autolink + r'|\\[!-/:-@\[-`{-~]|`+')
+pos = 0
+while m := token.search(markup, pos):
+    start, opener = m.start(), m.group(0)
+    if opener == '<!--':
+        end = markup.find('-->', start + 4)
+        if end < 0:
+            fail(f'unclosed HTML comment at {at(start)}')
+        kind, end = 'HTML COMMENT', end + 3
+    elif opener[0] == '<':
+        kind, end = 'AUTOLINK', m.end()
+    elif opener[0] == '\\':
+        kind, end = 'ESCAPE', m.end()
+    else:
+        eol = markup.find('\n', start)
+        eol = len(markup) if eol < 0 else eol
+        close = re.compile(f'(?<!`){opener}(?!`)').search(markup, start + len(opener), eol)
+        if not close:
+            pos = start + len(opener)  # unmatched backticks are literal text
+            continue
+        kind, end = 'CODE SPAN', close.end()
+    hidden.append((kind, start, end))
+    markup = markup[:start] + re.sub(r'[^\n]', ' ', markup[start:end]) + markup[end:]
+    pos = end
+# The name must follow '<' or '</' directly ('< details>' is text).
+# Attributes must follow whitespace or '/'; quoted attribute values may
+# contain '>', so consume them whole.
+tag_re = re.compile(r'''<(/?)([a-z][a-z0-9-]*)((?:[\s/](?:[^>"']|"[^"]*"|'[^']*')*)?)>''', re.I)
+starts = {m.start() for m in tag_re.finditer(markup)}
+prefix = re.compile(r'</?(?:detail|summar)', re.I)
+for m in prefix.finditer(markup):
+    if m.start() not in starts:
+        fail(f'unparsable tag at {at(m.start())} (unbalanced quote or invalid tag syntax?)')
+stack = []  # each frame: [tag, content_start, tag_start, has_summary]
+labels = []
+for m in tag_re.finditer(markup):
+    closing, tag = bool(m.group(1)), m.group(2).lower()
+    if tag not in ('details', 'summary'):
+        if tag.startswith(('detail', 'summar')):
+            fail(f'unrecognized tag <{m.group(1)}{m.group(2)}> at {at(m.start())}')
+        continue
+    if not closing:
+        if tag == 'details' and any(f[0] == 'summary' for f in stack):
+            fail(f'<details> at {at(m.start())} is inside an open <summary>')
+        if tag == 'summary':
+            if not stack or stack[-1][0] != 'details' or stack[-1][3]:
+                fail(f'<summary> at {at(m.start())} is not the first summary directly inside a <details>')
+            a, b = stack[-1][1], m.start()
+            if markup[a:b].strip() or any(k != 'HTML COMMENT' and s < b and e > a for k, s, e in hidden):
+                fail(f'<summary> at {at(m.start())} is preceded by content inside its <details>')
+            stack[-1][3] = True
+        stack.append([tag, m.end(), m.start(), False])
+        continue
+    if not stack or stack[-1][0] != tag:
+        top = stack[-1][0] if stack else 'nothing open'
+        fail(f'</{tag}> at {at(m.start())} closes {top}')
+    open_tag, content_start, tag_start, has_summary = stack.pop()
+    if open_tag == 'summary':
+        # Structure comes from the masked text; the label text restores
+        # each code span's content, as the web UI renders it.
+        a, b, parts = content_start, m.start(), []
+        for kind, s, e in sorted(h for h in hidden if content_start <= h[1] < b):
+            parts.append(html.unescape(tag_re.sub('', markup[a:s])))
+            if kind == 'CODE SPAN':
+                ticks = len(body[s:e]) - len(body[s:e].lstrip('`'))
+                parts.append(body[s + ticks:e - ticks])
+            elif kind in ('AUTOLINK', 'ESCAPE'):
+                parts.append(body[s + 1:e - (kind == 'AUTOLINK')])
+            elif kind == 'CODE FENCE':
+                parts.append(' ' + body[s:e] + ' ')
+            a = e
+        parts.append(html.unescape(tag_re.sub('', markup[a:b])))
+        label = ' '.join(''.join(parts).split())
+        if not label:
+            fail(f'empty <summary> at {at(tag_start)}')
+        depth = sum(f[0] == 'details' for f in stack) - 1
+        labels.append('  ' * depth + label)
+    elif not has_summary:
+        fail(f'<details> at {at(tag_start)} closed with no <summary>')
+if stack:
+    fail(f'unclosed tag(s): {[f"<{f[0]}> at {at(f[2])}" for f in stack]}')
+for label in labels:
+    print(label)
+# Tags inside a blanked region are not structure, but they are text a
+# reader must still see: list each so it is read in context. A token
+# starting in the region may run past its end (an escape covers only
+# '\<'), and one tag_re cannot parse is listed too, not dropped.
+for kind, start, end in hidden:
+    for m in prefix.finditer(body, start):
+        if m.start() >= end:
+            break
+        t = tag_re.match(body, m.start())
+        if t and not t.group(2).lower().startswith(('detail', 'summar')):
+            continue
+        text = t.group(0) if t else body[m.start():].split('\n')[0][:80] + ' (unparsable)'
+        print(f'IN {kind} at {at(m.start())}: {text}')
+PY
+   ```
+   Treat every label this prints as a section to account for, including
+   one that has never appeared before. Extracting the tag structure
+   itself, rather than grepping for one specific header string, is what
+   survives the next time GitHub renames or adds a section; letting the
+   stack — not a regex lookahead — decide where a label ends is what
+   survives GitHub nesting markup inside the label itself, which it
+   already does today (e.g.
+   `<summary><strong>Open (7)</strong></summary>`); and `re.I` plus a
+   quote-aware attribute pattern on the tag tokens is what keeps a
+   differently-cased or attribute-carrying tag (`<DETAILS>`,
+   `<details open>`, `<details title="a>b">`) from being missed or cut
+   short at a `>` inside a quoted value. The same pattern strips inner
+   markup from labels. A `details`/`summary`-like opener the pattern
+   cannot match — typically an unbalanced quote, or a name followed by
+   something other than whitespace or `/` — is a parse failure,
+   not a skipped tag. A space between `<` or `</` and the name
+   (`< details>`) makes it text, as GitHub renders it, not a tag or a
+   failure. Labels are printed with inner markup
+   removed, HTML entities decoded (`&amp;` → `&`), code-span,
+   autolink, and escaped-character text kept (masking hides it from the
+   stack, not from the label), HTML comments dropped, and whitespace
+   collapsed, so they read as the web UI renders them, and indented two
+   spaces per enclosing `<details>`, so a label nested inside another
+   block is visibly distinct from a top-level one (see step 5).
+
+   The stack is the point of the snippet, not boilerplate: a closing
+   tag that doesn't match the innermost open tag, or a tag left open at
+   end of input, means the body's structure is not what this parser
+   models, so its output is not evidence of anything. Each exits
+   non-zero with a message naming the offending tag and its offset and
+   line in the raw fetched file, rather than
+   printing a partial list, because a partial list is indistinguishable
+   from a complete one at a glance — which is the failure the "Strict
+   parsing" rules below require this step to detect, and cannot detect
+   on its behalf. The same-count-but-swapped-order case above is
+   exactly what a pure open/close tally cannot see and a stack can.
+   Placement is checked too: a `<summary>` must be the first summary
+   directly inside an open `<details>`, with nothing but whitespace or
+   HTML comments before it, so an orphan `<summary>`, a second summary
+   in one block, a summary nested in a summary, or one preceded by
+   other content (`<details><div>x</div><summary>…`) fails rather than
+   printing a merged, unattached, or misplaced label. A `<details>`
+   opened while a `<summary>` is still open fails for the same reason:
+   `<details><summary>Outer <details><summary>Inner</summary></details></summary></details>`
+   would otherwise print both `Inner` and a corrupted `Outer Inner`. An empty summary
+   fails for the same reason — a blank label cannot be reconciled.
+
+   The missing-summary check is per `<details>` frame, not a single
+   global check run once at the end. Each `details` frame records
+   whether a `summary` opened inside it before that frame closes; a
+   frame that closes with the flag still false is a parse failure
+   naming the offset of its own opening tag. This matters because a
+   body can contain one well-formed block — `<details><summary>...
+   </summary>...</details>` — followed by a second, malformed one,
+   `<details>hidden finding</details>`, with no `<summary>` at all. The
+   first block already produces a label, so a check that only asks "is
+   the labels list non-empty?" at the very end passes the whole body,
+   silently accepting the second block's missing summary. Tracking the
+   flag per frame instead of aggregating across the whole body is what
+   catches that.
+
+   **Near-miss tag names fail.** The tokenizer reads every tag, not
+   only the two it models, and any tag name that begins `detail` or
+   `summar` but is not exactly `details` or `summary` — a typo such as
+   `<detail>`, or a custom element such as `<details-x>` — is a parse
+   failure rather than an ignored tag. Other tags (`<p>`, `<strong>`,
+   `<img>`) are skipped.
+
+   **Scope this does not cover.** The masking follows CommonMark
+   closely enough for review bodies, not exactly: it does not model
+   indented (four-space) code blocks, raw HTML blocks, or code spans
+   that wrap across lines, and it does not track where a blockquote or
+   list item ends, so a fence left open when its container ends fails
+   as unclosed rather than closing with the container. If a review body ever looks
+   inconsistent with what step 3 reports — e.g. the web UI's rendered
+   nesting implies a `<details>` wrapper the parser didn't count — read
+   the raw fetched file by hand before trusting the extraction.
+
+   Note that `<details>` blocks nest: a hidden-findings section can
+   carry one collapsed block per finding inside it, so the label list
+   legitimately mixes section headers (`Previously missed (1)`) with
+   individual finding titles. Both are labels to account for — see
+   step 5 for which of them earn a ledger row.
+
+   The masking before tokenizing is load-bearing for the same reason:
+   a finding whose prose quotes `<details>` or `<summary>` inside
+   backticks would otherwise contribute a stray tag with no matching
+   partner, and the stack would report a parse failure that is an
+   artifact of the finding's own text rather than of the body's
+   structure. Attested on this repo — an earlier, count-only version of
+   this parser falsely failed on a review whose own prose quoted both
+   tag names in backticks. Fenced blocks (backtick or tilde, any fence
+   length), HTML comments, autolinks, backslash escapes, and inline
+   code spans (any backtick run length) are masked, because GitHub
+   renders none of them as markup. A backtick line whose info string
+   contains a backtick (```` ```<summary>``` ````) is a code span, not a
+   fence opener, as CommonMark specifies; treating it as a fence made a
+   valid review fail as an unclosed fence (attested on this PR, review
+   5295693766). A fence inside a blockquote or list item (`> ` or `- `
+   before each of its lines) is masked like any other; matching fences
+   only at the start of a line let the tags a quoted fence contained
+   print as a real label (attested on this PR, review 5295807022).
+   Likewise an email autolink (`<summary@example.com>`)
+   and an escaped `\<summary>` are text, not tags.
+   Comments, autolinks, escapes, and code spans are found in one
+   left-to-right pass, and whichever opens first wins: a code span
+   quoting `` `<!--` `` is not a comment opener, a backtick inside a
+   comment does not start a code span, and `` \` `` is a literal
+   backtick. Masking comments in a separate pass first made a review
+   that quoted `` `<!--` `` fail as an unclosed comment (attested on
+   this PR, review 5295401637).
+   Each is replaced with same-length whitespace rather than deleted, so
+   every reported offset indexes the raw file; an unclosed fence or
+   comment is a parse failure, because everything after it would
+   otherwise be masked silently.
+
+   Masking must not hide text from the reader, only from the stack. A
+   stray backtick can pair with a later one on the same line and mask
+   a whole real `<details>` block between them, and an HTML comment can
+   carry tags the web UI never shows. So every `details`/`summary`-like
+   token starting inside a masked region is printed after the labels as
+   an `IN CODE SPAN` / `IN CODE FENCE` / `IN HTML COMMENT` /
+   `IN AUTOLINK` / `IN ESCAPE` line with its location. A token the tag
+   pattern cannot parse (e.g. `<summary title="unterminated>` in a code
+   span) is printed with the rest of its line and `(unparsable)` rather
+   than dropped, and an escaped tag is printed whole even though the
+   escape masks only its `\<` (both attested on this PR, review
+   5302996125). Each such line must be read in the raw file: it is either
+   a quotation in finding prose (no action) or a block the masking
+   swallowed (treat as a parse failure and read the section by hand).
+
+4. **Fetch inline review comments separately, including each
+   comment's body:**
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate \
+     --jq '.[] | {id, updated_at, path, subject_type, line, original_line, original_commit_id, body, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
+   ```
+   A `null` `line` has two meanings, told apart by `subject_type`. With
+   `subject_type == "file"` it is a current file-level comment, attached
+   to `path` as a whole: record it as a `path`-only ledger row. With
+   `subject_type == "line"` it is an *outdated* comment — one whose diff
+   location a later commit invalidated so GitHub can no longer map it
+   onto the current diff. A later push alone does not outdate a comment:
+   one whose hunk survives keeps a current `line`. For an outdated
+   comment, record `original_line` at `original_commit_id` as the
+   finding's location, and read the current file to find where that
+   code now lives; a `null` line is not a missing location.
+
+   Also fetch top-level PR comments, because step 6 records some replies
+   there and a ledger rebuilt without them sees the finding but not its
+   answer:
+   ```bash
+   gh api repos/<owner>/<repo>/issues/<n>/comments --paginate \
+     --jq '.[] | {id, user: .user.login, created_at, updated_at, body}' < /dev/null
+   ```
+   Match each against the ledger by the review id and section label the
+   step 6 fallback requires it to cite.
+   `body` is not optional in this projection: it is the finding text
+   that step 5 must adjudicate and step 6 must answer. A projection
+   that drops it — keeping only `id`/`path`/`line`/`review` — retrieves
+   metadata sufficient to *count* comments but not to *read* them,
+   which silently defeats the "read every finding" hard rule at the
+   top of this section while still looking like a complete fetch.
+
+   A review whose `/comments` carry no rows for that
+   `pull_request_review_id` is **not** automatically suppressed-only —
+   it may instead have raised no findings at all (a body reading
+   `Findings: None`, with no hidden-findings label for step 3 to have
+   found). Do not infer either shape from the comment count alone: read
+   the body pulled in steps 2–3 for that review to tell "zero findings"
+   apart from "findings exist but every one landed in a collapsed
+   section" — only the second shape needs a ledger row.
+
+5. **Build a ledger before replying to anything:** one row per finding
+   (inline or hidden), each with its `path:line` (step 4's
+   `original_line` for an outdated comment, `path` alone for a
+   file-level one), source review id, and
+   adjudication (fix / fix differently / decline). First decide, for
+   each label step 3 printed, whether its block is a **container**, a
+   **finding**, or **informational**, from the block's structure in the
+   raw file, never from its label text: a container's content after its
+   `<summary>` is a list of items — bullets or nested `<details>` blocks
+   (printed indented beneath it) — one per finding; a finding's content
+   is the finding's own prose; an informational block is anything else,
+   typically an overview that mixes prose with a restatement of the
+   review's findings. Attested as `What changed in this PR` on this
+   repo: a verdict paragraph, a change list, and one bullet per finding
+   repeating the review's inline comments by `path:line`. An
+   informational block gets no ledger row and no count check, but it
+   must still be read: check every finding it names against the ledger,
+   and give any finding the ledger does not already cover a
+   hidden-finding row of its own. Finding titles are free-form and can end in
+   `(N)` too (`Handle all (3) cases`), so a trailing count is read only
+   once a block is known to be a container; a container with no
+   trailing count is a failure under the rules below, and a finding
+   whose title happens to end in `(N)` is still a finding and gets a
+   row. A container is then flagged for reconciliation, but reconciling
+   it correctly requires first classifying *what population it
+   aggregates* — its label text alone does not say. `Suppressed comments (N)`, `Previously missed (N)`,
+   and `Open (N)` are all attested labels on real reviews, but they are
+   not interchangeable: on one review, `Open (N)` nested items that
+   each linked to a `#discussion_r<id>` anchor — i.e., findings already
+   fetched as inline comments in step 4 — while `Previously missed (N)`
+   nested body-only bullets with no comment object of their own. Do not
+   assume any specific label name (`Open` included) always means
+   "hidden findings with no comment object"; that was true for
+   `Previously missed` and `Suppressed comments` on the reviews seen so
+   far, but is a property to verify per section, not to infer from the
+   name. Classify each aggregate section by its nested items' contents,
+   into one of three populations:
+   - **This review's inline comments** — items link to
+     `#discussion_r<id>` anchors whose ids step 4 attributes to *this*
+     review (`review` equals this review's id). Reconcile the count
+     against step 4's inline-comment count for this review, counting
+     only top-level rows (`in_reply_to` is `null`): a threaded reply is
+     discussion on a finding, not a finding, and counting replies
+     inflates the total once findings have been answered.
+   - **Earlier reviews' comments** — items link to `#discussion_r<id>`
+     anchors whose ids step 4 attributes to an *earlier* review.
+     Attested as `Resolved since last review (N)`: on this repo, one
+     such section counted 7 and linked the 7 comments of the previous
+     review, while its own review had 1 inline comment. Reconcile the
+     count against the number of linked ids, check every id exists in
+     step 4's output under an earlier review, and add no ledger rows —
+     those findings already have rows from their own review. Reading
+     each item is still required: Copilot saying a finding is resolved
+     is a claim to check against the ledger, not a reply.
+   - **Hidden findings** — items carry no `#discussion_r` link. This
+     ledger's hidden-finding row count for this review must match.
+
+   A section whose items mix populations, or link an id step 4 does not
+   return, is a parse failure under the rules below. A count mismatch,
+   once reconciled against the correct population, means step 3 missed
+   an entry or double-counted one, and the ledger is not trustworthy
+   yet.
+
+6. **Answer every ledger row** — a threaded reply for an inline
+   comment, a *new* inline comment (cited to the finding's `path:line`)
+   for a hidden one, and a top-level PR comment only where an inline
+   comment is impossible (below). For a finding adjudicated fix or fix
+   differently, reply after the fix lands, so the reply can cite a real
+   commit SHA; for a declined finding there is no fix to wait for, so
+   reply once the rationale for declining is settled, stating that
+   rationale. An inline comment is impossible for a hidden finding
+   that names no file, or whose line is outside the PR's current diff
+   (GitHub rejects a new inline comment there with HTTP 422). Either
+   gets a top-level PR comment instead, which must cite its source
+   review id and the section label it came from, plus the finding's
+   `path:line` if it has one, so it stays traceable to the ledger row.
+
+7. **Thread resolution belongs to the user, never the agent.** An
+   agent must not resolve a review thread — by API, by GraphQL
+   `resolveReviewThread`, or through any tool — regardless of whether
+   the thread has been answered, the fix has landed, or the user asked
+   for a clean or merge-ready PR. Once every ledger row has a reply and
+   step 8's refresh gate has just been re-run clean, report the
+   answered threads to the user and leave resolving them to the user,
+   in the same way as merging (the hard rule in "Agent merge policy"
+   below). A new inline comment for a hidden finding opens its own
+   thread; it is part of what the user resolves, not something the
+   agent clears as part of answering the finding.
+
+8. **Re-run this refresh-and-reconciliation gate at three separate
+   points, not once:** immediately before reporting threads as ready
+   for the user to resolve, immediately before requesting merge
+   permission, and immediately
+   again right before executing the merge itself. Treat each of the
+   three as its own mandatory pass whose result does not carry forward
+   to the next — a review or a push can land in the window between any
+   two of them, and the gap between "permission requested" and "merge
+   executed" can be arbitrarily long if the user does not respond
+   immediately.
+
+   At each pass, re-run steps 1–4 and check the result actually covers
+   the PR's current head SHA — don't assume a re-run does:
+   ```bash
+   gh pr view <n> --json headRefOid --jq .headRefOid < /dev/null
+   ```
+   Compare that value against the `commit_id` step 1 now records for
+   each review, and check whether a Copilot review is still in flight:
+   ```bash
+   gh api repos/<owner>/<repo>/pulls/<n>/requested_reviewers \
+     --jq '[.users[].login | select(test("opilot";"i"))] | length' < /dev/null
+   ```
+   A non-zero count means a review was requested and has not been
+   submitted; wait for it rather than treating an in-flight review as
+   equivalent to no review. Do not look for a `PENDING` review instead:
+   GitHub shows a pending review only to its own author, so Copilot's
+   in-progress review never appears in step 1's output.
+
+   If no review's `commit_id` matches the current head and no review is
+   in flight, the head is **unreviewed**, not reviewed: commits pushed
+   after the last review — a fix, a rebase — have not been read by
+   Copilot. Whether waiting can end this state depends on the repo's
+   Copilot review rule, which has changed over this repo's life
+   (push-triggered re-reviews were recorded in August 2026; the rule
+   now has them off), so read it rather than assuming:
+   ```bash
+   ids=$(gh api repos/<owner>/<repo>/rulesets --paginate --jq '.[].id' < /dev/null) ||
+     { echo "FETCH FAILED: rulesets list" >&2; exit 1; }
+   while read -r id; do
+     [ -n "$id" ] || continue
+     gh api "repos/<owner>/<repo>/rulesets/$id" < /dev/null \
+       --jq 'select(.enforcement=="active") | .rules[] | select(.type=="copilot_code_review") | .parameters.review_on_push' ||
+       { echo "FETCH FAILED: ruleset $id" >&2; exit 1; }
+   done <<< "$ids"
+   ```
+   The list is captured before the loop rather than piped into it, so
+   a failed list call stops with an error instead of running zero
+   iterations and printing nothing — which would read as the
+   explicit-request case below. A `FETCH FAILED` line is a parse
+   failure under the rules below, not an answer.
+   If any active rule prints `true`, a push requests a review
+   automatically: re-check `requested_reviewers` above, and wait for
+   that review rather than declaring the head unreviewed. If the
+   re-check reads zero, re-run step 1 before deciding anything — the
+   automatic review may have been requested and submitted since step 1
+   ran, leaving no request to wait for and a stale review list. If the
+   re-run shows a review at the head, reconcile it as below; if not,
+   the head is unreviewed. If every rule prints `false`, or none prints
+   anything and no command failed, Copilot reviews only on an
+   explicit request and waiting does not end this state. Once the ledger covers
+   every review that exists, the gate passes for those reviews; report
+   to the user that the head commit is unreviewed, name the commits
+   since the last reviewed `commit_id`, and ask whether to request a
+   fresh review before going further. Do not request one unasked, and
+   do not describe the head as Copilot-clean.
+
+   SHA coverage is necessary but not sufficient: it means the ledger
+   includes *a* review at the current head, not that every finding in
+   that review has been reconciled. **If a pass surfaces a review or
+   comment the ledger does not already cover — new or otherwise — stop
+   and run steps 5–6 for it (add ledger rows, answer them) before
+   continuing to whichever of the three points triggered this pass.** A
+   fresh review discovered mid-gate and left unreconciled is the exact
+   failure this checklist exists to close, only deferred to a later
+   re-run instead of skipped outright. The checklist is a gate on the
+   state at each of these three moments, not a one-time pass earlier in
+   the session.
+
+   **Bind each pass to one snapshot.** At the start of the pass, record
+   the head SHA, the id of every review step 1 lists and a digest of
+   the body step 2 saved for it, the id and `updated_at` of every
+   inline and top-level PR comment step 4 fetches, and the requested
+   reviewers; record them again, re-fetched, as the pass's last
+   action. If anything differs, a push, review, new or edited comment,
+   or review request landed mid-pass and the checks covered a state
+   that no longer exists: restart the pass from step 1. Editing a
+   comment keeps its id, so ids alone do not cover it. A review can arrive
+   without a push, so checking the head SHA alone does not cover it. The SHA the
+   final pass verified is the one the merge is pinned to ("Agent merge
+   policy", step 4): `--match-head-commit` makes GitHub refuse the
+   merge if the head has moved since. It does not cover a review or
+   comment that arrives without a push between the last snapshot and
+   the merge. GitHub offers no atomic check for that, so keep that
+   window to the one merge command, and check the PR again after
+   merging. A finding that turns up then gets a follow-up PR.
+
+### Strict parsing — no silent fallbacks
+
+The checklist above only closes the gap it targets if each step's
+output is checked against an explicit expectation and treated as a
+hard stop when it isn't met. A script (or an agent skimming output)
+that tolerates an empty body, an unrecognized `<summary>` label, or a
+hidden-finding-count mismatch by quietly moving on has reintroduced the
+exact "skim and hope" failure this section exists to replace —
+best-effort parsing and silent fallbacks are what let a renamed or
+newly introduced section disappear in the first place. Concretely:
+
+- **No hardcoded allowlist of expected `<summary>` labels.** Step 3's
+  extraction must not be followed by logic that only reacts to one
+  known label (`Suppressed comments`, `Open`, or any other single
+  string) and ignores every other match. Every distinct label step 3
+  returns — including one that has never appeared on this repo before
+  — must be read before the checklist can call this review accounted
+  for. Not every label earns a ledger row, though: an aggregate section
+  header — a block whose content is a list of per-finding items, e.g.
+  `Open (7)` or `Previously missed (2)` — is the container, not a
+  finding; only the individual findings nested inside it get rows.
+  Container status comes from that structure (step 5), never from a
+  trailing `(N)` alone, since a finding title can end in one too. An
+  informational block (step 5), such as an overview, is neither: it
+  gets no row and no count check, but every finding it names must be
+  matched to a ledger row, and one that matches none gets its own
+  hidden-finding row. But which count that container
+  cross-checks against is not fixed by its label text — see step 5:
+  a container whose nested items link to this review's inline comments
+  reconciles against step 4's top-level (non-reply) count for this
+  review, one whose items
+  link to earlier reviews' comments reconciles against its own linked
+  ids and adds no rows, and one whose nested items carry no such link
+  is what step 5's one-row-per-finding ledger count must match. Adding
+  the
+  header itself as a row, or cross-checking it against the wrong
+  population, inflates or corrupts the count step 5 checks and makes a
+  correct ledger look wrong. Finding a label outside the known set,
+  aggregate or not, is not a warning to log and continue past; treat it
+  the same as any other checklist failure — stop and read the section,
+  classify it as container, finding, or informational (and, if a
+  container, which population it aggregates), before going further.
+- **No silent fallback on an empty, missing, or truncated `body`.** If
+  step 2's fetch returns an empty string, `null`, or a response that
+  looks paginated/truncated, that is a fetch failure, not "this review
+  had no findings." Re-fetch or fix the query before treating the
+  review as accounted for; do not let an empty body pass the checklist
+  by default.
+- **Assert every aggregate section's count against its correct
+  population; don't just eyeball it.** Step 5's cross-check must fail
+  loudly when a container's `(N)` disagrees with whatever count it was
+  classified against — the ledger's hidden-finding row count for a
+  container whose nested items carry no `#discussion_r...` link, step
+  4's top-level (non-reply) inline-comment count for this review when
+  they link this
+  review's comments, or the number of linked ids when they link an
+  earlier review's.
+  Which check applies is read from the classification step 5 requires,
+  never hardcoded by label name, since the label text itself is exactly
+  what has changed release over release and a given name (`Open`
+  included) is not reliably tied to one population or the other:
+  ```bash
+  n_header=$(printf '%s\n' "$section_label" | sed -n 's/.*(\([0-9][0-9]*\))[[:space:]]*$/\1/p')
+  [ -n "$n_header" ] || { echo "NO COUNT: label has no trailing (N): $section_label" >&2; exit 1; }
+  n_actual=<count for the population this container was classified as>
+  [ "$n_header" = "$n_actual" ] || { echo "MISMATCH: header=$n_header actual=$n_actual" >&2; exit 1; }
+  ```
+  The count is the label's *trailing* `(N)` only, so a label such as
+  `Fix (a) thing (3)` reads as 3, and a label with no trailing count
+  or an empty `()` stops with its own message rather than an empty
+  comparison.
+  Here `$section_label` is one of the labels step 3 extracted (e.g.
+  `Suppressed comments (3)`, `Previously missed (3)`, `Open (7)`) — any
+  of them may aggregate either population, so the classification must
+  come before the count comparison, not be inferred from the label
+  string. A mismatch means the ledger is wrong, or the classification
+  was wrong, and must be corrected before any reply goes out — it is
+  never acceptable to round the two numbers together, defer the
+  discrepancy, or proceed on the larger/smaller of the two as a guess.
+- **A non-zero exit code or an API error from any command in steps
+  1–4 is a parse failure, not "no findings."** Do not interpret a
+  failed `gh api` call, a `jq` parse error, or an empty match set from
+  a command that should have matched something as evidence the review
+  is clean. Surface the failure and re-run the step; a checklist step
+  that fails closed (stops the workflow) is correct behavior here,
+  not a bug to route around.
+- **A tag structure step 3 cannot parse — any `PARSE FAILURE` it
+  exits with: a closing tag that does not match the innermost open
+  one, an unclosed tag, code fence, or HTML comment, a missing, empty,
+  or misplaced `<summary>`, a `<details>` opened inside a `<summary>`,
+  a near-miss tag name beginning `detail` or `summar`, or such a tag
+  left unparsable by an unbalanced quote or a name not followed by
+  whitespace or `/` — is itself a
+  finding.** Letter case and attributes are not failures: step 3
+  accepts `<DETAILS>`, `<details open>`, and `<details title="a>b">`
+  as ordinary tags. Nor is an `IN CODE SPAN` / `IN CODE FENCE` /
+  `IN HTML COMMENT` / `IN AUTOLINK` / `IN ESCAPE` line, including one
+  marked `(unparsable)`, which is text to read in context rather than
+  a failure: GitHub renders none of these regions as markup. Do not fall back to reading the rendered web page as a
+  substitute (see step 2's rationale for why) and do not assume the
+  section is decorative. Record the parse failure in the ledger, flag
+  it explicitly to the user, and treat the review as unaccounted-for
+  until it is resolved by hand.
+
+The underlying principle: every step in the checklist has a
+pass/fail condition, and "I didn't see anything unusual" is not the
+same as verifying the condition. GitHub is free to keep changing this
+UI; the checklist survives that only if unrecognized output halts the
+workflow instead of being silently absorbed as "nothing new here."
+
+### Mechanics reference
+
+The Augment skill `copilot-review-replies`
+(`~/.augment/skills/copilot-review-replies/SKILL.md`) codifies steps
+4–6 above with copy-pasteable commands: the payload shape for each
+reply endpoint, the endpoint asymmetry between fetching and posting a
+review comment, and adjudication guidance (fix / fix differently /
+decline — Copilot is confidently wrong often enough that accepting
+every finding degrades the branch). Use it in an Augment session; the
+checklist above is written to stand on its own for any agent or human
+running this workflow without it.
+
 ## Agent merge policy (read this before any `gh pr merge`)
 
 > **Hard rule:** An agent must **never** call `gh pr merge` (or
@@ -132,8 +828,12 @@ The agent-side workflow is therefore:
    user.
 3. **Stop.** Wait for explicit "merge it" / "go ahead and merge"
    / equivalent unambiguous instruction.
-4. On receiving that instruction, `gh pr merge --squash
-   --delete-branch` and report the merge result.
+4. On receiving that instruction, run the final step 8 pass of
+   "Copilot PR Review Handling", then
+   `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`,
+   where `<sha>` is the head SHA that pass verified, and report the
+   merge result. If GitHub refuses because the head no longer matches,
+   re-run the gate for the new head; do not drop the flag.
 
 Recovery when this rule is broken: open a revert PR
 (`git revert <squash-sha>` on a `revert/pr-<n>-<short-slug>`
