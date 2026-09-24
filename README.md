@@ -118,6 +118,10 @@ Web and WebAssembly are unsupported: NTS-KE needs a raw TCP socket
 on `:4460` and NTPv4 needs a raw UDP socket on `:123`, neither of
 which is reachable from a browser tab.
 
+The strict clock selects a native backend on all five platforms, but
+how much of its behaviour has been observed differs by platform; see
+[Platform evidence](#platform-evidence).
+
 ### Quick start
 
 For most applications, `ntsGetTime` is the whole integration: one
@@ -359,6 +363,159 @@ For the platform syscall mappings, epoch semantics, the
 bridge-initialization requirement, and how to synchronize your own
 protocol-level timeouts with the package's clock, see
 [doc/MONOTONIC_TIME.md](doc/MONOTONIC_TIME.md).
+
+`MonotonicClock` is best effort. Callers that need every reading to
+be attributable to the native clock, or to fail, should use the
+[strict clock](#strict-clock) instead.
+
+## Strict clock
+
+New in 10.0. `MonotonicClock` and the `NtsSyncedTime` it anchors are
+best effort: if the platform clock cannot be read, the native core
+can latch a process-local counter that may not count device sleep,
+and nothing on the reading says so. The strict path removes that
+fallback. A `StrictClockContext` names the clock it reads, and every
+read either returns a reading attributed to that clock or throws on
+that call.
+
+### Legacy versus strict
+
+| | Legacy: `MonotonicClock`, `ntsGetTime`, `NtsSyncedTime` | Strict: `StrictClockContext`, `ntsGetTimeStrict`, `StrictSyncedTime` |
+|---|---|---|
+| Native read fails | May latch a fallback counter that may not count sleep, with no signal | Throws a `StrictClockError` on that call; the context is invalid from then on |
+| Provenance | None | Every `StrictReading` carries `descriptor`, `generation` and `provenance` |
+| Sample attribution | Not attributed | Each sample is matched to the context by its native receipt stamp; an unattributable sample fails the call |
+| Synced clock reads | `utcNow` / `elapsedSinceSync` getters | `utcNow()` / `elapsedSinceSync()` methods that re-read the context and throw once it is invalid |
+| Mock bridge | Falls back to `Stopwatch` | `resolve()` throws `StrictClockMockOnly`; tests use `resolveForTesting()` |
+
+The legacy entry points are not untouched in 10.0: the native core
+now runs its own deadline, session and receipt clock reads strictly
+for every caller, so `ntsGetTime`, `ntsQuery` and `ntsWarmCookies`
+can also fail with `NtsError.clockFault`. See the `## 10.0` entry in
+[CHANGELOG.md](CHANGELOG.md).
+
+### Resolve, read and sync
+
+`StrictClockContext.resolve()` needs an initialized native bridge. It
+is synchronous, never cached, and fails distinctly:
+`StrictClockUninitialized` before `NtsBridge.ensureInitialized()`,
+`StrictClockMockOnly` on a hand-written mock bridge,
+`StrictClockUnsupported` when the build has no supported backend,
+and a source fault or `StrictClockUnknownSource` when the binding
+read cannot be trusted. `now()` performs the bridge-state checks and
+one synchronous native read; it does no I/O.
+
+```dart
+import 'package:nts/nts.dart';
+
+Future<void> main() async {
+  await NtsBridge.ensureInitialized();
+
+  final StrictClockContext clock;
+  try {
+    clock = StrictClockContext.resolve();
+  } on StrictClockError catch (e) {
+    // Fail closed: do not substitute MonotonicClock or DateTime.now().
+    print('strict clock unavailable: $e');
+    return;
+  }
+
+  final start = clock.now();
+  print('${start.descriptor}, generation ${start.generation}');
+
+  const spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
+  try {
+    final synced = await ntsGetTimeStrict(spec: spec, context: clock);
+    print('authenticated utc = ${synced.utcNow()}');
+    print('sync age = ${synced.elapsedSinceSync()}');
+    print('since start = ${clock.elapsedSince(start)}');
+  } on NtsErrorClockFault catch (e) {
+    print('clock could not vouch at ${e.stage.name}: ${e.fault}');
+  } on NtsError catch (e) {
+    print('sync failed: $e');
+  } on StrictClockError catch (e) {
+    // Raised by utcNow(), elapsedSinceSync() and elapsedSince().
+    // `clock` is now invalid; resolve a new context to continue.
+    print('strict clock failed: $e');
+  }
+}
+```
+
+Network calls report a clock failure as `NtsError.clockFault`, whose
+`stage` names where the read served and whose `fault` is the
+underlying `StrictClockError`. Context methods and the
+`StrictSyncedTime` projections throw the `StrictClockError` directly.
+
+### Errors and invalidation
+
+- **A failing read invalidates.** A source fault or a regression on
+  `now()` or `elapsedSince()` throws that error and leaves the
+  context permanently invalid.
+- **Lifecycle events invalidate.** After `NtsBridge.dispose()`, a raw
+  `NtsRustLib.dispose()` / `init()`, an explicit `invalidate()`, or
+  an advance of the native generation, the next `now()` /
+  `elapsedSince()` throws `StrictClockInvalidated` with the matching
+  `reason`. The generation is process-wide: a native fault or a
+  bridge disposal on any isolate or engine in the process advances
+  it, and every context in the process fails on its next read.
+- **Foreign readings are rejected without invalidating.**
+  `elapsedSince()` given a reading from another bridge incarnation,
+  coordinate or generation throws `StrictClockSourceIncompatible`,
+  `StrictClockDescriptorIncompatible` or
+  `StrictClockGenerationIncompatible` without reading the clock, and
+  the context stays valid.
+- **`isValid` is not a liveness probe.** `isValid` and
+  `invalidationReason` report only failures this context has already
+  observed. A reset or generation advance elsewhere shows up on the
+  next read, so call `now()` to learn the current state.
+
+### Recovery
+
+An invalid context is never repaired. Resolve a new one with
+`StrictClockContext.resolve()`, which itself fails if the clock is
+still unusable, and re-sync with `ntsGetTimeStrict` on the new
+context. Discard the old context's readings and `StrictSyncedTime`
+rather than carrying them over: the old `StrictSyncedTime` keeps
+throwing, and a new context rejects readings from an earlier bridge
+incarnation or generation.
+
+### Ownership and scope
+
+- A reading means nothing outside the process that took it. The
+  generation is a per-process lifecycle token, so equal generations
+  in two processes prove nothing. Do not persist raw `micros` or
+  compare them across processes or reboots.
+- `ClockSourceDescriptor` values can be persisted and compared with
+  `isCompatibleWith`. Compatibility says two coordinates use the same
+  source and conversion rules; it does not say two readings share a
+  counter epoch.
+- Same-boot transfer between processes (`exportReference` /
+  `bindReference`) is unavailable as shipped. No boot-scope provider
+  is approved, so a native context refuses with
+  `StrictClockBootScopeUnavailable` and reason
+  `BootScopeUnavailableReason.providerNotApproved`. Local strict
+  reads do not depend on it.
+
+### Platform evidence
+
+Every platform selects a suspend-inclusive source, but what has been
+observed differs. This table is what the
+[strict clock evidence matrix](https://github.com/nick-llewellyn/nts/blob/main/tool/clock_evidence/evidence_matrix.md)
+records today; anything not listed is unverified.
+
+| Platform | Backend | Recorded | Not yet recorded |
+|---|---|---|---|
+| Android | `linuxBoottime` (`CLOCK_BOOTTIME`) | Source review; Rust unit tests of the shared Linux/Android reader; hermetic Dart tests | Android compilation; native read on a device; all device behaviour |
+| iOS | `appleContinuous` (`mach_continuous_time`) | Source review; hermetic Dart tests | iOS compilation and Rust unit tests; native read on a device; all device behaviour |
+| macOS | `appleContinuous` (`mach_continuous_time`) | Source review; compilation; Rust unit tests; hermetic Dart tests; native read on a Mac | Multiple engines, bridge teardown across engines, relaunch, descriptor stability across relaunch, suspend, clock change, process death, reboot, uptime after boot |
+| Linux | `linuxBoottime` (`CLOCK_BOOTTIME`) | Source review; compilation; Rust unit tests; hermetic Dart tests | Native read on a host; all runtime behaviour |
+| Windows | `windowsInterruptTime` (`QueryInterruptTimePrecise`) | Source review; hermetic Dart tests | Compilation and Rust unit tests; native read on a host; all runtime behaviour |
+
+No platform yet has recorded evidence that strict readings advance
+correctly across a real suspend, stay put across a wall-clock
+change, or behave as specified across process death, reboot or
+multiple engines. Hermetic tests and simulators do not count as that
+evidence.
 
 ## Security considerations
 
