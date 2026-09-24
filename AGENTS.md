@@ -235,11 +235,13 @@ while m := token.search(markup, pos):
     hidden.append((kind, start, end))
     markup = markup[:start] + re.sub(r'[^\n]', ' ', markup[start:end]) + markup[end:]
     pos = end
+# The name must follow '<' or '</' directly ('< details>' is text).
 # Attributes must follow whitespace or '/'; quoted attribute values may
 # contain '>', so consume them whole.
-tag_re = re.compile(r'''<(/?)\s*([a-z][a-z0-9-]*)((?:[\s/](?:[^>"']|"[^"]*"|'[^']*')*)?)>''', re.I)
+tag_re = re.compile(r'''<(/?)([a-z][a-z0-9-]*)((?:[\s/](?:[^>"']|"[^"]*"|'[^']*')*)?)>''', re.I)
 starts = {m.start() for m in tag_re.finditer(markup)}
-for m in re.finditer(r'<\s*/?\s*(?:detail|summar)', markup, re.I):
+prefix = re.compile(r'</?(?:detail|summar)', re.I)
+for m in prefix.finditer(markup):
     if m.start() not in starts:
         fail(f'unparsable tag at {at(m.start())} (unbalanced quote or invalid tag syntax?)')
 stack = []  # each frame: [tag, content_start, tag_start, has_summary]
@@ -296,7 +298,6 @@ for label in labels:
 # reader must still see: list each so it is read in context. A token
 # starting in the region may run past its end (an escape covers only
 # '\<'), and one tag_re cannot parse is listed too, not dropped.
-prefix = re.compile(r'<\s*/?\s*(?:detail|summar)', re.I)
 for kind, start, end in hidden:
     for m in prefix.finditer(body, start):
         if m.start() >= end:
@@ -323,7 +324,9 @@ PY
    markup from labels. A `details`/`summary`-like opener the pattern
    cannot match — typically an unbalanced quote, or a name followed by
    something other than whitespace or `/` — is a parse failure,
-   not a skipped tag. Labels are printed with inner markup
+   not a skipped tag. A space between `<` or `</` and the name
+   (`< details>`) makes it text, as GitHub renders it, not a tag or a
+   failure. Labels are printed with inner markup
    removed, HTML entities decoded (`&amp;` → `&`), code-span,
    autolink, and escaped-character text kept (masking hides it from the
    stack, not from the label), HTML comments dropped, and whitespace
@@ -647,11 +650,13 @@ PY
    the session.
 
    **Bind each pass to one snapshot.** At the start of the pass, record
-   the head SHA, the ids of every review, inline comment, and top-level
-   PR comment, and the requested reviewers; record them again as the
-   pass's last action. If anything differs, a push, review, comment, or
-   review request landed mid-pass and the checks covered a state that
-   no longer exists: restart the pass from step 1. A review can arrive
+   the head SHA, the id and a digest of the body of every review, the
+   id and `updated_at` of every inline and top-level PR comment, and
+   the requested reviewers; record them again as the pass's last
+   action. If anything differs, a push, review, new or edited comment,
+   or review request landed mid-pass and the checks covered a state
+   that no longer exists: restart the pass from step 1. Editing a
+   comment keeps its id, so ids alone do not cover it. A review can arrive
    without a push, so checking the head SHA alone does not cover it. The SHA the
    final pass verified is the one the merge is pinned to ("Agent merge
    policy", step 4): `--match-head-commit` makes GitHub refuse the
