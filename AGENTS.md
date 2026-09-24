@@ -195,11 +195,13 @@ def blank(text, pattern, kind, flags=0):
         hidden.append((kind, m.start(), m.end()))
         return re.sub(r'[^\n]', ' ', m.group(0))
     return re.sub(pattern, sub, text, flags=flags)
-# A backtick fence's info string cannot contain a backtick; such a line
-# is a code span, not a fence.
-fence = r'^ {0,3}(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)\n.*?^ {0,3}(?:\1`*|\2~*)[ \t]*$'
+# A fence may sit inside blockquotes and list items, so the blockquote
+# and list markers before it are skipped. A backtick fence's info string
+# cannot contain a backtick; such a line is a code span, not a fence.
+lead = r'^(?:[ \t]*(?:>[ \t]?|(?:[-+*]|[0-9]{1,9}[.)])[ \t]+))*[ \t]*'
+fence = lead + r'(?:(`{3,})[^`\n]*|(~{3,})[^\n]*)\n.*?' + lead + r'(?:\1`*|\2~*)[ \t]*$'
 markup = blank(body, fence, 'CODE FENCE', re.S | re.M)
-m = re.search(r'^ {0,3}(`{3,}[^`\n]*$|~{3,})', markup, re.M)
+m = re.search(lead + r'(`{3,}[^`\n]*$|~{3,})', markup, re.M)
 if m:
     fail(f'unclosed code fence at {at(m.start())}')
 # HTML comments, autolinks, backslash escapes and code spans in one
@@ -367,7 +369,9 @@ PY
    **Scope this does not cover.** The masking follows CommonMark
    closely enough for review bodies, not exactly: it does not model
    indented (four-space) code blocks, raw HTML blocks, or code spans
-   that wrap across lines. If a review body ever looks
+   that wrap across lines, and it does not track where a blockquote or
+   list item ends, so a fence left open when its container ends fails
+   as unclosed rather than closing with the container. If a review body ever looks
    inconsistent with what step 3 reports — e.g. the web UI's rendered
    nesting implies a `<details>` wrapper the parser didn't count — read
    the raw fetched file by hand before trusting the extraction.
@@ -392,7 +396,11 @@ PY
    contains a backtick (```` ```<summary>``` ````) is a code span, not a
    fence opener, as CommonMark specifies; treating it as a fence made a
    valid review fail as an unclosed fence (attested on this PR, review
-   5295693766). Likewise an email autolink (`<summary@example.com>`)
+   5295693766). A fence inside a blockquote or list item (`> ` or `- `
+   before each of its lines) is masked like any other; matching fences
+   only at the start of a line let the tags a quoted fence contained
+   print as a real label (attested on this PR, review 5295807022).
+   Likewise an email autolink (`<summary@example.com>`)
    and an escaped `\<summary>` are text, not tags.
    Comments, autolinks, escapes, and code spans are found in one
    left-to-right pass, and whichever opens first wins: a code span
