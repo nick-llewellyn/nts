@@ -632,6 +632,15 @@ PY
    state at each of these three moments, not a one-time pass earlier in
    the session.
 
+   **Bind each pass to one head SHA.** Keep the head SHA read at the
+   start of the pass, and read it again as the pass's last action. If
+   the two differ, a push landed mid-pass and the checks covered a head
+   that no longer exists: restart the pass from step 1. The SHA the
+   final pass verified is the one the merge is pinned to ("Agent merge
+   policy", step 4): `--match-head-commit` makes GitHub refuse the
+   merge if the head has moved since, which closes the window between
+   that last read and the merge itself.
+
 ### Strict parsing — no silent fallbacks
 
 The checklist above only closes the gap it targets if each step's
@@ -792,8 +801,12 @@ The agent-side workflow is therefore:
    user.
 3. **Stop.** Wait for explicit "merge it" / "go ahead and merge"
    / equivalent unambiguous instruction.
-4. On receiving that instruction, `gh pr merge --squash
-   --delete-branch` and report the merge result.
+4. On receiving that instruction, run the final step 8 pass of
+   "Copilot PR Review Handling", then
+   `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`,
+   where `<sha>` is the head SHA that pass verified, and report the
+   merge result. If GitHub refuses because the head no longer matches,
+   re-run the gate for the new head; do not drop the flag.
 
 Recovery when this rule is broken: open a revert PR
 (`git revert <squash-sha>` on a `revert/pr-<n>-<short-slug>`
