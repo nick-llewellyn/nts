@@ -293,11 +293,19 @@ if stack:
 for label in labels:
     print(label)
 # Tags inside a blanked region are not structure, but they are text a
-# reader must still see: list each so it is read in context.
+# reader must still see: list each so it is read in context. A token
+# starting in the region may run past its end (an escape covers only
+# '\<'), and one tag_re cannot parse is listed too, not dropped.
+prefix = re.compile(r'<\s*/?\s*(?:detail|summar)', re.I)
 for kind, start, end in hidden:
-    for m in tag_re.finditer(body, start, end):
-        if m.group(2).lower().startswith(('detail', 'summar')):
-            print(f'IN {kind} at {at(m.start())}: {m.group(0)}')
+    for m in prefix.finditer(body, start):
+        if m.start() >= end:
+            break
+        t = tag_re.match(body, m.start())
+        if t and not t.group(2).lower().startswith(('detail', 'summar')):
+            continue
+        text = t.group(0) if t else body[m.start():].split('\n')[0][:80] + ' (unparsable)'
+        print(f'IN {kind} at {at(m.start())}: {text}')
 PY
    ```
    Treat every label this prints as a section to account for, including
@@ -418,9 +426,14 @@ PY
    stray backtick can pair with a later one on the same line and mask
    a whole real `<details>` block between them, and an HTML comment can
    carry tags the web UI never shows. So every `details`/`summary`-like
-   tag found inside a masked region is printed after the labels as an
-   `IN CODE SPAN` / `IN CODE FENCE` / `IN HTML COMMENT` line with its
-   location. Each such line must be read in the raw file: it is either
+   token starting inside a masked region is printed after the labels as
+   an `IN CODE SPAN` / `IN CODE FENCE` / `IN HTML COMMENT` /
+   `IN AUTOLINK` / `IN ESCAPE` line with its location. A token the tag
+   pattern cannot parse (e.g. `<summary title="unterminated>` in a code
+   span) is printed with the rest of its line and `(unparsable)` rather
+   than dropped, and an escaped tag is printed whole even though the
+   escape masks only its `\<` (both attested on this PR, review
+   5302996125). Each such line must be read in the raw file: it is either
    a quotation in finding prose (no action) or a block the masking
    swallowed (treat as a parse failure and read the section by hand).
 
@@ -737,8 +750,9 @@ newly introduced section disappear in the first place. Concretely:
   finding.** Letter case and attributes are not failures: step 3
   accepts `<DETAILS>`, `<details open>`, and `<details title="a>b">`
   as ordinary tags. Nor is an `IN CODE SPAN` / `IN CODE FENCE` /
-  `IN HTML COMMENT` / `IN AUTOLINK` line, which is
-  text to read in context rather than a failure. Do not fall back to reading the rendered web page as a
+  `IN HTML COMMENT` / `IN AUTOLINK` / `IN ESCAPE` line, including one
+  marked `(unparsable)`, which is text to read in context rather than
+  a failure: GitHub renders none of these regions as markup. Do not fall back to reading the rendered web page as a
   substitute (see step 2's rationale for why) and do not assume the
   section is decorative. Record the parse failure in the ledger, flag
   it explicitly to the user, and treat the review as unaccounted-for
