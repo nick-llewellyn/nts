@@ -444,7 +444,7 @@ PY
    comment's body:**
    ```bash
    gh api repos/<owner>/<repo>/pulls/<n>/comments --paginate \
-     --jq '.[] | {id, path, subject_type, line, original_line, original_commit_id, body, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
+     --jq '.[] | {id, updated_at, path, subject_type, line, original_line, original_commit_id, body, in_reply_to: .in_reply_to_id, review: .pull_request_review_id}' < /dev/null
    ```
    A `null` `line` has two meanings, told apart by `subject_type`. With
    `subject_type == "file"` it is a current file-level comment, attached
@@ -462,7 +462,7 @@ PY
    answer:
    ```bash
    gh api repos/<owner>/<repo>/issues/<n>/comments --paginate \
-     --jq '.[] | {id, user: .user.login, created_at, body}' < /dev/null
+     --jq '.[] | {id, user: .user.login, created_at, updated_at, body}' < /dev/null
    ```
    Match each against the ledger by the review id and section label the
    step 6 fallback requires it to cite.
@@ -650,9 +650,10 @@ PY
    the session.
 
    **Bind each pass to one snapshot.** At the start of the pass, record
-   the head SHA, the id and a digest of the body of every review, the
-   id and `updated_at` of every inline and top-level PR comment, and
-   the requested reviewers; record them again as the pass's last
+   the head SHA, the id of every review step 1 lists and a digest of
+   the body step 2 saved for it, the id and `updated_at` of every
+   inline and top-level PR comment step 4 fetches, and the requested
+   reviewers; record them again, re-fetched, as the pass's last
    action. If anything differs, a push, review, new or edited comment,
    or review request landed mid-pass and the checks covered a state
    that no longer exists: restart the pass from step 1. Editing a
