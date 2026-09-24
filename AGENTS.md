@@ -544,16 +544,17 @@ PY
 
 6. **Answer every ledger row** — a threaded reply for an inline
    comment, a *new* inline comment (cited to the finding's `path:line`)
-   for a hidden one, a top-level PR comment only as a last resort for a
-   finding that names no file. For a finding adjudicated fix or fix
+   for a hidden one, and a top-level PR comment only where an inline
+   comment is impossible (below). For a finding adjudicated fix or fix
    differently, reply after the fix lands, so the reply can cite a real
    commit SHA; for a declined finding there is no fix to wait for, so
    reply once the rationale for declining is settled, stating that
-   rationale. GitHub rejects a new inline comment
-   (HTTP 422) on a line outside the PR's current diff; a hidden finding
-   on such a line gets a top-level PR comment instead, which must cite
-   the finding's `path:line`, its source review id, and the section
-   label it came from, so it stays traceable to the ledger row.
+   rationale. An inline comment is impossible for a hidden finding
+   that names no file, or whose line is outside the PR's current diff
+   (GitHub rejects a new inline comment there with HTTP 422). Either
+   gets a top-level PR comment instead, which must cite its source
+   review id and the section label it came from, plus the finding's
+   `path:line` if it has one, so it stays traceable to the ledger row.
 
 7. **Thread resolution belongs to the user, never the agent.** An
    agent must not resolve a review thread — by API, by GraphQL
@@ -645,14 +646,20 @@ PY
    state at each of these three moments, not a one-time pass earlier in
    the session.
 
-   **Bind each pass to one head SHA.** Keep the head SHA read at the
-   start of the pass, and read it again as the pass's last action. If
-   the two differ, a push landed mid-pass and the checks covered a head
-   that no longer exists: restart the pass from step 1. The SHA the
+   **Bind each pass to one snapshot.** At the start of the pass, record
+   the head SHA, the ids of every review, inline comment, and top-level
+   PR comment, and the requested reviewers; record them again as the
+   pass's last action. If anything differs, a push, review, comment, or
+   review request landed mid-pass and the checks covered a state that
+   no longer exists: restart the pass from step 1. A review can arrive
+   without a push, so checking the head SHA alone does not cover it. The SHA the
    final pass verified is the one the merge is pinned to ("Agent merge
    policy", step 4): `--match-head-commit` makes GitHub refuse the
-   merge if the head has moved since, which closes the window between
-   that last read and the merge itself.
+   merge if the head has moved since. It does not cover a review or
+   comment that arrives without a push between the last snapshot and
+   the merge. GitHub offers no atomic check for that, so keep that
+   window to the one merge command, and check the PR again after
+   merging. A finding that turns up then gets a follow-up PR.
 
 ### Strict parsing — no silent fallbacks
 
@@ -725,7 +732,7 @@ newly introduced section disappear in the first place. Concretely:
   `Fix (a) thing (3)` reads as 3, and a label with no trailing count
   or an empty `()` stops with its own message rather than an empty
   comparison.
-  where `$section_label` is one of the labels step 3 extracted (e.g.
+  Here `$section_label` is one of the labels step 3 extracted (e.g.
   `Suppressed comments (3)`, `Previously missed (3)`, `Open (7)`) — any
   of them may aggregate either population, so the classification must
   come before the count comparison, not be inferred from the label
