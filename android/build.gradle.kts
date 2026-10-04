@@ -139,16 +139,30 @@ val rustlsPlatformVerifierVersion: String = providers
 // even touch this repo. The first build fetches the AAR from github.com;
 // Gradle caches it after that.
 //
-// Hosts that opt in to `dependencyResolutionManagement.repositoriesMode
-// = RepositoriesMode.FAIL_ON_PROJECT_REPOS` (uncommon for Flutter apps;
-// not the `flutter create` default) will need to declare this repo
-// themselves in the `dependencyResolutionManagement { repositories { ... } }`
-// block of `settings.gradle.kts`:
+// `RepositoriesMode.FAIL_ON_PROJECT_REPOS` is not supported: Gradle
+// rejects every project-level repository under it, including this
+// injection and the module's own `repositories` block below, even when
+// settings declares the same URL. The Flutter Gradle Plugin injects its
+// engine repository the same way. Hosts that centralise repositories in
+// `settings.gradle.kts` (not the `flutter create` default) use
+// `PREFER_SETTINGS` instead. Gradle then ignores every project-level
+// repository, so settings must declare all the build needs, this one
+// included:
 //
-//     maven {
-//         url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/")
-//         content { includeGroup("org.rustls") }
+//     dependencyResolutionManagement {
+//         repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+//         repositories {
+//             google()
+//             mavenCentral()
+//             maven { url = uri("https://storage.googleapis.com/download.flutter.io") }
+//             maven {
+//                 url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/")
+//                 content { includeGroup("org.rustls") }
+//             }
+//         }
 //     }
+//
+// `tool/test_android_kgp_gate.sh` resolves the AAR under this recipe.
 val rustlsPlatformVerifierMavenUrl =
     "https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/"
 

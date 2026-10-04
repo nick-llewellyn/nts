@@ -111,11 +111,14 @@ upstream's GitHub-hosted Maven repository for the
 `rustls-platform-verifier` companion AAR (group `org.rustls`) to the
 host build, so the first Android build needs network access to
 github.com, or a mirror of that repository. The one exception:
-hosts that opt in to `RepositoriesMode.FAIL_ON_PROJECT_REPOS` in
-`settings.gradle.kts` (not the `flutter create` default) reject the
-plugin's project-level Maven injection and must declare that
-repository themselves; the rationale comment in this package's
+hosts that declare their repositories in `settings.gradle.kts` under
+`RepositoriesMode.PREFER_SETTINGS` (not the `flutter create` default)
+must add that repository there, because Gradle then ignores the
+plugin's project-level one; the rationale comment in this package's
 `android/build.gradle.kts` documents the full recipe.
+`RepositoriesMode.FAIL_ON_PROJECT_REPOS` is not supported: Gradle
+rejects the project-level repositories that both this plugin and the
+Flutter Gradle Plugin declare.
 
 The AAR's manifest is merged into your app's. It adds the `INTERNET`
 permission and sets `android:networkSecurityConfig` to a config that
@@ -200,7 +203,7 @@ what your host code needs to do.
    Dart `main()` executes, so adding `nts` to your `pubspec.yaml` is
    enough — there is no `MainActivity` shim, JNI symbol, or
    `app/build.gradle.kts` Maven entry to maintain on the default
-   Flutter/Gradle setup. (The `FAIL_ON_PROJECT_REPOS` exception
+   Flutter/Gradle setup. (The `PREFER_SETTINGS` exception
    described under "Platform support" above is the one deviation
    from this.) iOS, macOS, Linux, and Windows have no equivalent
    step. Hosts that bypass the standard Flutter

@@ -15,10 +15,12 @@
 #
 # The matrix only configures the module (`:nts:tasks`); compiling would
 # pull in the Flutter embedding, which is the host app's to provide.
-# Configuring never resolves dependencies, so one further check resolves
-# the module's runtime classpath and asserts that the
+# Configuring never resolves dependencies, so two further checks resolve
+# the module's runtime classpath and assert that the
 # rustls-platform-verifier AAR it declares -- at the version in
-# `rust/Cargo.lock` -- downloads from the repository the module injects.
+# `rust/Cargo.lock` -- downloads from the repository the module injects,
+# and from settings alone under the `RepositoriesMode.PREFER_SETTINGS`
+# recipe documented in android/build.gradle.kts.
 #
 # Requires: a JDK, an Android SDK (ANDROID_HOME or ANDROID_SDK_ROOT),
 # network access to github.com (where upstream hosts the AAR), and
@@ -40,6 +42,12 @@ VERIFIER_VERSION=$(awk '$0 == "name = \"rustls-platform-verifier-android\"" { f 
   f && /^version = / { gsub(/"/, "", $3); print $3; exit }' "$REPO_ROOT/rust/Cargo.lock")
 [ -n "$VERIFIER_VERSION" ] || {
   echo "ERROR: rustls-platform-verifier-android not found in $REPO_ROOT/rust/Cargo.lock" >&2
+  exit 1
+}
+VERIFIER_MAVEN_URL=$(awk 'f { gsub(/[ "]/, ""); print; exit }
+  $0 == "val rustlsPlatformVerifierMavenUrl =" { f = 1 }' "$REPO_ROOT/android/build.gradle.kts")
+[ -n "$VERIFIER_MAVEN_URL" ] || {
+  echo "ERROR: rustlsPlatformVerifierMavenUrl not found in $REPO_ROOT/android/build.gradle.kts" >&2
   exit 1
 }
 
@@ -194,6 +202,38 @@ if [ "$rc" -eq 0 ] && grep -qxF "NTS_PROBE artifact=$expected" "$out"; then
   pass=$((pass + 1)); echo "  PASS: resolves $expected"
 else
   fail=$((fail + 1)); echo "  FAIL: expected to resolve $expected (rc=$rc)" >&2
+  sed 's/^/    | /' "$out" >&2
+fi
+
+echo
+echo "=== AAR resolution under RepositoriesMode.PREFER_SETTINGS ==="
+# Gradle ignores the module's project-level repositories in this mode,
+# so the AAR must resolve from the settings declaration alone. The
+# warning Gradle logs for each ignored repository confirms the mode
+# took effect.
+cat >> "$WORK_DIR/settings.gradle.kts" <<EOF
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        google()
+        mavenCentral()
+        maven {
+            url = uri("$VERIFIER_MAVEN_URL")
+            content { includeGroup("org.rustls") }
+        }
+    }
+}
+EOF
+set +e
+"$GRADLE" -p "$WORK_DIR" :nts:ntsProbeVerifierAar --console=plain >"$out" 2>&1
+rc=$?
+set -e
+if [ "$rc" -eq 0 ] && grep -qxF "NTS_PROBE artifact=$expected" "$out" \
+  && grep -qF 'prefer settings repositories over project repositories' "$out"; then
+  pass=$((pass + 1)); echo "  PASS: resolves $expected from settings repositories"
+else
+  fail=$((fail + 1)); echo "  FAIL: expected to resolve $expected from settings repositories (rc=$rc)" >&2
   sed 's/^/    | /' "$out" >&2
 fi
 

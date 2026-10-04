@@ -53,11 +53,16 @@ tarball.
   `rustls-platform-verifier` 0.7.1 crate now in `rust/Cargo.lock` no
   longer bundles one. The first build needs network access to
   github.com, or a mirror of that repository, and the AAR's group
-  changes from `rustls` to `org.rustls`. Hosts that set
-  `RepositoriesMode.FAIL_ON_PROJECT_REPOS` replace the on-disk
-  repository they declared with
+  changes from `rustls` to `org.rustls`. Hosts that declare their
+  repositories in `settings.gradle.kts` under
+  `RepositoriesMode.PREFER_SETTINGS` replace the on-disk repository
+  there with
   `https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/`,
   scoped with `includeGroup("org.rustls")`.
+  `RepositoriesMode.FAIL_ON_PROJECT_REPOS` is not supported, despite
+  earlier README guidance: Gradle rejects the project-level
+  repositories that both this plugin and the Flutter Gradle Plugin
+  declare.
 
   The AAR's manifest is now merged into the app's. It adds the
   `INTERNET` permission and sets `android:networkSecurityConfig` to a
