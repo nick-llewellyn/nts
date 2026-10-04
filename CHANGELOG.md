@@ -48,6 +48,35 @@ tarball.
   covers them. A sample from a real bridge always carries a non-zero
   generation. ([#354](https://github.com/nick-llewellyn/nts/pull/354))
 
+- Android builds fetch the `rustls-platform-verifier` companion AAR
+  from upstream's GitHub-hosted Maven repository, because the
+  `rustls-platform-verifier` 0.7.1 crate now in `rust/Cargo.lock` no
+  longer bundles one. The first build needs network access to
+  github.com, or a mirror of that repository, and the AAR's group
+  changes from `rustls` to `org.rustls`. Hosts that declare their
+  repositories in `settings.gradle.kts` under
+  `RepositoriesMode.PREFER_SETTINGS` replace the on-disk repository
+  there with
+  `https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/`,
+  scoped with `includeGroup("org.rustls")`.
+  `RepositoriesMode.FAIL_ON_PROJECT_REPOS` is not supported, despite
+  earlier README guidance: Gradle rejects the project-level
+  repositories that both this plugin and the Flutter Gradle Plugin
+  declare.
+
+  The AAR's manifest is now merged into the app's. It adds the
+  `INTERNET` permission and sets `android:networkSecurityConfig` to a
+  config that permits cleartext HTTP only to the certificate
+  revocation list (CRL) hosts upstream lists, so revocation checks can
+  download CRLs instead of soft-failing. An app that sets its own
+  `android:networkSecurityConfig` under another resource name fails
+  the manifest merge until it adds
+  `tools:replace="android:networkSecurityConfig"` to its
+  `<application>` element. The 0.7.1 crate also fixes an infinite loop
+  on Android when the user has disabled a system trust anchor, and
+  Windows verification of hostnames with a trailing `.`.
+  ([#374](https://github.com/nick-llewellyn/nts/pull/374))
+
 ### Added
 
 - Strict acquisition: `ntsGetTimeStrict` and `NtsClient.getTimeStrict`

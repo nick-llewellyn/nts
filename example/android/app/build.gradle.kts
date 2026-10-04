@@ -39,7 +39,7 @@ if (!builtInKotlinEnabled) {
     pluginManager.apply("kotlin-android")
 }
 
-// The `rustls:rustls-platform-verifier` AAR Maven repo, the AAR
+// The `org.rustls:rustls-platform-verifier` AAR Maven repo, the AAR
 // `implementation` dep, and the matching ProGuard / R8 keep rules are
 // all contributed by the `nts` plugin's own Android module
 // (`<plugin>/android/build.gradle.kts` + `consumer-rules.pro`). Nothing

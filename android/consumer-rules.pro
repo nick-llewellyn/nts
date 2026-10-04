@@ -6,11 +6,12 @@
 #
 # `nts` delegates X.509 chain validation on Android to the
 # `rustls-platform-verifier` Kotlin glue published in the companion AAR
-# `rustls:rustls-platform-verifier`. The Rust crate reaches that glue
-# exclusively via JNI lookups
-# (`JNIEnv::find_class("org/rustls/platformverifier/CertificateVerifier")`
-# in `rustls-platform-verifier-0.5.3/src/android.rs`), so R8 sees no static
-# reference to it and would otherwise dead-code-eliminate the whole package.
+# `org.rustls:rustls-platform-verifier`. The Rust crate reaches that glue
+# exclusively via JNI lookups (the application class loader's `loadClass`
+# for `org.rustls.platformverifier.CertificateVerifier` in
+# `rustls-platform-verifier-0.7.1/src/verification/android.rs`), so R8 sees
+# no static reference to it and would otherwise dead-code-eliminate the
+# whole package. The AAR ships no keep rules of its own.
 #
 # When that happens the verifier path fails on the first NTS-KE TLS 1.3
 # handshake (RFC 8915 §4) with a `ClassNotFoundException` for
@@ -20,9 +21,8 @@
 # see `hybrid_verifier.rs` notes for context).
 #
 # Keeping the package and its members is sufficient: the AAR ships only
-# `CertificateVerifier`, `StatusCode`, `VerificationResult`, and the inner
-# class `CertificateVerifier$makeLazyTrustManager$1`, all reflectively
-# loaded from native code.
+# `CertificateVerifier`, `StatusCode`, and `VerificationResult`, all
+# reflectively loaded from native code.
 -keep class org.rustls.platformverifier.** { *; }
 -keepclassmembers class org.rustls.platformverifier.** { *; }
 

@@ -42,7 +42,7 @@
 //! `rustls-platform-verifier` 0.7.x maps every `JNIError` raised while
 //! invoking the Kotlin `CertificateVerifier` glue to
 //! `Error::General("failed to call native verifier: …")` (see
-//! `rustls-platform-verifier-0.7.0/src/verification/android.rs`). The
+//! `rustls-platform-verifier-0.7.1/src/verification/android.rs`). The
 //! most common cause in the wild is R8 / ProGuard dead-code-eliminating
 //! the AAR's `org.rustls.platformverifier.*` classes when the host app
 //! ships release builds without the keep rules contributed by the
@@ -597,7 +597,7 @@ mod tests {
     fn jni_marker_matches_upstream_format() {
         // Upstream synthesises:
         //   `Error::General(format!("failed to call native verifier: {e:?}"))`
-        // (see rustls-platform-verifier-0.7.0/src/verification/android.rs).
+        // (see rustls-platform-verifier-0.7.1/src/verification/android.rs).
         // We mirror the exact prefix; any `{e:?}` payload still satisfies
         // `contains`.
         let synthesised = format!("failed to call native verifier: {:?}", "Error");
