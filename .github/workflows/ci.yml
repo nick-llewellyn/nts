@@ -110,6 +110,11 @@ jobs:
               - 'android/**'
               - 'example/android/**'
               - 'tool/test_android_kgp_gate.sh'
+              # `android/build.gradle.kts` reads the AAR version from
+              # `rust/Cargo.lock`, so a lockfile-only bump (a Dependabot
+              # Cargo PR) changes what the Android build resolves.
+              - 'rust/Cargo.lock'
+              - 'rust/Cargo.toml'
 
   build:
     # Matrix exercises an old-SDK leg (3.38.10, ships Dart 3.10.9) and the
@@ -959,9 +964,10 @@ jobs:
     # NTS-162.
     #
     # Configuration only (`:nts:tasks`) -- compiling would need the
-    # Flutter embedding, which the host app provides. Rust is installed
-    # because the module shells out to `cargo metadata` at configuration
-    # time to locate the rustls-platform-verifier AAR.
+    # Flutter embedding, which the host app provides. One further check
+    # resolves the module's runtime classpath, downloading the
+    # rustls-platform-verifier AAR at the version in `rust/Cargo.lock`
+    # from the repository the module injects.
     name: Android KGP gate matrix
     runs-on: ubuntu-latest
     needs: changes
@@ -978,14 +984,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-
-      - name: Cache cargo registry + crate target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: rust
 
       # The example app's `gradlew` and `gradle-wrapper.jar` are
       # gitignored (Flutter generates them), so a CI checkout has no

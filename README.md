@@ -106,13 +106,28 @@ per-platform bootstrap code. See "Initialization has two layers"
 below for the rationale.
 
 On Android the native bootstrap is automatic via the bundled
-`NtsPlugin` on the default Flutter/Gradle setup. The one exception:
+`NtsPlugin` on the default Flutter/Gradle setup. The plugin adds
+upstream's GitHub-hosted Maven repository for the
+`rustls-platform-verifier` companion AAR (group `org.rustls`) to the
+host build, so the first Android build needs network access to
+github.com, or a mirror of that repository. The one exception:
 hosts that opt in to `RepositoriesMode.FAIL_ON_PROJECT_REPOS` in
 `settings.gradle.kts` (not the `flutter create` default) reject the
-plugin's project-level Maven injection and must declare the on-disk
-`rustls-platform-verifier-android` repository themselves; the
-rationale comment in this package's `android/build.gradle.kts`
-documents the full recipe.
+plugin's project-level Maven injection and must declare that
+repository themselves; the rationale comment in this package's
+`android/build.gradle.kts` documents the full recipe.
+
+The AAR's manifest is merged into your app's. It adds the `INTERNET`
+permission and sets `android:networkSecurityConfig` to a config that
+permits cleartext HTTP only to the certificate revocation list (CRL)
+hosts upstream lists, so revocation checks can download CRLs. If your
+app sets its own `android:networkSecurityConfig`, the manifest merge
+fails until you add `tools:replace="android:networkSecurityConfig"` to
+your `<application>` element. Your config then applies instead: unless
+it permits cleartext HTTP to those hosts, CRL downloads are blocked and
+the revocation check soft-fails. A config of your own named
+`network_security_config.xml` replaces upstream's without a merge
+conflict.
 
 Web and WebAssembly are unsupported: NTS-KE needs a raw TCP socket
 on `:4460` and NTPv4 needs a raw UDP socket on `:123`, neither of

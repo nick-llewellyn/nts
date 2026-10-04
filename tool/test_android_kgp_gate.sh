@@ -13,14 +13,17 @@
 # Isolating the module is what makes the `newDsl=true` legs testable
 # ahead of that upstream work. See NTS-162.
 #
-# Only configuration is exercised (`:nts:tasks`); compiling would pull in
-# the Flutter embedding, which is the host app's to provide.
+# The matrix only configures the module (`:nts:tasks`); compiling would
+# pull in the Flutter embedding, which is the host app's to provide.
+# Configuring never resolves dependencies, so one further check resolves
+# the module's runtime classpath and asserts that the
+# rustls-platform-verifier AAR it declares -- at the version in
+# `rust/Cargo.lock` -- downloads from the repository the module injects.
 #
 # Requires: a JDK, an Android SDK (ANDROID_HOME or ANDROID_SDK_ROOT),
-# `cargo` on PATH (the module resolves the rustls-platform-verifier AAR
-# through `cargo metadata`), and Gradle -- either the example app's
-# wrapper, if a local Flutter build has materialised it, or `gradle` on
-# PATH.
+# network access to github.com (where upstream hosts the AAR), and
+# Gradle -- either the example app's wrapper, if a local Flutter build
+# has materialised it, or `gradle` on PATH.
 #
 # Run locally:  sh tool/test_android_kgp_gate.sh
 set -eu
@@ -33,8 +36,10 @@ if [ -z "$SDK_DIR" ]; then
   echo "ERROR: set ANDROID_HOME or ANDROID_SDK_ROOT to an Android SDK" >&2
   exit 1
 fi
-command -v cargo >/dev/null 2>&1 || {
-  echo "ERROR: cargo not on PATH (android/build.gradle.kts shells out to it)" >&2
+VERIFIER_VERSION=$(awk '$0 == "name = \"rustls-platform-verifier-android\"" { f = 1; next }
+  f && /^version = / { gsub(/"/, "", $3); print $3; exit }' "$REPO_ROOT/rust/Cargo.lock")
+[ -n "$VERIFIER_VERSION" ] || {
+  echo "ERROR: rustls-platform-verifier-android not found in $REPO_ROOT/rust/Cargo.lock" >&2
   exit 1
 }
 
@@ -101,9 +106,16 @@ project(":nts").projectDir = file("$REPO_ROOT/android")
 // Reports whether the conditional \`pluginManager.apply\` in the module
 // actually fired, which the gate's outcome alone does not reveal.
 gradle.projectsEvaluated {
-    val applied = rootProject.project(":nts").plugins
-        .hasPlugin("org.jetbrains.kotlin.android")
+    val nts = rootProject.project(":nts")
+    val applied = nts.plugins.hasPlugin("org.jetbrains.kotlin.android")
     println("NTS_PROBE kgp=\$applied")
+
+    // Resolving the runtime classpath downloads the AAR, which
+    // configuring alone never does.
+    val runtime = nts.configurations.getByName("releaseRuntimeClasspath")
+    nts.tasks.register("ntsProbeVerifierAar") {
+        doLast { runtime.files.forEach { println("NTS_PROBE artifact=\${it.name}") } }
+    }
 }
 EOF
 
@@ -164,6 +176,26 @@ probe true  true  ok     false
 probe true  false reject -
 probe false false ok     true
 probe false true  ok     false
+
+echo
+echo "=== rustls-platform-verifier AAR resolution ==="
+cat > "$WORK_DIR/gradle.properties" <<EOF
+android.useAndroidX=true
+android.newDsl=false
+android.builtInKotlin=false
+EOF
+out="$WORK_DIR/out.txt"
+expected="rustls-platform-verifier-$VERIFIER_VERSION.aar"
+set +e
+"$GRADLE" -p "$WORK_DIR" :nts:ntsProbeVerifierAar --console=plain >"$out" 2>&1
+rc=$?
+set -e
+if [ "$rc" -eq 0 ] && grep -qxF "NTS_PROBE artifact=$expected" "$out"; then
+  pass=$((pass + 1)); echo "  PASS: resolves $expected"
+else
+  fail=$((fail + 1)); echo "  FAIL: expected to resolve $expected (rc=$rc)" >&2
+  sed 's/^/    | /' "$out" >&2
+fi
 
 echo
 echo "passed: $pass  failed: $fail"

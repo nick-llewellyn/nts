@@ -21,8 +21,6 @@
 // module needs no `jniLibs` directory or Cargo integration of its own.
 
 import com.android.build.api.dsl.LibraryExtension
-import groovy.json.JsonSlurper
-import java.io.File
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 
@@ -78,103 +76,87 @@ if (!builtInKotlinEnabled) {
 group = "com.nllewellyn.nts"
 version = "1.4.0"
 
-// Locate the on-disk Maven repository bundled inside the
-// `rustls-platform-verifier-android` companion crate. The crate publishes a
-// pre-built AAR (`rustls:rustls-platform-verifier`) that contains the
-// Kotlin glue `org.rustls.platformverifier.CertificateVerifier` invoked
-// over JNI by `rustls-platform-verifier 0.5.x` on Android.
+// The Kotlin glue `org.rustls.platformverifier.CertificateVerifier`,
+// invoked over JNI by `rustls-platform-verifier` on Android, ships as a
+// pre-built AAR (`org.rustls:rustls-platform-verifier`) in a Maven
+// repository that upstream hosts on the `maven-archive` branch of its
+// GitHub repository. The AAR version must be identical to the
+// `rustls-platform-verifier-android` crate version that Cargo resolves, so
+// it is read from `rust/Cargo.lock` rather than hard-coded: a lockfile
+// bump moves the AAR with it. This is the `ValueSource` upstream's README
+// documents, which keeps the read compatible with the configuration
+// cache.
 //
-// We resolve the path by asking `cargo` for resolved package metadata of
-// the `nts_rust` crate (which transitively pulls in
-// `rustls-platform-verifier-android`) and walking to the `maven/`
-// directory next to its `Cargo.toml`. This makes Gradle resilient to:
-//
-//   * Crate version bumps (no hard-coded path).
-//   * Different on-disk layouts (source tree vs pub cache vs monorepo).
-//
-// `Cargo.toml` of the parent crate sits at `<plugin>/rust/Cargo.toml`.
-// `projectDir` here is `<plugin>/android/`, so the relative path is
-// stable regardless of where the plugin is installed.
-fun resolveRustlsPlatformVerifierMaven(): String {
-    val manifest = projectDir.resolve("../rust/Cargo.toml").canonicalFile
-    require(manifest.isFile) {
-        "Expected nts Rust crate at $manifest. Has the plugin layout changed?"
+// `Cargo.lock` sits at `<plugin>/rust/Cargo.lock` and ships in the
+// published package. `projectDir` here is `<plugin>/android/`, so the
+// relative path is stable regardless of where the plugin is installed.
+abstract class RustlsPlatformVerifierVersion :
+    ValueSource<String, RustlsPlatformVerifierVersion.Params> {
+    interface Params : ValueSourceParameters {
+        val lockFile: RegularFileProperty
     }
-    val proc = ProcessBuilder(
-        "cargo",
-        "metadata",
-        "--format-version",
-        "1",
-        "--manifest-path",
-        manifest.absolutePath,
-    ).start()
-    // Drain stderr concurrently so a verbose `cargo metadata` failure cannot
-    // deadlock the build by filling the OS-level stderr pipe buffer
-    // (typically 64 KiB on Linux) while we block on `waitFor()` reading
-    // stdout. The captured text is folded into the `require` message below
-    // so a non-zero exit surfaces actionable diagnostics rather than just
-    // the bare exit code.
-    val stderrBuf = StringBuilder()
-    val stderrThread = Thread {
-        proc.errorStream.bufferedReader().forEachLine { stderrBuf.appendLine(it) }
-    }.apply { isDaemon = true; start() }
-    val stdout = proc.inputStream.bufferedReader().readText()
-    val rc = proc.waitFor()
-    stderrThread.join()
-    require(rc == 0) {
-        "cargo metadata exited with $rc while resolving " +
-            "rustls-platform-verifier-android. stderr:\n$stderrBuf"
+
+    override fun obtain(): String {
+        val lockFile = parameters.lockFile.get().asFile
+        require(lockFile.isFile) {
+            "Expected nts Cargo lockfile at $lockFile. Has the plugin layout changed?"
+        }
+        val lines = lockFile.readLines()
+        val nameIdx = lines.indexOfFirst {
+            it.trim() == "name = \"rustls-platform-verifier-android\""
+        }
+        val version = if (nameIdx < 0) {
+            null
+        } else {
+            lines.drop(nameIdx + 1)
+                .firstOrNull { it.trimStart().startsWith("version = ") }
+                ?.substringAfter('"', "")
+                ?.substringBefore('"', "")
+                ?.takeIf { it.isNotEmpty() }
+        }
+        return version ?: error("rustls-platform-verifier-android not found in $lockFile")
     }
-    @Suppress("UNCHECKED_CAST")
-    val json = JsonSlurper().parseText(stdout) as Map<String, Any>
-    @Suppress("UNCHECKED_CAST")
-    val packages = json["packages"] as List<Map<String, Any>>
-    val pkg = packages.first { it["name"] == "rustls-platform-verifier-android" }
-    val manifestPath = pkg["manifest_path"] as String
-    return File(manifestPath).parentFile.resolve("maven").absolutePath
 }
 
-// Cache the resolved Maven path for the duration of the Gradle build.
-// `rootProject.allprojects { repositories { ... } }` below evaluates its
-// closure once per project visited (root + `:app` + every plugin module
-// in a typical Flutter app), so without this `by lazy` the `cargo metadata`
-// subprocess would fork once per project. `cargo metadata` walks the entire
-// resolved dependency graph and is multi-second on a cold cache, so the
-// per-project fan-out was a measurable configuration-time regression for
-// multi-module hosts. The path is a pure function of the on-disk Cargo
-// workspace, which does not move during a single Gradle run.
-val rustlsPlatformVerifierMavenPath: String by lazy { resolveRustlsPlatformVerifierMaven() }
+val rustlsPlatformVerifierVersion: String = providers
+    .of(RustlsPlatformVerifierVersion::class.java) {
+        parameters.lockFile.set(layout.projectDirectory.file("../rust/Cargo.lock"))
+    }
+    .get()
 
-// Inject the on-disk `rustls:rustls-platform-verifier` Maven repository
-// into every project in the host build, not just `:nts`. Gradle resolves
-// transitive dependencies of a project against the *consumer*'s repository
-// list by default, so a `repositories { ... }` block scoped to this
-// module would leave the `:app` -> `:nts` -> `rustls:...` resolution
-// looking only at the host's `google()` / `mavenCentral()` chain (where
-// the AAR does not exist).
+// Inject upstream's `org.rustls` Maven repository into every project in
+// the host build, not just `:nts`. Gradle resolves transitive dependencies
+// of a project against the *consumer*'s repository list by default, so a
+// `repositories { ... }` block scoped to this module would leave the
+// `:app` -> `:nts` -> `org.rustls:...` resolution looking only at the
+// host's `google()` / `mavenCentral()` chain (where the AAR does not
+// exist).
 //
-// `content { includeGroup("rustls") }` keeps the injected repo strictly
-// scoped to the one group we publish from the on-disk crate, so it does
+// `content { includeGroup("org.rustls") }` keeps the injected repo
+// strictly scoped to the one group upstream publishes there, so it does
 // not slow other dep resolution or override anything resolvable from the
-// public mirrors. Failure to find a non-`rustls` artifact will not even
-// touch this repo.
+// public mirrors. Failure to find a non-`org.rustls` artifact will not
+// even touch this repo. The first build fetches the AAR from github.com;
+// Gradle caches it after that.
 //
 // Hosts that opt in to `dependencyResolutionManagement.repositoriesMode
 // = RepositoriesMode.FAIL_ON_PROJECT_REPOS` (uncommon for Flutter apps;
 // not the `flutter create` default) will need to declare this repo
-// themselves in `settings.gradle.kts`. The file path printed by
-// `cargo metadata --format-version 1 --manifest-path
-// <pub-cache>/nts-X.Y.Z/rust/Cargo.toml` is stable and can be reused
-// verbatim.
+// themselves in the `dependencyResolutionManagement { repositories { ... } }`
+// block of `settings.gradle.kts`:
+//
+//     maven {
+//         url = uri("https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/")
+//         content { includeGroup("org.rustls") }
+//     }
+val rustlsPlatformVerifierMavenUrl =
+    "https://github.com/rustls/rustls-platform-verifier/raw/maven-archive/android-release-support/maven/"
+
 rootProject.allprojects {
     repositories {
         maven {
-            url = uri(rustlsPlatformVerifierMavenPath)
-            // The crate ships the AAR + POM but no Maven metadata index
-            // file; tell Gradle to discover artifacts directly off the
-            // filesystem.
-            metadataSources { artifact() }
-            content { includeGroup("rustls") }
+            url = uri(rustlsPlatformVerifierMavenUrl)
+            content { includeGroup("org.rustls") }
         }
     }
 }
@@ -247,10 +229,16 @@ dependencies {
     // Companion AAR for `rustls-platform-verifier`. Provides the Kotlin
     // glue (`org.rustls.platformverifier.*`) that the Rust crate invokes
     // over JNI to delegate X.509 chain validation to Android's
-    // `X509TrustManager`. Pinned to the version that ships alongside
-    // `rustls-platform-verifier 0.5.3` in our `Cargo.lock`. The `@aar`
-    // classifier is required because the on-disk Maven layout produced
-    // by `rustls-platform-verifier-android` only ships the AAR + POM and
-    // Gradle defaults to looking for a JAR otherwise.
-    implementation("rustls:rustls-platform-verifier:0.1.1@aar")
+    // `X509TrustManager`. The version is the
+    // `rustls-platform-verifier-android` entry in `rust/Cargo.lock` (see
+    // `RustlsPlatformVerifierVersion` above). The `@aar` extension selects
+    // the AAR explicitly: upstream's repository publishes a POM but no
+    // Gradle module metadata.
+    //
+    // AAR 0.2.0 carries its own manifest, which the host app's manifest
+    // merger folds in: the `INTERNET` permission and an
+    // `android:networkSecurityConfig` that permits cleartext HTTP to the
+    // CRL distribution hosts upstream lists, so certificate revocation
+    // checks can fetch CRLs.
+    implementation("org.rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion@aar")
 }

@@ -127,10 +127,10 @@ dev_dependencies:
 #   * `consumer-rules.pro` -- ProGuard / R8 keep rules covering both the
 #     companion AAR (`org.rustls.platformverifier.**`) and our own JNI
 #     class. Auto-merged into the host app's shrinker config.
-#   * `build.gradle.kts` -- discovers the on-disk Maven repo bundled inside
-#     the `rustls-platform-verifier-android` cargo crate via `cargo
-#     metadata`, so the AAR resolves regardless of where the plugin lives
-#     on disk (source tree, pub cache, monorepo, etc.).
+#   * `build.gradle.kts` -- adds upstream's GitHub-hosted Maven repo for
+#     the companion AAR to the host build and reads the AAR version from
+#     `rust/Cargo.lock`, so it always matches the
+#     `rustls-platform-verifier-android` crate Cargo resolves.
 #
 # Native code (the FRB-generated dylib `libnts_rust.so`) continues to be
 # delivered via the Native Assets pipeline (`hook/build.dart`); the plugin
