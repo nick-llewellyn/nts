@@ -39,5 +39,8 @@ mis = "mis"
 numer = "numer"
 # Bead ID `nts-otu` referenced in the CHANGELOG.
 otu = "otu"
+# Deliberate tag-name prefix (`summar` matches `<summary>` and near-miss
+# typos of it) in the Copilot review-body checker in AGENTS.md.
+summar = "summar"
 # Accepted variant spelling used deliberately in comments.
 unparseable = "unparseable"
