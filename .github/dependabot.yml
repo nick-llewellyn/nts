@@ -16,6 +16,9 @@ updates:
       interval: "weekly"
     ignore:
       - dependency-name: "flutter_rust_bridge"
+      # Remove once the Dart SDK floor is ^3.12.0 (cupertino_icons 2.x requires it).
+      - dependency-name: "cupertino_icons"
+        update-types: ["version-update:semver-major"]
 
   # Rust dependencies for the core native library
   - package-ecosystem: "cargo"
