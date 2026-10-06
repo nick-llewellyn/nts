@@ -262,21 +262,32 @@ never invokes the Native Assets hook (`hook/build.dart`) that would
 otherwise cross-compile it. It settles the `macos`/`linux`/`windows`
 device-independent rows the matrix marks `method: host`.
 
-The matrix's `android`/`ios` rows point at the same probe file but
-mark it `method: device`, and this repo has no documented procedure
-for running it there yet: `flutter run -d <device>` does invoke the
-Native Assets hook and produces a target `.so`/`.dylib`, but that
-builds and launches the *app*, not `flutter test`'s host-side test
-runner — the two don't share a packaging path today. Collecting an
-`android`/`ios` row means writing that procedure (most likely an
-integration/driver test bundled into the app, per
-[`hook/build.dart`](hook/build.dart)'s Native Assets wiring) rather
-than reusing this command block; the matrix's own next-action cells
-name the physical step, not the harness for it.
+The matrix's `android`/`ios` rows (`method: device`) come from
+`example/lib/clock_probe_main.dart` instead: the same probes, run
+inside the example app on a physical device, plus the relaunch,
+process-death and reboot comparisons a single test run cannot
+express. `flutter run` invokes the Native Assets hook
+([`hook/build.dart`](hook/build.dart)), so the native library is
+built for the device:
 
-Each phase prints an `evidence:` line naming the host it ran on, free
-of `|` so it pastes straight into a table cell; paste it into the
-matching cell and flip that row to `pass`. The four phases are one
+```bash
+cd example
+flutter run -t lib/clock_probe_main.dart -d <device>            # debug
+flutter run -t lib/clock_probe_main.dart -d <device> --profile  # relaunchable
+```
+
+`MainActivity.kt` and `AppDelegate.swift` host the second engine for
+`multi-engine` and `bridge-teardown` in Android debug builds and iOS
+profile builds only; a second JIT engine faults on code signing on
+iOS. iOS debug builds cannot be relaunched from the Home Screen, so
+every iOS row after a first launch uses a profile build. Each launch
+is persisted and its history printed again on the next one, so the
+row's physical step (suspend, lock, time change, kill, reboot) can
+happen with no tool attached.
+
+Both print `evidence:` lines naming the host they ran on, free of `|`
+so they paste straight into a table cell; paste one into the matching
+cell and flip that row to `pass`. The host test's four phases are one
 sequential test rather than four, because the teardown phase is
 terminal — `NtsBridge.dispose()` retires the process-wide generation,
 and `NtsRustLib.init()` refuses a second call — and separate tests
@@ -289,8 +300,10 @@ The matrix's *contents* are not, and cannot be.
 Neither command is in CI, and that is deliberate. A green CI run is not
 evidence that a physical device did anything, so wiring the matrix into
 a required check would make it satisfiable by editing a Markdown file.
-`--require-complete` turns every outstanding row into an error; that is
-the `nts-flr8.7` close gate, run by hand when the evidence is in.
+`--require-complete` turns every outstanding `android` or `ios` row
+into an error; that is the `nts-flr8.9` release gate, run by hand when
+the evidence is in. Outstanding `macos`, `linux` and `windows` rows are
+still listed but do not fail it.
 
 The dimensions the probe suite does not cover — `multi-engine`,
 `process-relaunch`, and every physical row from `suspend-resume` down —

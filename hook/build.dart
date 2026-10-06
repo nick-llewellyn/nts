@@ -88,6 +88,7 @@ const minimumAndroidNdkMajor = 28;
 
 Future<void> main(List<String> args) async {
   await build(args, (input, output) async {
+    if (!input.config.buildCodeAssets) return;
     if (input.config.code.targetOS == OS.android) {
       checkAndroidNdkFloor(input.config.code.cCompiler?.compiler);
     }

@@ -514,26 +514,72 @@ incarnation or generation.
   `BootScopeUnavailableReason.providerNotApproved`. Local strict
   reads do not depend on it.
 
+### Portability limits
+
+- **One device, one counter.** A strict reading is a position on
+  one device's boot-time counter. Compare readings only within one
+  boot of one device. A restored backup or a migrated install is a
+  different counter, and nothing in the package maps between them.
+- **Engines own their contexts; disposal is process-wide.** Every
+  engine calls `NtsBridge.ensureInitialized()` and resolves its own
+  contexts; contexts are not shared between isolates. Because the
+  generation is process-wide, `NtsBridge.dispose()` on a native
+  bridge in one engine invalidates the contexts of every engine in
+  the process. A raw `NtsRustLib.dispose()` followed by
+  `initMock(api:)` with the same object is not detected; use
+  `NtsBridge.dispose()` when a reset must be observed.
+- **Raw readings cannot be upgraded.** A stored `micros` integer, a
+  `MonotonicClock` reading or an `NtsSyncedTime` anchor cannot become
+  a `SameBootReference`. `exportReference` accepts only a
+  `StrictSyncedTime` bound to the exporting context.
+- **Reference time is not export time.** A `SameBootReference`
+  carries the instant its `StrictSyncedTime` was referenced to (the
+  winning sample's wire receipt), not the instant it was exported,
+  stored or bound, and binding maps it without conversion. A receipt
+  at 1,234,567 µs exported at 4,000,111 µs and bound when the
+  receiver reads 5,000,123 µs is 3,765,556 µs old, not 1,000,012 µs.
+- **Comparable is not trusted.** Same-boot comparability, once a
+  provider exists, says only that two readings are on one counter.
+  It does not authenticate a stored reference, prove that it is the
+  latest one (rollback freshness), make its UTC trustworthy after the
+  fact, or bound drift or real-time error. Those stay with the
+  consumer.
+- **iOS boot continuity is unsupported.** iOS exposes no
+  cold-restore boot identity to apps (`kern.bootsessionuuid` is no
+  longer available to apps as of iOS 18). The package does not
+  substitute boot time, uptime comparisons, stored identifiers or
+  hashes of them, so transfer on iOS stays unavailable with no
+  provider planned. Local strict reads are unaffected.
+- **Android scope is conditional.** `Settings.Global.BOOT_COUNT`
+  (API 24 and later) is a candidate boot-scope provider only. Its
+  reset behaviour has not been validated and it is not approved, so
+  Android refuses transfer like every other platform until a
+  reviewed release approves it. Linux, macOS and Windows have no
+  evaluated provider.
+
 ### Platform evidence
 
 Every platform selects a suspend-inclusive source, but what has been
 observed differs. This table is what the
 [strict clock evidence matrix](https://github.com/nick-llewellyn/nts/blob/main/tool/clock_evidence/evidence_matrix.md)
-records today; anything not listed is unverified.
+records today; anything not listed is unverified. Floors follow the
+package's: Android API 24 (the plugin's `minSdk`), Windows 10
+(`QueryInterruptTimePrecise`), and the Flutter SDK's deployment
+targets on iOS and macOS.
 
 | Platform | Backend | Recorded | Not yet recorded |
 |---|---|---|---|
-| Android | `linuxBoottime` (`CLOCK_BOOTTIME`) | Source review; Rust unit tests of the shared Linux/Android reader; hermetic Dart tests | Android compilation; native read on a device; all device behaviour |
-| iOS | `appleContinuous` (`mach_continuous_time`) | Source review; hermetic Dart tests | iOS compilation and Rust unit tests; native read on a device; all device behaviour |
+| Android | `linuxBoottime` (`CLOCK_BOOTTIME`) | Source review; compilation; Rust unit tests (CI and on a device); hermetic Dart tests; on a Pixel Tablet: native read, multiple engines, bridge teardown, relaunch and descriptor stability, suspend, locked reads, clock change, process death, reboot, uptime after boot | Locked reads from a foreground service (observed from the foreground app only) |
+| iOS | `appleContinuous` (`mach_continuous_time`) | Source review; compilation; Rust unit tests on a device; hermetic Dart tests; on an iPad mini: native read, multiple engines, bridge teardown, relaunch and descriptor stability, suspend, locked reads, clock change, OS memory kill (jetsam), reboot, uptime after boot | A launch before first unlock (the device is unreachable until then) |
 | macOS | `appleContinuous` (`mach_continuous_time`) | Source review; compilation; Rust unit tests; hermetic Dart tests; native read on a Mac | Multiple engines, bridge teardown across engines, relaunch, descriptor stability across relaunch, suspend, clock change, process death, reboot, uptime after boot |
 | Linux | `linuxBoottime` (`CLOCK_BOOTTIME`) | Source review; compilation; Rust unit tests; hermetic Dart tests | Native read on a host; all runtime behaviour |
 | Windows | `windowsInterruptTime` (`QueryInterruptTimePrecise`) | Source review; hermetic Dart tests | Compilation and Rust unit tests; native read on a host; all runtime behaviour |
 
-No platform yet has recorded evidence that strict readings advance
-correctly across a real suspend, stay put across a wall-clock
-change, or behave as specified across process death, reboot or
-multiple engines. Hermetic tests and simulators do not count as that
-evidence.
+Only Android and iOS have recorded evidence that strict readings
+advance correctly across a real suspend, stay put across a
+wall-clock change, and behave as specified across process death,
+reboot and multiple engines, each on one physical device. Hermetic
+tests and simulators do not count as that evidence.
 
 ## Security considerations
 

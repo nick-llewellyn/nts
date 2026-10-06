@@ -48,6 +48,15 @@ tarball.
   covers them. A sample from a real bridge always carries a non-zero
   generation. ([#354](https://github.com/nick-llewellyn/nts/pull/354))
 
+- Two lifecycle outcomes of existing APIs change without a compile
+  error. `NtsBridge.dispose()` on a native bridge now advances the
+  process-wide strict-clock generation, and if that dispatch throws it
+  propagates the error and leaves the bridge installed instead of
+  completing silently. `MonotonicClock` now stays on its process-local
+  fallback after a first native fault on every platform; Linux and
+  Android previously returned to `clock_gettime` on a later success.
+  ([#353](https://github.com/nick-llewellyn/nts/pull/353))
+
 - Android builds fetch the `rustls-platform-verifier` companion AAR
   from upstream's GitHub-hosted Maven repository, because the
   `rustls-platform-verifier` 0.7.1 crate now in `rust/Cargo.lock` no
@@ -76,6 +85,52 @@ tarball.
   on Android when the user has disabled a system trust anchor, and
   Windows verification of hostnames with a trailing `.`.
   ([#374](https://github.com/nick-llewellyn/nts/pull/374))
+
+These changes alter the runtime and error outcomes of existing public
+APIs and the Android build requirements, so the release is a major
+one (`10.0.0`), not a `9.x` minor.
+
+### Migrating from 9.x
+
+1. **Handle `NtsError.clockFault` everywhere you handle `NtsError`.**
+   Add an `NtsErrorClockFault(:final stage, :final fault)` arm to
+   every exhaustive `switch`, including those around `ntsGetTime`,
+   `ntsQuery`, `ntsWarmCookies` and the `NtsClient` methods. Treat it
+   as a failed call; a repeated fault at the `admission`, `handshake`,
+   `session`, `udp` or `receipt` stage means the platform clock itself
+   is failing.
+2. **Do not rely on `NtsBridge.dispose()` being infallible.** Let its
+   error propagate, or catch it and treat the bridge as still
+   installed. Contexts in every isolate of the process fail on their
+   next read after a successful native `dispose()`.
+3. **Expect a `MonotonicClock` epoch change at most once.** After a
+   native fault the clock stays on its fallback counter, which may not
+   count device sleep. If that matters, use the strict clock, which
+   throws instead.
+4. **Check Android repository and network security settings.** The
+   default Flutter/Gradle setup needs only network access to
+   github.com on the first build. Under
+   `RepositoriesMode.PREFER_SETTINGS`, declare upstream's Maven
+   repository in `settings.gradle.kts` as described above. If your
+   app sets its own `android:networkSecurityConfig` under another
+   resource name, add `tools:replace="android:networkSecurityConfig"`
+   to its `<application>` element.
+5. **Fixtures need no change.** Hand-built `NtsTimeSample` values still
+   compile; `recvClockGeneration` and `recvClockBackend` default to
+   `0` and `null` and now take part in `==` and `hashCode`.
+6. **Opting in to the strict clock is optional.** Resolve a context
+   with `StrictClockContext.resolve()` after
+   `NtsBridge.ensureInitialized()`, call `ntsGetTimeStrict` or
+   `NtsClient.getTimeStrict` instead of `ntsGetTime`, and call
+   `utcNow()` / `elapsedSinceSync()` on the result as methods, catching
+   `StrictClockError`. Recover by resolving a new context; tests use
+   `StrictClockContext.resolveForTesting()` against a mock bridge.
+   Same-boot transfer (`exportReference` / `bindReference`) refuses on
+   every platform in this release, and iOS has no boot identity to
+   support it. The README's
+   [Strict clock](https://github.com/nick-llewellyn/nts#strict-clock)
+   section covers usage, recovery, portability limits and what has
+   been verified on each platform.
 
 ### Added
 
@@ -289,6 +344,13 @@ tarball.
   now takes `reference:` as a `StrictReading` rather than a bare
   `referenceMicros:` integer, so only an attributed receipt can be
   exported. ([#355](https://github.com/nick-llewellyn/nts/pull/355))
+
+### Fixed
+
+- The build hook returns without building when the invocation does
+  not request code assets. It previously read the code config
+  unconditionally for the Android NDK floor check and threw, which
+  ended `flutter run` sessions once the app had launched.
 
 ## 9.4.0
 

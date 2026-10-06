@@ -148,6 +148,78 @@ Future<void> main() async {
 }
 ```
 
+## Strict clock
+
+New in 10.0. The strict path fails closed instead of falling back to
+a clock it cannot attribute. This snippet uses it locally, with no
+boot identity, and shows that same-boot transfer is refused: the
+package approves no boot-scope provider in this release, so an
+app-written one is rejected before it is consulted. It does not
+persist anything; authenticating and storing a reference is the
+consumer's job.
+
+```dart
+// ignore_for_file: avoid_print
+
+import 'package:nts/nts.dart';
+
+/// A provider the app wrote itself. Providers are approved by
+/// instance through `kApprovedBootScopeProviders`, which ships empty.
+final class AppBootScopeProvider implements BootScopeProvider {
+  const AppBootScopeProvider();
+
+  @override
+  String get providerId => 'com.example.boot-scope';
+
+  @override
+  Future<BootScope?> current() async => null;
+}
+
+Future<void> main() async {
+  await NtsBridge.ensureInitialized();
+
+  final StrictClockContext clock;
+  try {
+    clock = StrictClockContext.resolve();
+  } on StrictClockError catch (e) {
+    // Fail closed: no MonotonicClock or DateTime.now() substitute.
+    print('strict clock unavailable: $e');
+    return;
+  }
+
+  const spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
+  final StrictSyncedTime synced;
+  try {
+    synced = await ntsGetTimeStrict(spec: spec, context: clock);
+  } on NtsError catch (e) {
+    // Includes NtsErrorClockFault when the clock could not vouch.
+    print('no strict time: $e');
+    return;
+  }
+
+  try {
+    // Local strict use: synchronous reads, no I/O, no boot identity.
+    print('authenticated utc = ${synced.utcNow()}');
+
+    // Transfer needs an approved provider; none is approved.
+    try {
+      await clock.exportReference(
+        synced,
+        provider: const AppBootScopeProvider(),
+      );
+    } on StrictClockBootScopeUnavailable catch (e) {
+      // A scope refusal leaves the context valid.
+      print('transfer refused: ${e.reason.name}');
+    }
+
+    print('sync age = ${synced.elapsedSinceSync()}');
+  } on StrictClockError catch (e) {
+    // `clock` is invalid; resolve a new context and sync again.
+    print('strict clock failed: $e');
+  }
+}
+```
+
 ## Want the GUI?
 
 The full Flutter showcase lives at

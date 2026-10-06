@@ -454,6 +454,18 @@ is the reference (`/proc/sys/kernel/random/boot_id` on Android/Linux,
 `kern.bootsessionuuid` sysctl on iOS/macOS, boot-time-derived ID on
 Windows).
 
+The strict clock's `SameBootReference` is the first surface that
+crosses a process boundary, and it is gated on exactly that
+identifier: `exportReference` / `bindReference` require a
+`BootScopeProvider` from `kApprovedBootScopeProviders`, which ships
+empty, so every native transfer is refused in 10.0. No
+`trusted_time`-style source is substituted. iOS no longer exposes
+`kern.bootsessionuuid` to apps (iOS 18 and later), so iOS has no
+provider planned; `Settings.Global.BOOT_COUNT` on Android is a
+candidate that has not been validated. The strict generation is not a
+substitute either: it is an in-process invalidation token, and
+independent processes on one boot hold unrelated generations.
+
 ## Phase attribution and timings
 
 The shared deadline accounts for *when* a budget elapses but not for

@@ -77,6 +77,14 @@ boot session is meaningless. This is why `NtsSyncedTime` deliberately
 has no `toJson`/`fromJson` — no safe restore across launches is
 possible.
 
+The fallback row above applies to `MonotonicClock` only. The strict
+clock (`StrictClockContext`, new in 10.0) reads the same native
+sources with no fallback: a target without one fails `resolve()` with
+`StrictClockUnsupported`, and a faulting read throws instead of
+latching the `Instant` counter. Its portability limits — including
+why iOS has no boot continuity and Android's is conditional — are in
+the README's [Strict clock](../README.md#strict-clock) section.
+
 ## The Dart-side `Stopwatch` replacement: `MonotonicClock`
 
 `MonotonicClock` (`lib/src/api/clock.dart`, exported from
@@ -298,6 +306,9 @@ accept its stability terms.
 - [`README.md`](../README.md) — "Manual control (advanced
   primitives)": the burst-filter-compensate recipe the RTT
   measurement feeds.
+- [`README.md`](../README.md#strict-clock) — "Strict clock": the
+  fail-closed alternative to `MonotonicClock`, its errors, recovery
+  and platform evidence.
 - [`NOTICE`](../NOTICE) — license attribution for `windows-sys`,
   `libc`, and `mach2`.
 - [RFC 5905 §8](https://datatracker.ietf.org/doc/html/rfc5905) — the
