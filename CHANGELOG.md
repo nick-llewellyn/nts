@@ -131,6 +131,7 @@ one (`10.0.0`), not a `9.x` minor.
    [Strict clock](https://github.com/nick-llewellyn/nts#strict-clock)
    section covers usage, recovery, portability limits and what has
    been verified on each platform.
+   ([#375](https://github.com/nick-llewellyn/nts/pull/375))
 
 ### Added
 
@@ -351,6 +352,7 @@ one (`10.0.0`), not a `9.x` minor.
   not request code assets. It previously read the code config
   unconditionally for the Android NDK floor check and threw, which
   ended `flutter run` sessions once the app had launched.
+  ([#375](https://github.com/nick-llewellyn/nts/pull/375))
 
 ## 9.4.0
 
