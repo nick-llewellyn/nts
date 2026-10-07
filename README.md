@@ -419,9 +419,11 @@ is synchronous, never cached, and fails distinctly:
 `StrictClockUninitialized` before `NtsBridge.ensureInitialized()`,
 `StrictClockMockOnly` on a hand-written mock bridge,
 `StrictClockUnsupported` when the build has no supported backend,
-and a source fault or `StrictClockUnknownSource` when the binding
-read cannot be trusted. `now()` performs the bridge-state checks and
-one synchronous native read; it does no I/O.
+a source fault, a regression or `StrictClockUnknownSource` when the
+binding read cannot be trusted, and `StrictClockInvalidated` with
+reason `nativeGeneration` when a process-wide invalidation races that
+read. `now()` performs the bridge-state checks and one synchronous
+native read; it does no I/O.
 
 ```dart
 import 'package:nts/nts.dart';
@@ -529,9 +531,12 @@ incarnation or generation.
   `initMock(api:)` with the same object is not detected; use
   `NtsBridge.dispose()` when a reset must be observed.
 - **Raw readings cannot be upgraded.** A stored `micros` integer, a
-  `MonotonicClock` reading or an `NtsSyncedTime` anchor cannot become
-  a `SameBootReference`. `exportReference` accepts only a
-  `StrictSyncedTime` bound to the exporting context.
+  `MonotonicClock` reading or an `NtsSyncedTime` anchor has no export
+  provenance, and wrapping it in the public `SameBootReference`
+  constructor does not give it any. That constructor exists to rebuild
+  a reference the consumer exported and kept in storage it
+  authenticates. `exportReference` accepts only a `StrictSyncedTime`
+  bound to the exporting context.
 - **Reference time is not export time.** A `SameBootReference`
   carries the instant its `StrictSyncedTime` was referenced to (the
   winning sample's wire receipt), not the instant it was exported,

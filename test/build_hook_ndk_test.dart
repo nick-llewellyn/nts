@@ -1,4 +1,5 @@
-// Unit tests for the Android NDK floor check in `hook/build.dart`.
+// Unit tests for the Android NDK floor check in `hook/build.dart`, and
+// for the hook's early return when no code assets are requested.
 //
 // The hook refuses to build `libnts_rust.so` against an NDK below r28,
 // because the 16 KB page alignment Android 15+ requires comes entirely
@@ -8,7 +9,9 @@
 // deciding on the `Pkg.Revision` found there. A third group drives the
 // two together against a real NDK directory layout on disk, so the
 // wiring between them -- and the fail-open behaviour when the file
-// cannot be read -- is covered rather than inferred.
+// cannot be read -- is covered rather than inferred. A last group runs
+// the hook's `main` for an invocation that requests no code assets,
+// where reading the code config throws.
 //
 // `@TestOn('vm')` matches the hook itself, which uses `dart:io`.
 @TestOn('vm')
@@ -16,9 +19,12 @@ library;
 
 import 'dart:io';
 
+import 'package:code_assets/code_assets.dart' show HookConfigCodeConfig;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hooks/hooks.dart' show testBuildHook;
 
 import '../hook/build.dart';
+import '../hook/build.dart' as hook show main;
 
 // A `source.properties` in the shape the NDK ships, so the parser is
 // exercised against the real key ordering rather than a bare line.
@@ -190,5 +196,21 @@ void main() {
         reason: 'not an NDK layout',
       );
     });
+  });
+
+  group('build hook', () {
+    test(
+      'returns without building when code assets are not requested',
+      () async {
+        await testBuildHook(
+          mainMethod: hook.main,
+          extensions: const [],
+          check: (input, output) {
+            expect(input.config.buildCodeAssets, isFalse);
+            expect(output.assets.encodedAssets, isEmpty);
+          },
+        );
+      },
+    );
   });
 }

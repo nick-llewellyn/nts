@@ -404,8 +404,8 @@ class _Probe extends ChangeNotifier {
   }
 
   /// Dirties native memory in 64 MiB chunks of incompressible data until
-  /// iOS kills the process at its per-process memory limit (jetsam), for
-  /// the `process-death` row. Native memory, so the Dart heap limit cannot
+  /// iOS jetsam kills the process under memory pressure, for the
+  /// `process-death` row. Native memory, so the Dart heap limit cannot
   /// end the run with an `OutOfMemoryError` first. The launch record is
   /// rewritten first, so the relaunch compares against the moment of kill.
   Future<void> jetsam() => _step('jetsam', () async {
