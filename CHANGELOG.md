@@ -52,7 +52,9 @@ tarball.
   error. `NtsBridge.dispose()` on a native bridge now advances the
   process-wide strict-clock generation, and if that dispatch throws it
   propagates the error and leaves the bridge installed instead of
-  completing silently. `MonotonicClock` now stays on its process-local
+  completing silently. The calling isolate's `StrictClockContext`s are
+  invalidated even then, so a caller that catches the error must
+  resolve new ones. `MonotonicClock` now stays on its process-local
   fallback after a first native fault on every platform; Linux and
   Android previously returned to `clock_gettime` on a later success.
   ([#353](https://github.com/nick-llewellyn/nts/pull/353))
@@ -96,13 +98,18 @@ one (`10.0.0`), not a `9.x` minor.
    Add an `NtsErrorClockFault(:final stage, :final fault)` arm to
    every exhaustive `switch`, including those around `ntsGetTime`,
    `ntsQuery`, `ntsWarmCookies` and the `NtsClient` methods. Treat it
-   as a failed call; a repeated fault at the `admission`, `handshake`,
+   as a failed call, and check `fault` before diagnosing the cause.
+   `StrictClockInvalidated` with reason `nativeGeneration` means a
+   bridge reset or another generation advance moved under the call.
+   Any other fault repeated at the `admission`, `handshake`,
    `session`, `udp` or `receipt` stage means the platform clock itself
    is failing.
 2. **Do not rely on `NtsBridge.dispose()` being infallible.** Let its
    error propagate, or catch it and treat the bridge as still
-   installed. Contexts in every isolate of the process fail on their
-   next read after a successful native `dispose()`.
+   installed. Either way, resolve new contexts in the calling isolate:
+   its contexts are invalidated even when `dispose()` throws. Contexts
+   in every isolate of the process fail on their next read after a
+   successful native `dispose()`.
 3. **Expect a `MonotonicClock` epoch change at most once.** After a
    native fault the clock stays on its fallback counter, which may not
    count device sleep. If that matters, use the strict clock, which

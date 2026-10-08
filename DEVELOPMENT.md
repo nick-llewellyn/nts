@@ -305,11 +305,12 @@ into an error; that is the `nts-flr8.9` release gate, run by hand when
 the evidence is in. Outstanding `macos`, `linux` and `windows` rows are
 still listed but do not fail it.
 
-The dimensions the probe suite does not cover — `multi-engine`,
-`process-relaunch`, and every physical row from `suspend-resume` down —
-are absent rather than approximated. A thread sleep is not a suspend, a
-simulator is not a device, and an in-process teardown is not a process
-death. Per the `nts-flr8` delivery policy an unavailable proof stays
+The host probe test does not cover `multi-engine`, `process-relaunch`
+or any physical row from `suspend-resume` down, and does not
+approximate them: those rows come from the device probe on a physical
+device, and stay outstanding on platforms it does not run on. A thread
+sleep is not a suspend, a simulator is not a device, and an in-process
+teardown is not a process death. Per the `nts-flr8` delivery policy an unavailable proof stays
 `pending` or `blocked` with a next action; it is never promoted to
 `pass` on the strength of a substitute.
 

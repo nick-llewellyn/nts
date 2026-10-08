@@ -247,7 +247,8 @@ class _Probe extends ChangeNotifier {
         'skewMicros=${dClock - dWall} clockBackwards=${dClock < 0}';
   }
 
-  /// Strict, wall and `Stopwatch` deltas since the previous mark.
+  /// Strict, wall and `Stopwatch` deltas since the previous mark on
+  /// this context, each taken at the same two points.
   /// `Stopwatch` does not advance while the device sleeps, so
   /// `strict - stopwatch` is the time spent suspended, and
   /// `wall - strict` is any wall-clock (RTC) change in between.
@@ -264,7 +265,7 @@ class _Probe extends ChangeNotifier {
     _lastMarkWall = wall;
     var since = '';
     if (previous != null && previousWall != null) {
-      final strict = _context.elapsedSince(previous).inMicroseconds;
+      final strict = r.micros - previous.micros;
       final dWall = wall.difference(previousWall).inMicroseconds;
       since =
           ' strictMicros=$strict wallMicros=$dWall stopwatchMicros=$stopwatch '
@@ -298,6 +299,8 @@ class _Probe extends ChangeNotifier {
 
   Future<void> reResolve() => _step('re-resolve', () {
     _ctx = null;
+    _lastMark = null;
+    _lastMarkWall = null;
     final c = _context;
     return 'descriptor=${c.descriptor} generation=${c.generation}';
   });

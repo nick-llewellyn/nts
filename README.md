@@ -440,11 +440,11 @@ Future<void> main() async {
     return;
   }
 
-  final start = clock.now();
-  print('${start.descriptor}, generation ${start.generation}');
-
   const spec = NtsServerSpec(host: 'time.cloudflare.com', port: 4460);
   try {
+    final start = clock.now();
+    print('${start.descriptor}, generation ${start.generation}');
+
     final synced = await ntsGetTimeStrict(spec: spec, context: clock);
     print('authenticated utc = ${synced.utcNow()}');
     print('sync age = ${synced.elapsedSinceSync()}');
@@ -454,7 +454,7 @@ Future<void> main() async {
   } on NtsError catch (e) {
     print('sync failed: $e');
   } on StrictClockError catch (e) {
-    // Raised by utcNow(), elapsedSinceSync() and elapsedSince().
+    // Raised by now(), utcNow(), elapsedSinceSync() and elapsedSince().
     // `clock` is now invalid; resolve a new context to continue.
     print('strict clock failed: $e');
   }
