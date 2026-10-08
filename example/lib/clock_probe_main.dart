@@ -249,8 +249,9 @@ class _Probe extends ChangeNotifier {
 
   /// Strict, wall and `Stopwatch` deltas since the previous mark on
   /// this context, each taken at the same two points.
-  /// `Stopwatch` does not advance while the device sleeps, so
-  /// `strict - stopwatch` is the time spent suspended, and
+  /// `strict - stopwatch` estimates time spent suspended only where
+  /// `Stopwatch` stops while the device sleeps, as observed on Android;
+  /// on iOS it counts through sleep, so the difference cannot show it.
   /// `wall - strict` is any wall-clock (RTC) change in between.
   Future<void> mark() => _step('mark', () {
     final r = _context.now();
@@ -269,7 +270,7 @@ class _Probe extends ChangeNotifier {
       final dWall = wall.difference(previousWall).inMicroseconds;
       since =
           ' strictMicros=$strict wallMicros=$dWall stopwatchMicros=$stopwatch '
-          'suspendedMicros=${strict - stopwatch} '
+          'strictMinusStopwatchMicros=${strict - stopwatch} '
           'wallMinusStrictMicros=${dWall - strict}';
     }
     return 'micros=${r.micros} generation=${r.generation}$since';

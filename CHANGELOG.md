@@ -31,8 +31,10 @@ tarball.
   `receipt`) surfaces to `ntsQuery`, `ntsWarmCookies`, `ntsGetTime`
   and the `NtsClient` equivalents without any `context:`. In
   practice that is a fault of the platform clock itself — which
-  previously latched a silent fallback — or a generation change from
-  a bridge reset on another isolate while the call was in flight.
+  previously latched a silent fallback — a generation change from
+  a bridge reset on another isolate while the call was in flight, or,
+  at `receipt`, a device suspend during the exchange
+  (`StrictClockSuspendedInFlight`).
   The remaining stages —
   `awaitResult`, `attribution`, `projection` — are Dart-authored and
   fire only on the strict surfaces (`ntsGetTimeStrict`,
@@ -98,12 +100,17 @@ one (`10.0.0`), not a `9.x` minor.
    Add an `NtsErrorClockFault(:final stage, :final fault)` arm to
    every exhaustive `switch`, including those around `ntsGetTime`,
    `ntsQuery`, `ntsWarmCookies` and the `NtsClient` methods. Treat it
-   as a failed call, and check `fault` before diagnosing the cause.
+   as a failed call, and diagnose by the type of `fault`.
    `StrictClockInvalidated` with reason `nativeGeneration` means a
    bridge reset or another generation advance moved under the call.
-   Any other fault repeated at the `admission`, `handshake`,
-   `session`, `udp` or `receipt` stage means the platform clock itself
-   is failing.
+   `StrictClockSuspendedInFlight` means the device slept during the
+   exchange; retry. A `StrictClockSourceFault` of kind `abiMismatch`
+   or `bridge` points to the native library or the bridge, not the
+   clock. Only a `StrictClockRegression`, or a
+   `StrictClockSourceFault` of kind `syscallFailed`,
+   `timebaseUnavailable`, `invalidRaw` or `conversionOverflow`,
+   repeated at the `admission`, `handshake`, `session`, `udp` or
+   `receipt` stage means the platform clock itself is failing.
 2. **Do not rely on `NtsBridge.dispose()` being infallible.** Let its
    error propagate, or catch it and treat the bridge as still
    installed. Either way, resolve new contexts in the calling isolate:
