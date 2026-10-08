@@ -459,7 +459,7 @@ class _ProbeApp extends StatelessWidget {
       'Periodic': probe.togglePeriodic,
       'Export': () => unawaited(probe.exportReference()),
       'Bind persisted': () => unawaited(probe.bindPersisted()),
-      'Jetsam': () => unawaited(probe.jetsam()),
+      if (Platform.isIOS) 'Jetsam': () => unawaited(probe.jetsam()),
       if (_probeHosted) 'Multi-engine': () => unawaited(probe.multiEngine()),
       if (_probeHosted) 'Teardown': () => unawaited(probe.bridgeTeardown()),
       'Clear': () => unawaited(probe.clearHistory()),

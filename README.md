@@ -464,7 +464,12 @@ Future<void> main() async {
 Network calls report a clock failure as `NtsError.clockFault`, whose
 `stage` names where the read served and whose `fault` is the
 underlying `StrictClockError`. Context methods and the
-`StrictSyncedTime` projections throw the `StrictClockError` directly.
+`StrictSyncedTime` projections throw a failed clock read's
+`StrictClockError` directly. The transfer methods can also fail in
+other ways: `exportReference` throws `ArgumentError` for a
+`StrictSyncedTime` bound to another context, and once a provider is
+consulted, `exportReference` and `bindReference` propagate whatever its
+`current()` throws.
 
 ### Errors and invalidation
 

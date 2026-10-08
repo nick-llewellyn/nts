@@ -1,10 +1,12 @@
 import Flutter
 import UIKit
 
-// Debug and profile builds also host the second engine that
-// `lib/clock_probe_main.dart` starts for its multi-engine rows, relaying
-// its method calls between the two engines, and hold a background task
-// while the probe's periodic reads run so they continue after a lock.
+// Debug and profile builds also install host support for
+// `lib/clock_probe_main.dart`: the second engine it starts for its
+// multi-engine rows, relaying its method calls between the two engines,
+// and a background task held while its periodic reads run so they
+// continue after a lock. On iOS the probe uses both only in profile
+// builds, because a second JIT engine faults on code signing.
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private static let clockProbe = "nts_example/clock_probe"
