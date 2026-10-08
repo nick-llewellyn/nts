@@ -20,10 +20,12 @@
 //   1  a structural defect, or an outstanding row under
 //      `--require-complete`
 //
-// `--require-complete` is the release gate for `nts-flr8.9`: it fails
+// `--require-complete` is the matrix gate for `nts-flr8.9`: it fails
 // while any `android` or `ios` row is outstanding. `macos`, `linux` and
 // `windows` rows are still validated and reported, but do not gate the
-// release. It is deliberately not wired into CI: a green CI run is not
+// release. It does not check the bead's other release criteria, such as
+// the post-`4d3f42b` Android NTS query, which are recorded on the bead.
+// It is deliberately not wired into CI: a green CI run is not
 // evidence that a physical device did anything, and making the gate pass
 // by editing this file is exactly the failure the `nts-flr8` delivery
 // policy forbids.
@@ -68,7 +70,7 @@ Usage:
 Options:
     --require-complete  Also fail when any android or ios row is still
                         pending, blocked or failing. This is the
-                        nts-flr8.9 release gate; macos, linux and
+                        nts-flr8.9 matrix gate; macos, linux and
                         windows rows are reported but do not gate it.
     -h, --help          Show this message.
 ''';
@@ -146,13 +148,14 @@ void main(List<String> args) {
     if (gating.isNotEmpty) {
       stderr.writeln(
         '$_errorPrefix${gating.length} ${_gatedPlatforms.join('/')} row(s) '
-        'still outstanding; the nts-flr8.9 release gate is not met',
+        'still outstanding; the nts-flr8.9 matrix gate is not met',
       );
       exit(1);
     }
     stdout.writeln(
-      'nts-flr8.9 release gate met: every ${_gatedPlatforms.join('/')} '
-      'row is settled',
+      'nts-flr8.9 matrix gate met: every ${_gatedPlatforms.join('/')} '
+      'row is settled; the bead\'s other release criteria are not '
+      'checked here',
     );
   }
 }

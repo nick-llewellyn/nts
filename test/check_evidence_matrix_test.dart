@@ -1,7 +1,7 @@
 // Unit tests for the parser and coverage rules behind
 // `tool/clock_evidence/check_evidence_matrix.dart`.
 //
-// That script is the release gate for NTS-180 (`nts-flr8.9`):
+// That script is the matrix gate for NTS-180 (`nts-flr8.9`):
 // `--require-complete` is what decides whether the strict clock's
 // Android and iOS evidence is accepted as complete. A parser or scoping
 // regression there would let the gate accept a

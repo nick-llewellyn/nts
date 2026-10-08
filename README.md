@@ -475,9 +475,10 @@ underlying `StrictClockError`. Context methods and the
   `NtsRustLib.dispose()` / `init()`, an explicit `invalidate()`, or
   an advance of the native generation, the next `now()` /
   `elapsedSince()` throws `StrictClockInvalidated` with the matching
-  `reason`. The generation is process-wide: a native fault or a
-  bridge disposal on any isolate or engine in the process advances
-  it, and every context in the process fails on its next read.
+  `reason`. The generation is process-wide: a native fault, or the
+  disposal of a native bridge, on any isolate or engine in the
+  process advances it, and every context in the process fails on its
+  next read.
 - **Foreign readings are rejected without invalidating.**
   `elapsedSince()` given a reading from another bridge incarnation,
   coordinate or generation throws `StrictClockSourceIncompatible`,

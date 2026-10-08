@@ -4,10 +4,11 @@ Machine-checked record of what has actually been observed for the
 strict clock (`lib/src/api/strict_clock.dart`,
 `rust/src/nts/boottime.rs`) on each supported platform. Validated by
 `dart run tool/clock_evidence/check_evidence_matrix.dart`. With
-`--require-complete` that command is the `nts-flr8.9` release gate: it
+`--require-complete` that command is the `nts-flr8.9` matrix gate: it
 fails while any `android` or `ios` row is outstanding. Outstanding
 `macos`, `linux` and `windows` rows are reported but do not gate the
-release.
+release. The bead's other release criteria, such as the post-`4d3f42b`
+Android NTS query, are recorded on the bead, not in this matrix.
 
 A row is the unit of evidence. `status` is one of:
 

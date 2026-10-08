@@ -301,9 +301,11 @@ Neither command is in CI, and that is deliberate. A green CI run is not
 evidence that a physical device did anything, so wiring the matrix into
 a required check would make it satisfiable by editing a Markdown file.
 `--require-complete` turns every outstanding `android` or `ios` row
-into an error; that is the `nts-flr8.9` release gate, run by hand when
+into an error; that is the `nts-flr8.9` matrix gate, run by hand when
 the evidence is in. Outstanding `macos`, `linux` and `windows` rows are
-still listed but do not fail it.
+still listed but do not fail it. The bead's other release criteria,
+such as the post-`4d3f42b` Android NTS query, are recorded on the bead
+and not checked by it.
 
 The host probe test does not cover `multi-engine`, `process-relaunch`
 or any physical row from `suspend-resume` down, and does not
