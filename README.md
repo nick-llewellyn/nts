@@ -400,7 +400,7 @@ that call.
 
 | | Legacy: `MonotonicClock`, `ntsGetTime`, `NtsSyncedTime` | Strict: `StrictClockContext`, `ntsGetTimeStrict`, `StrictSyncedTime` |
 |---|---|---|
-| Native read fails | May latch a fallback counter that may not count sleep, with no signal | Throws a `StrictClockError` on that call; the context is invalid from then on |
+| Native read fails | May latch a fallback counter that may not count sleep, with no signal | Fails that call: context methods and `StrictSyncedTime` projections throw a `StrictClockError`, and `ntsGetTimeStrict` throws `NtsError.clockFault` carrying it as `fault`; the context is invalid from then on |
 | Provenance | None | Every `StrictReading` carries `descriptor`, `generation` and `provenance` |
 | Sample attribution | Not attributed | Each sample is matched to the context by its native receipt stamp; an unattributable sample fails the call |
 | Synced clock reads | `utcNow` / `elapsedSinceSync` getters | `utcNow()` / `elapsedSinceSync()` methods that re-read the context and throw once it is invalid |

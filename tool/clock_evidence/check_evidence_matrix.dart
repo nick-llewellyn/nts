@@ -16,9 +16,9 @@
 //
 // Exit codes:
 //   0  the matrix is well-formed (and, with `--require-complete`, has no
-//      outstanding rows)
-//   1  a structural defect, or an outstanding row under
-//      `--require-complete`
+//      outstanding `android` or `ios` row)
+//   1  a structural defect, or an outstanding `android` or `ios` row
+//      under `--require-complete`
 //
 // `--require-complete` is the matrix gate for `nts-flr8.9`: it fails
 // while any `android` or `ios` row is outstanding. `macos`, `linux` and
