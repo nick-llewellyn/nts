@@ -147,7 +147,7 @@ class _Probe extends ChangeNotifier {
   DateTime? _lastMarkWall;
   final _sinceMark = Stopwatch();
   Timer? _periodic;
-  bool _secondStarted = false;
+  Future<void>? _second;
 
   bool get periodic => _periodic != null;
 
@@ -164,9 +164,11 @@ class _Probe extends ChangeNotifier {
   }
 
   /// Runs `body` and logs the outcome; an error is evidence, not a crash.
-  Future<void> _step(String name, FutureOr<String> Function() body) async {
+  /// Returns whether `body` completed.
+  Future<bool> _step(String name, FutureOr<String> Function() body) async {
     try {
       log('$name: ${await body()}');
+      return true;
     } on StrictClockInvalidated catch (e) {
       log(
         '$name: invalidated reason=${e.reason.name} generation=${e.generation}',
@@ -176,6 +178,7 @@ class _Probe extends ChangeNotifier {
     } catch (e) {
       log('$name: ${e.runtimeType} $e');
     }
+    return false;
   }
 
   StrictClockContext get _context => _ctx ??= StrictClockContext.resolve();
@@ -353,22 +356,29 @@ class _Probe extends ChangeNotifier {
     return reply;
   }
 
-  Future<void> _ensureSecond() async {
-    if (_secondStarted) return;
-    final ready = _fromSecond.stream.first.timeout(const Duration(seconds: 20));
+  /// Starts the second engine once; completes on its `ready` line and
+  /// fails, now and on every later call, on any other first line. The
+  /// host starts the engine at most once per process.
+  Future<void> _ensureSecond() => _second ??= _startSecond();
+
+  Future<void> _startSecond() async {
+    final first = _fromSecond.stream.first.timeout(const Duration(seconds: 20));
     await _channel.invokeMethod<void>('startSecondEngine');
-    _secondStarted = true;
-    await ready;
+    final line = await first;
+    if (!line.startsWith('ready ')) {
+      throw StateError('second engine not ready: $line');
+    }
   }
 
   /// `multi-engine`: a process-wide generation advance made on this
   /// engine fails closed on the other engine's next read; both recover
   /// by re-resolving.
   Future<void> multiEngine() async {
-    await _step('multi-engine start', () async {
+    final started = await _step('multi-engine start', () async {
       await _ensureSecond();
       return 'second engine ready';
     });
+    if (!started) return;
     await _step('multi-engine e1 before', () => _read('read'));
     await _step('multi-engine e2 before', () => _ask('read'));
     await _step(
@@ -386,10 +396,11 @@ class _Probe extends ChangeNotifier {
   /// engine's context fails closed and it can re-resolve on its own
   /// still-installed bridge.
   Future<void> bridgeTeardown() async {
-    await _step('teardown start', () async {
+    final started = await _step('teardown start', () async {
       await _ensureSecond();
       return 'second engine ready';
     });
+    if (!started) return;
     await _step('teardown e1 before', () => _read('read'));
     await _step('teardown e2 before', () => _ask('read'));
     await _step('teardown dispose', () {

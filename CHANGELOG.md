@@ -30,11 +30,11 @@ tarball.
   fault at those stages (`admission`, `handshake`, `session`, `udp`,
   `receipt`) surfaces to `ntsQuery`, `ntsWarmCookies`, `ntsGetTime`
   and the `NtsClient` equivalents without any `context:`. In
-  practice that is a fault of the platform clock itself — which
-  previously latched a silent fallback — a generation change from
-  a bridge reset on another isolate while the call was in flight, or,
-  at `receipt`, a device suspend during the exchange
-  (`StrictClockSuspendedInFlight`).
+  practice that is one of three things: a fault of the platform
+  clock itself, which previously latched a silent fallback; a
+  generation change from a bridge reset on another isolate while
+  the call was in flight; or, at `receipt`, a device suspend during
+  the exchange (`StrictClockSuspendedInFlight`).
   The remaining stages —
   `awaitResult`, `attribution`, `projection` — are Dart-authored and
   fire only on the strict surfaces (`ntsGetTimeStrict`,
