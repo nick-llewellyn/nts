@@ -16,14 +16,19 @@
 //
 // Exit codes:
 //   0  the matrix is well-formed (and, with `--require-complete`, has no
-//      outstanding rows)
-//   1  a structural defect, or an outstanding row under
-//      `--require-complete`
+//      outstanding `android` or `ios` row)
+//   1  a structural defect, or an outstanding `android` or `ios` row
+//      under `--require-complete`
 //
-// `--require-complete` is the epic-close gate for `nts-flr8.7`. It is
-// deliberately not wired into CI: a green CI run is not evidence that a
-// physical device did anything, and making the gate pass by editing this
-// file is exactly the failure the `nts-flr8` delivery policy forbids.
+// `--require-complete` is the matrix gate for `nts-flr8.9`: it fails
+// while any `android` or `ios` row is outstanding. `macos`, `linux` and
+// `windows` rows are still validated and reported, but do not gate the
+// release. It does not check the bead's other release criteria, such as
+// the post-`4d3f42b` Android NTS query, which are recorded on the bead.
+// It is deliberately not wired into CI: a green CI run is not
+// evidence that a physical device did anything, and making the gate pass
+// by editing this file is exactly the failure the `nts-flr8` delivery
+// policy forbids.
 
 import 'dart:io';
 
@@ -53,6 +58,9 @@ const _dimensions = [
 const _settled = {'pass', 'n/a'};
 const _statuses = {'pass', 'fail', 'pending', 'blocked', 'n/a'};
 
+/// Platforms whose outstanding rows fail `--require-complete`.
+const _gatedPlatforms = {'android', 'ios'};
+
 const _usage = '''
 Validate the strict clock evidence matrix.
 
@@ -60,8 +68,10 @@ Usage:
     dart run tool/clock_evidence/check_evidence_matrix.dart [options]
 
 Options:
-    --require-complete  Also fail when any row is still pending, blocked
-                        or failing. This is the nts-flr8.7 close gate.
+    --require-complete  Also fail when any android or ios row is still
+                        pending, blocked or failing. This is the
+                        nts-flr8.9 matrix gate; macos, linux and
+                        windows rows are reported but do not gate it.
     -h, --help          Show this message.
 ''';
 
@@ -71,7 +81,8 @@ String get _errorPrefix => Platform.environment.containsKey('GITHUB_ACTIONS')
 
 /// One data row of one platform table.
 ///
-/// Public, like [parseEvidenceRows] and [checkEvidenceCoverage], because
+/// Public, like [parseEvidenceRows], [checkEvidenceCoverage] and
+/// [gatingRows], because
 /// `test/check_evidence_matrix_test.dart` drives the parser and the
 /// coverage rules directly -- the same seam
 /// `tool/check_doc_snippets.dart` exposes to its own suite.
@@ -132,14 +143,31 @@ void main(List<String> args) {
   final outstanding = rows.where((r) => !_settled.contains(r.status)).toList();
   _report(rows, outstanding);
 
-  if (requireComplete && outstanding.isNotEmpty) {
-    stderr.writeln(
-      '$_errorPrefix${outstanding.length} row(s) still outstanding; '
-      'the nts-flr8.7 evidence matrix is not complete',
+  if (requireComplete) {
+    final gating = gatingRows(rows);
+    if (gating.isNotEmpty) {
+      stderr.writeln(
+        '$_errorPrefix${gating.length} ${_gatedPlatforms.join('/')} row(s) '
+        'still outstanding; the nts-flr8.9 matrix gate is not met',
+      );
+      exit(1);
+    }
+    stdout.writeln(
+      'nts-flr8.9 matrix gate met: every ${_gatedPlatforms.join('/')} '
+      'row is settled; the bead\'s other release criteria are not '
+      'checked here',
     );
-    exit(1);
   }
 }
+
+/// The outstanding rows `--require-complete` fails on: those of a
+/// platform in [_gatedPlatforms].
+List<EvidenceRow> gatingRows(List<EvidenceRow> rows) => [
+  for (final row in rows)
+    if (_gatedPlatforms.contains(row.platform) &&
+        !_settled.contains(row.status))
+      row,
+];
 
 /// Collect every data row of every `## <platform>` table.
 List<EvidenceRow> parseEvidenceRows(List<String> lines, List<String> problems) {

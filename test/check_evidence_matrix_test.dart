@@ -1,9 +1,10 @@
 // Unit tests for the parser and coverage rules behind
 // `tool/clock_evidence/check_evidence_matrix.dart`.
 //
-// That script is the close gate for NTS-180: `--require-complete` is
-// what decides whether the strict clock's platform evidence is accepted
-// as complete. A parser regression there would let the gate accept a
+// That script is the matrix gate for NTS-180 (`nts-flr8.9`):
+// `--require-complete` is what decides whether the strict clock's
+// Android and iOS evidence is accepted as complete. A parser or scoping
+// regression there would let the gate accept a
 // matrix that is missing a platform, silently double-counts a
 // dimension, or records a `pass` with no evidence behind it -- exactly
 // the outcomes the `nts-flr8` delivery policy exists to prevent. These
@@ -190,6 +191,44 @@ void main() {
       final rows = completeRows()
         ..[0] = '| source-contract | pending | host | | read the source |';
       expect(problemsFor(allPlatforms(androidRows: rows)), isEmpty);
+    });
+  });
+
+  group('gatingRows', () {
+    EvidenceRow row(String platform, String status) => EvidenceRow(
+      platform: platform,
+      dimension: 'reboot',
+      status: status,
+      method: 'device',
+      evidence: '',
+      nextAction: 'reboot',
+      line: 1,
+    );
+
+    test('gates on outstanding android and ios rows', () {
+      final rows = [
+        for (final platform in ['android', 'ios'])
+          for (final status in ['pending', 'blocked', 'fail'])
+            row(platform, status),
+      ];
+      expect(gatingRows(rows), rows);
+    });
+
+    test('does not gate on settled android and ios rows', () {
+      final rows = [
+        for (final platform in ['android', 'ios'])
+          for (final status in ['pass', 'n/a']) row(platform, status),
+      ];
+      expect(gatingRows(rows), isEmpty);
+    });
+
+    test('does not gate on outstanding macos, linux or windows rows', () {
+      final rows = [
+        for (final platform in ['macos', 'linux', 'windows'])
+          for (final status in ['pending', 'blocked', 'fail'])
+            row(platform, status),
+      ];
+      expect(gatingRows(rows), isEmpty);
     });
   });
 }

@@ -30,9 +30,11 @@ tarball.
   fault at those stages (`admission`, `handshake`, `session`, `udp`,
   `receipt`) surfaces to `ntsQuery`, `ntsWarmCookies`, `ntsGetTime`
   and the `NtsClient` equivalents without any `context:`. In
-  practice that is a fault of the platform clock itself — which
-  previously latched a silent fallback — or a generation change from
-  a bridge reset on another isolate while the call was in flight.
+  practice that is one of three things: a fault of the platform
+  clock itself, which previously latched a silent fallback; a
+  generation change from a bridge reset on another isolate while
+  the call was in flight; or, at `receipt`, a device suspend during
+  the exchange (`StrictClockSuspendedInFlight`).
   The remaining stages —
   `awaitResult`, `attribution`, `projection` — are Dart-authored and
   fire only on the strict surfaces (`ntsGetTimeStrict`,
@@ -47,6 +49,17 @@ tarball.
   the value-semantics contract (`==`, `hashCode`, `toString`) now
   covers them. A sample from a real bridge always carries a non-zero
   generation. ([#354](https://github.com/nick-llewellyn/nts/pull/354))
+
+- Two lifecycle outcomes of existing APIs change without a compile
+  error. `NtsBridge.dispose()` on a native bridge now advances the
+  process-wide strict-clock generation, and if that dispatch throws it
+  propagates the error and leaves the bridge installed instead of
+  completing silently. The calling isolate's `StrictClockContext`s are
+  invalidated even then, so a caller that catches the error must
+  resolve new ones. `MonotonicClock` now stays on its process-local
+  fallback after a first native fault on every platform; Linux and
+  Android previously returned to `clock_gettime` on a later success.
+  ([#353](https://github.com/nick-llewellyn/nts/pull/353))
 
 - Android builds fetch the `rustls-platform-verifier` companion AAR
   from upstream's GitHub-hosted Maven repository, because the
@@ -76,6 +89,63 @@ tarball.
   on Android when the user has disabled a system trust anchor, and
   Windows verification of hostnames with a trailing `.`.
   ([#374](https://github.com/nick-llewellyn/nts/pull/374))
+
+These changes alter the runtime and error outcomes of existing public
+APIs and the Android build requirements, so the release is a major
+one (`10.0.0`), not a `9.x` minor.
+
+### Migrating from 9.x
+
+1. **Handle `NtsError.clockFault` everywhere you handle `NtsError`.**
+   Add an `NtsErrorClockFault(:final stage, :final fault)` arm to
+   every exhaustive `switch`, including those around `ntsGetTime`,
+   `ntsQuery`, `ntsWarmCookies` and the `NtsClient` methods. Treat it
+   as a failed call, and diagnose by the type of `fault`.
+   `StrictClockInvalidated` with reason `nativeGeneration` means a
+   bridge reset or another generation advance moved under the call.
+   `StrictClockSuspendedInFlight` means the device slept during the
+   exchange; retry. A `StrictClockSourceFault` of kind `abiMismatch`
+   or `bridge` points to the native library or the bridge, not the
+   clock. Only a `StrictClockRegression`, or a
+   `StrictClockSourceFault` of kind `syscallFailed`,
+   `timebaseUnavailable`, `invalidRaw` or `conversionOverflow`,
+   repeated at the `admission`, `handshake`, `session`, `udp` or
+   `receipt` stage means the platform clock itself is failing.
+2. **Do not rely on `NtsBridge.dispose()` being infallible.** Let its
+   error propagate, or catch it and treat the bridge as still
+   installed. Either way, resolve new contexts in the calling isolate:
+   its contexts are invalidated even when `dispose()` throws. Contexts
+   in every isolate of the process fail on their next read after a
+   successful native `dispose()`.
+3. **Expect a `MonotonicClock` epoch change at most once.** After a
+   native fault the clock stays on its fallback counter, which may not
+   count device sleep. If that matters, use the strict clock, which
+   throws instead.
+4. **Check Android repository and network security settings.** The
+   default Flutter/Gradle setup needs only network access to
+   github.com on the first build. Under
+   `RepositoriesMode.PREFER_SETTINGS`, declare upstream's Maven
+   repository in `settings.gradle.kts` as described above. If your
+   app sets its own `android:networkSecurityConfig` under another
+   resource name, add `tools:replace="android:networkSecurityConfig"`
+   to its `<application>` element.
+5. **Fixtures need no change.** Hand-built `NtsTimeSample` values still
+   compile; `recvClockGeneration` and `recvClockBackend` default to
+   `0` and `null` and now take part in `==` and `hashCode`.
+6. **Opting in to the strict clock is optional.** Resolve a context
+   with `StrictClockContext.resolve()` after
+   `NtsBridge.ensureInitialized()`, call `ntsGetTimeStrict` or
+   `NtsClient.getTimeStrict` instead of `ntsGetTime`, and call
+   `utcNow()` / `elapsedSinceSync()` on the result as methods, catching
+   `StrictClockError`. Recover by resolving a new context; tests use
+   `StrictClockContext.resolveForTesting()` against a mock bridge.
+   Same-boot transfer (`exportReference` / `bindReference`) refuses on
+   every platform in this release, and iOS has no boot identity to
+   support it. The README's
+   [Strict clock](https://github.com/nick-llewellyn/nts#strict-clock)
+   section covers usage, recovery, portability limits and what has
+   been verified on each platform.
+   ([#375](https://github.com/nick-llewellyn/nts/pull/375))
 
 ### Added
 
@@ -289,6 +359,14 @@ tarball.
   now takes `reference:` as a `StrictReading` rather than a bare
   `referenceMicros:` integer, so only an attributed receipt can be
   exported. ([#355](https://github.com/nick-llewellyn/nts/pull/355))
+
+### Fixed
+
+- The build hook returns without building when the invocation does
+  not request code assets. It previously read the code config
+  unconditionally for the Android NDK floor check and threw, which
+  ended `flutter run` sessions once the app had launched.
+  ([#375](https://github.com/nick-llewellyn/nts/pull/375))
 
 ## 9.4.0
 
