@@ -76,6 +76,17 @@ Future<AppState> _stateWith({
   );
 }
 
+/// Asserts the text field under [field] still holds focus, still
+/// carries [text], and still has the soft keyboard up.
+void _expectFieldKept(WidgetTester tester, Finder field, String text) {
+  final editable = tester.widget<EditableText>(
+    find.descendant(of: field, matching: find.byType(EditableText)),
+  );
+  expect(editable.focusNode.hasFocus, isTrue);
+  expect(editable.controller.text, text);
+  expect(tester.testTextInput.isVisible, isTrue);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -695,6 +706,76 @@ void main() {
     // tripping the PrimaryScrollController collision).
     expect(find.text('time.cloudflare.com'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  group('keyboard inset', () {
+    // A soft keyboard shrinks the Scaffold body by its bottom inset.
+    // On a landscape tablet that drops the Client tab below
+    // _tightHeightFloorDp, so _ClientTab swaps layout branches while
+    // a text field holds focus. 1400 of the 1800-high test surface
+    // leaves a body well under the ~400dp floor.
+    const keyboardInset = FakeViewPadding(bottom: 1400);
+    final compactBranch = find.descendant(
+      of: find.byType(TabBarView),
+      matching: find.byType(SingleChildScrollView),
+    );
+
+    testWidgets('search field keeps focus, text and the keyboard across '
+        'both layout flips', (tester) async {
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      final search = find.byType(TextField);
+      await tester.enterText(search, 'netnod');
+      await tester.pump();
+      expect(compactBranch, findsNothing);
+
+      tester.view.viewInsets = keyboardInset;
+      addTearDown(tester.view.resetViewInsets);
+      await tester.pump();
+
+      expect(compactBranch, findsOneWidget);
+      _expectFieldKept(tester, search, 'netnod');
+
+      tester.view.resetViewInsets();
+      await tester.pump();
+
+      expect(compactBranch, findsNothing);
+      _expectFieldKept(tester, search, 'netnod');
+      expect(find.text('time.cloudflare.com'), findsNothing);
+    });
+
+    testWidgets('pasted PEM text keeps focus and the keyboard when the '
+        'inset flips to the compact branch', (tester) async {
+      final h = await _bootHarness();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+
+      h.state.trustMode.value = TrustMode.custom;
+      await tester.pump();
+
+      const pasted =
+          '-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----';
+      final pem = find.byKey(const Key('custom_roots_text_field'));
+      await tester.enterText(pem, pasted);
+      await tester.pump();
+
+      tester.view.viewInsets = keyboardInset;
+      addTearDown(tester.view.resetViewInsets);
+      await tester.pump();
+
+      expect(compactBranch, findsOneWidget);
+      _expectFieldKept(tester, pem, pasted);
+    });
   });
 
   group('shell diagnostics', () {

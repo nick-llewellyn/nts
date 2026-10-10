@@ -368,6 +368,16 @@ one (`10.0.0`), not a `9.x` minor.
   ended `flutter run` sessions once the app had launched.
   ([#375](https://github.com/nick-llewellyn/nts/pull/375))
 
+- The example app's Client tab no longer closes the soft keyboard the
+  moment a text field gains focus. On a landscape tablet the keyboard
+  shrinks the tab below the height at which it switches to its compact,
+  scrollable layout, and that switch rebuilt the server list and the
+  panels below it. The focused search field (or the pasted-PEM field in
+  Custom trust mode) was disposed, its input connection closed, and the
+  keyboard hid; the search field also lost its text while the filter
+  stayed applied. Both subtrees now keep their state across the switch.
+  ([#376](https://github.com/nick-llewellyn/nts/pull/376))
+
 ## 9.4.0
 
 ### Security
