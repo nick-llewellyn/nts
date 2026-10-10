@@ -17,7 +17,9 @@
 //     vertical space.
 //
 // Every reactive bit lives in the [AppState] / [NtsController] pair
-// passed in by `main.dart`, so this widget is itself stateless.
+// passed in by `main.dart`, so [HomePage] is itself stateless.
+// `_ClientTab` holds only the two `GlobalKey`s that carry its
+// subtrees across layout switches.
 
 import 'package:flutter/material.dart';
 
@@ -107,12 +109,24 @@ class HomePage extends StatelessWidget {
 ///   (in `main.dart`) takes effect. Without this dispatch the panels
 ///   plus the filter bar's ~120dp minimum can't both fit, and the outer
 ///   column surfaces a `RenderFlex` overflow.
-class _ClientTab extends StatelessWidget {
+///
+/// A soft keyboard on a landscape tablet also drops the body below the
+/// threshold, so the switch can happen while a text field holds focus.
+/// The server list and the bottom panels carry a `GlobalKey` that is
+/// the same in both layouts, so Flutter moves their state across the
+/// switch rather than rebuilding it. Without that, the focused field
+/// is disposed, its input connection closes, and the keyboard hides.
+class _ClientTab extends StatefulWidget {
   const _ClientTab({required this.state, required this.controller});
 
   final AppState state;
   final NtsController controller;
 
+  @override
+  State<_ClientTab> createState() => _ClientTabState();
+}
+
+class _ClientTabState extends State<_ClientTab> {
   /// Body-height threshold below which the layout switches to
   /// scrollable-compact mode. Sits comfortably above realistic
   /// phone-portrait and tablet-landscape body heights (each
@@ -126,8 +140,12 @@ class _ClientTab extends StatelessWidget {
   /// latest-result panels stacked below.
   static const double _compactServerListHeightDp = 320.0;
 
+  final _serverListKey = GlobalKey();
+  final _bottomPanelsKey = GlobalKey();
+
   @override
   Widget build(BuildContext context) {
+    final state = widget.state;
     return LayoutBuilder(
       builder: (context, constraints) {
         // The four panels below the server list are identical in
@@ -137,15 +155,21 @@ class _ClientTab extends StatelessWidget {
         // zero-height when TrustMode.custom is not active, so the
         // divider before it is always rendered but the panel itself
         // collapses — this avoids a double-divider artefact.
-        final bottomPanels = <Widget>[
-          const Divider(height: 1),
-          ActionPanel(state: state, controller: controller),
-          const Divider(height: 1),
-          CustomRootsPanel(state: state),
-          TrustStatusPanel(state: state),
-          const Divider(height: 1),
-          LatestResultPanel(state: state),
-        ];
+        final serverList = ServerListView(key: _serverListKey, state: state);
+        final bottomPanels = Column(
+          key: _bottomPanelsKey,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Divider(height: 1),
+            ActionPanel(state: state, controller: widget.controller),
+            const Divider(height: 1),
+            CustomRootsPanel(state: state),
+            TrustStatusPanel(state: state),
+            const Divider(height: 1),
+            LatestResultPanel(state: state),
+          ],
+        );
         if (constraints.maxHeight < _tightHeightFloorDp) {
           // `primary: false` is load-bearing here: ServerListView's
           // inner ListView.builder default-attaches to the ambient
@@ -161,11 +185,8 @@ class _ClientTab extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SizedBox(
-                  height: _compactServerListHeightDp,
-                  child: ServerListView(state: state),
-                ),
-                ...bottomPanels,
+                SizedBox(height: _compactServerListHeightDp, child: serverList),
+                bottomPanels,
               ],
             ),
           );
@@ -173,8 +194,8 @@ class _ClientTab extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(child: ServerListView(state: state)),
-            ...bottomPanels,
+            Expanded(child: serverList),
+            bottomPanels,
           ],
         );
       },
