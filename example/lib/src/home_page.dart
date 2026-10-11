@@ -9,9 +9,10 @@
 // action panel below it.
 //
 //   * **Client** tab — `ServerListView` (Expanded), `ActionPanel`,
-//     `TrustStatusPanel`, `LatestResultPanel`. This is the
-//     interactive surface: pick a server, pick a trust mode, fire
-//     a query, read the single-entry summary.
+//     `TrustStatusPanel`, `StrictClockPanel` (strict / compare clock
+//     modes only), `LatestResultPanel`. This is the interactive
+//     surface: pick a server, pick a trust mode and a clock mode,
+//     fire a query, read the single-entry summary.
 //   * **Log** tab — `LogView` fills the whole tab body so the user
 //     can scroll history without the action surface stealing
 //     vertical space.
@@ -30,6 +31,7 @@ import 'widgets/custom_roots_panel.dart';
 import 'widgets/latest_result_panel.dart';
 import 'widgets/log_view.dart';
 import 'widgets/server_list_view.dart';
+import 'widgets/strict_clock_panel.dart';
 import 'widgets/trust_status_panel.dart';
 
 class HomePage extends StatelessWidget {
@@ -166,6 +168,7 @@ class _ClientTabState extends State<_ClientTab> {
             const Divider(height: 1),
             CustomRootsPanel(state: state),
             TrustStatusPanel(state: state),
+            StrictClockPanel(state: state, controller: widget.controller),
             const Divider(height: 1),
             LatestResultPanel(state: state),
           ],

@@ -109,6 +109,48 @@ or without changing the selected server in between, and every request
 runs concurrently. Results land in the log in the order they complete,
 which usually reflects each server's response time.
 
+### Clock mode
+
+The **clock mode** dropdown next to the trust-mode dropdown picks what
+**Get Time** runs:
+
+- **Legacy clock** (default) — `NtsClient.getTime`, as described above.
+  The result is anchored on `MonotonicClock`, which is best effort: it
+  names no clock source and can switch to a counter that stops during
+  device sleep without telling you.
+- **Strict clock** — `NtsClient.getTimeStrict` on a
+  `StrictClockContext`, resolved on first use. Every sample must carry
+  a receipt stamp from that context's clock, and a clock fault fails
+  the call instead of falling back. The log line adds a third row with
+  the context's provenance, clock source and generation, and the
+  reference and anchor readings the projected UTC is computed from.
+- **Compare clocks** — runs both against the selected server, one after
+  the other, then logs one line comparing them at the same instant: the
+  difference between the two projected UTC values, then each path's
+  UTC, round trip, offset θ and clock, with the guarantee each clock
+  does or does not give.
+
+In the strict and compare modes a **Strict clock** panel appears below
+the trust status. It shows the held context (provenance, source,
+descriptor versions, generation) and whether it was still valid at the
+last call, with three actions:
+
+- **Re-resolve** — binds a fresh context. This is the only recovery
+  after an invalidation: an invalid context refuses every read and is
+  never repaired or silently replaced.
+- **Invalidate** — invalidates the held context on purpose, to show the
+  fail-closed path: strict Get Time refuses to run until you re-resolve.
+- **Export reference** — offers the last strict result for same-boot
+  transfer (`exportReference`). This release approves no boot-scope
+  provider, so the export is always refused with `providerNotApproved`
+  and the context stays valid.
+
+Strict failures are logged with an explanation and never crash the app.
+Under the mock bridge (`--dart-define=NTS_BRIDGE=mock`, or the mock
+fallback) the strict modes log that the strict clock is unavailable,
+because the mock cannot vouch for a clock source; legacy mode still
+works.
+
 ## Live log
 
 Every action emits one or more log entries, prefixed with a UTC

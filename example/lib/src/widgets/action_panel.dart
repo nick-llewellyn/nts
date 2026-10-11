@@ -1,9 +1,11 @@
 // Action strip rendered on the Client tab between `ServerListView`
 // and the trust-status / latest-result panels: the three action
-// buttons that drive the underlying [NtsController] plus a
-// TrustMode dropdown that picks which trust-anchor policy the
-// next action (query, warm, or get time) runs under — all three
-// route through the same trust-mode-minted client. Buttons are
+// buttons that drive the underlying [NtsController], a TrustMode
+// dropdown that picks which trust-anchor policy the next action
+// (query, warm, or get time) runs under — all three route through
+// the same trust-mode-minted client — and a clock-mode dropdown that
+// picks whether Get Time runs the legacy `getTime`, the strict
+// `getTimeStrict`, or both for comparison. Buttons are
 // disabled only when
 // no server is selected — operations are intentionally re-entrant,
 // so the user can stack overlapping requests and watch them
@@ -71,13 +73,18 @@ class ActionPanel extends StatelessWidget {
               return FilledButton.tonalIcon(
                 onPressed: selected == null
                     ? null
-                    : () => controller.getTime(selected),
+                    : () => switch (state.clockMode.value) {
+                        ClockMode.legacy => controller.getTime(selected),
+                        ClockMode.strict => controller.getTimeStrict(selected),
+                        ClockMode.compare => controller.compareClocks(selected),
+                      },
                 icon: const Icon(Icons.schedule),
                 label: const Text('Get Time'),
               );
             },
           ),
           _TrustModeDropdown(state: state),
+          _ClockModeDropdown(state: state),
         ],
       ),
     );
@@ -149,6 +156,64 @@ class _TrustModeDropdown extends StatelessWidget {
                   DropdownMenuItem<TrustMode>(
                     value: TrustMode.custom,
                     child: Text('Custom roots'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Compact dropdown that picks the [ClockMode] the Get Time button
+/// runs on. Styled and labelled like [_TrustModeDropdown] beside it.
+class _ClockModeDropdown extends StatelessWidget {
+  const _ClockModeDropdown({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SignalBuilder(
+      builder: (context) {
+        final mode = state.clockMode.value;
+        return Semantics(
+          label: 'Clock mode',
+          container: true,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Tooltip(
+                message: 'Clock mode',
+                child: Icon(
+                  Icons.timer_outlined,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: 6),
+              DropdownButton<ClockMode>(
+                value: mode,
+                isDense: true,
+                underline: const SizedBox.shrink(),
+                onChanged: (v) {
+                  if (v != null) state.clockMode.value = v;
+                },
+                items: const [
+                  DropdownMenuItem<ClockMode>(
+                    value: ClockMode.legacy,
+                    child: Text('Legacy clock'),
+                  ),
+                  DropdownMenuItem<ClockMode>(
+                    value: ClockMode.strict,
+                    child: Text('Strict clock'),
+                  ),
+                  DropdownMenuItem<ClockMode>(
+                    value: ClockMode.compare,
+                    child: Text('Compare clocks'),
                   ),
                 ],
               ),

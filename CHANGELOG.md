@@ -360,6 +360,19 @@ one (`10.0.0`), not a `9.x` minor.
   `referenceMicros:` integer, so only an attributed receipt can be
   exported. ([#355](https://github.com/nick-llewellyn/nts/pull/355))
 
+- The example app's Client tab gains a clock-mode selector beside the
+  trust-mode dropdown. It picks what **Get Time** runs: the legacy
+  `NtsClient.getTime`, the strict `NtsClient.getTimeStrict` on a
+  resolved `StrictClockContext`, or both against the same server,
+  logged side by side. In the strict modes a panel shows the held
+  context's provenance, clock source and generation, with actions to
+  re-resolve it, invalidate it, and attempt a same-boot export of the
+  last strict result. Strict failures are logged as outcomes rather
+  than crashing the app. Under the mock bridge the strict modes report
+  the clock as unavailable, and the legacy mode is unchanged. Example
+  app only; no package API change.
+  ([#384](https://github.com/nick-llewellyn/nts/pull/384))
+
 ### Fixed
 
 - The build hook returns without building when the invocation does

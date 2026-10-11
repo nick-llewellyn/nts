@@ -7,7 +7,9 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show
+        ClockBackend,
         ClockFaultStage,
+        ClockSourceDescriptor,
         NtsClient,
         NtsDnsPoolStats,
         NtsError,
@@ -27,6 +29,7 @@ import 'package:nts/nts.dart'
         NtsTimeSample,
         NtsWarmCookiesOutcome,
         PhaseTimings,
+        StrictClockProvenance,
         StrictClockUninitialized,
         TimeoutPhase,
         TrustBackend,
@@ -523,6 +526,33 @@ void main() {
       final out = formatGetTimeSuccess(synced);
       // Constructor default: errorBoundMicros = roundTripMicros ~/ 2.
       expect(out, contains('error≤±17.82ms (root distance)'));
+    });
+  });
+
+  group('formatSignedMicros', () {
+    test('prefixes the sign and keeps formatRtt units', () {
+      expect(formatSignedMicros(1_200), '+1.20ms');
+      expect(formatSignedMicros(-850), '-850µs');
+      expect(formatSignedMicros(0), '+0µs');
+      expect(formatSignedMicros(-2_345_678), '-2.35s');
+    });
+  });
+
+  group('formatStrictClock', () {
+    test('names provenance, backend, both descriptor versions and '
+        'generation', () {
+      expect(
+        formatStrictClock(
+          provenance: StrictClockProvenance.native,
+          descriptor: const ClockSourceDescriptor(
+            backend: ClockBackend.linuxBoottime,
+            semanticsVersion: 1,
+            conversionVersion: 2,
+          ),
+          generation: 7,
+        ),
+        'native linuxBoottime (semantics v1, conversion v2) generation 7',
+      );
     });
   });
 

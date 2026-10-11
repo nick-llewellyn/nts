@@ -11,6 +11,7 @@
 
 import 'package:nts/nts.dart'
     show
+        ClockSourceDescriptor,
         NtsDnsPoolStats,
         NtsError,
         NtsErrorAbiMismatch,
@@ -27,6 +28,8 @@ import 'package:nts/nts.dart'
         NtsSyncedTime,
         NtsTimeSample,
         NtsWarmCookiesOutcome,
+        StrictClockProvenance,
+        StrictSyncedTime,
         TrustBackend,
         TrustMode;
 
@@ -350,6 +353,71 @@ String formatGetTimeSuccess(NtsSyncedTime time) {
       'utc=${time.utcNow.toIso8601String()}\n'
       '    \u2514\u2500 error\u2264\u00b1$bound (root distance)  '
       'trust=${formatTrustBackend(time.trustBackend)}';
+}
+
+/// Signed duration in microseconds with [formatRtt]'s unit selection,
+/// e.g. `+1.20ms` or `-850µs`.
+String formatSignedMicros(int micros) =>
+    '${micros < 0 ? '-' : '+'}${formatRtt(micros.abs())}';
+
+/// One-line description of a strict clock coordinate: how the context
+/// was resolved, the native source family, the two descriptor versions
+/// and the live generation the context is bound to.
+String formatStrictClock({
+  required StrictClockProvenance provenance,
+  required ClockSourceDescriptor descriptor,
+  required int generation,
+}) =>
+    '${provenance.name} ${descriptor.backend.name} '
+    '(semantics v${descriptor.semanticsVersion}, '
+    'conversion v${descriptor.conversionVersion}) generation $generation';
+
+/// Three-line success rendering for a `getTimeStrict` result: the
+/// [formatGetTimeSuccess] headline and error bound, plus the clock the
+/// result is bound to and the reference / anchor readings on it.
+/// [utcNow] is passed in because [StrictSyncedTime.utcNow] can throw.
+String formatGetTimeStrictSuccess(
+  StrictSyncedTime time, {
+  required StrictClockProvenance provenance,
+  required DateTime utcNow,
+}) {
+  final rtt = formatRtt(time.roundTripMicros).padLeft(8);
+  final bound = formatRtt(time.errorBoundMicros);
+  final lag = formatRtt(time.anchorMicros - time.referenceMicros);
+  return 'OK  rtt=$rtt  samples=${time.samplesUsed}  '
+      'utc=${utcNow.toIso8601String()}\n'
+      '    \u2514\u2500 error\u2264\u00b1$bound (root distance)  '
+      'trust=${formatTrustBackend(time.trustBackend)}\n'
+      '    \u2514\u2500 clock=${provenance.name} '
+      '${time.descriptor.backend.name} gen=${time.generation}  '
+      'reference=${time.referenceMicros}\u00b5s  '
+      'anchor=${time.anchorMicros}\u00b5s (+$lag)';
+}
+
+/// Three-line comparison of one legacy and one strict result for the
+/// same server, projected at the same instant: the difference between
+/// the two projections, then each path's UTC, round trip, offset θ and
+/// clock, with the guarantee that clock does or does not give.
+String formatClockComparison({
+  required NtsSyncedTime legacy,
+  required DateTime legacyUtc,
+  required StrictSyncedTime strict,
+  required DateTime strictUtc,
+  required StrictClockProvenance provenance,
+}) {
+  final delta = strictUtc.difference(legacyUtc).inMicroseconds;
+  return '\u0394(strict\u2212legacy)=${formatSignedMicros(delta)} '
+      'at one instant\n'
+      '    \u2514\u2500 legacy  utc=${legacyUtc.toIso8601String()}  '
+      'rtt=${formatRtt(legacy.roundTripMicros)}  '
+      '\u03b8=${formatSignedMicros(legacy.offsetMicros)}  '
+      'clock=MonotonicClock (best effort: unattributed, may degrade '
+      'silently)\n'
+      '    \u2514\u2500 strict  utc=${strictUtc.toIso8601String()}  '
+      'rtt=${formatRtt(strict.roundTripMicros)}  '
+      '\u03b8=${formatSignedMicros(strict.offsetMicros)}  '
+      'clock=${provenance.name} ${strict.descriptor.backend.name} '
+      'gen=${strict.generation} (fail-closed: attributed, no fallback)';
 }
 
 /// Two-line rendering of the DNS resolver pool counters observed
