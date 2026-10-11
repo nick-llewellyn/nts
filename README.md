@@ -409,7 +409,7 @@ that call.
 The legacy entry points are not untouched in 10.0: the native core
 now runs its own deadline, session and receipt clock reads strictly
 for every caller, so `ntsGetTime`, `ntsQuery` and `ntsWarmCookies`
-can also fail with `NtsError.clockFault`. See the `## 10.0` entry in
+can also fail with `NtsError.clockFault`. See the `## 10.0.0` entry in
 [CHANGELOG.md](CHANGELOG.md).
 
 ### Resolve, read and sync
@@ -962,7 +962,7 @@ must admit exactly the version `nts` pins:
 
 | `nts` version | Required `flutter_rust_bridge` |
 |---|---|
-| 9.3.x | `2.13.0` |
+| 9.3.x – 10.0.x | `2.13.0` |
 | 9.2.x and earlier | `2.12.0` |
 
 If your app does not depend on `flutter_rust_bridge` directly there

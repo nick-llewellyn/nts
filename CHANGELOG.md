@@ -6,7 +6,7 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 10.0
+## 10.0.0
 
 ### Breaking
 
