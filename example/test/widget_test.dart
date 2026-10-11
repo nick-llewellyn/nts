@@ -11,7 +11,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:nts/nts.dart' show NtsRustLib, TrustMode;
+import 'package:nts/nts.dart'
+    show
+        NtsRustLib,
+        StrictClockContext,
+        StrictClockInvalidationReason,
+        StrictClockMockOnly,
+        StrictClockProvenance,
+        TrustMode;
 import 'package:nts_example/main.dart' show BridgeUnavailableApp, NtsExampleApp;
 import 'package:nts_example/src/data/server_entry.dart';
 import 'package:nts_example/src/home_page.dart';
@@ -19,6 +26,7 @@ import 'package:nts_example/src/mock_api.dart';
 import 'package:nts_example/src/state/app_state.dart';
 import 'package:nts_example/src/state/favorites_store.dart';
 import 'package:nts_example/src/state/log_buffer.dart';
+import 'package:nts_example/src/state/log_entry.dart';
 import 'package:nts_example/src/state/nts_controller.dart';
 
 const _testCatalog = <NtsServerEntry>[
@@ -40,7 +48,12 @@ const _testCatalog = <NtsServerEntry>[
   ),
 ];
 
-Future<({AppState state, NtsController controller})> _bootHarness() async {
+/// [resolveStrictClock] defaults to the production resolver, which
+/// refuses the mock bridge; strict-path tests pass
+/// `StrictClockContext.resolveForTesting` to bind MockNtsApi's clock.
+Future<({AppState state, NtsController controller})> _bootHarness({
+  StrictClockContext Function() resolveStrictClock = StrictClockContext.resolve,
+}) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final favorites = await FavoritesStore.load();
   final state = AppState(
@@ -50,7 +63,10 @@ Future<({AppState state, NtsController controller})> _bootHarness() async {
     favorites: favorites,
     log: NtsLogBuffer(),
   );
-  final controller = NtsController(state);
+  final controller = NtsController(
+    state,
+    resolveStrictClock: resolveStrictClock,
+  );
   // Mirrors what `_NtsExampleAppState.dispose` does in the app: drop
   // the signal subscriptions and release the client so a controller
   // from one test cannot react to a later one's signal writes.
@@ -89,9 +105,10 @@ void _expectFieldKept(WidgetTester tester, Finder field, String text) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  final mockApi = MockNtsApi();
 
   setUpAll(() {
-    NtsRustLib.initMock(api: MockNtsApi());
+    NtsRustLib.initMock(api: mockApi);
   });
 
   setUp(() {
@@ -231,6 +248,16 @@ void main() {
     expect(ok.message, contains('trust='));
     expect(ok.host, 'time.cloudflare.com');
     expect(ok.trustBackend, isNotNull);
+    // Legacy is the default clock mode and never touches the strict
+    // clock.
+    expect(h.state.clockMode.value, ClockMode.legacy);
+    expect(h.state.strictClock.value, isNull);
+    expect(
+      h.state.log.entries.value.where(
+        (e) => e.source == 'nts_get_time_strict' || e.source == 'strict_clock',
+      ),
+      isEmpty,
+    );
   });
 
   testWidgets('toggling favourites re-orders the list with pinned first', (
@@ -425,7 +452,11 @@ void main() {
         .where((e) => e.source == 'nts_query')
         .toList();
     expect(
-      logs.any((e) => e.message.contains('from previous TrustMode')),
+      logs.any(
+        (e) => e.message.contains(
+          'from a client superseded by a trust-mode / custom-roots change',
+        ),
+      ),
       isTrue,
       reason: 'stale completion should be tagged in the log',
     );
@@ -775,6 +806,461 @@ void main() {
 
       expect(compactBranch, findsOneWidget);
       _expectFieldKept(tester, pem, pasted);
+    });
+  });
+
+  group('clock mode', () {
+    final status = find.byKey(const Key('strict_clock_status'));
+    final resolveButton = find.byKey(const Key('strict_clock_resolve_button'));
+    final invalidateButton = find.byKey(
+      const Key('strict_clock_invalidate_button'),
+    );
+    final exportButton = find.byKey(const Key('strict_clock_export_button'));
+
+    List<String> messages(AppState state, String source) => [
+      for (final e in state.log.entries.value)
+        if (e.source == source) e.message,
+    ];
+
+    bool enabled(WidgetTester tester, Finder button) =>
+        tester.widget<ButtonStyleButton>(button).onPressed != null;
+
+    Future<({AppState state, NtsController controller})> pumpHome(
+      WidgetTester tester, {
+      required ClockMode mode,
+      bool testClock = true,
+      StrictClockContext Function()? resolver,
+    }) async {
+      final h = await _bootHarness(
+        resolveStrictClock:
+            resolver ??
+            (testClock
+                ? StrictClockContext.resolveForTesting
+                : StrictClockContext.resolve),
+      );
+      h.state.clockMode.value = mode;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(state: h.state, controller: h.controller),
+        ),
+      );
+      await tester.pump();
+      return h;
+    }
+
+    testWidgets('strict and compare modes raise the compact-layout floor so '
+        'the strict clock panel fits', (tester) async {
+      final compactBranch = find.descendant(
+        of: find.byType(TabBarView),
+        matching: find.byType(SingleChildScrollView),
+      );
+      final body = find.byType(TabBarView);
+      tester.view.physicalSize = const Size(865, 554);
+      addTearDown(tester.view.resetPhysicalSize);
+      final h = await pumpHome(tester, mode: ClockMode.legacy);
+      expect(tester.getSize(body).height, 450);
+      expect(compactBranch, findsNothing);
+
+      for (final mode in [ClockMode.strict, ClockMode.compare]) {
+        h.state.clockMode.value = mode;
+        await tester.pump();
+        expect(compactBranch, findsOneWidget, reason: '$mode');
+        expect(status, findsOneWidget, reason: '$mode');
+      }
+      h.state.clockMode.value = ClockMode.legacy;
+      await tester.pump();
+      expect(compactBranch, findsNothing);
+
+      tester.view.physicalSize = const Size(865, 674);
+      h.state.clockMode.value = ClockMode.strict;
+      await tester.pump();
+      expect(tester.getSize(body).height, 570);
+      expect(compactBranch, findsNothing);
+      await tester.tap(resolveButton);
+      await tester.pump();
+      expect(h.state.strictClock.value, isA<StrictClockBound>());
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the dropdown offers all three modes and the strict clock '
+        'panel shows outside legacy only', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.legacy);
+      expect(status, findsNothing);
+
+      await tester.tap(find.text('Legacy clock'));
+      await tester.pumpAndSettle();
+      expect(find.text('Compare clocks'), findsOneWidget);
+      await tester.tap(find.text('Strict clock').last);
+      await tester.pumpAndSettle();
+
+      expect(h.state.clockMode.value, ClockMode.strict);
+      expect(
+        tester.widget<Text>(status).data,
+        startsWith('context: (not resolved yet'),
+      );
+
+      h.state.clockMode.value = ClockMode.compare;
+      await tester.pump();
+      expect(status, findsOneWidget);
+
+      h.state.clockMode.value = ClockMode.legacy;
+      await tester.pump();
+      expect(status, findsNothing);
+    });
+
+    testWidgets('strict mode on the mock bridge reports the clock as '
+        'unavailable instead of running', (tester) async {
+      final h = await pumpHome(
+        tester,
+        mode: ClockMode.strict,
+        testClock: false,
+      );
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      final snapshot = h.state.strictClock.value;
+      expect(snapshot, isA<StrictClockUnavailable>());
+      expect(
+        (snapshot! as StrictClockUnavailable).error,
+        isA<StrictClockMockOnly>(),
+      );
+      expect(
+        messages(h.state, 'strict_clock').single,
+        allOf(startsWith('Strict clock unavailable'), contains('mock bridge')),
+      );
+      expect(messages(h.state, 'nts_get_time_strict'), isEmpty);
+      expect(
+        tester.widget<Text>(status).data,
+        startsWith('context: unavailable'),
+      );
+    });
+
+    testWidgets('strict mode logs a result attributed to the resolved '
+        'context', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.strict);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+
+      expect(
+        messages(h.state, 'strict_clock').single,
+        startsWith('Resolved strict clock: testInjected appleContinuous'),
+      );
+      final lines = messages(h.state, 'nts_get_time_strict');
+      expect(lines.first, 'Starting getTimeStrict');
+      final ok = lines.firstWhere((m) => m.startsWith('OK '));
+      expect(ok, contains('utc='));
+      expect(ok, contains('clock=testInjected appleContinuous gen=1'));
+      expect(ok, contains('reference='));
+      expect(ok, contains('anchor='));
+      // The legacy path did not run.
+      expect(messages(h.state, 'nts_get_time'), isEmpty);
+
+      final snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.provenance, StrictClockProvenance.testInjected);
+      expect(snapshot.generation, 1);
+      expect(snapshot.invalidation, isNull);
+      expect(snapshot.hasSyncedTime, isTrue);
+      expect(
+        tester.widget<Text>(status).data,
+        endsWith('valid as of the last call'),
+      );
+      expect(enabled(tester, exportButton), isTrue);
+    });
+
+    testWidgets('an unexpected resolver failure drops the held context '
+        'instead of leaving it in use', (tester) async {
+      var fail = false;
+      final h = await pumpHome(
+        tester,
+        mode: ClockMode.strict,
+        resolver: () => fail
+            ? throw StateError('resolver failed')
+            : StrictClockContext.resolveForTesting(),
+      );
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(enabled(tester, exportButton), isTrue);
+
+      fail = true;
+      await tester.tap(resolveButton);
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      final snapshot = h.state.strictClock.value;
+      expect(snapshot, isA<StrictClockUnavailable>());
+      expect((snapshot! as StrictClockUnavailable).error, isA<StateError>());
+      expect(
+        tester.widget<Text>(status).data,
+        'context: unavailable \u2014 Bad state: resolver failed',
+      );
+      expect(enabled(tester, invalidateButton), isFalse);
+      expect(enabled(tester, exportButton), isFalse);
+      expect(
+        messages(h.state, 'strict_clock').last,
+        startsWith('Unhandled: Bad state: resolver failed'),
+      );
+
+      // No context is held, so Get Time resolves again rather than
+      // reusing the one Re-resolve failed to replace.
+      final okBefore = messages(
+        h.state,
+        'nts_get_time_strict',
+      ).where((m) => m.startsWith('OK ')).length;
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(
+        messages(
+          h.state,
+          'nts_get_time_strict',
+        ).where((m) => m.startsWith('OK ')).length,
+        okBefore,
+      );
+      expect(
+        messages(
+          h.state,
+          'strict_clock',
+        ).where((m) => m.startsWith('Unhandled:')).length,
+        2,
+      );
+    });
+
+    testWidgets('compare mode runs both paths and logs them side by side', (
+      tester,
+    ) async {
+      final h = await pumpHome(tester, mode: ClockMode.compare);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 2000));
+      await tester.pump();
+
+      expect(
+        messages(h.state, 'nts_get_time').any((m) => m.startsWith('OK ')),
+        isTrue,
+      );
+      expect(
+        messages(
+          h.state,
+          'nts_get_time_strict',
+        ).any((m) => m.startsWith('OK ')),
+        isTrue,
+      );
+      final compare = messages(h.state, 'nts_compare_clocks');
+      expect(compare.first, startsWith('Starting legacy getTime'));
+      final lines = compare.last.split('\n');
+      expect(lines, hasLength(3));
+      expect(lines[0], startsWith('Δ(strict−legacy)='));
+      expect(lines[1], contains('legacy  utc='));
+      expect(lines[1], contains('clock=MonotonicClock (best effort'));
+      expect(lines[2], contains('strict  utc='));
+      expect(lines[2], contains('clock=testInjected appleContinuous gen=1'));
+      expect(lines[2], contains('(fail-closed'));
+    });
+
+    testWidgets('an invalidated context fails closed until Re-resolve binds '
+        'a new one', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.strict);
+
+      await tester.tap(resolveButton);
+      await tester.pump();
+      expect(enabled(tester, invalidateButton), isTrue);
+      // No strict time on this context yet, so nothing to export.
+      expect(enabled(tester, exportButton), isFalse);
+
+      await tester.tap(invalidateButton);
+      await tester.pump();
+      var snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.invalidation, StrictClockInvalidationReason.explicit);
+      expect(
+        tester.widget<Text>(status).data,
+        contains('invalidated (explicit)'),
+      );
+      expect(enabled(tester, invalidateButton), isFalse);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(messages(h.state, 'nts_get_time_strict'), [
+        'Strict clock context is invalidated (explicit); tap Re-resolve to '
+            'bind a new one',
+      ]);
+
+      await tester.tap(resolveButton);
+      await tester.pump();
+      snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.invalidation, isNull);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(
+        messages(
+          h.state,
+          'nts_get_time_strict',
+        ).any((m) => m.startsWith('OK ')),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a clock fault during a strict call invalidates the context '
+        'until Re-resolve binds a new one', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.strict);
+      addTearDown(() => mockApi.faultNextStrictRead = false);
+
+      await tester.tap(resolveButton);
+      await tester.pump();
+      mockApi.faultNextStrictRead = true;
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+
+      expect(mockApi.faultNextStrictRead, isFalse);
+      expect(tester.takeException(), isNull);
+      final strictEntries = [
+        for (final e in h.state.log.entries.value)
+          if (e.source == 'nts_get_time_strict') e,
+      ];
+      expect(strictEntries.any((e) => e.message.startsWith('OK ')), isFalse);
+      expect(
+        strictEntries.any(
+          (e) =>
+              e.level == NtsLogLevel.error &&
+              e.message.startsWith('ClockFault'),
+        ),
+        isTrue,
+      );
+      expect(
+        strictEntries.last.message,
+        'Strict clock context invalidated (sourceFault); it refuses every '
+        'further read, with no fallback — tap Re-resolve to bind a new one',
+      );
+      var snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.invalidation, StrictClockInvalidationReason.sourceFault);
+      expect(snapshot.hasSyncedTime, isFalse);
+      expect(
+        tester.widget<Text>(status).data,
+        contains('invalidated (sourceFault)'),
+      );
+      expect(enabled(tester, invalidateButton), isFalse);
+      expect(enabled(tester, exportButton), isFalse);
+      expect(enabled(tester, resolveButton), isTrue);
+
+      await tester.tap(resolveButton);
+      await tester.pump();
+      snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.invalidation, isNull);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(
+        messages(
+          h.state,
+          'nts_get_time_strict',
+        ).any((m) => m.startsWith('OK ')),
+        isTrue,
+      );
+    });
+
+    testWidgets('Export reference reports the same-boot refusal and leaves '
+        'the context valid', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.strict);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      await tester.tap(exportButton);
+      await tester.pump();
+
+      final refusal = messages(h.state, 'strict_clock').last;
+      expect(refusal, startsWith('Same-boot export refused'));
+      expect(refusal, contains('providerNotApproved'));
+      expect(refusal, contains('the context stays valid'));
+      final snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.invalidation, isNull);
+      expect(snapshot.hasSyncedTime, isTrue);
+    });
+
+    testWidgets('a strict call that completes after dispose leaves the '
+        'state as it was', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.strict);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump();
+      h.controller.dispose();
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+
+      final ok = messages(
+        h.state,
+        'nts_get_time_strict',
+      ).firstWhere((m) => m.startsWith('OK '));
+      expect(
+        ok,
+        endsWith('(controller disposed; state intentionally not updated)'),
+      );
+      expect(h.state.lastHandshakeBackend.value, isNull);
+      final snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.hasSyncedTime, isFalse);
+    });
+
+    testWidgets('a compare run disposed during its legacy leg does not '
+        'start the strict leg', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.compare);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump();
+      h.controller.dispose();
+      await tester.pump(const Duration(milliseconds: 2000));
+      await tester.pump();
+
+      final ok = messages(
+        h.state,
+        'nts_get_time',
+      ).firstWhere((m) => m.startsWith('OK '));
+      expect(
+        ok,
+        endsWith('(controller disposed; state intentionally not updated)'),
+      );
+      expect(h.state.lastHandshakeBackend.value, isNull);
+      expect(messages(h.state, 'nts_get_time_strict'), isEmpty);
+      expect(messages(h.state, 'nts_compare_clocks'), [
+        'Starting legacy getTime, then strict getTimeStrict',
+      ]);
+    });
+
+    testWidgets('a compare run whose client is replaced mid-run is '
+        'abandoned instead of mixing two clients', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.compare);
+
+      // Signal write rather than the dropdown, for the reason given in
+      // the TrustMode in-flight test above.
+      await tester.tap(find.text('Get Time'));
+      await tester.pump();
+      h.state.trustMode.value = TrustMode.platformOnly;
+      await tester.pump(const Duration(milliseconds: 2000));
+      await tester.pump();
+
+      expect(
+        messages(h.state, 'nts_get_time').any(
+          (m) => m.contains(
+            'from a client superseded by a trust-mode / custom-roots change',
+          ),
+        ),
+        isTrue,
+      );
+      expect(messages(h.state, 'nts_get_time_strict'), isEmpty);
+      final compare = messages(h.state, 'nts_compare_clocks');
+      expect(compare, hasLength(2));
+      expect(compare.last, startsWith('Comparison abandoned'));
     });
   });
 

@@ -934,8 +934,9 @@ complexity:
   an in-memory mock (with an explanatory banner) if the dylib cannot
   be loaded; pass `--dart-define=NTS_BRIDGE=mock` to opt into the
   mock explicitly. See the [GUI User Manual](example/GUI_GUIDE.md)
-  for navigation, the **NTS Query** / **Warm Cookies** actions, and
-  how to read the status banners.
+  for navigation, the **NTS Query** / **Warm Cookies** / **Get Time**
+  actions, the legacy / strict / compare clock modes, and how to read
+  the status banners.
 - **Dart CLI** (`example/bin/nts_cli.dart`) — scriptable companion
   for batched probing, cron jobs, and CI smoke checks. See the
   [CLI User Manual](example/CLI_GUIDE.md) for the positional host

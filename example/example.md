@@ -234,5 +234,17 @@ flutter run -t lib/main.dart
 flutter run -t example/lib/main.dart
 ```
 
+A clock-mode selector beside the trust-mode dropdown picks what
+**Get Time** runs: **Legacy clock** (`NtsClient.getTime`, anchored on
+the best-effort `MonotonicClock`), **Strict clock**
+(`NtsClient.getTimeStrict` on a resolved `StrictClockContext`, as in
+the snippet above) or **Compare clocks** (both against the same
+server, logged side by side). In the strict modes a panel shows the
+context's provenance, source and generation, with **Re-resolve**,
+**Invalidate** and **Export reference** actions. Under the mock bridge
+the strict modes report the clock as unavailable, because
+`StrictClockContext.resolve` refuses a mock. See the
+[GUI User Manual](GUI_GUIDE.md#clock-mode) for details.
+
 See [`example/README.md`](README.md) for the three entry points
 (snippet, GUI, CLI) and the bridge-mode toggles.

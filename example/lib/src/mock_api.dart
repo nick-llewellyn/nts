@@ -17,14 +17,17 @@ import 'dart:math';
 import 'dart:typed_data' show Uint16List;
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show PlatformInt64Util;
+    show PlatformInt64, PlatformInt64Util;
 import 'package:nts/src/ffi/api/nts.dart'
     show
         NtsClient,
         NtsClockBackend,
+        NtsClockDescriptor,
+        NtsClockFault,
         NtsDnsPoolStats,
         NtsError,
         NtsServerSpec,
+        NtsStrictClockReading,
         NtsTimeSample,
         NtsTrustStatus,
         NtsWarmCookiesOutcome,
@@ -52,10 +55,42 @@ import 'package:nts/src/ffi/frb_generated.dart' show NtsRustLib, NtsRustLibApi;
 /// the example's TrustMode toggle, TrustStatus panel, and
 /// per-handshake backend log lines work identically under the mock
 /// and the real bridge.
+///
+/// The 10.0 strict clock is stubbed too, but only for a context bound
+/// through `StrictClockContext.resolveForTesting`, which the widget
+/// tests use to drive the strict and compare clock modes. The app
+/// itself calls `StrictClockContext.resolve`, which refuses a mock
+/// bridge, so under this mock its strict mode reports the clock as
+/// unavailable.
 class MockNtsApi implements NtsRustLibApi {
   MockNtsApi({Random? random}) : _random = random ?? Random();
 
   final Random _random;
+
+  /// Source of the stubbed strict clock. Read through
+  /// [_strictClockMicros], which offsets it far above the
+  /// `MonotonicClock` Stopwatch fallback so the legacy `getTime`
+  /// path's plausibility window keeps rejecting the receipt stamps
+  /// [_mockSample] takes on it.
+  final Stopwatch _strictClock = Stopwatch()..start();
+
+  static const int _kStrictClockBaseMicros = 1 << 40;
+
+  /// Never advanced: the mock models no suspend, bridge reset or
+  /// generation retirement, so `boundGeneration` always matches.
+  static const int _kStrictClockGeneration = 1;
+
+  static const NtsClockBackend _kStrictClockBackend =
+      NtsClockBackend.appleContinuous;
+
+  int _strictClockMicros() =>
+      _kStrictClockBaseMicros + _strictClock.elapsedMicroseconds;
+
+  /// When set, the next strict clock read fails as a source fault (a
+  /// `clock_gettime` failure with `EIO`) and clears this flag. Lets
+  /// widget tests drive a clock fault through a strict call, which
+  /// invalidates the context it was read on.
+  bool faultNextStrictRead = false;
 
   /// Per-fake-client trust mode pinned at construction so the
   /// `client.trustMode()` getter round-trips. Uses an [Expando]
@@ -221,6 +256,29 @@ class MockNtsApi implements NtsRustLibApi {
   void crateApiNtsNtsClientClear({required NtsClient that}) {}
 
   @override
+  NtsClockDescriptor crateApiNtsNtsClockDescriptor() =>
+      const NtsClockDescriptor(
+        backend: _kStrictClockBackend,
+        semanticsVersion: 1,
+        conversionVersion: 1,
+      );
+
+  @override
+  NtsStrictClockReading crateApiNtsNtsStrictClockRead({
+    PlatformInt64? boundGeneration,
+  }) {
+    if (faultNextStrictRead) {
+      faultNextStrictRead = false;
+      throw const NtsClockFault.syscallFailed(errno: 5);
+    }
+    return NtsStrictClockReading(
+      micros: PlatformInt64Util.from(_strictClockMicros()),
+      backend: _kStrictClockBackend,
+      generation: PlatformInt64Util.from(_kStrictClockGeneration),
+    );
+  }
+
+  @override
   NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() => NtsDnsPoolStats(
     // The mock never touches the system resolver, so there is no pool
     // to report on: every counter stays at its process-start value.
@@ -294,15 +352,17 @@ class MockNtsApi implements NtsRustLibApi {
       freshCookies: 1,
       phaseTimings: _mockPhaseTimings(),
       trustBackend: backend,
-      // This mock does not stub `crateApiNtsNtsBoottimeMicros`, so
+      // Receipt stamp on the stubbed strict clock, taken after the
+      // simulated round trip, so the strict path can attribute the
+      // sample to a context bound through `resolveForTesting`. This
+      // mock does not stub `crateApiNtsNtsBoottimeMicros`, so
       // `MonotonicClock` runs on its Stopwatch fallback with an
-      // unrelated epoch. A zero stamp fails `_getTime`'s
+      // unrelated epoch; the stamp sits far above it, fails `_getTime`'s
       // epoch-plausibility window and deliberately selects the
-      // post-`await` fallback arithmetic. Generation 0 is the matching
-      // "no strict receipt" marker; the strict path rejects it.
-      recvBoottimeMicros: PlatformInt64Util.from(0),
-      recvClockGeneration: PlatformInt64Util.from(0),
-      recvClockBackend: NtsClockBackend.appleContinuous,
+      // post-`await` fallback arithmetic on the legacy path.
+      recvBoottimeMicros: PlatformInt64Util.from(_strictClockMicros()),
+      recvClockGeneration: PlatformInt64Util.from(_kStrictClockGeneration),
+      recvClockBackend: _kStrictClockBackend,
       // Simulated RFC 5905 statistics: a small offset, a peer delay
       // slightly under the round trip (as if the server spent ~1 ms
       // processing), and modest root metrics for a stratum-1 server.

@@ -18,7 +18,14 @@
 
 import 'dart:typed_data' show Uint8List;
 
-import 'package:nts/nts.dart' show TrustBackend, TrustMode;
+import 'package:nts/nts.dart'
+    show
+        ClockSourceDescriptor,
+        StrictClockError,
+        StrictClockInvalidationReason,
+        StrictClockProvenance,
+        TrustBackend,
+        TrustMode;
 import 'package:signals/signals.dart'
     show Computed, ReadonlySignal, Signal, computed, signal;
 
@@ -35,6 +42,68 @@ const String kAllRegions = 'All regions';
 /// suppressed from the region dropdown so it can't be selected
 /// directly (it would behave identically to [kAllRegions]).
 const String kUniversalLocation = 'All';
+
+/// Clock the Get Time action runs on.
+enum ClockMode {
+  /// `NtsClient.getTime`: an `NtsSyncedTime` on the best-effort
+  /// `MonotonicClock`, which carries no provenance and can switch to a
+  /// suspend-frozen counter without telling the caller.
+  legacy,
+
+  /// `NtsClient.getTimeStrict`: a `StrictSyncedTime` bound to a
+  /// resolved `StrictClockContext`, failing closed instead of falling
+  /// back.
+  strict,
+
+  /// Both against the same server, back to back, followed by one line
+  /// comparing the two projections taken at the same instant.
+  compare,
+}
+
+/// What the Client tab shows about the strict clock context
+/// [NtsController] holds. A context's validity changes without
+/// notifying anyone, so the controller publishes a fresh snapshot after
+/// every strict action rather than exposing the context itself.
+sealed class StrictClockSnapshot {
+  const StrictClockSnapshot();
+}
+
+/// A resolved context, as observed by the last strict action.
+final class StrictClockBound extends StrictClockSnapshot {
+  const StrictClockBound({
+    required this.provenance,
+    required this.descriptor,
+    required this.generation,
+    this.invalidation,
+    this.hasSyncedTime = false,
+  });
+
+  final StrictClockProvenance provenance;
+  final ClockSourceDescriptor descriptor;
+  final int generation;
+
+  /// Why the context stopped being usable, or `null` while no call on
+  /// it has failed.
+  final StrictClockInvalidationReason? invalidation;
+
+  /// Whether a strict Get Time has produced a result on this context,
+  /// which the same-boot export can then offer.
+  final bool hasSyncedTime;
+}
+
+/// The last resolution attempt failed, so no context is held.
+final class StrictClockUnavailable extends StrictClockSnapshot {
+  const StrictClockUnavailable(this.error);
+
+  /// The [StrictClockError] the package refused with, or whatever else
+  /// the resolver threw.
+  final Object error;
+
+  String get message => switch (error) {
+    StrictClockError(:final message) => message,
+    _ => '$error',
+  };
+}
 
 /// Aggregate state container injected once at startup. Held by the
 /// top-level widget tree so children can read individual signals
@@ -56,7 +125,9 @@ class AppState {
        trustMode = signal<TrustMode>(TrustMode.platformWithFallback),
        lastHandshakeBackend = signal<TrustBackend?>(null),
        customRoots = signal<Uint8List?>(null),
-       customRootsLabel = signal<String>('') {
+       customRootsLabel = signal<String>(''),
+       clockMode = signal<ClockMode>(ClockMode.legacy),
+       strictClock = signal<StrictClockSnapshot?>(null) {
     filteredServers = computed<List<NtsServerEntry>>(_recomputeFiltered);
     regions = _collectRegions(catalog);
   }
@@ -135,6 +206,15 @@ class AppState {
   /// handshake" row, which is the sole surface for per-handshake
   /// trust-anchor attribution in the example app.
   final Signal<TrustBackend?> lastHandshakeBackend;
+
+  /// Clock the Get Time action runs on. Defaults to
+  /// [ClockMode.legacy], the behaviour the app had before the strict
+  /// clock existed.
+  final Signal<ClockMode> clockMode;
+
+  /// The strict clock context as last observed by [NtsController], or
+  /// `null` before the first resolution attempt.
+  final Signal<StrictClockSnapshot?> strictClock;
 
   /// Computed view: catalog → filtered & sorted with favourites first.
   /// Recomputes lazily whenever any of the input signals changes.

@@ -9,9 +9,10 @@
 // action panel below it.
 //
 //   * **Client** tab — `ServerListView` (Expanded), `ActionPanel`,
-//     `TrustStatusPanel`, `LatestResultPanel`. This is the
-//     interactive surface: pick a server, pick a trust mode, fire
-//     a query, read the single-entry summary.
+//     `TrustStatusPanel`, `StrictClockPanel` (strict / compare clock
+//     modes only), `LatestResultPanel`. This is the interactive
+//     surface: pick a server, pick a trust mode and a clock mode,
+//     fire a query, read the single-entry summary.
 //   * **Log** tab — `LogView` fills the whole tab body so the user
 //     can scroll history without the action surface stealing
 //     vertical space.
@@ -22,6 +23,7 @@
 // subtrees across layout switches.
 
 import 'package:flutter/material.dart';
+import 'package:signals/signals_flutter.dart' show SignalBuilder;
 
 import 'state/app_state.dart';
 import 'state/nts_controller.dart';
@@ -30,6 +32,7 @@ import 'widgets/custom_roots_panel.dart';
 import 'widgets/latest_result_panel.dart';
 import 'widgets/log_view.dart';
 import 'widgets/server_list_view.dart';
+import 'widgets/strict_clock_panel.dart';
 import 'widgets/trust_status_panel.dart';
 
 class HomePage extends StatelessWidget {
@@ -98,10 +101,11 @@ class HomePage extends StatelessWidget {
 ///
 /// Switches between two layouts based on the body height:
 ///
-/// * **Roomy** (≥ 400dp tall) — `Expanded(ServerListView)` plus the
-///   intrinsic-height panels in a `Column`. This is the normal
-///   phone-portrait and tablet path.
-/// * **Compact** (< 400dp tall) — a `SingleChildScrollView` with a
+/// * **Roomy** (≥ 400dp tall, or ≥ 560dp in strict and compare modes,
+///   where the strict clock panel also shows) —
+///   `Expanded(ServerListView)` plus the intrinsic-height panels in a
+///   `Column`. This is the normal phone-portrait and tablet path.
+/// * **Compact** (below that floor) — a `SingleChildScrollView` with a
 ///   fixed-height `ServerListView` on top and the panels below.
 ///   Covers tablet multi-window slices, foldables in the folded
 ///   half-state, and the brief frame during a pending phone-to-portrait
@@ -134,6 +138,12 @@ class _ClientTabState extends State<_ClientTab> {
   /// 255dp surface the original overflow report measured.
   static const double _tightHeightFloorDp = 400.0;
 
+  /// Extra body height the roomy layout needs in strict and compare
+  /// modes, where [StrictClockPanel] shows below the trust status. The
+  /// panel's status line and buttons wrap at phone widths, adding up
+  /// to ~160dp to the stacked panels.
+  static const double _strictClockPanelAllowanceDp = 160.0;
+
   /// Fixed height the server list claims in compact mode. Tuned so
   /// the filter bar (~120dp) plus a few list rows (~50dp each)
   /// stays useful without crowding out the action / status /
@@ -145,6 +155,17 @@ class _ClientTabState extends State<_ClientTab> {
 
   @override
   Widget build(BuildContext context) {
+    final state = widget.state;
+    return SignalBuilder(
+      builder: (context) => _layout(
+        state.clockMode.value == ClockMode.legacy
+            ? _tightHeightFloorDp
+            : _tightHeightFloorDp + _strictClockPanelAllowanceDp,
+      ),
+    );
+  }
+
+  Widget _layout(double floor) {
     final state = widget.state;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -166,11 +187,12 @@ class _ClientTabState extends State<_ClientTab> {
             const Divider(height: 1),
             CustomRootsPanel(state: state),
             TrustStatusPanel(state: state),
+            StrictClockPanel(state: state, controller: widget.controller),
             const Divider(height: 1),
             LatestResultPanel(state: state),
           ],
         );
-        if (constraints.maxHeight < _tightHeightFloorDp) {
+        if (constraints.maxHeight < floor) {
           // `primary: false` is load-bearing here: ServerListView's
           // inner ListView.builder default-attaches to the ambient
           // PrimaryScrollController, and a SingleChildScrollView in

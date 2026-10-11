@@ -7,7 +7,9 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nts/nts.dart'
     show
+        ClockBackend,
         ClockFaultStage,
+        ClockSourceDescriptor,
         NtsClient,
         NtsDnsPoolStats,
         NtsError,
@@ -27,7 +29,10 @@ import 'package:nts/nts.dart'
         NtsTimeSample,
         NtsWarmCookiesOutcome,
         PhaseTimings,
+        StrictClockContext,
+        StrictClockProvenance,
         StrictClockUninitialized,
+        StrictSyncedTime,
         TimeoutPhase,
         TrustBackend,
         TrustMode;
@@ -523,6 +528,86 @@ void main() {
       final out = formatGetTimeSuccess(synced);
       // Constructor default: errorBoundMicros = roundTripMicros ~/ 2.
       expect(out, contains('error≤±17.82ms (root distance)'));
+    });
+  });
+
+  group('formatSignedMicros', () {
+    test('prefixes the sign and keeps formatRtt units', () {
+      expect(formatSignedMicros(1_200), '+1.20ms');
+      expect(formatSignedMicros(-850), '-850µs');
+      expect(formatSignedMicros(0), '+0µs');
+      expect(formatSignedMicros(-2_345_678), '-2.35s');
+    });
+  });
+
+  group('formatStrictClock', () {
+    test('names provenance, backend, both descriptor versions and '
+        'generation', () {
+      expect(
+        formatStrictClock(
+          provenance: StrictClockProvenance.native,
+          descriptor: const ClockSourceDescriptor(
+            backend: ClockBackend.linuxBoottime,
+            semanticsVersion: 1,
+            conversionVersion: 2,
+          ),
+          generation: 7,
+        ),
+        'native linuxBoottime (semantics v1, conversion v2) generation 7',
+      );
+    });
+  });
+
+  group('formatClockComparison', () {
+    final before = DateTime.utc(2026, 10, 11, 12);
+
+    List<String> compare({required int bracketMicros}) {
+      final context = StrictClockContext.resolveForTesting();
+      final reading = context.now();
+      final strict = StrictSyncedTime(
+        context: context,
+        anchor: reading,
+        reference: reading,
+        utcUnixMicros: 1_777_334_400 * 1000000,
+        roundTripMicros: 30_000,
+        samplesUsed: 4,
+        offsetMicros: -250,
+        trustBackend: TrustBackend.platform,
+      );
+      final legacy = NtsSyncedTime(
+        utcUnixMicros: 1_777_334_400 * 1000000,
+        roundTripMicros: 35_650,
+        samplesUsed: 3,
+        trustBackend: TrustBackend.platform,
+      );
+      return formatClockComparison(
+        legacy: legacy,
+        legacyBefore: before,
+        legacyAfter: before.add(Duration(microseconds: bracketMicros)),
+        strict: strict,
+        strictUtc: before.add(const Duration(microseconds: 1_220)),
+        provenance: context.provenance,
+      ).split('\n');
+    }
+
+    test('takes the legacy projection at the midpoint of its bracket', () {
+      final lines = compare(bracketMicros: 40);
+
+      expect(lines, hasLength(3));
+      // Midpoint is before + 20µs, so Δ = 1220 − 20 µs, ± half the bracket.
+      expect(lines[0], 'Δ(strict−legacy)=+1.20ms ±20µs at one instant');
+      expect(lines[1], contains('legacy  utc=2026-10-11T12:00:00.000020Z'));
+      expect(lines[2], contains('strict  utc=2026-10-11T12:00:00.001220Z'));
+      expect(lines[2], contains('θ=-250µs'));
+      expect(lines[2], contains('clock=testInjected appleContinuous gen=1'));
+    });
+
+    test('rounds an odd bracket\'s uncertainty up to its far end', () {
+      final lines = compare(bracketMicros: 41);
+
+      // Midpoint stays at before + 20µs; the far end is 21µs from it.
+      expect(lines[0], 'Δ(strict−legacy)=+1.20ms ±21µs at one instant');
+      expect(lines[1], contains('legacy  utc=2026-10-11T12:00:00.000020Z'));
     });
   });
 

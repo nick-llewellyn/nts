@@ -21,6 +21,9 @@ import 'dart:developer' as developer;
 import 'package:flutter_rust_bridge/flutter_rust_bridge.dart' show FrbException;
 import 'package:nts/nts.dart'
     show
+        BootScope,
+        BootScopeProvider,
+        BootScopeUnavailableReason,
         NtsClient,
         NtsError,
         NtsErrorAbiMismatch,
@@ -34,6 +37,15 @@ import 'package:nts/nts.dart'
         NtsErrorNtpProtocol,
         NtsErrorTimeout,
         NtsErrorTrustBackendUnavailable,
+        NtsSyncedTime,
+        StrictClockBootScopeUnavailable,
+        StrictClockContext,
+        StrictClockError,
+        StrictClockInvalidationReason,
+        StrictClockMockOnly,
+        StrictClockUninitialized,
+        StrictClockUnsupported,
+        StrictSyncedTime,
         TrustBackend,
         TrustMode,
         kDefaultDnsConcurrencyCap;
@@ -60,14 +72,36 @@ const String _kDeveloperLogName = 'nts.example.controller';
 /// mechanism. Mirrors the value the original example used.
 const Duration _kTimeout = Duration(milliseconds: 5000);
 
+/// Boot-scope provider the app wrote itself, offered by
+/// [NtsController.exportSameBootReference]. Providers are approved by
+/// instance through `kApprovedBootScopeProviders`, which ships empty,
+/// so this one is refused before [current] is ever consulted.
+final class _AppBootScopeProvider implements BootScopeProvider {
+  const _AppBootScopeProvider();
+
+  @override
+  String get providerId => 'com.example.nts.boot-scope';
+
+  @override
+  Future<BootScope?> current() async => null;
+}
+
 class NtsController {
-  NtsController(this.state)
-    : // Initialize from the same source-of-truth that builds `_client`
-      // so the two cannot diverge if the caller starts the app under
-      // a non-default trust mode (e.g. a future deeplink that pre-
-      // populates `state.trustMode` to `platformOnly` before the
-      // controller is constructed).
-      _activeMode = state.trustMode.value {
+  /// [resolveStrictClock] binds the context the strict and compare
+  /// clock modes run on. It defaults to [StrictClockContext.resolve],
+  /// which refuses a mock bridge; widget tests pass
+  /// `StrictClockContext.resolveForTesting` to bind one through theirs.
+  NtsController(
+    this.state, {
+    StrictClockContext Function() resolveStrictClock =
+        StrictClockContext.resolve,
+  }) : _resolveStrictClock = resolveStrictClock,
+       // Initialize from the same source-of-truth that builds `_client`
+       // so the two cannot diverge if the caller starts the app under
+       // a non-default trust mode (e.g. a future deeplink that pre-
+       // populates `state.trustMode` to `platformOnly` before the
+       // controller is constructed).
+       _activeMode = state.trustMode.value {
     _client = _mintClient();
     // Re-mint the per-instance NtsClient whenever the user toggles
     // the trust-mode signal. TrustMode is a construction-time
@@ -123,6 +157,19 @@ class NtsController {
   /// the two stay in lockstep from construction onward.
   TrustMode _activeMode;
 
+  final StrictClockContext Function() _resolveStrictClock;
+
+  /// Context the strict and compare clock modes run on, or `null`
+  /// before the first resolution and after a failed one. Never
+  /// replaced behind the user's back: once it is invalid, only
+  /// [resolveStrictClock] binds a new one, mirroring the package rule
+  /// that re-resolution is explicit.
+  StrictClockContext? _strictContext;
+
+  /// Most recent strict Get Time result on [_strictContext], which
+  /// [exportSameBootReference] offers for transfer.
+  ({StrictSyncedTime time, StrictClockContext context})? _lastStrict;
+
   /// Construct a fresh [NtsClient] from the current signal values,
   /// or return `null` when [TrustMode.custom] is active but
   /// [AppState.customRoots] has not yet been populated.
@@ -143,12 +190,26 @@ class NtsController {
   /// session table, cached AEAD keys and cookie jars pinned until the
   /// GC finalizer notices. In-flight calls that already reached the
   /// native side complete against the state they started with; the
-  /// `identical` stale checks in the action methods keep their results
+  /// [_isCurrent] stale checks in the action methods keep their results
   /// out of `AppState`.
   void _replaceClient() {
     final previous = _client;
     _client = _mintClient();
     previous?.dispose();
+  }
+
+  /// Whether a call started against `client` may still write to
+  /// `AppState`: `client` is the active one and the controller has not
+  /// been disposed.
+  bool _isCurrent(NtsClient client) => !_disposed && identical(client, _client);
+
+  /// Continuation row appended to the log line of a completion that
+  /// [_isCurrent] rejected, naming why its state write was skipped.
+  String get _staleNote {
+    final cause = _disposed
+        ? 'controller disposed'
+        : 'from a client superseded by a trust-mode / custom-roots change';
+    return '\n    \u2514\u2500 ($cause; state intentionally not updated)';
   }
 
   void _onTrustModeChanged() {
@@ -319,13 +380,11 @@ class NtsController {
         // pool is full fail fast as TimeoutPhase.dnsSaturation.
         dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       );
-      final stale = !identical(clientAtStart, _client);
+      final stale = !_isCurrent(clientAtStart);
       state.log.info(
         'nts_query',
         stale
-            ? '${formatQuerySuccess(sample)}\n'
-                  '    \u2514\u2500 (from previous TrustMode; '
-                  'state intentionally not updated)'
+            ? '${formatQuerySuccess(sample)}$_staleNote'
             : formatQuerySuccess(sample),
         host: entry.hostname,
         trustBackend: sample.trustBackend,
@@ -383,13 +442,11 @@ class NtsController {
         // Same bounded-DNS demonstration as `runQuery` above.
         dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       );
-      final stale = !identical(clientAtStart, _client);
+      final stale = !_isCurrent(clientAtStart);
       state.log.info(
         'nts_warm_cookies',
         stale
-            ? '${formatWarmSuccess(outcome)}\n'
-                  '    \u2514\u2500 (from previous TrustMode; '
-                  'state intentionally not updated)'
+            ? '${formatWarmSuccess(outcome)}$_staleNote'
             : formatWarmSuccess(outcome),
         host: entry.hostname,
         trustBackend: outcome.trustBackend,
@@ -432,6 +489,12 @@ class NtsController {
   /// [warmCookies] (handshake only); this button is the "do the
   /// whole thing for me" path the high-level API exists for.
   Future<void> getTime(NtsServerEntry entry) async {
+    await _runGetTime(entry);
+  }
+
+  /// [getTime]'s body. Returns the result, stale or not, so
+  /// [compareClocks] can project it, or `null` when the call failed.
+  Future<NtsSyncedTime?> _runGetTime(NtsServerEntry entry) async {
     final client = _client;
     if (client == null) {
       state.log.warn(
@@ -439,19 +502,17 @@ class NtsController {
         'No NtsClient available — load a custom root certificate first.',
         host: entry.hostname,
       );
-      return;
+      return null;
     }
     state.log.info('nts_get_time', 'Starting getTime', host: entry.hostname);
     final clientAtStart = client;
     try {
       final synced = await clientAtStart.getTime(spec: entry.spec);
-      final stale = !identical(clientAtStart, _client);
+      final stale = !_isCurrent(clientAtStart);
       state.log.info(
         'nts_get_time',
         stale
-            ? '${formatGetTimeSuccess(synced)}\n'
-                  '    \u2514\u2500 (from previous TrustMode; '
-                  'state intentionally not updated)'
+            ? '${formatGetTimeSuccess(synced)}$_staleNote'
             : formatGetTimeSuccess(synced),
         host: entry.hostname,
         trustBackend: synced.trustBackend,
@@ -463,6 +524,7 @@ class NtsController {
           source: 'nts_get_time',
         );
       }
+      return synced;
     } on NtsError catch (err) {
       _logError('nts_get_time', err, entry.hostname);
     } on FrbException catch (err, stack) {
@@ -480,6 +542,317 @@ class NtsController {
         host: entry.hostname,
       );
     }
+    return null;
+  }
+
+  /// Run the strict `getTimeStrict` flow against `entry`: the same
+  /// warm + burst as [getTime], with the budget metered, every sample
+  /// attributed by its native receipt stamp, and the result anchored
+  /// on the held [StrictClockContext] instead of `MonotonicClock`.
+  ///
+  /// Resolves a context first when none is held. On an invalidated one
+  /// it refuses to run and points at [resolveStrictClock] instead:
+  /// strict failures are outcomes to show, not something to paper over
+  /// with a silent re-resolution.
+  Future<void> getTimeStrict(NtsServerEntry entry) async {
+    await _runGetTimeStrict(entry);
+  }
+
+  /// Run [getTime] and then [getTimeStrict] against `entry`, and log
+  /// both results projected at the same instant side by side. Each path
+  /// still logs its own start and outcome lines; the comparison line is
+  /// only posted when both produced a time on the client the run
+  /// started with. A run whose client is replaced stops after the leg
+  /// in flight, and so does one the controller is disposed during.
+  Future<void> compareClocks(NtsServerEntry entry) async {
+    const source = 'nts_compare_clocks';
+    final clientAtStart = _client;
+    state.log.info(
+      source,
+      'Starting legacy getTime, then strict getTimeStrict',
+      host: entry.hostname,
+    );
+    final legacy = await _runGetTime(entry);
+    if (!_comparisonCurrent(clientAtStart, entry.hostname)) return;
+    final strict = await _runGetTimeStrict(entry);
+    if (!_comparisonCurrent(clientAtStart, entry.hostname)) return;
+    if (legacy == null || strict == null) {
+      final failed = [
+        if (legacy == null) 'legacy',
+        if (strict == null) 'strict',
+      ].join(' and ');
+      state.log.warn(
+        source,
+        'Comparison incomplete — the $failed path produced no time; '
+        'see the lines above',
+        host: entry.hostname,
+      );
+      return;
+    }
+    try {
+      final legacyBefore = legacy.utcNow;
+      final strictUtc = strict.time.utcNow();
+      final legacyAfter = legacy.utcNow;
+      state.log.info(
+        source,
+        formatClockComparison(
+          legacy: legacy,
+          legacyBefore: legacyBefore,
+          legacyAfter: legacyAfter,
+          strict: strict.time,
+          strictUtc: strictUtc,
+          provenance: strict.context.provenance,
+        ),
+        host: entry.hostname,
+      );
+    } on StrictClockError catch (err) {
+      state.log.error(
+        source,
+        'Strict projection failed: ${err.message}',
+        host: entry.hostname,
+      );
+      _afterStrictCall(strict.context, source, host: entry.hostname);
+    }
+  }
+
+  /// Whether a [compareClocks] run started on `clientAtStart` may go
+  /// on. Logs why it stops when a trust-mode or custom-roots change
+  /// replaced the client; stops silently once the controller is
+  /// disposed.
+  bool _comparisonCurrent(NtsClient? clientAtStart, String host) {
+    if (_disposed) return false;
+    if (identical(clientAtStart, _client)) return true;
+    state.log.warn(
+      'nts_compare_clocks',
+      'Comparison abandoned — the trust mode or custom roots changed '
+          'mid-run, so the two paths would not share a client; see the lines '
+          'above',
+      host: host,
+    );
+    return false;
+  }
+
+  /// Resolve a fresh strict clock context, replacing any context held,
+  /// valid or not, and publish it to [AppState.strictClock]. This is
+  /// the recovery action after an invalidation: an invalid context is
+  /// never repaired, only replaced. Returns the new context, or `null`
+  /// when resolution failed — on a mock bridge, for instance, which
+  /// [StrictClockContext.resolve] refuses.
+  StrictClockContext? resolveStrictClock() {
+    const source = 'strict_clock';
+    _lastStrict = null;
+    try {
+      final context = _resolveStrictClock();
+      _strictContext = context;
+      _publishStrictClock(context);
+      state.log.info(source, 'Resolved ${_describeContext(context)}');
+      return context;
+    } on StrictClockError catch (err) {
+      _strictContext = null;
+      state.strictClock.value = StrictClockUnavailable(err);
+      final hint = switch (err) {
+        StrictClockMockOnly() =>
+          'the app is running on the mock bridge, which cannot vouch for '
+              'a clock source; legacy mode still works',
+        StrictClockUnsupported() =>
+          'this build has no supported strict clock backend; legacy mode '
+              'still works',
+        StrictClockUninitialized() => 'the native bridge is not initialized',
+        _ => null,
+      };
+      final message =
+          'Strict clock unavailable: ${err.message}'
+          '${hint == null ? '' : '\n    \u2514\u2500 $hint'}';
+      if (err is StrictClockMockOnly || err is StrictClockUnsupported) {
+        state.log.warn(source, message);
+      } else {
+        state.log.error(source, message);
+      }
+    } catch (err, stack) {
+      _strictContext = null;
+      state.strictClock.value = StrictClockUnavailable(err);
+      state.log.error(source, 'Unhandled: $err\n$stack');
+    }
+    return null;
+  }
+
+  /// Invalidate the held strict clock context, so the fail-closed path
+  /// and the [resolveStrictClock] recovery can be exercised on demand.
+  /// No-op when no context is held.
+  void invalidateStrictClock() {
+    final context = _strictContext;
+    if (context == null) return;
+    context.invalidate();
+    _publishStrictClock(context);
+    state.log.warn(
+      'strict_clock',
+      'Invalidated ${_describeContext(context)} on request; strict reads '
+          'on it now fail closed until it is re-resolved',
+    );
+  }
+
+  /// Offer the last strict Get Time result for same-boot transfer via
+  /// [StrictClockContext.exportReference]. The package approves no
+  /// boot-scope provider in this release, so the export ends in
+  /// [StrictClockBootScopeUnavailable], which leaves the context valid;
+  /// the action exists to show that refusal as an outcome.
+  Future<void> exportSameBootReference() async {
+    const source = 'strict_clock';
+    final last = _lastStrict;
+    if (last == null || !identical(last.context, _strictContext)) {
+      state.log.warn(
+        source,
+        'No strict time on the current context to export — run Get Time '
+        'in strict or compare mode first',
+      );
+      return;
+    }
+    try {
+      final reference = await last.context.exportReference(
+        last.time,
+        provider: const _AppBootScopeProvider(),
+      );
+      state.log.info(
+        source,
+        'Exported same-boot reference at ${reference.referenceMicros}\u00b5s '
+        'under boot-scope provider "${reference.scope.providerId}"',
+      );
+    } on StrictClockBootScopeUnavailable catch (err) {
+      final hint = err.reason == BootScopeUnavailableReason.providerNotApproved
+          ? 'this release approves no boot-scope provider, so an app-written '
+                'one is refused before it is consulted'
+          : 'the boot scope could not be established';
+      state.log.warn(
+        source,
+        'Same-boot export refused: ${err.message}\n'
+        '    \u2514\u2500 $hint; the context stays valid for local strict '
+        'reads',
+      );
+    } on StrictClockError catch (err) {
+      state.log.error(source, 'Same-boot export failed: ${err.message}');
+    } catch (err, stack) {
+      state.log.error(source, 'Unhandled: $err\n$stack');
+    } finally {
+      _afterStrictCall(last.context, source);
+    }
+  }
+
+  /// [getTimeStrict]'s body. Returns the result with the context it is
+  /// bound to, stale or not, or `null` when no time was produced.
+  Future<({StrictSyncedTime time, StrictClockContext context})?>
+  _runGetTimeStrict(NtsServerEntry entry) async {
+    const source = 'nts_get_time_strict';
+    final client = _client;
+    if (client == null) {
+      state.log.warn(
+        source,
+        'No NtsClient available — load a custom root certificate first.',
+        host: entry.hostname,
+      );
+      return null;
+    }
+    final context = _strictContext ?? resolveStrictClock();
+    if (context == null) return null;
+    final reason = context.invalidationReason;
+    if (reason != null) {
+      state.log.warn(
+        source,
+        'Strict clock context is invalidated (${reason.name}); tap '
+        'Re-resolve to bind a new one',
+        host: entry.hostname,
+      );
+      return null;
+    }
+    state.log.info(source, 'Starting getTimeStrict', host: entry.hostname);
+    final clientAtStart = client;
+    try {
+      final synced = await clientAtStart.getTimeStrict(
+        spec: entry.spec,
+        context: context,
+      );
+      final utcNow = synced.utcNow();
+      final stale = !_isCurrent(clientAtStart);
+      final line = formatGetTimeStrictSuccess(
+        synced,
+        provenance: context.provenance,
+        utcNow: utcNow,
+      );
+      state.log.info(
+        source,
+        stale ? '$line$_staleNote' : line,
+        host: entry.hostname,
+        trustBackend: synced.trustBackend,
+      );
+      if (!stale) {
+        _setLastHandshakeBackend(
+          host: entry.hostname,
+          backend: synced.trustBackend,
+          source: source,
+        );
+        if (identical(context, _strictContext)) {
+          _lastStrict = (time: synced, context: context);
+        }
+      }
+      return (time: synced, context: context);
+    } on NtsError catch (err) {
+      _logError(source, err, entry.hostname);
+    } on StrictClockError catch (err) {
+      state.log.error(
+        source,
+        'Strict projection failed: ${err.message}',
+        host: entry.hostname,
+      );
+    } on FrbException catch (err, stack) {
+      _logSupersededClient(source, clientAtStart, entry.hostname, err, stack);
+    } catch (err, stack) {
+      state.log.error(source, 'Unhandled: $err\n$stack', host: entry.hostname);
+    } finally {
+      _afterStrictCall(context, source, host: entry.hostname);
+    }
+    return null;
+  }
+
+  /// Publish `context`'s state after a strict call on it and, when the
+  /// call left it invalidated, explain that and name the recovery. A
+  /// context the user has already replaced is left alone, as is every
+  /// context once the controller is disposed, and an explicit
+  /// invalidation was announced when it was requested.
+  void _afterStrictCall(
+    StrictClockContext context,
+    String source, {
+    String? host,
+  }) {
+    if (_disposed || !identical(context, _strictContext)) return;
+    _publishStrictClock(context);
+    final reason = context.invalidationReason;
+    if (reason == null || reason == StrictClockInvalidationReason.explicit) {
+      return;
+    }
+    state.log.warn(
+      source,
+      'Strict clock context invalidated (${reason.name}); it refuses every '
+      'further read, with no fallback — tap Re-resolve to bind a new one',
+      host: host,
+    );
+  }
+
+  void _publishStrictClock(StrictClockContext context) {
+    state.strictClock.value = StrictClockBound(
+      provenance: context.provenance,
+      descriptor: context.descriptor,
+      generation: context.generation,
+      invalidation: context.invalidationReason,
+      hasSyncedTime: identical(_lastStrict?.context, context),
+    );
+  }
+
+  static String _describeContext(StrictClockContext context) {
+    final clock = formatStrictClock(
+      provenance: context.provenance,
+      descriptor: context.descriptor,
+      generation: context.generation,
+    );
+    return 'strict clock: $clock';
   }
 
   void _logError(String source, NtsError err, String host) {
@@ -536,7 +909,7 @@ class NtsController {
     Object err,
     StackTrace stack,
   ) {
-    if (identical(client, _client) && !_disposed) {
+    if (_isCurrent(client)) {
       state.log.error(
         source,
         'Bridge call failed against the active NtsClient: $err\n$stack',
@@ -562,11 +935,13 @@ class NtsController {
   /// cached AEAD keys and cookie jars go away when the app decides
   /// they should, not when GC gets around to it.
   ///
-  /// Idempotent. Actions in flight when this runs behave exactly as
-  /// they do across a re-mint: whatever already reached the native
-  /// side completes and is discarded by the `identical` stale check,
-  /// and anything still queued surfaces through
-  /// [_logSupersededClient].
+  /// Idempotent. Actions in flight when this runs behave as they do
+  /// across a re-mint: whatever already reached the native side
+  /// completes and is discarded by the [_isCurrent] stale check, which
+  /// rejects every client once this has run, and anything still queued
+  /// surfaces through [_logSupersededClient]. Strict calls leave the
+  /// strict clock state as it was, and a compare run stops after the
+  /// leg in flight.
   void dispose() {
     if (_disposed) return;
     _disposed = true;
