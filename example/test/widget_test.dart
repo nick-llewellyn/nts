@@ -1073,6 +1073,31 @@ void main() {
         'Starting legacy getTime, then strict getTimeStrict',
       ]);
     });
+
+    testWidgets('a compare run whose client is replaced mid-run is '
+        'abandoned instead of mixing two clients', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.compare);
+
+      // Signal write rather than the dropdown, for the reason given in
+      // the TrustMode in-flight test above.
+      await tester.tap(find.text('Get Time'));
+      await tester.pump();
+      h.state.trustMode.value = TrustMode.platformOnly;
+      await tester.pump(const Duration(milliseconds: 2000));
+      await tester.pump();
+
+      expect(
+        messages(
+          h.state,
+          'nts_get_time',
+        ).any((m) => m.contains('from previous TrustMode')),
+        isTrue,
+      );
+      expect(messages(h.state, 'nts_get_time_strict'), isEmpty);
+      final compare = messages(h.state, 'nts_compare_clocks');
+      expect(compare, hasLength(2));
+      expect(compare.last, startsWith('Comparison abandoned'));
+    });
   });
 
   group('shell diagnostics', () {

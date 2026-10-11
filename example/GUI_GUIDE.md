@@ -131,7 +131,9 @@ The **clock mode** dropdown next to the trust-mode dropdown picks what
   does or does not give. The legacy value is read just before and just
   after the strict one and taken at the midpoint, so the order of the
   reads does not skew the difference; the `±` after it is half that
-  bracket.
+  bracket, rounded up. If a trust-mode or custom-roots change replaces
+  the client mid-run, the comparison is abandoned rather than mixing
+  results from two clients.
 
 In the strict and compare modes a **Strict clock** panel appears below
 the trust status. It shows the held context (provenance, source,

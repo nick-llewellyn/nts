@@ -559,7 +559,9 @@ void main() {
   });
 
   group('formatClockComparison', () {
-    test('takes the legacy projection at the midpoint of its bracket', () {
+    final before = DateTime.utc(2026, 10, 11, 12);
+
+    List<String> compare({required int bracketMicros}) {
       final context = StrictClockContext.resolveForTesting();
       final reading = context.now();
       final strict = StrictSyncedTime(
@@ -578,15 +580,18 @@ void main() {
         samplesUsed: 3,
         trustBackend: TrustBackend.platform,
       );
-      final before = DateTime.utc(2026, 10, 11, 12);
-      final lines = formatClockComparison(
+      return formatClockComparison(
         legacy: legacy,
         legacyBefore: before,
-        legacyAfter: before.add(const Duration(microseconds: 40)),
+        legacyAfter: before.add(Duration(microseconds: bracketMicros)),
         strict: strict,
         strictUtc: before.add(const Duration(microseconds: 1_220)),
         provenance: context.provenance,
       ).split('\n');
+    }
+
+    test('takes the legacy projection at the midpoint of its bracket', () {
+      final lines = compare(bracketMicros: 40);
 
       expect(lines, hasLength(3));
       // Midpoint is before + 20µs, so Δ = 1220 − 20 µs, ± half the bracket.
@@ -595,6 +600,14 @@ void main() {
       expect(lines[2], contains('strict  utc=2026-10-11T12:00:00.001220Z'));
       expect(lines[2], contains('θ=-250µs'));
       expect(lines[2], contains('clock=testInjected appleContinuous gen=1'));
+    });
+
+    test('rounds an odd bracket\'s uncertainty up to its far end', () {
+      final lines = compare(bracketMicros: 41);
+
+      // Midpoint stays at before + 20µs; the far end is 21µs from it.
+      expect(lines[0], 'Δ(strict−legacy)=+1.20ms ±21µs at one instant');
+      expect(lines[1], contains('legacy  utc=2026-10-11T12:00:00.000020Z'));
     });
   });
 

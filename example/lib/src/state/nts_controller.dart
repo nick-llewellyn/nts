@@ -559,19 +559,21 @@ class NtsController {
   /// Run [getTime] and then [getTimeStrict] against `entry`, and log
   /// both results projected at the same instant side by side. Each path
   /// still logs its own start and outcome lines; the comparison line is
-  /// only posted when both produced a time. A run the controller is
-  /// disposed during stops after the leg in flight.
+  /// only posted when both produced a time on the client the run
+  /// started with. A run whose client is replaced stops after the leg
+  /// in flight, and so does one the controller is disposed during.
   Future<void> compareClocks(NtsServerEntry entry) async {
     const source = 'nts_compare_clocks';
+    final clientAtStart = _client;
     state.log.info(
       source,
       'Starting legacy getTime, then strict getTimeStrict',
       host: entry.hostname,
     );
     final legacy = await _runGetTime(entry);
-    if (_disposed) return;
+    if (!_comparisonCurrent(clientAtStart, entry.hostname)) return;
     final strict = await _runGetTimeStrict(entry);
-    if (_disposed) return;
+    if (!_comparisonCurrent(clientAtStart, entry.hostname)) return;
     if (legacy == null || strict == null) {
       final failed = [
         if (legacy == null) 'legacy',
@@ -609,6 +611,23 @@ class NtsController {
       );
       _afterStrictCall(strict.context, source, host: entry.hostname);
     }
+  }
+
+  /// Whether a [compareClocks] run started on `clientAtStart` may go
+  /// on. Logs why it stops when a trust-mode or custom-roots change
+  /// replaced the client; stops silently once the controller is
+  /// disposed.
+  bool _comparisonCurrent(NtsClient? clientAtStart, String host) {
+    if (_disposed) return false;
+    if (identical(clientAtStart, _client)) return true;
+    state.log.warn(
+      'nts_compare_clocks',
+      'Comparison abandoned — the trust mode or custom roots changed '
+          'mid-run, so the two paths would not share a client; see the lines '
+          'above',
+      host: host,
+    );
+    return false;
   }
 
   /// Resolve a fresh strict clock context, replacing any context held,

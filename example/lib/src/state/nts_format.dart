@@ -402,8 +402,9 @@ String formatGetTimeStrictSuccess(
 /// [legacyBefore] and [legacyAfter] are legacy projections read just
 /// before and just after [strictUtc]. The legacy side is taken at their
 /// midpoint, so the order of the reads does not bias the difference,
-/// and the `±` after it is half the bracket: the most the midpoint can
-/// be off from the legacy projection at the strict read.
+/// and the `±` after it is half the bracket, rounded up to a whole
+/// microsecond: the most the midpoint can be off from the legacy
+/// projection at the strict read.
 String formatClockComparison({
   required NtsSyncedTime legacy,
   required DateTime legacyBefore,
@@ -412,11 +413,12 @@ String formatClockComparison({
   required DateTime strictUtc,
   required StrictClockProvenance provenance,
 }) {
-  final halfBracket = legacyAfter.difference(legacyBefore) ~/ 2;
-  final legacyUtc = legacyBefore.add(halfBracket);
+  final bracket = legacyAfter.difference(legacyBefore).inMicroseconds;
+  final legacyUtc = legacyBefore.add(Duration(microseconds: bracket ~/ 2));
+  final uncertainty = (bracket.abs() + 1) ~/ 2;
   final delta = strictUtc.difference(legacyUtc).inMicroseconds;
   return '\u0394(strict\u2212legacy)=${formatSignedMicros(delta)} '
-      '\u00b1${formatRtt(halfBracket.inMicroseconds.abs())} at one instant\n'
+      '\u00b1${formatRtt(uncertainty)} at one instant\n'
       '    \u2514\u2500 legacy  utc=${legacyUtc.toIso8601String()}  '
       'rtt=${formatRtt(legacy.roundTripMicros)}  '
       '\u03b8=${formatSignedMicros(legacy.offsetMicros)}  '
