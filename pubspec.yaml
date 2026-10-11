@@ -102,14 +102,13 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
-  # Used internally by `flutter_rust_bridge_codegen generate` to emit the
-  # `dart:ffi` bindings. Not a runtime dependency.
-  ffigen: ">=20.1.1 <22.0.0"
   # Code generator backing `@freezed`. FRB v2 invokes it transparently when
   # bridging Rust enums-with-data to Dart sealed classes.
   freezed: ">=3.2.5 <5.0.0"
   # Required by `freezed`'s build pipeline.
   build_runner: ^2.15.0
+  # No `ffigen`: `flutter_rust_bridge_codegen generate` runs it only when
+  # `full_dep: true` is set, and `flutter_rust_bridge.yaml` does not set it.
 
 # Flutter plugin classification. Declared here so consuming Flutter apps
 # pick up the Android library module shipped under `android/`, which
