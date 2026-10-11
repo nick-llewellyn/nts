@@ -103,8 +103,8 @@ class StrictClockPanel extends StatelessWidget {
 String describeStrictClockSnapshot(StrictClockSnapshot? snapshot) =>
     switch (snapshot) {
       null => 'context: (not resolved yet; Get Time or Re-resolve binds one)',
-      StrictClockUnavailable(:final error) =>
-        'context: unavailable \u2014 ${error.message}',
+      StrictClockUnavailable(:final message) =>
+        'context: unavailable \u2014 $message',
       StrictClockBound(:final invalidation?) =>
         'context: ${_clock(snapshot)} \u2014 invalidated '
             '(${invalidation.name}); reads fail closed until Re-resolve',

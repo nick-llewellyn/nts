@@ -95,7 +95,14 @@ final class StrictClockBound extends StrictClockSnapshot {
 final class StrictClockUnavailable extends StrictClockSnapshot {
   const StrictClockUnavailable(this.error);
 
-  final StrictClockError error;
+  /// The [StrictClockError] the package refused with, or whatever else
+  /// the resolver threw.
+  final Object error;
+
+  String get message => switch (error) {
+    StrictClockError(:final message) => message,
+    _ => '$error',
+  };
 }
 
 /// Aggregate state container injected once at startup. Held by the

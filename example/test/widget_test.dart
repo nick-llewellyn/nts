@@ -452,7 +452,11 @@ void main() {
         .where((e) => e.source == 'nts_query')
         .toList();
     expect(
-      logs.any((e) => e.message.contains('from previous TrustMode')),
+      logs.any(
+        (e) => e.message.contains(
+          'from a client superseded by a trust-mode / custom-roots change',
+        ),
+      ),
       isTrue,
       reason: 'stale completion should be tagged in the log',
     );
@@ -825,12 +829,15 @@ void main() {
       WidgetTester tester, {
       required ClockMode mode,
       bool testClock = true,
+      StrictClockContext Function()? resolver,
     }) async {
-      final h = testClock
-          ? await _bootHarness(
-              resolveStrictClock: StrictClockContext.resolveForTesting,
-            )
-          : await _bootHarness();
+      final h = await _bootHarness(
+        resolveStrictClock:
+            resolver ??
+            (testClock
+                ? StrictClockContext.resolveForTesting
+                : StrictClockContext.resolve),
+      );
       h.state.clockMode.value = mode;
       await tester.pumpWidget(
         MaterialApp(
@@ -929,6 +936,66 @@ void main() {
         endsWith('valid as of the last call'),
       );
       expect(enabled(tester, exportButton), isTrue);
+    });
+
+    testWidgets('an unexpected resolver failure drops the held context '
+        'instead of leaving it in use', (tester) async {
+      var fail = false;
+      final h = await pumpHome(
+        tester,
+        mode: ClockMode.strict,
+        resolver: () => fail
+            ? throw StateError('resolver failed')
+            : StrictClockContext.resolveForTesting(),
+      );
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(enabled(tester, exportButton), isTrue);
+
+      fail = true;
+      await tester.tap(resolveButton);
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      final snapshot = h.state.strictClock.value;
+      expect(snapshot, isA<StrictClockUnavailable>());
+      expect((snapshot! as StrictClockUnavailable).error, isA<StateError>());
+      expect(
+        tester.widget<Text>(status).data,
+        'context: unavailable \u2014 Bad state: resolver failed',
+      );
+      expect(enabled(tester, invalidateButton), isFalse);
+      expect(enabled(tester, exportButton), isFalse);
+      expect(
+        messages(h.state, 'strict_clock').last,
+        startsWith('Unhandled: Bad state: resolver failed'),
+      );
+
+      // No context is held, so Get Time resolves again rather than
+      // reusing the one Re-resolve failed to replace.
+      final okBefore = messages(
+        h.state,
+        'nts_get_time_strict',
+      ).where((m) => m.startsWith('OK ')).length;
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(
+        messages(
+          h.state,
+          'nts_get_time_strict',
+        ).where((m) => m.startsWith('OK ')).length,
+        okBefore,
+      );
+      expect(
+        messages(
+          h.state,
+          'strict_clock',
+        ).where((m) => m.startsWith('Unhandled:')).length,
+        2,
+      );
     });
 
     testWidgets('compare mode runs both paths and logs them side by side', (
@@ -1149,10 +1216,11 @@ void main() {
       await tester.pump();
 
       expect(
-        messages(
-          h.state,
-          'nts_get_time',
-        ).any((m) => m.contains('from previous TrustMode')),
+        messages(h.state, 'nts_get_time').any(
+          (m) => m.contains(
+            'from a client superseded by a trust-mode / custom-roots change',
+          ),
+        ),
         isTrue,
       );
       expect(messages(h.state, 'nts_get_time_strict'), isEmpty);

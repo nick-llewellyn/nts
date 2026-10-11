@@ -205,10 +205,12 @@ class NtsController {
 
   /// Continuation row appended to the log line of a completion that
   /// [_isCurrent] rejected, naming why its state write was skipped.
-  String get _staleNote =>
-      '\n    \u2514\u2500 '
-      '(${_disposed ? 'controller disposed' : 'from previous TrustMode'}; '
-      'state intentionally not updated)';
+  String get _staleNote {
+    final cause = _disposed
+        ? 'controller disposed'
+        : 'from a client superseded by a trust-mode / custom-roots change';
+    return '\n    \u2514\u2500 ($cause; state intentionally not updated)';
+  }
 
   void _onTrustModeChanged() {
     if (_disposed) return;
@@ -667,6 +669,8 @@ class NtsController {
         state.log.error(source, message);
       }
     } catch (err, stack) {
+      _strictContext = null;
+      state.strictClock.value = StrictClockUnavailable(err);
       state.log.error(source, 'Unhandled: $err\n$stack');
     }
     return null;
