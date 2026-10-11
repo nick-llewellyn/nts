@@ -190,13 +190,25 @@ class NtsController {
   /// session table, cached AEAD keys and cookie jars pinned until the
   /// GC finalizer notices. In-flight calls that already reached the
   /// native side complete against the state they started with; the
-  /// `identical` stale checks in the action methods keep their results
+  /// [_isCurrent] stale checks in the action methods keep their results
   /// out of `AppState`.
   void _replaceClient() {
     final previous = _client;
     _client = _mintClient();
     previous?.dispose();
   }
+
+  /// Whether a call started against `client` may still write to
+  /// `AppState`: `client` is the active one and the controller has not
+  /// been disposed.
+  bool _isCurrent(NtsClient client) => !_disposed && identical(client, _client);
+
+  /// Continuation row appended to the log line of a completion that
+  /// [_isCurrent] rejected, naming why its state write was skipped.
+  String get _staleNote =>
+      '\n    \u2514\u2500 '
+      '(${_disposed ? 'controller disposed' : 'from previous TrustMode'}; '
+      'state intentionally not updated)';
 
   void _onTrustModeChanged() {
     if (_disposed) return;
@@ -366,13 +378,11 @@ class NtsController {
         // pool is full fail fast as TimeoutPhase.dnsSaturation.
         dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       );
-      final stale = !identical(clientAtStart, _client);
+      final stale = !_isCurrent(clientAtStart);
       state.log.info(
         'nts_query',
         stale
-            ? '${formatQuerySuccess(sample)}\n'
-                  '    \u2514\u2500 (from previous TrustMode; '
-                  'state intentionally not updated)'
+            ? '${formatQuerySuccess(sample)}$_staleNote'
             : formatQuerySuccess(sample),
         host: entry.hostname,
         trustBackend: sample.trustBackend,
@@ -430,13 +440,11 @@ class NtsController {
         // Same bounded-DNS demonstration as `runQuery` above.
         dnsConcurrencyCap: kDefaultDnsConcurrencyCap,
       );
-      final stale = !identical(clientAtStart, _client);
+      final stale = !_isCurrent(clientAtStart);
       state.log.info(
         'nts_warm_cookies',
         stale
-            ? '${formatWarmSuccess(outcome)}\n'
-                  '    \u2514\u2500 (from previous TrustMode; '
-                  'state intentionally not updated)'
+            ? '${formatWarmSuccess(outcome)}$_staleNote'
             : formatWarmSuccess(outcome),
         host: entry.hostname,
         trustBackend: outcome.trustBackend,
@@ -498,13 +506,11 @@ class NtsController {
     final clientAtStart = client;
     try {
       final synced = await clientAtStart.getTime(spec: entry.spec);
-      final stale = !identical(clientAtStart, _client);
+      final stale = !_isCurrent(clientAtStart);
       state.log.info(
         'nts_get_time',
         stale
-            ? '${formatGetTimeSuccess(synced)}\n'
-                  '    \u2514\u2500 (from previous TrustMode; '
-                  'state intentionally not updated)'
+            ? '${formatGetTimeSuccess(synced)}$_staleNote'
             : formatGetTimeSuccess(synced),
         host: entry.hostname,
         trustBackend: synced.trustBackend,
@@ -553,7 +559,8 @@ class NtsController {
   /// Run [getTime] and then [getTimeStrict] against `entry`, and log
   /// both results projected at the same instant side by side. Each path
   /// still logs its own start and outcome lines; the comparison line is
-  /// only posted when both produced a time.
+  /// only posted when both produced a time. A run the controller is
+  /// disposed during stops after the leg in flight.
   Future<void> compareClocks(NtsServerEntry entry) async {
     const source = 'nts_compare_clocks';
     state.log.info(
@@ -562,7 +569,9 @@ class NtsController {
       host: entry.hostname,
     );
     final legacy = await _runGetTime(entry);
+    if (_disposed) return;
     final strict = await _runGetTimeStrict(entry);
+    if (_disposed) return;
     if (legacy == null || strict == null) {
       final failed = [
         if (legacy == null) 'legacy',
@@ -577,13 +586,15 @@ class NtsController {
       return;
     }
     try {
-      final legacyUtc = legacy.utcNow;
+      final legacyBefore = legacy.utcNow;
       final strictUtc = strict.time.utcNow();
+      final legacyAfter = legacy.utcNow;
       state.log.info(
         source,
         formatClockComparison(
           legacy: legacy,
-          legacyUtc: legacyUtc,
+          legacyBefore: legacyBefore,
+          legacyAfter: legacyAfter,
           strict: strict.time,
           strictUtc: strictUtc,
           provenance: strict.context.provenance,
@@ -737,7 +748,7 @@ class NtsController {
         context: context,
       );
       final utcNow = synced.utcNow();
-      final stale = !identical(clientAtStart, _client);
+      final stale = !_isCurrent(clientAtStart);
       final line = formatGetTimeStrictSuccess(
         synced,
         provenance: context.provenance,
@@ -745,11 +756,7 @@ class NtsController {
       );
       state.log.info(
         source,
-        stale
-            ? '$line\n'
-                  '    \u2514\u2500 (from previous TrustMode; '
-                  'state intentionally not updated)'
-            : line,
+        stale ? '$line$_staleNote' : line,
         host: entry.hostname,
         trustBackend: synced.trustBackend,
       );
@@ -784,14 +791,15 @@ class NtsController {
 
   /// Publish `context`'s state after a strict call on it and, when the
   /// call left it invalidated, explain that and name the recovery. A
-  /// context the user has already replaced is left alone, and an
-  /// explicit invalidation was announced when it was requested.
+  /// context the user has already replaced is left alone, as is every
+  /// context once the controller is disposed, and an explicit
+  /// invalidation was announced when it was requested.
   void _afterStrictCall(
     StrictClockContext context,
     String source, {
     String? host,
   }) {
-    if (!identical(context, _strictContext)) return;
+    if (_disposed || !identical(context, _strictContext)) return;
     _publishStrictClock(context);
     final reason = context.invalidationReason;
     if (reason == null || reason == StrictClockInvalidationReason.explicit) {
@@ -878,7 +886,7 @@ class NtsController {
     Object err,
     StackTrace stack,
   ) {
-    if (identical(client, _client) && !_disposed) {
+    if (_isCurrent(client)) {
       state.log.error(
         source,
         'Bridge call failed against the active NtsClient: $err\n$stack',
@@ -904,11 +912,13 @@ class NtsController {
   /// cached AEAD keys and cookie jars go away when the app decides
   /// they should, not when GC gets around to it.
   ///
-  /// Idempotent. Actions in flight when this runs behave exactly as
-  /// they do across a re-mint: whatever already reached the native
-  /// side completes and is discarded by the `identical` stale check,
-  /// and anything still queued surfaces through
-  /// [_logSupersededClient].
+  /// Idempotent. Actions in flight when this runs behave as they do
+  /// across a re-mint: whatever already reached the native side
+  /// completes and is discarded by the [_isCurrent] stale check, which
+  /// rejects every client once this has run, and anything still queued
+  /// surfaces through [_logSupersededClient]. Strict calls leave the
+  /// strict clock state as it was, and a compare run stops after the
+  /// leg in flight.
   void dispose() {
     if (_disposed) return;
     _disposed = true;

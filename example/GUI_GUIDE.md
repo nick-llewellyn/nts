@@ -128,7 +128,10 @@ The **clock mode** dropdown next to the trust-mode dropdown picks what
   the other, then logs one line comparing them at the same instant: the
   difference between the two projected UTC values, then each path's
   UTC, round trip, offset θ and clock, with the guarantee each clock
-  does or does not give.
+  does or does not give. The legacy value is read just before and just
+  after the strict one and taken at the midpoint, so the order of the
+  reads does not skew the difference; the `±` after it is half that
+  bracket.
 
 In the strict and compare modes a **Strict clock** panel appears below
 the trust status. It shows the held context (provenance, source,

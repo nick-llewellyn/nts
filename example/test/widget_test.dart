@@ -1025,6 +1025,54 @@ void main() {
       expect(snapshot.invalidation, isNull);
       expect(snapshot.hasSyncedTime, isTrue);
     });
+
+    testWidgets('a strict call that completes after dispose leaves the '
+        'state as it was', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.strict);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump();
+      h.controller.dispose();
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+
+      final ok = messages(
+        h.state,
+        'nts_get_time_strict',
+      ).firstWhere((m) => m.startsWith('OK '));
+      expect(
+        ok,
+        endsWith('(controller disposed; state intentionally not updated)'),
+      );
+      expect(h.state.lastHandshakeBackend.value, isNull);
+      final snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.hasSyncedTime, isFalse);
+    });
+
+    testWidgets('a compare run disposed during its legacy leg does not '
+        'start the strict leg', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.compare);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump();
+      h.controller.dispose();
+      await tester.pump(const Duration(milliseconds: 2000));
+      await tester.pump();
+
+      final ok = messages(
+        h.state,
+        'nts_get_time',
+      ).firstWhere((m) => m.startsWith('OK '));
+      expect(
+        ok,
+        endsWith('(controller disposed; state intentionally not updated)'),
+      );
+      expect(h.state.lastHandshakeBackend.value, isNull);
+      expect(messages(h.state, 'nts_get_time_strict'), isEmpty);
+      expect(messages(h.state, 'nts_compare_clocks'), [
+        'Starting legacy getTime, then strict getTimeStrict',
+      ]);
+    });
   });
 
   group('shell diagnostics', () {

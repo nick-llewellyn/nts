@@ -398,16 +398,25 @@ String formatGetTimeStrictSuccess(
 /// same server, projected at the same instant: the difference between
 /// the two projections, then each path's UTC, round trip, offset θ and
 /// clock, with the guarantee that clock does or does not give.
+///
+/// [legacyBefore] and [legacyAfter] are legacy projections read just
+/// before and just after [strictUtc]. The legacy side is taken at their
+/// midpoint, so the order of the reads does not bias the difference,
+/// and the `±` after it is half the bracket: the most the midpoint can
+/// be off from the legacy projection at the strict read.
 String formatClockComparison({
   required NtsSyncedTime legacy,
-  required DateTime legacyUtc,
+  required DateTime legacyBefore,
+  required DateTime legacyAfter,
   required StrictSyncedTime strict,
   required DateTime strictUtc,
   required StrictClockProvenance provenance,
 }) {
+  final halfBracket = legacyAfter.difference(legacyBefore) ~/ 2;
+  final legacyUtc = legacyBefore.add(halfBracket);
   final delta = strictUtc.difference(legacyUtc).inMicroseconds;
   return '\u0394(strict\u2212legacy)=${formatSignedMicros(delta)} '
-      'at one instant\n'
+      '\u00b1${formatRtt(halfBracket.inMicroseconds.abs())} at one instant\n'
       '    \u2514\u2500 legacy  utc=${legacyUtc.toIso8601String()}  '
       'rtt=${formatRtt(legacy.roundTripMicros)}  '
       '\u03b8=${formatSignedMicros(legacy.offsetMicros)}  '
