@@ -848,6 +848,40 @@ void main() {
       return h;
     }
 
+    testWidgets('strict and compare modes raise the compact-layout floor so '
+        'the strict clock panel fits', (tester) async {
+      final compactBranch = find.descendant(
+        of: find.byType(TabBarView),
+        matching: find.byType(SingleChildScrollView),
+      );
+      final body = find.byType(TabBarView);
+      tester.view.physicalSize = const Size(865, 554);
+      addTearDown(tester.view.resetPhysicalSize);
+      final h = await pumpHome(tester, mode: ClockMode.legacy);
+      expect(tester.getSize(body).height, 450);
+      expect(compactBranch, findsNothing);
+
+      for (final mode in [ClockMode.strict, ClockMode.compare]) {
+        h.state.clockMode.value = mode;
+        await tester.pump();
+        expect(compactBranch, findsOneWidget, reason: '$mode');
+        expect(status, findsOneWidget, reason: '$mode');
+      }
+      h.state.clockMode.value = ClockMode.legacy;
+      await tester.pump();
+      expect(compactBranch, findsNothing);
+
+      tester.view.physicalSize = const Size(865, 674);
+      h.state.clockMode.value = ClockMode.strict;
+      await tester.pump();
+      expect(tester.getSize(body).height, 570);
+      expect(compactBranch, findsNothing);
+      await tester.tap(resolveButton);
+      await tester.pump();
+      expect(h.state.strictClock.value, isA<StrictClockBound>());
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('the dropdown offers all three modes and the strict clock '
         'panel shows outside legacy only', (tester) async {
       final h = await pumpHome(tester, mode: ClockMode.legacy);
