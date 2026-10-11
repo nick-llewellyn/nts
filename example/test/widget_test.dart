@@ -26,6 +26,7 @@ import 'package:nts_example/src/mock_api.dart';
 import 'package:nts_example/src/state/app_state.dart';
 import 'package:nts_example/src/state/favorites_store.dart';
 import 'package:nts_example/src/state/log_buffer.dart';
+import 'package:nts_example/src/state/log_entry.dart';
 import 'package:nts_example/src/state/nts_controller.dart';
 
 const _testCatalog = <NtsServerEntry>[
@@ -104,9 +105,10 @@ void _expectFieldKept(WidgetTester tester, Finder field, String text) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  final mockApi = MockNtsApi();
 
   setUpAll(() {
-    NtsRustLib.initMock(api: MockNtsApi());
+    NtsRustLib.initMock(api: mockApi);
   });
 
   setUp(() {
@@ -1005,6 +1007,66 @@ void main() {
         isTrue,
       );
       expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a clock fault during a strict call invalidates the context '
+        'until Re-resolve binds a new one', (tester) async {
+      final h = await pumpHome(tester, mode: ClockMode.strict);
+      addTearDown(() => mockApi.faultNextStrictRead = false);
+
+      await tester.tap(resolveButton);
+      await tester.pump();
+      mockApi.faultNextStrictRead = true;
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+
+      expect(mockApi.faultNextStrictRead, isFalse);
+      expect(tester.takeException(), isNull);
+      final strictEntries = [
+        for (final e in h.state.log.entries.value)
+          if (e.source == 'nts_get_time_strict') e,
+      ];
+      expect(strictEntries.any((e) => e.message.startsWith('OK ')), isFalse);
+      expect(
+        strictEntries.any(
+          (e) =>
+              e.level == NtsLogLevel.error &&
+              e.message.startsWith('ClockFault'),
+        ),
+        isTrue,
+      );
+      expect(
+        strictEntries.last.message,
+        'Strict clock context invalidated (sourceFault); it refuses every '
+        'further read, with no fallback — tap Re-resolve to bind a new one',
+      );
+      var snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.invalidation, StrictClockInvalidationReason.sourceFault);
+      expect(snapshot.hasSyncedTime, isFalse);
+      expect(
+        tester.widget<Text>(status).data,
+        contains('invalidated (sourceFault)'),
+      );
+      expect(enabled(tester, invalidateButton), isFalse);
+      expect(enabled(tester, exportButton), isFalse);
+      expect(enabled(tester, resolveButton), isTrue);
+
+      await tester.tap(resolveButton);
+      await tester.pump();
+      snapshot = h.state.strictClock.value! as StrictClockBound;
+      expect(snapshot.invalidation, isNull);
+
+      await tester.tap(find.text('Get Time'));
+      await tester.pump(const Duration(milliseconds: 900));
+      await tester.pump();
+      expect(
+        messages(
+          h.state,
+          'nts_get_time_strict',
+        ).any((m) => m.startsWith('OK ')),
+        isTrue,
+      );
     });
 
     testWidgets('Export reference reports the same-boot refusal and leaves '

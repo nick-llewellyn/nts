@@ -23,6 +23,7 @@ import 'package:nts/src/ffi/api/nts.dart'
         NtsClient,
         NtsClockBackend,
         NtsClockDescriptor,
+        NtsClockFault,
         NtsDnsPoolStats,
         NtsError,
         NtsServerSpec,
@@ -84,6 +85,12 @@ class MockNtsApi implements NtsRustLibApi {
 
   int _strictClockMicros() =>
       _kStrictClockBaseMicros + _strictClock.elapsedMicroseconds;
+
+  /// When set, the next strict clock read fails as a source fault (a
+  /// `clock_gettime` failure with `EIO`) and clears this flag. Lets
+  /// widget tests drive a clock fault through a strict call, which
+  /// invalidates the context it was read on.
+  bool faultNextStrictRead = false;
 
   /// Per-fake-client trust mode pinned at construction so the
   /// `client.trustMode()` getter round-trips. Uses an [Expando]
@@ -259,11 +266,17 @@ class MockNtsApi implements NtsRustLibApi {
   @override
   NtsStrictClockReading crateApiNtsNtsStrictClockRead({
     PlatformInt64? boundGeneration,
-  }) => NtsStrictClockReading(
-    micros: PlatformInt64Util.from(_strictClockMicros()),
-    backend: _kStrictClockBackend,
-    generation: PlatformInt64Util.from(_kStrictClockGeneration),
-  );
+  }) {
+    if (faultNextStrictRead) {
+      faultNextStrictRead = false;
+      throw const NtsClockFault.syscallFailed(errno: 5);
+    }
+    return NtsStrictClockReading(
+      micros: PlatformInt64Util.from(_strictClockMicros()),
+      backend: _kStrictClockBackend,
+      generation: PlatformInt64Util.from(_kStrictClockGeneration),
+    );
+  }
 
   @override
   NtsDnsPoolStats crateApiNtsNtsDnsPoolStats() => NtsDnsPoolStats(
