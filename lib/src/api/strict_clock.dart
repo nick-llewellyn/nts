@@ -4,13 +4,13 @@
 // its readings carry no provenance, the Rust side may have degraded
 // to a suspend-frozen process-local counter, and in mock mode it
 // falls back to `Stopwatch`. The types here are the strict,
-// provenance-attributed alternative described by the `nts-flr8`
-// contract: a `StrictClockContext` is resolved explicitly, names its
-// `ClockSourceDescriptor`, is bound to a live generation, and either
-// returns a `StrictReading` or throws a `StrictClockError` on that
-// call. A fault, a bridge reset, or a native generation change
-// invalidates the context permanently; explicit re-resolution yields
-// a new context and never repairs the old one.
+// provenance-attributed alternative: a `StrictClockContext` is
+// resolved explicitly, names its `ClockSourceDescriptor`, is bound to
+// a live generation, and either returns a `StrictReading` or throws a
+// `StrictClockError` on that call. A fault, a bridge reset, or a
+// native generation change invalidates the context permanently;
+// explicit re-resolution yields a new context and never repairs the
+// old one.
 //
 // Consumers never import generated FFI types: every FFI value is
 // converted at this boundary.

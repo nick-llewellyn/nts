@@ -32,6 +32,11 @@ analysis_options.yaml
 # canonical entry point is example/main.dart.
 test/
 
+# On-device strict clock evidence probe (maintainer-only; see
+# DEVELOPMENT.md). Its multi-engine host code lives in the excluded
+# android/ and ios/ scaffolding, and it imports a private FFI binding.
+lib/clock_probe_main.dart
+
 # Defensive: also covered by root .gitignore but listed for clarity
 pubspec.lock
 .dart_tool/
