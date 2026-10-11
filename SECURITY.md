@@ -2,9 +2,9 @@
 
 ## Supported Versions
 
-Security fixes ship in a new release from `main`. Earlier major
-versions do not receive backports, so upgrade to the latest 10.x
-release to get them.
+Security fixes ship in a new release of the latest major version.
+Earlier major versions do not receive backports, so upgrade to the
+latest 10.x release to get them.
 
 | Version | Supported          |
 | ------- | ------------------ |
