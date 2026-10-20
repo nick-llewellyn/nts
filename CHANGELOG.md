@@ -63,6 +63,15 @@ tarball.
   Documentation only — no behavioural change.
   ([#391](https://github.com/nick-llewellyn/nts/pull/391))
 
+### Packaging
+
+- The pub.dev screenshot now shows the current example app, including
+  the strict-clock mode selector and status panel added since the
+  previous capture in 5.2.4. It replaces `screenshot_gui_example.webp`
+  with `example_gui_overview.webp` (lossy WebP, 2184×2088, alpha
+  kept). No code change.
+  ([#392](https://github.com/nick-llewellyn/nts/pull/392))
+
 ## 10.0.0
 
 ### Breaking
