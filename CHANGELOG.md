@@ -42,6 +42,23 @@ tarball.
   fix, so no manifest or source change was needed.
   ([#388](https://github.com/nick-llewellyn/nts/pull/388))
 
+### Documentation
+
+- The docs now describe correctly when the Native Assets build hook
+  runs. They said `dart run` and `flutter test` skip
+  `hook/build.dart` and that it runs only under `flutter run` and
+  `flutter build`. On every supported SDK (Dart 3.10 / Flutter 3.38
+  and later) all four commands run it, so each needs rustup — mock-mode
+  test runs and the example CLIs' `--mock` mode included, although
+  they load no native library. The advice for non-Flutter callers is
+  unchanged, but the stated reason is corrected: the hook does compile
+  the crate, yet only a Flutter app build puts the library where the
+  bridge loads it, so a `dart run` script still needs
+  `cargo build --release` in `rust/` or an explicit path
+  (`externalLibrary:`, or `--library` for the example CLIs).
+  Documentation only — no behavioural change.
+  ([#391](https://github.com/nick-llewellyn/nts/pull/391))
+
 ## 10.0.0
 
 ### Breaking

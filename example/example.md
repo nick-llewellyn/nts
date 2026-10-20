@@ -35,9 +35,11 @@ The same code ships as a runnable Flutter target at
 // primitives)" section for the full rationale.
 //
 // Run from a Flutter target (`flutter run -t example/main.dart`)
-// so the Native Assets pipeline bundles the Rust dylib. Plain
-// `dart run` does not invoke build hooks; see `example/bin/nts_cli.dart`
-// for the explicit `ExternalLibrary.open` loader pattern needed there.
+// so the Native Assets pipeline bundles the Rust dylib into the app.
+// `dart run` also runs the build hook (Dart 3.10+), but the bridge's
+// default loader does not load the library it builds; see
+// `example/bin/nts_cli.dart` for the explicit `ExternalLibrary.open`
+// loader pattern needed there.
 
 // ignore_for_file: avoid_print
 

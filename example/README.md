@@ -190,9 +190,8 @@ fvm flutter run -d macos -t lib/main.dart --dart-define=NTS_BRIDGE=mock
 ```
 
 If bridge initialization throws at startup (typically because rustup is
-missing, the build hook was skipped — `dart run` instead of
-`flutter run` — or the host triple isn't pinned in
-`rust-toolchain.toml`), what happens depends on how far it got:
+missing or the host triple isn't pinned in `rust-toolchain.toml`),
+what happens depends on how far it got:
 
 * **Failed before installing anything** — the usual case, and the one
   every cause listed above produces. The app falls back to the mock so
@@ -246,8 +245,11 @@ are convenient starting points but in no way special.
 
 ### Prerequisite — build the host-arch dylib
 
-Unlike `flutter run`, plain `dart run` does **not** trigger the Native
-Assets build hook. The CLI loads the dylib explicitly via
+`dart run` runs the Native Assets build hook just as `flutter run`
+does (on every supported SDK, Dart ≥ 3.10 / Flutter ≥ 3.38), so
+rustup must be on your `PATH` even for `--mock` runs. Only a Flutter
+app build, though, bundles the library the hook compiles where the
+bridge can load it. The CLI instead loads the dylib explicitly via
 `ExternalLibrary.open(path)`, so the binary must exist on disk before
 the first non-mock invocation:
 
@@ -265,7 +267,7 @@ The build drops `libnts_rust.{dylib|so|dll}` into
 `rust/target/release/`. The CLI auto-locates that path when invoked
 either from `example/` or from the repo root; pass `--library
 <absolute-path>` to override, or `--mock` to skip dylib loading
-entirely.
+entirely (the build hook still runs).
 
 ### Usage
 
@@ -529,8 +531,9 @@ curated catalog.
 
 ### Prerequisite — the host-arch dylib (same as `nts_cli`)
 
-Identical to `nts_cli`: plain `dart run` does not trigger the Native
-Assets build hook, so the dylib must exist on disk before the first
+Identical to `nts_cli`: `dart run` runs the Native Assets build hook
+(so rustup is required), but the tool does not load the library the
+hook builds, so the dylib must exist on disk before the first
 non-mock invocation. Build it once with `cargo build --release` from
 `rust/` (full detail in the
 [`nts_cli` prerequisite](#prerequisite--build-the-host-arch-dylib)

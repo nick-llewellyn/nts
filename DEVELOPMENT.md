@@ -35,10 +35,16 @@ else mandatory. The load-bearing facts:
   above the declared `flutter: '>=3.38.0'` floor on purpose —
   earlier 3.38.x patches do not build native dependencies through
   the build hook reliably.
-- **Native dylib for local testing:** most Dart-side work needs no
-  manual build — the mock-mode suite runs without a dylib, and
-  `flutter run` builds one via the hook. The one manual step is the
-  opt-in live Dart suite, which needs
+- **Native dylib for local testing:** on every supported SDK
+  (Flutter ≥ 3.38, Dart ≥ 3.10), `flutter test`, `flutter run`,
+  `flutter build` and `dart run` all run the Native Assets hook, so
+  each needs rustup — even the mock-mode suite and the example
+  CLIs' `--mock` runs, which load no dylib. Only `flutter run` and
+  `flutter build` bundle the hook's library where the bridge loads
+  it; under `flutter test` and `dart run` the FRB default loader
+  reads `rust/target/release/` instead. Most Dart-side work still
+  needs no manual build; the one manual step is the opt-in live Dart
+  suite, which needs
   `(cd rust && cargo build --release -p nts_rust)` first; see
   [Live Dart integration suite](#live-dart-integration-suite-testlive).
 
@@ -51,7 +57,7 @@ Six tools, distinct roles.
 | `cargo` (in `rust/`) | Manage Rust deps, run unit tests | During Rust development |
 | `tool/check_bindings.dart` | Regenerate, patch, and verify the Dart bindings | After any change to `rust/src/api/*.rs`, and before pushing it |
 | `flutter_rust_bridge_codegen` | Underlying generator, invoked by the script above — not run directly | Never on its own; see [Regenerate bindings](#regenerate-bindings) |
-| `hook/build.dart` (Native Assets) | Compile + bundle the dylib for Flutter | Automatically on `flutter build` |
+| `hook/build.dart` (Native Assets) | Compile the dylib; Flutter app builds also bundle it | Automatically on `flutter run`, `flutter build`, `flutter test` and `dart run` |
 | `tool/check_doc_snippets.dart` | Validate Dart code snippets in documentation | Before pushing changes that touch docs or public API |
 | `tool/clock_evidence/` | Record and audit the strict clock's platform evidence | After collecting device evidence; see [Strict clock evidence harness](#strict-clock-evidence-harness-toolclock_evidence) |
 
@@ -257,10 +263,12 @@ flutter test --run-skipped tool/clock_evidence/
 
 That build+run pair is **host-only** (macOS, Linux, Windows): the
 explicit `cargo build --release` places a host-target dylib where
-`NtsRustLib.init()` looks (`rust/target/release/`), and `flutter test`
-never invokes the Native Assets hook (`hook/build.dart`) that would
-otherwise cross-compile it. It settles the `macos`/`linux`/`windows`
-device-independent rows the matrix marks `method: host`.
+`NtsRustLib.init()` looks (`rust/target/release/`). `flutter test`
+does run the Native Assets hook (`hook/build.dart`), but only for
+the host, and the bridge never loads that copy; building for a
+device takes `flutter run`, below. It settles the
+`macos`/`linux`/`windows` device-independent rows the matrix marks
+`method: host`.
 
 The matrix's `android`/`ios` rows (`method: device`) come from
 `example/lib/clock_probe_main.dart` instead: the same probes, run
@@ -358,8 +366,9 @@ Two implementation constraints worth not re-breaking:
   `ke_live_cloudflare` because it is a KE-only probe already subsumed by
   the four `api/nts` probes.
 - **The release dylib must be built before the Dart step.**
-  `NtsRustLib.init()` loads from `rust/target/release/` and `flutter
-  test` does not run the Native Assets hook, so without the explicit
+  `NtsRustLib.init()` loads from `rust/target/release/`. `flutter
+  test` runs the Native Assets hook, but the bridge does not load the
+  library the hook builds, so without the explicit
   `cargo build --release --locked` the Dart suite fails at load.
 
 Reproduce a leg locally with the same commands the workflow runs:

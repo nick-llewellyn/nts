@@ -47,14 +47,20 @@ the underlying RFC 8915 layering and cryptographic specifics.
   must be consumed from a Flutter app — `dart pub add nts` from a
   pure-Dart project will not resolve.
 - **`rustup` on your `PATH`.** The protocol core ships as Rust
-  source and is compiled on your machine by the Flutter Native
-  Assets build hook the first time you run `flutter run` /
-  `flutter build`. The hook reads `rust/rust-toolchain.toml` via
-  rustup, which automatically installs the pinned toolchain
-  (currently Rust 1.98.0) and the cross-compile target for the
-  platform being built. No manual `cargo` invocation, dylib
-  copying, or build configuration is needed — but without rustup
-  installed the build fails at the hook step.
+  source and is compiled on your machine by the package's Native
+  Assets build hook (`hook/build.dart`). On every supported SDK
+  (build hooks are stable from Dart 3.10 / Flutter 3.38) the hook
+  runs on `flutter run`, `flutter build`, `flutter test` and
+  `dart run` in any project that depends on this package. It reads
+  `rust/rust-toolchain.toml` via rustup, which automatically
+  installs the pinned toolchain (currently Rust 1.98.0) and the
+  cross-compile target for the platform being built. In a Flutter
+  app no manual `cargo` invocation, dylib copying, or build
+  configuration is needed — but without rustup installed each of
+  those commands fails at the hook step, including test runs that
+  never load the native library. Outside a Flutter app the compiled
+  library is not loaded for you; see
+  [Non-Flutter Dart callers](#non-flutter-dart-callers-must-pass-externallibrary-explicitly).
 
   New to Rust? Installing rustup is a one-time step; see the
   [official install page](https://rustup.rs/) (or the longer-form
@@ -73,7 +79,7 @@ the underlying RFC 8915 layering and cryptographic specifics.
 
   The same mechanism covers toolchain *upgrades*: when a release of
   this package bumps the pin in `rust/rust-toolchain.toml`, the next
-  `flutter run` / `flutter build` auto-downloads the new version —
+  command that runs the hook auto-downloads the new version —
   no `rustup update` or other manual step is needed. The superseded
   toolchain stays on disk; reclaim the space with
   `rustup toolchain uninstall <old-version>` if you like.
@@ -746,20 +752,27 @@ boundary.
 ### Non-Flutter Dart callers must pass `externalLibrary` explicitly
 
 The automatic library resolution described under
-[Prerequisites](#prerequisites) is a Flutter-specific feature: the
-Native Assets build hook only runs inside `flutter run` /
-`flutter build`, where it compiles the Rust crate and hands bridge
-initialization a controlled absolute path to the resulting dynamic
-library.
+[Prerequisites](#prerequisites) is a Flutter-app feature. On every
+supported SDK (Dart ≥ 3.10, Flutter ≥ 3.38) the Native Assets build
+hook runs under each command below and compiles the Rust crate, but
+only a Flutter app build puts the resulting dynamic library where
+bridge initialization looks for it:
+
+| Command | Runs `hook/build.dart` (needs rustup) | Bridge loads the hook's library |
+|---|---|---|
+| `flutter run` / `flutter build` | Yes | Yes — bundled into the app |
+| `flutter test` | Yes, without printing progress | No |
+| `dart run` | Yes | No |
 
 Pure Dart environments — a `dart run` CLI such as the bundled
 [`example/bin/nts_cli.dart`](example/bin/nts_cli.dart), a
-server-side script, an integration-test harness — never trigger
-that hook. Nothing compiles the crate for you (build it with
-`cargo build --release` in `rust/`), and nothing supplies a load
-path: without one, the FRB-generated default loader falls back to
-resolving the *relative* directory `rust/target/release/` against
-the current working directory.
+server-side script, an integration-test harness — therefore get the
+crate compiled but no load path for it: the hook's output stays in
+the build cache under `.dart_tool/`, which the FRB-generated default
+loader never reads. Without an explicit path, that loader falls back
+to resolving the *relative* directory `rust/target/release/` against
+the current working directory, so the library has to be built there
+separately (`cargo build --release` in `rust/`).
 
 That fallback is a security problem, not just a convenience gap.
 Initializing with no `externalLibrary:` argument from a working
