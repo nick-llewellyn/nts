@@ -16,9 +16,10 @@ topics:
 
 screenshots:
   - description: >-
-      Example app: NTS server catalog with region filtering,
-      favourites, and live authenticated time query results.
-    path: screenshots/screenshot_gui_example.webp
+      Example app: NTS server catalog with region filtering and
+      favourites, a strict-clock time query result, and its trust
+      and clock status.
+    path: screenshots/example_gui_overview.webp
 
 # Explicit platform allow-list. RFC 8915 requires raw TCP (NTS-KE on
 # :4460) and raw UDP (NTPv4 on :123) sockets, neither of which is
