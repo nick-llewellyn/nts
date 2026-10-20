@@ -55,7 +55,11 @@ tarball.
   the crate, yet only a Flutter app build puts the library where the
   bridge loads it, so a `dart run` script still needs
   `cargo build --release` in `rust/` or an explicit path
-  (`externalLibrary:`, or `--library` for the example CLIs).
+  (`externalLibrary:`, or `--library` for the example CLIs). The
+  example app's troubleshooting no longer presents a missing rustup or
+  an unpinned host triple as recoverable through the runtime mock
+  fallback or `--dart-define=NTS_BRIDGE=mock`: both fail the hook, so
+  the build stops before the app starts whichever bridge is selected.
   Documentation only — no behavioural change.
   ([#391](https://github.com/nick-llewellyn/nts/pull/391))
 

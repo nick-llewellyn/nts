@@ -181,22 +181,25 @@ fvm flutter run -d linux -t lib/main.dart
 The same target spelled from the repo root is
 `-t example/lib/main.dart`.
 
-To exercise the UI without network or on a host whose target triple
-isn't pinned in `rust/rust-toolchain.toml`, switch to the in-memory
-fake via the `NTS_BRIDGE` dart-define:
+To exercise the UI without network, switch to the in-memory fake via
+the `NTS_BRIDGE` dart-define:
 
 ```bash
 fvm flutter run -d macos -t lib/main.dart --dart-define=NTS_BRIDGE=mock
 ```
 
-If bridge initialization throws at startup (typically because rustup is
-missing or the host triple isn't pinned in `rust-toolchain.toml`),
-what happens depends on how far it got:
+The dart-define selects the bridge at runtime only; it does not skip
+the build hook. A missing rustup, or a host triple not pinned in
+`rust/rust-toolchain.toml`, fails the hook in either mode, so
+`flutter run` stops with a build error before the app starts.
 
-* **Failed before installing anything** — the usual case, and the one
-  every cause listed above produces. The app falls back to the mock so
-  the rest of the UI stays usable: a banner reports the load error and
-  the header label switches to `mock (load failed)`.
+If bridge initialization throws at startup instead, what happens
+depends on how far it got:
+
+* **Failed before installing anything** — the library failed to load
+  or its codegen version did not match. The app falls back to the mock
+  so the rest of the UI stays usable: a banner reports the load error
+  and the header label switches to `mock (load failed)`.
 * **Failed after installing** — a Rust-side initializer threw once FRB
   had already taken the entrypoint. That state cannot be replaced in
   the process and no mock can stand in for it, so the app renders a
