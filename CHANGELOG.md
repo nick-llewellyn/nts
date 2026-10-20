@@ -6,6 +6,42 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 10.0.1
+
+### Security
+
+- `rustls` moves to 0.23.46, clearing four advisories against the TLS
+  stack that performs the NTS-KE handshake. None of them can be
+  triggered through this package's TLS configuration: it uses the
+  `ring` provider with its default key exchange groups and the
+  built-in session cache, and enables neither Encrypted Client Hello
+  nor the `brotli` feature. The release still matters because the
+  native library is built from the `rust/Cargo.lock` this package
+  ships, so an app on 10.0.0 keeps building with 0.23.45 until it
+  upgrades.
+  - RUSTSEC-2026-0346 (GHSA-c8m5-c952-6cm4): the `Debug` output of
+    client session values included the TLS 1.2 master secret or the
+    TLS 1.3 resumption PSK. Only custom `ClientSessionStore`
+    implementations that format those values are affected; the
+    built-in session cache redacts them.
+  - RUSTSEC-2026-0347 (GHSA-vp88-798v-h67f): when a server rejected
+    Encrypted Client Hello, application data written before the
+    handshake completed was sent to the client-facing server. Only
+    clients using `EchMode::Enable` are affected.
+  - RUSTSEC-2026-0348 (GHSA-h2v8-394m-p7vv): the certificate
+    decompressor behind the non-default `brotli` feature could be made
+    to allocate 1 GiB before the peer was authenticated.
+  - RUSTSEC-2026-0349 (GHSA-w44r-93j7-qv28): the client recorded the
+    server's chosen key exchange group before authenticating the
+    server, so a network attacker could make later connections to
+    that server name offer only a classical key share instead of a
+    hybrid post-quantum one. The `ring` provider offers no hybrid
+    group, so there is no post-quantum exchange here to downgrade.
+
+  Lockfile-only — the declared `0.23` constraint already admitted the
+  fix, so no manifest or source change was needed.
+  ([#388](https://github.com/nick-llewellyn/nts/pull/388))
+
 ## 10.0.0
 
 ### Breaking
