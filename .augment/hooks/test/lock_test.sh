@@ -843,13 +843,16 @@ teardown
 
 # --- a background record outlives a hand-off that failed ---------------
 # Once the record is gone the registry entry is the only thing naming the
-# store, so a SessionEnd that could not write one must keep the record.
+# store, so a SessionEnd that could not write one must keep the record. An
+# older entry for the store is no proof the hand-off landed: whoever holds
+# the guard may be settling it, so the case starts with one in place.
 setup
 OUT=$(mktemp -d)
 mkdir -p "$OUT/.beads"
 ASYNC="$WS/.beads/.augment-sync.async"
 REG="$WS/.beads/.augment-sync.external"
 fire "bd -C $OUT close CHR-1 &"
+reg_write "$REG" "$OUT"
 sleep 300 &
 HOLDER=$!
 hold_lock "$REG.guard" "$HOLDER"

@@ -520,8 +520,13 @@ for_each_registry read_registry
 # follows finds the marker. Every entry rather than the one, since the dead
 # holder's candidate is not recoverable from the guard; the cost is a no-op
 # commit per entry, once.
+#
+# Returns non-zero when the store could not be both recorded and marked under
+# the guard, so a caller holding the only other record of it -- a background
+# record -- keeps that one. An entry read afterwards without the guard is no
+# such proof: it may be an older one that a concurrent settle is removing.
 remember_external() {
-  local candidate="$1" existing
+  local candidate="$1" existing status=0
   [ -n "$REGISTRY" ] && [ -d "$candidate/.beads" ] || return 0
   for existing in ${WS_ROOTS[@]:+"${WS_ROOTS[@]}"}; do
     [ "$existing" = "$candidate" ] && return 0
@@ -533,7 +538,7 @@ remember_external() {
   # reachable for as long as this invocation runs.
   if ! take_guard_waiting "$REGISTRY_GUARD" 5; then
     WARNINGS+=("beads: could not record the external bead store ${candidate}; a failed sync there will not be retried later in this session.")
-    return 0
+    return 1
   fi
   [ "$GUARD_RECLAIMED" -eq 1 ] && mark_registry_owed
   # Deduplicated by path, which is sound only because an entry is no longer
@@ -553,10 +558,13 @@ remember_external() {
     if : >"$REGISTRY.$$" &&
       { [ ! -e "$REGISTRY" ] || cat "$REGISTRY" >>"$REGISTRY.$$"; } &&
       printf '%s\0' "$candidate" >>"$REGISTRY.$$"; then
-      mv -f "$REGISTRY.$$" "$REGISTRY" ||
+      mv -f "$REGISTRY.$$" "$REGISTRY" || {
+        status=1
         WARNINGS+=("beads: could not record the external bead store ${candidate}; a failed sync there will not be retried later in this session.")
+      }
     else
       rm -f "$REGISTRY.$$"
+      status=1
       WARNINGS+=("beads: could not record the external bead store ${candidate}; a failed sync there will not be retried later in this session.")
     fi
   fi
@@ -568,8 +576,9 @@ remember_external() {
     OWED_UNMARKED+=("$candidate")
     WARNINGS+=("beads: could not mark the external bead store ${candidate} as owed a sync; its entry is kept so a later invocation syncs it, but run 'bd dolt push --remote origin' there if the write matters.")
   fi
+  [ -e "$candidate/.beads/.augment-sync.pending" ] || status=1
   drop_lock "$REGISTRY_GUARD"
-  return 0
+  return "$status"
 }
 
 # Whether the registry being written already names $1. Read as NUL-delimited
@@ -816,23 +825,14 @@ remember_async() {
   return 0
 }
 
-# Whether the store $1 is covered without its background record: it is a
-# workspace root, which every SessionEnd syncs, or the registry names it.
-handed_off() {
-  local existing
-  for existing in ${WS_ROOTS[@]:+"${WS_ROOTS[@]}"}; do
-    [ "$existing" = "$1" ] && return 0
-  done
-  registry_has "$1"
-}
-
 # SessionEnd's half: every store the background list $1 names goes back into
 # the registry, marker raised, and into this invocation's sync set. A record
-# is then kept unless it is this conversation's and its store is covered
-# without it. `remember_external` can fail to record -- a guard it cannot take,
-# a write that fails -- and dropping the record then left the store named by
-# nothing if this sync failed too. A store that no longer holds a `.beads` is
-# dropped whoever recorded it, as the prune drops its registry entry.
+# is then kept unless it is this conversation's and `remember_external` says
+# it recorded and marked the store, or needed to do neither for a workspace
+# root. It can fail to -- a guard it cannot take, a write that fails -- and
+# dropping the record then left the store named by nothing if this sync failed
+# too. A store that no longer holds a `.beads` is dropped whoever recorded it,
+# as the prune drops its registry entry.
 #
 # The list is rewritten by replacement, under its guard, after every store has
 # been handed off, so a SessionEnd killed part-way leaves it whole for the
@@ -848,8 +848,7 @@ take_async() {
   while IFS= read -r -d '' owner && IFS= read -r -d '' entry; do
     [ -d "$entry/.beads" ] || continue
     add_root "$entry"
-    remember_external "$entry"
-    [ "$owner" = "$CONVERSATION_ID" ] && handed_off "$entry" && continue
+    remember_external "$entry" && [ "$owner" = "$CONVERSATION_ID" ] && continue
     printf '%s\0%s\0' "$owner" "$entry" >>"$list.$$" 2>/dev/null || failed=1
     kept=1
   done <"$list"
