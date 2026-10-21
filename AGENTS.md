@@ -1117,8 +1117,8 @@ cannot name (a `-C` path built from a substitution, a pattern such as
 have run) is reported as unresolved rather than guessed, and so is script
 the scan cannot read at all (`eval "$X"`, `bash -c "$(…)"`); act on that
 warning the same way. A store outside the workspace roots written by a
-command the shell does not wait for (`&`, `coproc`) is synced again at
-`SessionEnd`, since that write can land after the tool call returns.
+command the shell does not wait for (`&`, `coproc`, `<(…)`) is synced again
+at `SessionEnd`, since that write can land after the tool call returns.
 
 **Act on hook warnings.** Failures are prefixed `beads:` — e.g. `beads:
 'bd dolt push' failed in <root>, local bead writes are NOT on DoltHub.` —

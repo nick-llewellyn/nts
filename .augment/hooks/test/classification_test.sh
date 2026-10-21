@@ -2250,11 +2250,16 @@ check_target '/tmp/store' 'sudo bash -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'env OUT=/tmp/decoy bash -c "bd -C /tmp/store close CHR-1"'
 
 # --- background writes ---------------------------------------------------
-# The shell does not wait for a command after `&` or in a coprocess, so the
-# tool call can return, and the hook sync, before the write lands.
+# The shell does not wait for a command after `&`, in a coprocess or in a
+# process substitution, so the tool call can return, and the hook sync,
+# before the write lands.
 check_async '/tmp/store' 'bd -C /tmp/store close CHR-1 &'
 check_async '/tmp/store' '(sleep 5; bd -C /tmp/store close CHR-1) >/dev/null 2>&1 &'
 check_async '/tmp/store' 'coproc bd -C /tmp/store close CHR-1'
+check_async '/tmp/store' ': < <(sleep 5; bd -C /tmp/store close CHR-1)'
+check_async '/tmp/store' 'cat <(bd -C /tmp/store close CHR-1)'
+# A command substitution is waited for.
+check_async '' 'echo "$(bd -C /tmp/store close CHR-1)"'
 check_async '/tmp/store' 'bash -c "bd -C /tmp/store close CHR-1 &"'
 check_async '/tmp/store' 'f() { bd -C /tmp/store close CHR-1; }; f &'
 # Still a target to sync now, as the write may already have landed.
@@ -2284,6 +2289,9 @@ check_target "$EXT" "set -P; cd $WS_DIR/link/.. && bd close CHR-1"
 check_target "$EXT" "set -o physical; cd $WS_DIR/link/.. && bd close CHR-1"
 check_target "$EXT" "env -C $WS_DIR/link/.. bd close CHR-1"
 check_target "$WS_DIR" "set -P; set +P; cd $WS_DIR/link/.. && bd close CHR-1"
+# `shopt -o` is another spelling of `set -o`.
+check_target "$EXT" "shopt -so physical; cd $WS_DIR/link/.. && bd close CHR-1"
+check_target "$WS_DIR" "set -P; shopt -uo physical; cd $WS_DIR/link/.. && bd close CHR-1"
 # The last of `-L` and `-P` wins, as in bash.
 check_target "$WS_DIR" "cd -P -L $WS_DIR/link/.. && bd close CHR-1"
 # A `set -P` that may not have run leaves the two readings in doubt.

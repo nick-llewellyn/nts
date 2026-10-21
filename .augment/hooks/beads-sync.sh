@@ -770,8 +770,8 @@ prune_registry() {
   return 0
 }
 
-# A write the command left running -- after `&`, or in a coprocess -- can land
-# after this invocation has synced its store. For a store outside the roots the
+# A write the command left running -- after `&`, in a coprocess or in a
+# process substitution -- can land after this invocation has synced its store. For a store outside the roots the
 # settle then drops the only entry naming it, and the write sits local with
 # nothing able to find it again. So such a store is also recorded in the first
 # root's `.augment-sync.async`, which SessionEnd alone reads: it hands each

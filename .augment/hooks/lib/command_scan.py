@@ -9,8 +9,9 @@ path, then one store path per target found, in the order they were found. Both
 counts come before the paths so the paths remain everything past them. NUL
 rather than newline because a path may contain a newline and a target that has
 been silently truncated names some other store. A path written by a command
-the shell does not wait for -- one after `&`, or in a coprocess -- carries a
-leading `&`, which no path reported here can begin with: every one is absolute.
+the shell does not wait for -- one after `&`, in a coprocess or in a process
+substitution -- carries a leading `&`, which no path reported here can begin
+with: every one is absolute.
 
 The command is parsed by `shfmt --to-json` rather than scanned as text. A
 regex over raw text cannot see a quote, an escape, a command prefix or an
@@ -2638,8 +2639,15 @@ class Scanner:
     def node_subs(self, node):
         if isinstance(node, dict):
             kind = node.get("Type")
-            if kind in ("CmdSubst", "ProcSubst"):
+            if kind == "CmdSubst":
                 self.sub_scan(node.get("Stmts") or ())
+                return
+            # A process substitution is not waited for: `: < <(sleep 5; bd -C
+            # /ext close X)` returns before the write lands. See
+            # `in_background`.
+            if kind == "ProcSubst":
+                self.in_background(
+                    lambda: self.sub_scan(node.get("Stmts") or ()))
                 return
             # Arithmetic in a word assigns in this shell as `((...))` does:
             # `echo $((OUT=1))` and `${a[OUT=1]}` both set OUT.
@@ -3810,9 +3818,9 @@ class Scanner:
         `shopt -s lastpipe; true | cd /external; bd close X` writes
         /external's store where a scan that put every member in a subshell
         restored the old cwd. `-o` makes `shopt` a spelling of `set -o`, so
-        `shopt -so allexport` is `set -a`. Without `-s` or `-u` the builtin
-        only reports, and the rest of `shopt`'s options say nothing about
-        which store a command opens.
+        `shopt -so allexport` is `set -a` and `shopt -so physical` is `set
+        -P`. Without `-s` or `-u` the builtin only reports, and the rest of
+        `shopt`'s options say nothing about which store a command opens.
         """
         setting = None
         set_o = False
@@ -3845,6 +3853,8 @@ class Scanner:
             # flag that set it, so whatever it could have named is unknown.
             if set_o or "allexport" in names:
                 self.scope.allexport = UNKNOWN
+            if set_o or "physical" in names:
+                self.scope.physical = UNKNOWN
             if not set_o:
                 self.scope.lastpipe = UNKNOWN
             return
@@ -3854,6 +3864,8 @@ class Scanner:
         if set_o:
             if "allexport" in names:
                 self.scope.allexport = value
+            if "physical" in names:
+                self.scope.physical = value
         elif "lastpipe" in names:
             self.scope.lastpipe = value
 
