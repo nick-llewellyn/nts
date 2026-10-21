@@ -1174,10 +1174,14 @@ check_unresolved "sudo -D $STORE bd close CHR-1"
 check_target "$STORE" "env -vC$STORE bd close CHR-1"
 check_target "$STORE" "env -iC$STORE bd close CHR-1"
 check_target "$STORE" "sudo -nD$STORE bd -C sub/deeper close CHR-1"
-# A relative `-C` resolves against the cwd in force before it, and a second
-# against the first: the wrapper's chdir calls run in order.
+# A relative `-C` resolves against the cwd in force before the wrapper. Of
+# several in one `env` only the last counts, `env` keeping only that one, but
+# a second wrapper's resolves against the first's.
+mkdir -p "$CD/alt/repo/.beads"
 check_target "$STORE" "cd $CD && env -C repo bd close CHR-1"
-check_target "$STORE" "env -C $CD -C repo bd close CHR-1"
+check_target "$STORE" "cd $CD && env -C $CD/alt -C repo bd close CHR-1"
+check_target "$STORE" "cd $CD && env --chdir=$CD/alt --chdir repo bd close CHR-1"
+check_target "$CD/alt/repo" "env -C $CD/alt env -C repo bd close CHR-1"
 # A `-C` of its own is where `bd` starts looking, and it starts from wherever
 # the wrapper put it.
 check_target "$STORE" "env -C $STORE bd -C sub/deeper close CHR-1"
@@ -1437,6 +1441,11 @@ check_unresolved 'CS_V=/tmp/a; mapfile CS_V; bd -C "$CS_V" close CHR-1'
 # A sourced file may assign anything, so every name is in doubt after it.
 check_unresolved 'CS_V=/tmp/a; source ./lib.sh; bd -C "$CS_V" close CHR-1'
 check_unresolved 'CS_V=/tmp/a; . ./lib.sh; bd -C "$CS_V" close CHR-1'
+# So is one sourced in a branch or by `eval`, even a name nothing here
+# assigned: the file may export BEADS_DIR.
+check_unresolved "if true; then source ./select-store.sh; fi; cd $STORE; bd close CHR-1"
+check_unresolved "true && { . ./select-store.sh; }; cd $STORE; bd close CHR-1"
+check_unresolved "eval '. ./select-store.sh'; cd $STORE; bd close CHR-1"
 # Only the name written is touched: an arithmetic read, another name, or a
 # `printf` to stdout leaves the value standing.
 check_target '/tmp/a' 'CS_V=/tmp/a; : $((CS_W = 1)); bd -C "$CS_V" close CHR-1'
@@ -2248,6 +2257,13 @@ check_unresolved 'sudo OUT=/tmp/store bash -c "bd -C \"\$OUT\" close CHR-1"'
 check_target '/tmp/store' 'sudo bash -c "bd -C /tmp/store close CHR-1"'
 # The wrapper's assignments reach the child only, not the command after it.
 check_target '/tmp/store' 'env OUT=/tmp/decoy bash -c "bd -C /tmp/store close CHR-1"'
+# A later prefix assignment sees an earlier one in dash, zsh and bash from
+# 4.0, but not everywhere in bash 3.2, so in bash a value the two readings
+# disagree on is unknown, and one they agree on stands.
+check_unresolved 'D=/tmp/old; D=/tmp/store BEADS_DIR="$D/.beads" bd close CHR-1'
+check_unresolved 'D=/tmp/old; D=/tmp/store OUT="$D" bash -c "bd -C \"\$OUT\" close CHR-1"'
+check_target '/tmp/store' 'D=/tmp/store; A=1 OUT="$D" bash -c "bd -C \"\$OUT\" close CHR-1"'
+check_target '/tmp/store' "dash -c 'D=/tmp/old; D=/tmp/store OUT=\"\$D\" bash -c \"bd -C \\\"\\\$OUT\\\" close CHR-1\"'"
 
 # --- background writes ---------------------------------------------------
 # The shell does not wait for a command after `&`, in a coprocess or in a
@@ -2271,6 +2287,11 @@ check_async '' "cd $CD/other & bd -C /tmp/store close CHR-1"
 # Only the store written in the background is.
 check_async '/tmp/b' 'bd -C /tmp/a close CHR-1; bd -C /tmp/b close CHR-2 &'
 check_target '/tmp/a /tmp/b' 'bd -C /tmp/a close CHR-1; bd -C /tmp/b close CHR-2 &'
+# A plain `bd` in the background may write a store `bd init` has not made
+# yet, so its directory is reported, as a `-C` naming it would be.
+check_async "$CD/one" "(cd $CD/one; bd init; bd create X) &"
+check_async "$CD/one" "(cd $CD/one && bd init) &"
+check_async "$CD/one" "(bd -C $CD/one init) &"
 
 # --- symlinks ------------------------------------------------------------
 # `link` points into ext, which holds a store, from ws, which holds another.
@@ -2298,11 +2319,15 @@ check_target "$WS_DIR" "set -P; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "bash -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "bash -o physical -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "bash -P +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
-# bash also starts in physical mode when its SHELLOPTS lists it, before its
-# own options. Only bash reads it; `sh` may or may not be bash.
+# bash also starts in physical mode when its SHELLOPTS lists it. It reads
+# SHELLOPTS after its own options, and SHELLOPTS only turns options on, so a
+# `+P` does not undo it. Only bash reads it; `sh` may or may not be bash.
 check_target "$EXT" "env SHELLOPTS=physical bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "env SHELLOPTS=braceexpand:physical bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
-check_target "$WS_DIR" "env SHELLOPTS=physical bash +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "env SHELLOPTS=physical bash +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "env SHELLOPTS=physical bash +o physical -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "export SHELLOPTS; set -P; bash +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "env SHELLOPTS=braceexpand bash -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "env SHELLOPTS=physical dash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_unresolved "env SHELLOPTS=physical sh -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 # A privileged shell ignores an inherited SHELLOPTS; its own `-P` still counts,
@@ -2311,6 +2336,7 @@ check_target "$WS_DIR" "env SHELLOPTS=physical bash -p -c 'cd $WS_DIR/link/.. &&
 check_target "$WS_DIR" "env SHELLOPTS=physical bash -o privileged -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "env SHELLOPTS=physical bash -p -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "env SHELLOPTS=physical bash -p +p -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "env SHELLOPTS=physical bash -p +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 # An exported SHELLOPTS carries the parent's physical mode as it is now, not
 # as it was inherited; a wrapper that drops it, or clears the environment,
 # leaves the child logical, and a prefix assignment to it is refused.
@@ -2321,6 +2347,22 @@ check_target "$WS_DIR" "export SHELLOPTS; set -P; env -u SHELLOPTS bash -c 'cd $
 check_target "$WS_DIR" "export SHELLOPTS; set -P; env -i bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "SHELLOPTS=physical bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_unresolved "true && set -P; export SHELLOPTS; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# bash refuses to unset SHELLOPTS, readonly as it is, and a prefix assigning
+# it reaches no child, the variable keeping the export state it had.
+check_target "$EXT" "export SHELLOPTS; set -P; unset SHELLOPTS; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "export -n SHELLOPTS; SHELLOPTS=physical bash -c 'set -P; bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "export -n SHELLOPTS; SHELLOPTS=physical env -S 'bash -c \"set -P; bash -c \\\"cd $WS_DIR/link/.. && bd close CHR-1\\\"\"'"
+# As a word it is the options in force, not the value inherited, so a child
+# handed it starts in the mode its parent was in.
+check_target "$WS_DIR" "env SHELLOPTS=physical bash -c 'set +P; env SHELLOPTS=\"\$SHELLOPTS\" bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$EXT" "env SHELLOPTS=braceexpand bash -c 'set -P; env SHELLOPTS=\"\$SHELLOPTS\" bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+# Any other shell holds SHELLOPTS as a plain variable, which a bash it starts
+# reads as given, whatever that shell's own options.
+check_target "$EXT" "env SHELLOPTS=physical dash -c 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$EXT" "env SHELLOPTS=physical zsh -c 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$EXT" "export SHELLOPTS; set -P; dash -c 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "export SHELLOPTS; set -P; dash -c 'unset SHELLOPTS; bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "env SHELLOPTS=physical dash -c 'SHELLOPTS=braceexpand bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
 # `env -S` is no shell, so what its string runs gets the physical mode the
 # environment's SHELLOPTS carries, as it would without the `-S`.
 check_target "$EXT" "export SHELLOPTS; set -P; env -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
@@ -2360,6 +2402,15 @@ check_target "$WS_DIR" "cd $WS_DIR/link; env -C . bd -C .. close CHR-1"
 check_target "$EXT" "cd $WS_DIR/link; env -i -C . bash -c 'cd ..; bd close CHR-1'"
 check_target "$EXT" "cd $WS_DIR/link; env -u PWD -C . bash -c 'cd ..; bd close CHR-1'"
 check_target "$EXT" "cd $WS_DIR; env -C link bash -c 'cd ..; bd close CHR-1'"
+# Every shell sets PWD as it starts, and exports it, so a child of one keeps
+# the spelling a `cd` gave it even in a cleared environment; a shell that
+# inherited no PWD naming its directory starts from the physical path.
+check_target "$WS_DIR" "env -i bash -c 'cd $WS_DIR/link; env -C . bash -c \"cd ..; bd close CHR-1\"'"
+check_target "$WS_DIR" "env -i dash -c 'cd $WS_DIR/link; env -C . bash -c \"cd ..; bd close CHR-1\"'"
+check_target "$EXT" "env -i bash -c 'cd $WS_DIR/link; env -u PWD -C . bash -c \"cd ..; bd close CHR-1\"'"
+check_target "$EXT" "cd $WS_DIR/link; env -i bash -c 'cd ..; bd close CHR-1'"
+check_target "$EXT" "cd $WS_DIR/link; env -u PWD bash -c 'cd ..; bd close CHR-1'"
+check_target "$EXT" "cd $WS_DIR/link; export -n PWD; bash -c 'cd ..; bd close CHR-1'"
 # A logical `cd` through a directory that does not exist fails, as bash
 # checks each directory a `..` leaves, so the shell stays where it was.
 check_target "$EXT" "cd $EXT; cd $WS_DIR/missing/..; bd close CHR-1"
