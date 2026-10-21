@@ -2293,11 +2293,19 @@ check_target "$EXT" "cd $WS_DIR/link && bd close CHR-1"
 check_target "$EXT" "bd -C $WS_DIR/link close CHR-1"
 # `bd -C` cleans `..` by name before resolving anything, so this is ws.
 check_target "$WS_DIR" "bd -C $WS_DIR/link/.. close CHR-1"
-# A link naming the store's own directory keeps its spelling, so a root
-# still matches the workspace root it is.
+# After `cd -P` the shell's PWD is where the link points, so a later plain
+# `cd ..` leaves from there.
+check_target "$EXT" "cd -P $WS_DIR/link; cd ..; bd close CHR-1"
+check_target "$WS_DIR" "cd $WS_DIR/link; cd ..; bd close CHR-1"
+# A logical `cd` through a directory that does not exist fails, as bash
+# checks each directory a `..` leaves, so the shell stays where it was.
+check_target "$EXT" "cd $EXT; cd $WS_DIR/missing/..; bd close CHR-1"
+# A link naming the store's own directory keeps its spelling under a plain
+# `cd`, so a root still matches the workspace root it is. `cd -P` names the
+# directory as the shell's PWD then does.
 ln -s "$STORE" "$CD/alias"
 check_target "$CD/alias" "cd $CD/alias && bd close CHR-1"
-check_target "$CD/alias" "cd -P $CD/alias && bd close CHR-1"
+check_target "$STORE" "cd -P $CD/alias && bd close CHR-1"
 
 # --- work budget ---------------------------------------------------------
 # Nested loops multiply work that the cap on each loop does not bound: five

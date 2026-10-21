@@ -771,61 +771,95 @@ prune_registry() {
 # an entry there makes every later invocation sync, and one that must wait for
 # SessionEnd would do so on every tool call until it came.
 #
-# A write still running when the session ends is not waited for, as nothing
-# runs after SessionEnd to find it.
+# Each record is the event's `conversation_id` followed by the path, because
+# several sessions can share a workspace and one ending must not retire
+# another's record: that session's write may still be running, and once the
+# record is gone nothing names the store when it lands. So every SessionEnd
+# syncs every store the list names, and removes only its own records.
+#
+# A write still running when its session ends is not waited for, as nothing
+# runs after that SessionEnd to find it.
+CONVERSATION_ID=$(jq -r '.conversation_id // ""' <<<"$EVENT_JSON")
 ASYNC_LISTS=()
 for ROOT in ${WS_ROOTS[@]:+"${WS_ROOTS[@]}"}; do
   ASYNC_LISTS+=("$ROOT/.beads/.augment-sync.async")
 done
 
-# Records $1 in the first root's background list. Appended by replacement, as
-# the registry is, so a write that stops part-way leaves the list that was
-# there rather than a record run onto the next.
+# Records $1, for this conversation, in the first root's background list.
+# Appended by replacement, as the registry is, so a write that stops part-way
+# leaves the list that was there rather than a record run onto the next.
 remember_async() {
-  local candidate="$1" list existing entry found=0
+  local candidate="$1" list existing owner entry found=0
   [ "${#ASYNC_LISTS[@]}" -gt 0 ] && [ -d "$candidate/.beads" ] || return 0
   list="${ASYNC_LISTS[0]}"
   for existing in ${WS_ROOTS[@]:+"${WS_ROOTS[@]}"}; do
     [ "$existing" = "$candidate" ] && return 0
   done
   if ! take_guard_waiting "$list.guard" 5; then
-    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
+    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run 'bd dolt push --remote origin' there.")
     return 0
   fi
   if [ -r "$list" ]; then
-    while IFS= read -r -d '' entry; do
-      [ "$entry" = "$candidate" ] && found=1
+    while IFS= read -r -d '' owner && IFS= read -r -d '' entry; do
+      [ "$owner" = "$CONVERSATION_ID" ] && [ "$entry" = "$candidate" ] && found=1
     done <"$list"
   fi
   if [ "$found" -eq 0 ] &&
     ! { : >"$list.$$" &&
       { [ ! -e "$list" ] || cat "$list" >>"$list.$$"; } &&
-      printf '%s\0' "$candidate" >>"$list.$$" &&
+      printf '%s\0%s\0' "$CONVERSATION_ID" "$candidate" >>"$list.$$" &&
       mv -f "$list.$$" "$list"; }; then
     rm -f "$list.$$"
-    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
+    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run 'bd dolt push --remote origin' there.")
   fi
   drop_lock "$list.guard"
   return 0
 }
 
+# Whether the store $1 is covered without its background record: it is a
+# workspace root, which every SessionEnd syncs, or the registry names it.
+handed_off() {
+  local existing
+  for existing in ${WS_ROOTS[@]:+"${WS_ROOTS[@]}"}; do
+    [ "$existing" = "$1" ] && return 0
+  done
+  registry_has "$1"
+}
+
 # SessionEnd's half: every store the background list $1 names goes back into
-# the registry, marker raised, and into this invocation's sync set. The list is
-# removed only after, under its guard, so a SessionEnd killed part-way leaves
-# it for the next, whose hand-off costs a no-op commit at most.
+# the registry, marker raised, and into this invocation's sync set. A record
+# is then kept unless it is this conversation's and its store is covered
+# without it. `remember_external` can fail to record -- a guard it cannot take,
+# a write that fails -- and dropping the record then left the store named by
+# nothing if this sync failed too. A store that no longer holds a `.beads` is
+# dropped whoever recorded it, as the prune drops its registry entry.
+#
+# The list is rewritten by replacement, under its guard, after every store has
+# been handed off, so a SessionEnd killed part-way leaves it whole for the
+# next, whose hand-off costs a no-op commit at most.
 take_async() {
-  local list="$1" entry
+  local list="$1" owner entry kept=0 failed=0
   [ -r "$list" ] || return 0
   if ! take_guard_waiting "$list.guard" 5; then
     WARNINGS+=("beads: could not read ${list}, so the bead stores it names as written in the background were not synced; the next session end retries them.")
     return 0
   fi
-  while IFS= read -r -d '' entry; do
-    [ -n "$entry" ] || continue
+  : >"$list.$$" 2>/dev/null || failed=1
+  while IFS= read -r -d '' owner && IFS= read -r -d '' entry; do
+    [ -d "$entry/.beads" ] || continue
     add_root "$entry"
     remember_external "$entry"
+    [ "$owner" = "$CONVERSATION_ID" ] && handed_off "$entry" && continue
+    printf '%s\0%s\0' "$owner" "$entry" >>"$list.$$" 2>/dev/null || failed=1
+    kept=1
   done <"$list"
-  rm -f "$list"
+  if [ "$failed" -eq 1 ]; then
+    rm -f "$list.$$"
+  elif [ "$kept" -eq 1 ]; then
+    mv -f "$list.$$" "$list" || rm -f "$list.$$"
+  else
+    rm -f "$list.$$" "$list"
+  fi
   drop_lock "$list.guard"
   return 0
 }

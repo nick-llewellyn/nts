@@ -1005,36 +1005,59 @@ def same_dir(one, other):
 
 
 def chdir_path(path):
-    """The directory a `chdir` to the absolute `path` lands in.
+    """The directory a `chdir` to the absolute `path` lands in, as `getcwd`
+    then names it.
 
     The kernel resolves each symlink before the `..` after it, so with `link`
     pointing at /ext/child, `/ws/link/..` is /ext -- where `cd -P`, `env -C`
     and `sudo -D` all go -- and not the /ws that collapsing it by name gives.
-    Spelled as given, cleaned, whenever that is the same directory, so a root
-    found under it still matches the workspace root it is.
+    Every link is resolved, not only those before a `..`: after `cd -P
+    /ws/link` the shell's PWD is /ext/child, so a later `cd ..` lands in /ext,
+    and keeping the spelling /ws/link sent the scan to /ws instead.
     """
-    spelled = os.path.normpath(path)
-    if same_dir(spelled, path):
-        return spelled
     return os.path.realpath(path)
+
+
+def logical_path(path):
+    """The absolute `path` with `.` and `..` collapsed by name, as a logical
+    `cd` reads it, or None when bash refuses that reading.
+
+    bash checks that each directory a `..` leaves exists, and that the result
+    does: `cd /ws/missing/..` fails rather than landing in /ws, and the shell
+    stays where it was. Collapsing by name alone moved the scan to /ws.
+    """
+    parts = []
+    for part in path.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not os.path.isdir("/" + "/".join(parts)):
+                return None
+            parts = parts[:-1]
+            continue
+        parts.append(part)
+    result = "/" + "/".join(parts)
+    return result if os.path.isdir(result) else None
 
 
 def cd_dest(target, physical):
     """Where a `cd` to the absolute `target` lands, or None when it fails.
 
     By default `cd` collapses `..` by name, so `cd /ws/link/..` is /ws whatever
-    `link` points at, and takes the kernel's reading only when that names no
-    directory. `cd -P`, or any `cd` under `set -P`, takes the kernel's reading
-    outright: with `link` pointing at /ext/child it lands in /ext, and reading
-    it by name there named /ws, a store the command never opened. UNKNOWN when
-    `set -P` may or may not be in force and the two readings differ.
+    `link` points at, and takes the kernel's reading only when bash refuses
+    that one; see `logical_path`. `cd -P`, or any `cd` under `set -P`, takes
+    the kernel's reading outright: with `link` pointing at /ext/child it lands
+    in /ext, and reading it by name there named /ws, a store the command never
+    opened. UNKNOWN when `set -P` may or may not be in force and the two
+    readings differ.
     """
     if physical is UNKNOWN:
         logical = cd_dest(target, False)
         return logical if logical == cd_dest(target, True) else UNKNOWN
-    spelled = os.path.normpath(target)
-    if not physical and os.path.isdir(spelled):
-        return spelled
+    if not physical:
+        spelled = logical_path(target)
+        if spelled is not None:
+            return spelled
     if os.path.isdir(target):
         return chdir_path(target)
     return None
