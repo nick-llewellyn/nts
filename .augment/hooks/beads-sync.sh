@@ -797,9 +797,13 @@ done
 # Records $1, for this conversation, in the first root's background list.
 # Appended by replacement, as the registry is, so a write that stops part-way
 # leaves the list that was there rather than a record run onto the next.
+#
+# A store that does not exist yet is recorded too. The backgrounded command
+# may create it before it writes -- `(sleep 5; mv /old /new; bd -C /new close
+# X) &` -- and `take_async` checks for a `.beads` when SessionEnd comes.
 remember_async() {
   local candidate="$1" list existing owner entry found=0
-  [ "${#ASYNC_LISTS[@]}" -gt 0 ] && [ -d "$candidate/.beads" ] || return 0
+  [ "${#ASYNC_LISTS[@]}" -gt 0 ] && [ -n "$candidate" ] || return 0
   list="${ASYNC_LISTS[0]}"
   for existing in ${WS_ROOTS[@]:+"${WS_ROOTS[@]}"}; do
     [ "$existing" = "$candidate" ] && return 0

@@ -2292,6 +2292,14 @@ check_target "$WS_DIR" "set -P; set +P; cd $WS_DIR/link/.. && bd close CHR-1"
 # `shopt -o` is another spelling of `set -o`.
 check_target "$EXT" "shopt -so physical; cd $WS_DIR/link/.. && bd close CHR-1"
 check_target "$WS_DIR" "set -P; shopt -uo physical; cd $WS_DIR/link/.. && bd close CHR-1"
+# A new shell starts in logical mode whatever its parent was in, and its own
+# options can turn physical mode on.
+check_target "$WS_DIR" "set -P; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "bash -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "bash -o physical -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "bash -P +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# A sourced file may change it, so after one the two readings are in doubt.
+check_unresolved "set -P; source ./opts.sh; cd $WS_DIR/link/..; bd close CHR-1"
 # The last of `-L` and `-P` wins, as in bash.
 check_target "$WS_DIR" "cd -P -L $WS_DIR/link/.. && bd close CHR-1"
 # A `set -P` that may not have run leaves the two readings in doubt.

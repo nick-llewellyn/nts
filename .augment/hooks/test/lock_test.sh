@@ -883,6 +883,23 @@ wait "$HOLDER" 2>/dev/null
 rm -rf "$OUT"
 teardown
 
+# --- a background write to a store that does not exist yet -------------
+# The backgrounded command may create the store before it writes, so the
+# store can be missing when PostToolUse runs and present by SessionEnd.
+setup
+PARENT=$(mktemp -d)
+NEW="$PARENT/store"
+fire "(sleep 5; mkdir -p $NEW/.beads; bd -C $NEW close CHR-1) &"
+registered "$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
+  report bad "a background write to a store not there yet must be kept for SessionEnd (async: $(reg_dump "$WS/.beads/.augment-sync.async"))"
+mkdir -p "$NEW/.beads"
+: >"$BD_LOG.dirs"
+fire_end
+grep -q "push $NEW" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync a store that appeared after its background write was seen (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+rm -rf "$PARENT"
+teardown
+
 # --- a settled external target is forgotten ----------------------------
 # The record exists only to carry unfinished work forward. Kept past that,
 # every later invocation would commit a store it has no reason to touch --

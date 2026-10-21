@@ -2475,6 +2475,39 @@ class Scanner:
             return None
         return i
 
+    @staticmethod
+    def shell_physical(words):
+        """Whether a shell started with the options `words` is in physical
+        mode, as `bash -P` and `bash -o physical` are: True, False or UNKNOWN.
+
+        A new shell starts in logical mode whatever its parent was in, so
+        `set -P; bash -c 'cd /ws/link/..'` lands in /ws -- but its own options
+        can turn physical mode on, and then the same `cd` lands where the link
+        points. The last of `-P`, `+P`, `-o physical` and `+o physical` wins.
+        """
+        physical = False
+        i = 0
+        while i < len(words):
+            word = words[i].value
+            if word is UNKNOWN:
+                return UNKNOWN
+            if word in ("-o", "+o"):
+                option = words[i + 1].value if i + 1 < len(words) else None
+                if option is UNKNOWN:
+                    return UNKNOWN
+                if option == "physical":
+                    physical = word == "-o"
+                i += 2
+                continue
+            if word in SHELL_OPT_ARGS:
+                i += 2
+                continue
+            if word[:1] in ("-", "+") and not word.startswith("--") and \
+                    "P" in word[1:]:
+                physical = word.startswith("-")
+            i += 1
+        return physical
+
     # --- the walk ---------------------------------------------------------
 
     def scoped(self, fn):
@@ -2547,7 +2580,7 @@ class Scanner:
 
     def sub_scan(self, stmts, cwd=None, known=None, seed=None, text=None,
                  sealed=False, conditional=False, frame="subshell",
-                 process=False):
+                 process=False, physical=False):
         """Scans `stmts` as a subshell: its writes count, its state does not.
 
         `text` is the source those statements were parsed from, needed when they
@@ -2566,7 +2599,8 @@ class Scanner:
         of this shell, variables and all; a new process gets the environment,
         which is the exported names alone -- see `environment_view`. `seed` is
         what the command line handed the process on top of that, and is
-        exported there, having arrived as environment.
+        exported there, having arrived as environment. `physical` is the
+        process's own `set -P` state; see `shell_physical`.
 
         `frame` is "tentative" for text that runs in this shell rather than a
         subshell, as `eval`'s does; see `tentative`. `conditional` is then what
@@ -2593,7 +2627,7 @@ class Scanner:
                 self.scope.allexport = False
                 self.scope.lastpipe = False
                 self.scope.monitor = False
-                self.scope.physical = False
+                self.scope.physical = physical
             if sealed:
                 self.scope.sealed = sealed
             if seed:
@@ -3290,9 +3324,11 @@ class Scanner:
         # nothing known before it speaks for the commands after it. `.
         # ./select-store.sh; bd close X` may have moved the shell or set
         # BEADS_DIR, and reading on with the old state named a store the
-        # command never opened, with no warning.
+        # command never opened, with no warning. It may `set -P` or `set +P`
+        # too, so how a later `cd` reads `..` is in doubt with the rest.
         if word in SOURCE_WORDS:
             self.seal_opaque(cwd=True)
+            self.scope.physical = UNKNOWN
             return
 
         if name in READ_WORDS:
@@ -3934,7 +3970,8 @@ class Scanner:
         wrapper_assigns, sealed = self.prefix_env(args, start)
         seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
-        self.scan_script(script, seed=seed, sealed=sealed, process=True)
+        self.scan_script(script, seed=seed, sealed=sealed, process=True,
+                         physical=self.shell_physical(args[start + 1:idx]))
 
     def split_wrapper(self, cmd, args, start, split):
         """Scans what `env -S <string>` runs, the string naming the command.
@@ -4068,7 +4105,7 @@ class Scanner:
 
     def scan_script(self, script, seed=None, sealed=False, cwd=None,
                     known=None, conditional=False, frame="subshell",
-                    process=False):
+                    process=False, physical=False):
         """Scans `script` as shell text, in a scope of its own.
 
         The text is parsed afresh, so its offsets index it and not the command
@@ -4091,7 +4128,7 @@ class Scanner:
             self.sub_scan(tree.get("Stmts") or (), seed=seed, text=parsed,
                           sealed=sealed, cwd=cwd, known=known,
                           conditional=conditional, frame=frame,
-                          process=process)
+                          process=process, physical=physical)
         finally:
             self.scripts.discard(script)
 
