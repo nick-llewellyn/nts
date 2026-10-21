@@ -4063,22 +4063,31 @@ class Scanner:
 
         bash turns on every option an inherited SHELLOPTS lists, so `env
         SHELLOPTS=physical bash -c 'cd /ws/link/..'` lands where the link
-        points. Only bash reads it; `sh` is bash on some systems and not on
-        others, so there the answer is in doubt, and the other shells ignore
-        it.
+        points; see `env_physical` for what the environment carries. Only bash
+        reads it; `sh` is bash on some systems and not on others, so there the
+        answer is in doubt, and the other shells ignore it.
+        """
+        name = args[start].value.rsplit("/", 1)[-1]
+        if name not in ("bash", "sh"):
+            return False
+        physical = self.env_physical(cmd, args, start)
+        if physical is not True:
+            return physical
+        return True if name == "bash" else UNKNOWN
 
-        A wrapper that sets, unsets or clears the environment decides the
-        value. Otherwise it is this shell's own SHELLOPTS, and bash keeps that
-        in step with its options: exported, it carries the physical mode in
-        force now, so `export SHELLOPTS; set -P; bash -c ...` starts the child
+    def env_physical(self, cmd, args, start):
+        """Whether the environment the command at `args[start]` runs with
+        carries a SHELLOPTS listing `physical`: True, False or UNKNOWN.
+
+        A wrapper that sets, unsets or clears the environment decides it.
+        Otherwise it is this shell's own SHELLOPTS, and bash keeps that in
+        step with its options: exported, it carries the physical mode in force
+        now, so `export SHELLOPTS; set -P; bash -c ...` starts the child
         physical, and a `set +P` before it starts the child logical whatever
         was inherited. Unexported, it reaches no child. A prefix assignment
         does not change it, as bash refuses one to a readonly variable and
         runs the command with the value it had.
         """
-        name = args[start].value.rsplit("/", 1)[-1]
-        if name not in ("bash", "sh"):
-            return False
         wrapper_assigns, sealed = self.prefix_env(args, start)
         if sealed or "SHELLOPTS" in wrapper_assigns:
             shellopts = self.command_env(cmd, args, start, "SHELLOPTS")
@@ -4086,15 +4095,11 @@ class Scanner:
                 return False
             if shellopts is UNKNOWN:
                 return UNKNOWN
-            physical = "physical" in shellopts.split(":")
-        else:
-            exported = self.is_exported("SHELLOPTS")
-            if exported is not True:
-                return exported
-            physical = self.scope.physical
-        if physical is not True:
-            return physical
-        return True if name == "bash" else UNKNOWN
+            return "physical" in shellopts.split(":")
+        exported = self.is_exported("SHELLOPTS")
+        if exported is not True:
+            return exported
+        return self.scope.physical
 
     def split_wrapper(self, cmd, args, start, split):
         """Scans what `env -S <string>` runs, the string naming the command.
@@ -4178,8 +4183,13 @@ class Scanner:
         wrapper_assigns, sealed = self.prefix_env(args, prefix_end)
         seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
+        # `env` is no shell, so the frame keeps the physical mode its
+        # environment's SHELLOPTS carries rather than starting a shell's
+        # afresh: `export SHELLOPTS; set -P; env -S 'bash -c ...'` starts that
+        # bash physical, as it would without the `-S`.
         self.scan_script("env " + " ".join(rendered), seed=seed,
-                         sealed=sealed, process=True)
+                         sealed=sealed, process=True,
+                         physical=self.env_physical(cmd, args, prefix_end))
 
     def eval_builtin(self, cmd, args, start, conditional):
         """Scans what `eval` runs, which is script and not an argument list.

@@ -2321,6 +2321,16 @@ check_target "$WS_DIR" "export SHELLOPTS; set -P; env -u SHELLOPTS bash -c 'cd $
 check_target "$WS_DIR" "export SHELLOPTS; set -P; env -i bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "SHELLOPTS=physical bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_unresolved "true && set -P; export SHELLOPTS; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# `env -S` is no shell, so what its string runs gets the physical mode the
+# environment's SHELLOPTS carries, as it would without the `-S`.
+check_target "$EXT" "export SHELLOPTS; set -P; env -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$EXT" "export SHELLOPTS; set -P; env -S 'env bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "set -P; env -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "export SHELLOPTS; set -P; env -S 'SHELLOPTS=braceexpand bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "export SHELLOPTS; set -P; env -S '-u SHELLOPTS bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "export SHELLOPTS; set -P; env -u SHELLOPTS -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "export SHELLOPTS; set -P; env -i -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_unresolved "true && set -P; export SHELLOPTS; env -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
 # A wrapper's directory with a PWD that cannot be read: the store `bd` walks
 # up to is still known, but a `..` read from there may climb through a link.
 check_target "$EXT" "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bash -c 'bd close CHR-1'"
