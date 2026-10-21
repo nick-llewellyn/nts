@@ -800,6 +800,37 @@ grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
 rm -rf "$OUT"
 teardown
 
+# --- a background write's external store waits for SessionEnd ----------
+# A command can return while a write it started is still running: `(sleep 5;
+# bd -C /ext close X) &`. The sync that follows finds nothing there yet, and
+# settling the entry then left the write, when it landed, named by nothing --
+# not the registry, and so not SessionEnd either.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+ASYNC="$WS/.beads/.augment-sync.async"
+fire "(sleep 5; bd -C $OUT close CHR-1) &"
+registered "$OUT" "$ASYNC" && report ok ||
+  report bad "a background write's external store must be kept for SessionEnd (async: $(reg_dump "$ASYNC"))"
+# Kept apart from the registry, so later invocations are not made to sync it.
+: >"$BD_LOG.dirs"
+fire 'bd list'
+! grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
+  report bad "a background entry must not make a later invocation sync (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+# SessionEnd syncs it, and through the registry, so a failure there is still
+# retried later.
+export BD_PUSH_FAIL=1
+fire_end
+unset BD_PUSH_FAIL
+grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync a background write's external store (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+registered "$OUT" "$WS/.beads/.augment-sync.external" && report ok ||
+  report bad "a failed SessionEnd sync must leave the store registered (registry: $(reg_dump "$WS/.beads/.augment-sync.external"))"
+[ ! -e "$ASYNC" ] && report ok ||
+  report bad "SessionEnd must hand the background list over (async: $(reg_dump "$ASYNC"))"
+rm -rf "$OUT"
+teardown
+
 # --- a settled external target is forgotten ----------------------------
 # The record exists only to carry unfinished work forward. Kept past that,
 # every later invocation would commit a store it has no reason to touch --

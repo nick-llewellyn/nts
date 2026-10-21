@@ -8,7 +8,9 @@ then the count of `-C` targets that were named and could not be resolved to a
 path, then one store path per target found, in the order they were found. Both
 counts come before the paths so the paths remain everything past them. NUL
 rather than newline because a path may contain a newline and a target that has
-been silently truncated names some other store.
+been silently truncated names some other store. A path written by a command
+the shell does not wait for -- one after `&`, or in a coprocess -- carries a
+leading `&`, which no path reported here can begin with: every one is absolute.
 
 The command is parsed by `shfmt --to-json` rather than scanned as text. A
 regex over raw text cannot see a quote, an escape, a command prefix or an
@@ -280,8 +282,9 @@ WRAPPER_CHDIR_OPTS = {
     "sudo": {"-D", "--chdir"},
 }
 
-# `cd`'s own options say nothing about where it lands, so they are stepped
-# over to find the operand.
+# `cd`'s own options, stepped over to find the operand. `-P` and `-L` decide
+# how a `..` in it is read, which `cd_dest` settles; `-e` and `-@` say nothing
+# about where it lands.
 CD_OPT = re.compile(r"^-[LPe@]")
 
 # The builtins besides `cd` that move the shell. `pushd /external; bd close X`
@@ -395,9 +398,24 @@ MAX_DEPTH = 64
 
 # How many items a word-iterating `for` may have for its body to be scanned
 # once per value. Past this the name is left unknown for the body instead, so a
-# `-C` through it is reported unresolved rather than the scan running long: a
-# body nested in another such loop is scanned the product of the two counts.
+# `-C` through it is reported unresolved rather than the scan running long. The
+# cap is per loop, and a body nested in another such loop is scanned the
+# product of the two counts, so it bounds no nesting; `MAX_STEPS` does.
 FOR_ITEMS_MAX = 16
+
+# How much work one scan may do, counted in statements visited, with each
+# script parsed charged as `PARSE_STEPS` of them. Nesting multiplies work that
+# no cap on one construct bounds: three nested 16-item loops visit 4,096 bodies,
+# four 65,536 and five a million, and the hook is killed at 60s before it has
+# recorded anything -- writes earlier in the command included. A statement
+# costs 25 to 50 microseconds, the more for a `bd` whose store is walked for,
+# and a parse, which starts `shfmt`, about 10 milliseconds, so the budget runs
+# out within a few seconds.
+#
+# Reaching it is a failure and not an answer, as reaching `MAX_DEPTH` is:
+# `Unavailable` is raised, and the hook syncs the roots and warns.
+MAX_STEPS = 50000
+PARSE_STEPS = 200
 
 # How many closers may be appended to unbalanced text before it is abandoned.
 MAX_REPAIRS = 8
@@ -946,10 +964,29 @@ def bead_root(start):
     The filesystem is read here, as `cd` already does. The alternative -- taking
     the path as given -- is what named a subdirectory that holds no `.beads`,
     which the hook then skipped, leaving the write it described unsynced.
+
+    The walk is the one `bd` makes: it cleans `..` out of the path by name,
+    resolves the symlinks in what is left, and walks up from the directory that
+    names. With `link` pointing at /ext/child, `/ws/link` opens /ext's store
+    rather than /ws's, and walking up the spelled path named /ws -- a store the
+    command never opened, while the one it wrote went unsynced. The answer keeps
+    the command's spelling when that names the same directory, so a root still
+    matches the workspace root it is.
     """
     if not start.startswith("/"):
         return None
-    path = os.path.normpath(start)
+    spelled = os.path.normpath(start)
+    found = nearest_store(os.path.realpath(spelled))
+    if found is None:
+        return None
+    named = nearest_store(spelled)
+    if named is not None and same_dir(named, found):
+        return named
+    return found
+
+
+def nearest_store(path):
+    """The nearest of `path` and its ancestors holding a `.beads`, or None."""
     while True:
         if os.path.isdir(os.path.join(path, ".beads")):
             return path
@@ -957,6 +994,50 @@ def bead_root(start):
         if parent == path:
             return None
         path = parent
+
+
+def same_dir(one, other):
+    """Whether `one` and `other` are the same directory."""
+    try:
+        return os.path.samefile(one, other)
+    except OSError:
+        return False
+
+
+def chdir_path(path):
+    """The directory a `chdir` to the absolute `path` lands in.
+
+    The kernel resolves each symlink before the `..` after it, so with `link`
+    pointing at /ext/child, `/ws/link/..` is /ext -- where `cd -P`, `env -C`
+    and `sudo -D` all go -- and not the /ws that collapsing it by name gives.
+    Spelled as given, cleaned, whenever that is the same directory, so a root
+    found under it still matches the workspace root it is.
+    """
+    spelled = os.path.normpath(path)
+    if same_dir(spelled, path):
+        return spelled
+    return os.path.realpath(path)
+
+
+def cd_dest(target, physical):
+    """Where a `cd` to the absolute `target` lands, or None when it fails.
+
+    By default `cd` collapses `..` by name, so `cd /ws/link/..` is /ws whatever
+    `link` points at, and takes the kernel's reading only when that names no
+    directory. `cd -P`, or any `cd` under `set -P`, takes the kernel's reading
+    outright: with `link` pointing at /ext/child it lands in /ext, and reading
+    it by name there named /ws, a store the command never opened. UNKNOWN when
+    `set -P` may or may not be in force and the two readings differ.
+    """
+    if physical is UNKNOWN:
+        logical = cd_dest(target, False)
+        return logical if logical == cd_dest(target, True) else UNKNOWN
+    spelled = os.path.normpath(target)
+    if not physical and os.path.isdir(spelled):
+        return spelled
+    if os.path.isdir(target):
+        return chdir_path(target)
+    return None
 
 
 def store_root(path):
@@ -1070,7 +1151,8 @@ class Scope:
     """
 
     def __init__(self, cwd, known, assigns, sealed=False, exported=None,
-                 allexport=False, lastpipe=False, monitor=False):
+                 allexport=False, lastpipe=False, monitor=False,
+                 physical=False):
         self.cwd = cwd
         self.known = known
         # Whether anything in this frame acted on the cwd -- a `cd` taken or
@@ -1105,11 +1187,15 @@ class Scope:
         # commands run in until a `set -m` turns it on.
         self.lastpipe = lastpipe
         self.monitor = monitor
+        # `set -P` in force: a `cd` resolves symlinks before `..`, as the
+        # kernel does, rather than collapsing `..` by name; see `cd_dest`.
+        # UNKNOWN when the text may or may not have set it.
+        self.physical = physical
 
     def child(self):
         return Scope(self.cwd, self.known, dict(self.assigns), self.sealed,
                      dict(self.exported), self.allexport, self.lastpipe,
-                     self.monitor)
+                     self.monitor, self.physical)
 
     def last_member_stays(self):
         """Whether a pipeline's last member runs in this shell: True, False
@@ -1161,10 +1247,24 @@ class Scanner:
         # rather than counted, since the count cannot tell that case from a
         # command legitimately nested deep.
         self.scripts = set()
+        # The work done so far; see `MAX_STEPS`.
+        self.steps = 0
+        # How many of the frames being scanned the shell does not wait for,
+        # and the stores written inside one; see `in_background`.
+        self.background = 0
+        self.async_targets = set()
 
     def found_target(self, path):
         if path not in self.targets:
             self.targets.append(path)
+        if self.background:
+            self.async_targets.add(path)
+
+    def spend(self, steps):
+        """Charges `steps` to the scan's budget, raising once it is spent."""
+        self.steps += steps
+        if self.steps > MAX_STEPS:
+            raise Unavailable("more work than %d steps" % MAX_STEPS)
 
     # --- assignment state -------------------------------------------------
 
@@ -1939,7 +2039,8 @@ class Scanner:
         """`field` as the directory in force after changing to it from `cwd`.
 
         UNKNOWN once it is unknown, since a relative directory after an
-        unreadable one is unreadable too.
+        unreadable one is unreadable too. The change is a `chdir`, so a `..`
+        is read after the symlinks before it; see `chdir_path`.
         """
         value = field.value
         if cwd is UNKNOWN:
@@ -1956,7 +2057,7 @@ class Scanner:
             value = cwd.rstrip("/") + "/" + value
         if not os.path.isdir(value):
             return UNKNOWN
-        return value
+        return chdir_path(value)
 
     @staticmethod
     def exec_clears(args, start, end):
@@ -2361,6 +2462,20 @@ class Scanner:
         finally:
             self.scope = saved
 
+    def in_background(self, fn):
+        """Runs `fn` as a subshell the shell does not wait for.
+
+        The tool call can return, and the hook sync, before a write inside one
+        lands: `(sleep 5; bd -C /ext close X) &` writes /ext after the sync has
+        found nothing there. Its stores are reported as written in the
+        background, so the hook keeps them recorded for SessionEnd.
+        """
+        self.background += 1
+        try:
+            self.scoped(fn)
+        finally:
+            self.background -= 1
+
     def tentative(self, fn):
         """Runs `fn` in a frame whose effects may or may not have happened.
 
@@ -2400,6 +2515,8 @@ class Scanner:
             saved.lastpipe = UNKNOWN
         if saved.monitor != inner.monitor:
             saved.monitor = UNKNOWN
+        if saved.physical != inner.physical:
+            saved.physical = UNKNOWN
         if inner.moved:
             saved.known = False
             saved.moved = True
@@ -2452,6 +2569,7 @@ class Scanner:
                 self.scope.allexport = False
                 self.scope.lastpipe = False
                 self.scope.monitor = False
+                self.scope.physical = False
             if sealed:
                 self.scope.sealed = sealed
             if seed:
@@ -2654,12 +2772,14 @@ class Scanner:
         one: what comes after runs precisely when the `cd` failed, so applying
         it names a directory the shell is in only on the branch not taken.
         """
+        self.spend(1)
         # Every command of a pipeline runs in a subshell, as does one
         # backgrounded with `&`: `cd /tmp/other & bd -C store ...` leaves the
         # real shell where it was, and resolving the write under /tmp/other
-        # names a store the command never opened.
+        # names a store the command never opened. Nor does the shell wait for
+        # the backgrounded one; see `in_background`.
         if stmt.get("Background"):
-            self.scoped(lambda: self.body(stmt, conditional, follows))
+            self.in_background(lambda: self.body(stmt, conditional, follows))
         else:
             self.body(stmt, conditional, follows)
 
@@ -2759,9 +2879,11 @@ class Scanner:
             # A coprocess is a subshell, and the command in one is a real
             # invocation: `coproc bd -C /tmp/store close CHR-1` writes that
             # store, and word-scanning the clause would find only its
-            # substitutions and miss the write itself.
+            # substitutions and miss the write itself. The shell does not
+            # wait for it; see `in_background`.
             if cmd.get("Stmt"):
-                self.scoped(lambda: self.stmt(cmd["Stmt"], conditional))
+                self.in_background(
+                    lambda: self.stmt(cmd["Stmt"], conditional))
         elif kind == "DeclClause":
             self.decl(cmd, conditional)
         elif kind == "TestClause":
@@ -3395,6 +3517,7 @@ class Scanner:
             self.leave_cwd()
             return
         i = start + 1
+        physical = self.scope.physical
         if name != "cd":
             words = [arg.value for arg in args[i:]]
             if any(word is UNKNOWN for word in words):
@@ -3415,6 +3538,10 @@ class Scanner:
                     break
                 if word is UNKNOWN or not CD_OPT.match(word):
                     break
+                # The last of `-L` and `-P` wins, as in bash.
+                for letter in word[1:]:
+                    if letter in "LP":
+                        physical = letter == "P"
                 i += 1
         # `cd` with no operand goes to $HOME, and `cd -` to a directory only the
         # shell's history knows.
@@ -3436,8 +3563,12 @@ class Scanner:
         # leaves the cwd unknown, as before.
         if target is None:
             self.leave_cwd()
-        elif os.path.isdir(target):
-            self.enter_cwd(target)
+            return
+        dest = cd_dest(target, physical)
+        if dest is UNKNOWN:
+            self.leave_cwd()
+        elif dest is not None:
+            self.enter_cwd(dest)
 
     def cdpath_target(self, field):
         """Where `CDPATH` sends a `cd` to `field`, if it sends it anywhere.
@@ -3604,21 +3735,22 @@ class Scanner:
             i += 1
 
     def set_builtin(self, args, start, conditional):
-        """Records `set -a`/`+a` and `set -m`/`+m`.
+        """Records `set -a`/`+a`, `set -m`/`+m` and `set -P`/`+P`.
 
         Under `set -a` every assignment exports its name, so `set -a;
         BEADS_DIR=/x/.beads; bd close X` runs `bd` with that BEADS_DIR though
         nothing said `export`. `set -m` turns job control on, which switches
-        `lastpipe` off again; see `Scope.last_member_stays`. Only those two
-        are read; the rest of `set` says nothing about which store a command
-        opens.
+        `lastpipe` off again; see `Scope.last_member_stays`. `set -P` makes
+        every later `cd` resolve symlinks before `..`; see `cd_dest`. Only
+        those three are read; the rest of `set` says nothing about which store
+        a command opens.
         """
         state = {}
         i = start + 1
         while i < len(args):
             word = args[i].value
             if word is UNKNOWN:
-                state = {"a": UNKNOWN, "m": UNKNOWN}
+                state = {"a": UNKNOWN, "m": UNKNOWN, "P": UNKNOWN}
                 i += 1
                 continue
             if word == "--" or not (word.startswith("-") or
@@ -3628,14 +3760,16 @@ class Scanner:
                 if i + 1 < len(args):
                     option = args[i + 1].value
                     if option is UNKNOWN:
-                        state = {"a": UNKNOWN, "m": UNKNOWN}
+                        state = {"a": UNKNOWN, "m": UNKNOWN, "P": UNKNOWN}
                     elif option == "allexport":
                         state["a"] = word == "-o"
                     elif option == "monitor":
                         state["m"] = word == "-o"
+                    elif option == "physical":
+                        state["P"] = word == "-o"
                 i += 2
                 continue
-            for letter in "am":
+            for letter in "amP":
                 if letter in word[1:]:
                     state[letter] = word.startswith("-")
             i += 1
@@ -3643,6 +3777,8 @@ class Scanner:
             self.scope.allexport = UNKNOWN if conditional else state["a"]
         if "m" in state:
             self.scope.monitor = UNKNOWN if conditional else state["m"]
+        if "P" in state:
+            self.scope.physical = UNKNOWN if conditional else state["P"]
 
     def shopt_builtin(self, args, start, conditional):
         """Records `shopt -s lastpipe` and `shopt -u lastpipe`.
@@ -3911,6 +4047,7 @@ class Scanner:
         """
         if script in self.scripts:
             return
+        self.spend(PARSE_STEPS)
         tree, parsed = parse(script)
         if tree is None:
             return
@@ -3928,20 +4065,22 @@ def scan(command, launch_cwd):
     """What `command` writes, launched from `launch_cwd`.
 
     `launch_cwd` empty says the directory is unknown rather than being this
-    process's own, so a relative target under it stays unresolved.
+    process's own, so a relative target under it stays unresolved. The last of
+    the four answers is the set of targets written in the background.
     """
     tree, parsed = parse(command)
     scanner = Scanner(launch_cwd, parsed)
     if tree is not None:
         scanner.stmts(tree.get("Stmts") or (), conditional=False)
-    return scanner.mutates, scanner.unresolved, scanner.targets
+    return (scanner.mutates, scanner.unresolved, scanner.targets,
+            scanner.async_targets)
 
 
 def main():
     command = sys.stdin.read()
     launch_cwd = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     try:
-        mutates, unresolved, targets = scan(command, launch_cwd)
+        mutates, unresolved, targets, background = scan(command, launch_cwd)
     except Unavailable as err:
         # Nothing is written to stdout, so a caller reading the first field
         # cannot mistake a scan that did not happen for one that found no
@@ -3950,7 +4089,8 @@ def main():
         return 2
     # Both counts come first and always, so the targets remain everything past
     # them and a caller need not tell a count from a path.
-    out = ["1" if mutates else "0", str(unresolved)] + targets
+    out = ["1" if mutates else "0", str(unresolved)] + [
+        "&" + path if path in background else path for path in targets]
     sys.stdout.write("\0".join(out) + "\0")
     return 0
 

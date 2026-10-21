@@ -1099,7 +1099,9 @@ event at all, so it reports that and stands down, leaving bead writes local.
 Without the scanner it keeps going: it reports the failed scan and syncs the
 workspace roots anyway, so only a store outside them can be missed — one
 named by `bd -C <dir>`, `bd --db <path>`, `BEADS_DIR` or `BEADS_DB`, or
-found by walking up from wherever the command ran.
+found by walking up from wherever the command ran. A command that nests
+loops, functions or scripts too deeply to scan within a few seconds is
+treated the same way.
 `HOMEBREW_NO_AUTO_UPDATE=1 brew install jq shfmt` if either warning appears.
 
 The scan is static. It follows assignments, `cd`, wrappers (`sudo`, `env`,
@@ -1114,7 +1116,9 @@ cannot name (a `-C` path built from a substitution, a pattern such as
 `-C /tmp/store-*`, or a variable last assigned on a path that may not
 have run) is reported as unresolved rather than guessed, and so is script
 the scan cannot read at all (`eval "$X"`, `bash -c "$(…)"`); act on that
-warning the same way.
+warning the same way. A store outside the workspace roots written by a
+command the shell does not wait for (`&`, `coproc`) is synced again at
+`SessionEnd`, since that write can land after the tool call returns.
 
 **Act on hook warnings.** Failures are prefixed `beads:` — e.g. `beads:
 'bd dolt push' failed in <root>, local bead writes are NOT on DoltHub.` —

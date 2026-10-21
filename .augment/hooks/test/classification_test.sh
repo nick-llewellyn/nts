@@ -91,6 +91,34 @@ check_unresolved() {
   fi
 }
 
+# Asserts the stores a command writes in the background, space-separated and
+# in order.
+check_async() {
+  local want="$1" command="$2" got
+  scan_command "$command" "$BASE"
+  got="${SCAN_ASYNC[*]:+${SCAN_ASYNC[*]}}"
+  if [ "$got" = "$want" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    printf 'FAIL want async=[%s] got=[%s] %s\n' "$want" "$got" "$command"
+  fi
+}
+
+# Asserts that the scan gave up rather than answering, and did so in time for
+# the hook to sync and warn before it is killed at 60s.
+check_gives_up() {
+  local command="$1" started=$SECONDS
+  scan_command "$command" "$BASE"
+  if [ "$SCAN_FAILED" -eq 1 ] && [ $((SECONDS - started)) -le 20 ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    printf 'FAIL want a prompt give-up got failed=%s after %ss: %.80s\n' \
+      "$SCAN_FAILED" $((SECONDS - started)) "$command"
+  fi
+}
+
 # --- not bd at all -----------------------------------------------------
 check skip 'ls -la'
 check skip 'git commit -m "bd update"'
@@ -2220,6 +2248,80 @@ check_unresolved 'sudo OUT=/tmp/store bash -c "bd -C \"\$OUT\" close CHR-1"'
 check_target '/tmp/store' 'sudo bash -c "bd -C /tmp/store close CHR-1"'
 # The wrapper's assignments reach the child only, not the command after it.
 check_target '/tmp/store' 'env OUT=/tmp/decoy bash -c "bd -C /tmp/store close CHR-1"'
+
+# --- background writes ---------------------------------------------------
+# The shell does not wait for a command after `&` or in a coprocess, so the
+# tool call can return, and the hook sync, before the write lands.
+check_async '/tmp/store' 'bd -C /tmp/store close CHR-1 &'
+check_async '/tmp/store' '(sleep 5; bd -C /tmp/store close CHR-1) >/dev/null 2>&1 &'
+check_async '/tmp/store' 'coproc bd -C /tmp/store close CHR-1'
+check_async '/tmp/store' 'bash -c "bd -C /tmp/store close CHR-1 &"'
+check_async '/tmp/store' 'f() { bd -C /tmp/store close CHR-1; }; f &'
+# Still a target to sync now, as the write may already have landed.
+check_target '/tmp/store' 'bd -C /tmp/store close CHR-1 &'
+# A command the shell waits for is not one, beside a backgrounded one or not.
+check_async '' 'bd -C /tmp/store close CHR-1'
+check_async '' 'sleep 1 & bd -C /tmp/store close CHR-1'
+check_async '' "cd $CD/other & bd -C /tmp/store close CHR-1"
+# Only the store written in the background is.
+check_async '/tmp/b' 'bd -C /tmp/a close CHR-1; bd -C /tmp/b close CHR-2 &'
+check_target '/tmp/a /tmp/b' 'bd -C /tmp/a close CHR-1; bd -C /tmp/b close CHR-2 &'
+
+# --- symlinks ------------------------------------------------------------
+# `link` points into ext, which holds a store, from ws, which holds another.
+# `bd` resolves symlinks before walking up, and `cd -P`, `set -P` and a
+# wrapper's directory resolve them before `..`, so which store a command
+# opens through the link turns on where it points, not on how it is spelled.
+WS_DIR="$CD/ws"
+EXT="$CD/ext"
+mkdir -p "$WS_DIR/.beads" "$EXT/.beads" "$EXT/child"
+ln -s "$EXT/child" "$WS_DIR/link"
+# A plain `cd` collapses `..` by name, so this lands in ws.
+check_target "$WS_DIR" "cd $WS_DIR/link/.. && bd close CHR-1"
+# Resolving the link first lands in ext.
+check_target "$EXT" "cd -P $WS_DIR/link/.. && bd close CHR-1"
+check_target "$EXT" "set -P; cd $WS_DIR/link/.. && bd close CHR-1"
+check_target "$EXT" "set -o physical; cd $WS_DIR/link/.. && bd close CHR-1"
+check_target "$EXT" "env -C $WS_DIR/link/.. bd close CHR-1"
+check_target "$WS_DIR" "set -P; set +P; cd $WS_DIR/link/.. && bd close CHR-1"
+# The last of `-L` and `-P` wins, as in bash.
+check_target "$WS_DIR" "cd -P -L $WS_DIR/link/.. && bd close CHR-1"
+# A `set -P` that may not have run leaves the two readings in doubt.
+check_unresolved "true && set -P; cd $WS_DIR/link/.. && bd close CHR-1"
+# `bd` walks up from where the link points, so from ws/link it opens ext.
+check_target "$EXT" "cd $WS_DIR/link && bd close CHR-1"
+check_target "$EXT" "bd -C $WS_DIR/link close CHR-1"
+# `bd -C` cleans `..` by name before resolving anything, so this is ws.
+check_target "$WS_DIR" "bd -C $WS_DIR/link/.. close CHR-1"
+# A link naming the store's own directory keeps its spelling, so a root
+# still matches the workspace root it is.
+ln -s "$STORE" "$CD/alias"
+check_target "$CD/alias" "cd $CD/alias && bd close CHR-1"
+check_target "$CD/alias" "cd -P $CD/alias && bd close CHR-1"
+
+# --- work budget ---------------------------------------------------------
+# Nested loops multiply work that the cap on each loop does not bound: five
+# nested 16-item loops visit a million bodies, which ran past the hook's 60s
+# timeout. The scan gives up instead, which the hook answers by syncing the
+# roots and warning.
+ITEMS="0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"
+NESTED='bd -C /tmp/store close CHR-1'
+for level in 1 2 3; do
+  NESTED="for v$level in $ITEMS; do $NESTED; done"
+done
+# Three levels are within the budget.
+check_target '/tmp/store' "$NESTED"
+for level in 4 5; do
+  NESTED="for v$level in $ITEMS; do $NESTED; done"
+done
+check_gives_up "$NESTED"
+# Each `bash -c` script is parsed by starting `shfmt`, which costs far more
+# than a statement, so three levels of them are past it.
+NESTED='bash -c "bd -C /tmp/$v1 close $v2$v3"'
+for level in 1 2 3; do
+  NESTED="for v$level in $ITEMS; do $NESTED; done"
+done
+check_gives_up "$NESTED"
 
 echo "classification: pass=$PASS fail=$FAIL"
 [ "$FAIL" -eq 0 ]

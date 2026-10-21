@@ -8,11 +8,11 @@
 #
 # The decision itself is in command_scan.py, over the syntax tree `shfmt
 # --to-json` produces. This file is the bash contract around it: scan_command
-# sets SCAN_MUTATES, SCAN_UNRESOLVED, SCAN_TARGETS and SCAN_FAILED, which is
-# what the hook and the suite are written against. Both `shfmt` and `python3`
-# are required; a missing one is a broken install rather than a case to degrade
-# through, and standing down quietly would leave bead writes local with nothing
-# to say so.
+# sets SCAN_MUTATES, SCAN_UNRESOLVED, SCAN_TARGETS, SCAN_ASYNC and SCAN_FAILED,
+# which is what the hook and the suite are written against. Both `shfmt` and
+# `python3` are required; a missing one is a broken install rather than a case
+# to degrade through, and standing down quietly would leave bead writes local
+# with nothing to say so.
 
 _SC_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 _SC_PY="$_SC_LIB_DIR/command_scan.py"
@@ -21,13 +21,18 @@ _SC_PY="$_SC_LIB_DIR/command_scan.py"
 SCAN_MUTATES=0
 SCAN_UNRESOLVED=0
 SCAN_TARGETS=()
+SCAN_ASYNC=()
 SCAN_FAILED=0
 
-# Fills SCAN_MUTATES, SCAN_UNRESOLVED, SCAN_TARGETS and SCAN_FAILED from
-# command $1, which was launched from directory $2. An empty $2 says that
+# Fills SCAN_MUTATES, SCAN_UNRESOLVED, SCAN_TARGETS, SCAN_ASYNC and SCAN_FAILED
+# from command $1, which was launched from directory $2. An empty $2 says that
 # directory is unknown, which leaves a relative `-C` target unresolved rather
 # than resolving it against this process's own cwd -- a directory nothing
 # requires to be the tool call's.
+#
+# SCAN_ASYNC is the targets written by a command the shell does not wait for,
+# which the scanner marks with a leading `&`. Each is in SCAN_TARGETS too, as
+# the write may already have landed.
 #
 # Targets are read back NUL-separated rather than by line, because a store path
 # may contain a newline and a target silently truncated at one names some other
@@ -45,6 +50,7 @@ scan_command() {
   SCAN_MUTATES=0
   SCAN_UNRESOLVED=0
   SCAN_TARGETS=()
+  SCAN_ASYNC=()
   SCAN_FAILED=0
   out=$(mktemp "${TMPDIR:-/tmp}/cs-scan.XXXXXX") || {
     SCAN_FAILED=1
@@ -58,7 +64,15 @@ scan_command() {
     case "$seen" in
       1) SCAN_MUTATES=$field ;;
       2) SCAN_UNRESOLVED=$field ;;
-      *) SCAN_TARGETS+=("$field") ;;
+      *)
+        case "$field" in
+          '&'*)
+            SCAN_ASYNC+=("${field#&}")
+            SCAN_TARGETS+=("${field#&}")
+            ;;
+          *) SCAN_TARGETS+=("$field") ;;
+        esac
+        ;;
     esac
   done <"$out"
   rm -f "$out"
@@ -72,6 +86,7 @@ scan_command() {
     SCAN_MUTATES=0
     SCAN_UNRESOLVED=0
     SCAN_TARGETS=()
+    SCAN_ASYNC=()
   fi
   return 0
 }

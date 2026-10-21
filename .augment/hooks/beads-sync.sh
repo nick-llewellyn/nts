@@ -761,6 +761,75 @@ prune_registry() {
   return 0
 }
 
+# A write the command left running -- after `&`, or in a coprocess -- can land
+# after this invocation has synced its store. For a store outside the roots the
+# settle then drops the only entry naming it, and the write sits local with
+# nothing able to find it again. So such a store is also recorded in the first
+# root's `.augment-sync.async`, which SessionEnd alone reads: it hands each
+# entry back to the registry, marker raised, and syncs it, the write having had
+# the rest of the session to land. Kept out of the registry until then because
+# an entry there makes every later invocation sync, and one that must wait for
+# SessionEnd would do so on every tool call until it came.
+#
+# A write still running when the session ends is not waited for, as nothing
+# runs after SessionEnd to find it.
+ASYNC_LISTS=()
+for ROOT in ${WS_ROOTS[@]:+"${WS_ROOTS[@]}"}; do
+  ASYNC_LISTS+=("$ROOT/.beads/.augment-sync.async")
+done
+
+# Records $1 in the first root's background list. Appended by replacement, as
+# the registry is, so a write that stops part-way leaves the list that was
+# there rather than a record run onto the next.
+remember_async() {
+  local candidate="$1" list existing entry found=0
+  [ "${#ASYNC_LISTS[@]}" -gt 0 ] && [ -d "$candidate/.beads" ] || return 0
+  list="${ASYNC_LISTS[0]}"
+  for existing in ${WS_ROOTS[@]:+"${WS_ROOTS[@]}"}; do
+    [ "$existing" = "$candidate" ] && return 0
+  done
+  if ! take_guard_waiting "$list.guard" 5; then
+    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
+    return 0
+  fi
+  if [ -r "$list" ]; then
+    while IFS= read -r -d '' entry; do
+      [ "$entry" = "$candidate" ] && found=1
+    done <"$list"
+  fi
+  if [ "$found" -eq 0 ] &&
+    ! { : >"$list.$$" &&
+      { [ ! -e "$list" ] || cat "$list" >>"$list.$$"; } &&
+      printf '%s\0' "$candidate" >>"$list.$$" &&
+      mv -f "$list.$$" "$list"; }; then
+    rm -f "$list.$$"
+    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
+  fi
+  drop_lock "$list.guard"
+  return 0
+}
+
+# SessionEnd's half: every store the background list $1 names goes back into
+# the registry, marker raised, and into this invocation's sync set. The list is
+# removed only after, under its guard, so a SessionEnd killed part-way leaves
+# it for the next, whose hand-off costs a no-op commit at most.
+take_async() {
+  local list="$1" entry
+  [ -r "$list" ] || return 0
+  if ! take_guard_waiting "$list.guard" 5; then
+    WARNINGS+=("beads: could not read ${list}, so the bead stores it names as written in the background were not synced; the next session end retries them.")
+    return 0
+  fi
+  while IFS= read -r -d '' entry; do
+    [ -n "$entry" ] || continue
+    add_root "$entry"
+    remember_external "$entry"
+  done <"$list"
+  rm -f "$list"
+  drop_lock "$list.guard"
+  return 0
+}
+
 # A request is outstanding while either marker exists. `.pending` is raised
 # by an invocation that has not yet been served; `.inflight` is a sync that
 # started and has not been seen to finish.
@@ -871,7 +940,7 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # of is the wrong place to look.
   if [ "$SCAN_FAILED" -eq 1 ]; then
     MUTATES=1
-    WARNINGS+=("beads: could not scan the command for bead writes; syncing the workspace roots as a precaution. A store outside them -- named by 'bd -C <dir>', 'bd --db <path>', BEADS_DIR or BEADS_DB, or found by walking up from where the command ran -- may be left unsynced. Check that shfmt and python3 are installed.")
+    WARNINGS+=("beads: could not scan the command for bead writes; syncing the workspace roots as a precaution. A store outside them -- named by 'bd -C <dir>', 'bd --db <path>', BEADS_DIR or BEADS_DB, or found by walking up from where the command ran -- may be left unsynced. This happens when shfmt or python3 is missing or failing, or when the command nests loops, functions or scripts too deeply to scan in time.")
   fi
 
   # A store that was seen to be written and could not be named is the one write
@@ -902,6 +971,13 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # instead left one: killed between the two calls, the only record was a file
   # outside every root that no entry named, and no later invocation could find
   # it.
+  #
+  # A store written in the background is recorded for SessionEnd first, so a
+  # kill before its registry entry still leaves it found there; see
+  # `remember_async`.
+  for TARGET in ${SCAN_ASYNC[@]:+"${SCAN_ASYNC[@]}"}; do
+    remember_async "$TARGET"
+  done
   for TARGET in ${SCAN_TARGETS[@]:+"${SCAN_TARGETS[@]}"}; do
     add_root "$TARGET"
     remember_external "$TARGET"
@@ -912,6 +988,12 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   if [ "$MUTATES" -ne 1 ] && ! any_outstanding; then
     exit 0
   fi
+fi
+
+if [ "$EVENT_NAME" = "SessionEnd" ]; then
+  for LIST in ${ASYNC_LISTS[@]:+"${ASYNC_LISTS[@]}"}; do
+    take_async "$LIST"
+  done
 fi
 
 [ "${#ROOTS[@]}" -gt 0 ] || exit 0
