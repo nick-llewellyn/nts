@@ -3262,11 +3262,32 @@ class Scanner:
         # one to apply, so an unwrapped `cd` still reaches the command after it.
         end = split[1] if split is not None else start
         cwd = None if end is None else self.wrapper_chdir(fields, end)
+        cwd = self.wrapper_pwd(cmd, fields, end, cwd)
         if cwd is not None:
             self.scoped(lambda: self.dispatch(cmd, fields, start, split,
                                               conditional, follows, cwd))
             return
         self.dispatch(cmd, fields, start, split, conditional, follows, None)
+
+    def wrapper_pwd(self, cmd, args, end, cwd):
+        """The directory the wrappers moved the command to, as it names it.
+
+        A wrapper's `chdir` leaves `PWD` in the environment as it was, and
+        bash -- like Go's `os.Getwd`, which `bd` uses -- keeps an inherited PWD
+        that names the directory it starts in. So after `cd /a/link; env -C .`
+        the command's PWD is still /a/link, and a `cd ..` or `bd -C ..` inside
+        it reads `..` from there and lands in /a. Where PWD names some other
+        directory, or none reaches the command, it starts from the physical
+        path `getcwd` gives, which is what `cwd` holds. A PWD this scan cannot
+        read is taken as not naming it.
+        """
+        if cwd is None or cwd is UNKNOWN:
+            return cwd
+        pwd = self.command_env(cmd, args, end, "PWD")
+        if not isinstance(pwd, str) or not pwd.startswith("/") or \
+                not same_dir(pwd, cwd):
+            return cwd
+        return logical_path(pwd) or cwd
 
     def dispatch(self, cmd, fields, start, split, conditional, follows, cwd):
         """Hands the command at `fields[start]` to the reader that knows it.
@@ -3527,6 +3548,11 @@ class Scanner:
             return UNKNOWN
         if self.scope.sealed is CLEARED:
             return None
+        # The shell keeps its own PWD current as it moves, so the tracked cwd
+        # answers for it, as in `get`; this process's PWD is some other
+        # directory.
+        if name == "PWD":
+            return self.get("PWD")
         return os.environ.get(name)
 
     @staticmethod

@@ -835,8 +835,13 @@ remember_async() {
 # it recorded and marked the store, or needed to do neither for a workspace
 # root. It can fail to -- a guard it cannot take, a write that fails -- and
 # dropping the record then left the store named by nothing if this sync failed
-# too. A store that no longer holds a `.beads` is dropped whoever recorded it,
-# as the prune drops its registry entry.
+# too.
+#
+# A store that holds no `.beads` is dropped only by its own conversation's
+# SessionEnd, whose write has had its session to land. Another conversation's
+# background job may still be about to create it -- `(sleep 5; bd -C /ext
+# init; bd -C /ext create X) &` -- and dropping its record then left the store
+# named by nothing once it did.
 #
 # The list is rewritten by replacement, under its guard, after every store has
 # been handed off, so a SessionEnd killed part-way leaves it whole for the
@@ -850,9 +855,12 @@ take_async() {
   fi
   : >"$list.$$" 2>/dev/null || failed=1
   while IFS= read -r -d '' owner && IFS= read -r -d '' entry; do
-    [ -d "$entry/.beads" ] || continue
-    add_root "$entry"
-    remember_external "$entry" && [ "$owner" = "$CONVERSATION_ID" ] && continue
+    if [ -d "$entry/.beads" ]; then
+      add_root "$entry"
+      remember_external "$entry" && [ "$owner" = "$CONVERSATION_ID" ] && continue
+    elif [ "$owner" = "$CONVERSATION_ID" ]; then
+      continue
+    fi
     printf '%s\0%s\0' "$owner" "$entry" >>"$list.$$" 2>/dev/null || failed=1
     kept=1
   done <"$list"

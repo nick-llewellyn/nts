@@ -2313,6 +2313,14 @@ check_target "$WS_DIR" "bd -C $WS_DIR/link/.. close CHR-1"
 # `cd ..` leaves from there.
 check_target "$EXT" "cd -P $WS_DIR/link; cd ..; bd close CHR-1"
 check_target "$WS_DIR" "cd $WS_DIR/link; cd ..; bd close CHR-1"
+# A wrapper's `chdir` leaves PWD as it was, and a command started where that
+# PWD still names keeps it -- bash does, and so does `bd` reading `-C ..`.
+check_target "$WS_DIR" "cd $WS_DIR/link; env -C . bash -c 'cd ..; bd close CHR-1'"
+check_target "$WS_DIR" "cd $WS_DIR/link; env -C . bd -C .. close CHR-1"
+# Without a PWD that names it, the command starts from the physical path.
+check_target "$EXT" "cd $WS_DIR/link; env -i -C . bash -c 'cd ..; bd close CHR-1'"
+check_target "$EXT" "cd $WS_DIR/link; env -u PWD -C . bash -c 'cd ..; bd close CHR-1'"
+check_target "$EXT" "cd $WS_DIR; env -C link bash -c 'cd ..; bd close CHR-1'"
 # A logical `cd` through a directory that does not exist fails, as bash
 # checks each directory a `..` leaves, so the shell stays where it was.
 check_target "$EXT" "cd $EXT; cd $WS_DIR/missing/..; bd close CHR-1"

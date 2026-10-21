@@ -889,12 +889,17 @@ teardown
 setup
 PARENT=$(mktemp -d)
 NEW="$PARENT/store"
-fire "(sleep 5; mkdir -p $NEW/.beads; bd -C $NEW close CHR-1) &"
+CONV=conv-a fire "(sleep 5; mkdir -p $NEW/.beads; bd -C $NEW close CHR-1) &"
 registered "$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
   report bad "a background write to a store not there yet must be kept for SessionEnd (async: $(reg_dump "$WS/.beads/.augment-sync.async"))"
+# Another session ending before the store exists must keep the record: the
+# job that will create it belongs to the session still running.
+CONV=conv-b fire_end
+registered "$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
+  report bad "another session's SessionEnd must keep a record whose store is not there yet (async: $(reg_dump "$WS/.beads/.augment-sync.async"))"
 mkdir -p "$NEW/.beads"
 : >"$BD_LOG.dirs"
-fire_end
+CONV=conv-a fire_end
 grep -q "push $NEW" "$BD_LOG.dirs" && report ok ||
   report bad "SessionEnd must sync a store that appeared after its background write was seen (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
 rm -rf "$PARENT"
