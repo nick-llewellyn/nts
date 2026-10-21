@@ -50,6 +50,15 @@ setup() {
   cat >"$WS/bin/bd" <<'STUB'
 #!/usr/bin/env bash
 LOG="${BD_LOG:?}"
+# `bd -C <dir> config get dolt.auto-push --json`, answered before the op
+# logging below, whose `push` match would otherwise read the key as a push:
+# false under BD_AUTO_PUSH_OFF, a failure under BD_CONFIG_FAIL, unset
+# otherwise.
+if [ "${3:-}" = config ]; then
+  [ -n "${BD_CONFIG_FAIL:-}" ] && exit 1
+  [ -n "${BD_AUTO_PUSH_OFF:-}" ] && echo '{"value": "false"}' || echo '{"value": ""}'
+  exit 0
+fi
 # `bd -C <dir> dolt <op>`: record which root each op was aimed at, so the
 # multi-root cases can tell the difference.
 [ "${1:-}" = -C ] && TARGET="${2:-}" || TARGET=""
@@ -91,7 +100,8 @@ STUB
 teardown() {
   rm -rf "$WS"
   PATH="$ORIG_PATH"
-  unset BD_PUSH_FAIL BD_PUSH_SLEEP BD_COMMIT_FAIL BD_COMMIT_NOOP
+  unset BD_PUSH_FAIL BD_PUSH_SLEEP BD_COMMIT_FAIL BD_COMMIT_NOOP \
+    BD_AUTO_PUSH_OFF BD_CONFIG_FAIL
 }
 
 # Feeds one event of type $1 carrying $2 as the command. Remaining
@@ -1247,7 +1257,7 @@ wait "$DEAD" 2>/dev/null
 mv -f "$WS/bin/bd" "$WS/bin/bd.real"
 cat >"$WS/bin/bd" <<STUB
 #!/usr/bin/env bash
-if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && grep -q push <<<"\$*"; then
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && [ "\${3:-}" = dolt ] && [ "\${4:-}" = push ]; then
   ln -sf "$DEAD" "$REG.guard"
 fi
 exec "$WS/bin/bd.real" "\$@"
@@ -1293,7 +1303,7 @@ wait "$DEAD" 2>/dev/null
 mv -f "$WS/bin/bd" "$WS/bin/bd.real"
 cat >"$WS/bin/bd" <<STUB
 #!/usr/bin/env bash
-if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && grep -q push <<<"\$*"; then
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && [ "\${3:-}" = dolt ] && [ "\${4:-}" = push ]; then
   ln -sf "$DEAD" "$REG.guard"
   ln -sf "$OUT/.beads/no-such-dir/pending" "$OUT/.beads/.augment-sync.pending"
 fi
@@ -1725,10 +1735,57 @@ teardown
 setup
 export BD_PUSH_FAIL=1
 fire_end
-grep -q "NOT on DoltHub" "$WS/err" && report ok ||
+grep -q "NOT on the remote" "$WS/err" && report ok ||
   report bad "SessionEnd push failure must warn on stderr (err: $(tr '\n' ',' <"$WS/err"))"
 ! grep -q hookSpecificOutput "$WS/err" && report ok ||
   report bad "SessionEnd must not emit the PostToolUse envelope"
+teardown
+
+# --- `dolt.auto-push: false` commits and skips the push ----------------
+# A store kept local has no remote to push to. Each pass still commits, so
+# the write is in the store's history, and the markers clear as they would
+# after a push that succeeded.
+setup
+export BD_AUTO_PUSH_OFF=1
+FIRE_CWD="$WS" event 'bd close CHR-1' | "$BASH_UNDER_TEST" "$HOOK" >"$WS/out" 2>/dev/null
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 0 ] && report ok ||
+  report bad "auto-push off must commit without pushing (log: $(tr '\n' ',' <"$BD_LOG"))"
+! pending && ! inflight && report ok ||
+  report bad "auto-push off must clear the markers once the commit is made"
+[ ! -s "$WS/out" ] && report ok ||
+  report bad "a skipped push must not be warned about (out: $(tr '\n' ',' <"$WS/out"))"
+teardown
+
+# ... on SessionEnd as well ...
+setup
+export BD_AUTO_PUSH_OFF=1
+fire_end
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 0 ] && report ok ||
+  report bad "SessionEnd with auto-push off must commit without pushing (log: $(tr '\n' ',' <"$BD_LOG"))"
+teardown
+
+# ... and an external store synced that way is settled, not kept as owed.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+REG="$WS/.beads/.augment-sync.external"
+export BD_AUTO_PUSH_OFF=1
+fire "bd -C $OUT close CHR-1"
+grep -q "commit $OUT" "$BD_LOG.dirs" && ! grep -q "push $OUT" "$BD_LOG.dirs" &&
+  report ok || report bad "an external store with auto-push off must be committed, not pushed (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+! registered "$OUT" && report ok ||
+  report bad "a commit-only sync must settle the external entry (reg: $(reg_dump))"
+rm -rf "$OUT"
+teardown
+
+# --- a setting that cannot be read still pushes ------------------------
+# Only an explicit `false` keeps a store local. A `bd` that fails to answer
+# must not turn the push off for a store that relies on it.
+setup
+export BD_CONFIG_FAIL=1
+fire 'bd close CHR-1'
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 1 ] && report ok ||
+  report bad "an unreadable auto-push setting must still push (log: $(tr '\n' ',' <"$BD_LOG"))"
 teardown
 
 # --- a workspace root holding a newline is one root, not two -----------

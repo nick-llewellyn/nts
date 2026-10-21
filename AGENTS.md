@@ -1089,8 +1089,10 @@ write (`bd create` / `close` / `update` / `config set` / … — anything not on
 its read-only allow-list), the hook runs `bd dolt commit` followed by
 `bd dolt push --remote origin` in the store that was written, under a lock
 with a pending-marker so concurrent invocations and the 60 s hook timeout
-cannot lose a write or double-push. `bd prime` is injected at
-`SessionStart` by `.augment/hooks/beads-prime.sh`.
+cannot lose a write or double-push. The push is skipped for a store that
+sets `dolt.auto-push: false`; this repository's store leaves it unset, so it
+pushes. `bd prime` is injected at `SessionStart` by
+`.augment/hooks/beads-prime.sh`.
 
 The hooks need `bd`, `jq`, `shfmt` and `python3` on `PATH` — `shfmt` and
 `python3` are the command scanner, which parses each command's syntax tree
@@ -1121,7 +1123,7 @@ command the shell does not wait for (`&`, `coproc`, `<(…)`) is synced again
 at `SessionEnd`, since that write can land after the tool call returns.
 
 **Act on hook warnings.** Failures are prefixed `beads:` — e.g. `beads:
-'bd dolt push' failed in <root>, local bead writes are NOT on DoltHub.` —
+'bd dolt push' failed in <root>, local bead writes are NOT on the remote.` —
 and reach you on two channels: a `PostToolUse` failure is delivered as
 `additionalContext` on the tool result, while a `SessionEnd` failure and
 the missing-`jq` case (`beads: jq not found, …`, on every event) go to

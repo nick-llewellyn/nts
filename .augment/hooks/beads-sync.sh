@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Commit and push the embedded Dolt bead store after a mutating `bd` command.
+# Commit the Dolt bead store after a mutating `bd` command, and push it unless
+# the store sets `dolt.auto-push: false`.
 #
-# `bd`'s own git-hook shims only fire on git operations, so standalone bead
-# writes (create/close/config) never reach DoltHub. This runs on Auggie's
+# `bd`'s own git-hook shims only fire on git operations, so they never sync
+# standalone bead writes (create/close/config). This runs on Auggie's
 # PostToolUse and SessionEnd events instead, which do not depend on git.
 #
-# Reads the hook event as JSON on stdin. Always exits 0: a failed push must
+# Reads the hook event as JSON on stdin. Always exits 0: a failed sync must
 # warn, never wedge the session.
 
 set -uo pipefail
@@ -28,7 +29,7 @@ command -v bd >/dev/null 2>&1 || exit 0
 # detect on the events that do scan. A scanner that cannot run is reported by
 # `SCAN_FAILED` instead, which is the same warning and syncs the roots anyway.
 if ! command -v jq >/dev/null 2>&1; then
-  echo "beads: jq not found, so the Auggie sync hook is inactive and bead writes will not reach DoltHub. Install with 'brew install jq'." >&2
+  echo "beads: jq not found, so the Auggie sync hook is inactive and bead writes will not be committed or pushed. Install with 'brew install jq'." >&2
   exit 0
 fi
 
@@ -61,6 +62,10 @@ WS_ROOTS=()
 # several roots failing would otherwise emit several objects. Declared here
 # rather than beside the sync loop because the registry below can warn too.
 WARNINGS=()
+
+# What a warning tells the reader to run by hand. A store with
+# `dolt.auto-push: false` has no push to make, so the commit is named first.
+SYNC_BY_HAND="'bd dolt commit' (and 'bd dolt push --remote origin' if it pushes)"
 
 # Emits whatever has been collected, once. Called on the way out of every
 # terminating path, the normal end included.
@@ -332,7 +337,7 @@ run_tracked() {
   if [ "$(lock_owner "$child_link")" != "$recorded" ]; then
     wait "$child"
     rm -f "$gate"
-    WARNINGS+=("beads: could not record the sync process in ${root}, so no push was started there; the markers stay and the next invocation retries.")
+    WARNINGS+=("beads: could not record the sync process in ${root}, so no sync was started there; the markers stay and the next invocation retries.")
     return 1
   fi
   : >"$gate"
@@ -574,7 +579,7 @@ remember_external() {
   if ! : >"$candidate/.beads/.augment-sync.pending" 2>/dev/null &&
     unrecorded "$candidate" && ! owed_unmarked "$candidate"; then
     OWED_UNMARKED+=("$candidate")
-    WARNINGS+=("beads: could not mark the external bead store ${candidate} as owed a sync; its entry is kept so a later invocation syncs it, but run 'bd dolt push --remote origin' there if the write matters.")
+    WARNINGS+=("beads: could not mark the external bead store ${candidate} as owed a sync; its entry is kept so a later invocation syncs it, but run ${SYNC_BY_HAND} there if the write matters.")
   fi
   [ -e "$candidate/.beads/.augment-sync.pending" ] || status=1
   drop_lock "$REGISTRY_GUARD"
@@ -636,7 +641,7 @@ mark_registry_owed() {
     unrecorded "$entry" || continue
     owed_unmarked "$entry" && continue
     OWED_UNMARKED+=("$entry")
-    WARNINGS+=("beads: could not mark the external bead store ${entry} as owed a sync while reclaiming its registry guard; its entry is kept so a later invocation syncs it, but run 'bd dolt push --remote origin' there if the write matters.")
+    WARNINGS+=("beads: could not mark the external bead store ${entry} as owed a sync while reclaiming its registry guard; its entry is kept so a later invocation syncs it, but run ${SYNC_BY_HAND} there if the write matters.")
   done <"$REGISTRY"
   return 0
 }
@@ -809,7 +814,7 @@ remember_async() {
     [ "$existing" = "$candidate" ] && return 0
   done
   if ! take_guard_waiting "$list.guard" 5; then
-    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run 'bd dolt push --remote origin' there.")
+    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
     return 0
   fi
   if [ -r "$list" ]; then
@@ -823,7 +828,7 @@ remember_async() {
       printf '%s\0%s\0' "$CONVERSATION_ID" "$candidate" >>"$list.$$" &&
       mv -f "$list.$$" "$list"; }; then
     rm -f "$list.$$"
-    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run 'bd dolt push --remote origin' there.")
+    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
   fi
   drop_lock "$list.guard"
   return 0
@@ -914,7 +919,7 @@ hand_back() {
   mv -f "$1/.beads/.augment-sync.inflight" "$1/.beads/.augment-sync.pending" 2>/dev/null ||
     : >"$1/.beads/.augment-sync.pending"
   unrecorded "$1" || return 0
-  WARNINGS+=("beads: the failed sync in ${1} could not be recorded for retry either, so nothing marks that store as owed one; run 'bd dolt push --remote origin' there once the cause is fixed.")
+  WARNINGS+=("beads: the failed sync in ${1} could not be recorded for retry either, so nothing marks that store as owed one; run ${SYNC_BY_HAND} there once the cause is fixed.")
   return 0
 }
 
@@ -1004,7 +1009,7 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # Saying `-C` of all of these pointed recovery at a flag the command need not
   # have carried.
   if [ "$SCAN_UNRESOLVED" -gt 0 ]; then
-    WARNINGS+=("beads: a bead store that was written could not be resolved to a path, so it was not synced or recorded; run 'bd dolt push --remote origin' there if the write matters. This happens when a 'bd -C <dir>', 'bd --db <path>', BEADS_DIR or BEADS_DB value depends on something only the running command knew, when a plain 'bd' ran in a directory the event did not report, or when the command ran script the hook could not read (eval \"\$X\", bash -c \"\$(...)\").")
+    WARNINGS+=("beads: a bead store that was written could not be resolved to a path, so it was not synced or recorded; run ${SYNC_BY_HAND} there if the write matters. This happens when a 'bd -C <dir>', 'bd --db <path>', BEADS_DIR or BEADS_DB value depends on something only the running command knew, when a plain 'bd' ran in a directory the event did not report, or when the command ran script the hook could not read (eval \"\$X\", bash -c \"\$(...)\").")
   fi
 
   # `bd -C <dir>` can write a store outside every workspace root, which no
@@ -1105,7 +1110,7 @@ sync_root() {
   local reclaim_dir="$root/.beads/.augment-sync.reclaim"
   local child_link="$root/.beads/.augment-sync.child"
   local locked=0 owner recheck pass commit_out commit_rc push_out push_rc
-  local run_out
+  local run_out push_enabled
 
   # A write that arrives while another invocation holds the lock is not
   # covered by that invocation's push if its commit already ran. Record the
@@ -1196,7 +1201,7 @@ sync_root() {
   # named.
   if [ "$locked" -ne 1 ]; then
     if unrecorded "$root"; then
-      WARNINGS+=("beads: could not record that ${root} is owed a sync, and its lock was held past the deadline; the write there stands behind no record, so run 'bd dolt push --remote origin' there if it matters.")
+      WARNINGS+=("beads: could not record that ${root} is owed a sync, and its lock was held past the deadline; the write there stands behind no record, so run ${SYNC_BY_HAND} there if it matters.")
     fi
     return 0
   fi
@@ -1219,10 +1224,18 @@ sync_root() {
   # -- it is the record -- and the lock released, so a later invocation with
   # a working directory takes both up.
   if ! run_out=$(mktemp "${TMPDIR:-/tmp}/cs-bd.XXXXXX"); then
-    WARNINGS+=("beads: could not create a temporary file under ${TMPDIR:-/tmp}, so ${root} was not synced; the request stays marked, but until the directory is writable no invocation can serve it -- run 'bd dolt push --remote origin' there if the write matters.")
+    WARNINGS+=("beads: could not create a temporary file under ${TMPDIR:-/tmp}, so ${root} was not synced; the request stays marked, but until the directory is writable no invocation can serve it -- run ${SYNC_BY_HAND} there if the write matters.")
     drop_lock "$lock_dir"
     return 0
   fi
+
+  # A store with `dolt.auto-push: false` stays local: each pass below still
+  # commits, and the push is skipped. Unset or any other value pushes, so a
+  # store whose setting cannot be read is synced as it was before.
+  push_enabled=1
+  [ "$(bd -C "$root" config get dolt.auto-push --json 2>/dev/null |
+    jq -r '.value // empty' 2>/dev/null)" = false ] && push_enabled=0
+
   for ((pass = 1; pass <= 3; pass++)); do
     mv -f "$pending" "$inflight" 2>/dev/null || : >"$inflight"
 
@@ -1240,21 +1253,23 @@ sync_root() {
     # non-zero exit instead.
     if [ "$commit_rc" -ne 0 ] && ! commit_noop "$commit_out"; then
       # As with a failed push: hand the request back so it is retried.
-      WARNINGS+=("beads: 'bd dolt commit' failed in ${root}, bead store not pushed to DoltHub. Output: ${commit_out}")
+      WARNINGS+=("beads: 'bd dolt commit' failed in ${root}, bead writes there are not committed. Output: ${commit_out}")
       hand_back "$root"
       rm -f "$run_out"
       return 0
     fi
 
-    run_tracked "$root" "$run_out" dolt push --remote origin
-    push_rc=$?
-    push_out=$(cat "$run_out" 2>/dev/null)
+    if [ "$push_enabled" -eq 1 ]; then
+      run_tracked "$root" "$run_out" dolt push --remote origin
+      push_rc=$?
+      push_out=$(cat "$run_out" 2>/dev/null)
 
-    if [ "$push_rc" -ne 0 ]; then
-      rm -f "$run_out"
-      WARNINGS+=("beads: 'bd dolt push' failed in ${root}, local bead writes are NOT on DoltHub. Output: ${push_out}")
-      hand_back "$root"
-      return 0
+      if [ "$push_rc" -ne 0 ]; then
+        rm -f "$run_out"
+        WARNINGS+=("beads: 'bd dolt push' failed in ${root}, local bead writes are NOT on the remote. Output: ${push_out}")
+        hand_back "$root"
+        return 0
+      fi
     fi
 
     rm -f "$inflight"
@@ -1262,12 +1277,13 @@ sync_root() {
   done
   rm -f "$run_out"
 
-  # A push has returned 0, which is a precondition for settling a registry
-  # entry rather than proof of one. The loop above is bounded, so it can arrive
-  # here with a request still outstanding; `forget_external` re-reads the
-  # markers and keeps the entry when it is. Every earlier return from this
-  # function leaves the entry in place too, so a sync that failed, timed out or
-  # was killed is still owed and every later invocation still finds it.
+  # A pass has completed -- its push returned 0, or the store does not push --
+  # which is a precondition for settling a registry entry rather than proof of
+  # one. The loop above is bounded, so it can arrive here with a request still
+  # outstanding; `forget_external` re-reads the markers and keeps the entry
+  # when it is. Every earlier return from this function leaves the entry in
+  # place too, so a sync that failed, timed out or was killed is still owed and
+  # every later invocation still finds it.
   forget_external "$root"
 
   # Released here rather than only in the trap so a later root is not blocked
