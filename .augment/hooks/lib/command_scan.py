@@ -1176,9 +1176,14 @@ class Scope:
 
     def __init__(self, cwd, known, assigns, sealed=False, exported=None,
                  allexport=False, lastpipe=False, monitor=False,
-                 physical=False):
+                 physical=False, spelled=True):
         self.cwd = cwd
         self.known = known
+        # Whether `cwd` is also how the shell's PWD spells the directory. False
+        # where a wrapper moved the command and the PWD it inherits cannot be
+        # read: the directory is known, but whether a `..` or `$PWD` read from
+        # there goes through a symlink is not; see `wrapper_pwd`.
+        self.spelled = spelled
         # Whether anything in this frame acted on the cwd -- a `cd` taken or
         # given up on, a wrapper's directory, a sealed scope. A tentative
         # frame that never did leaves its caller's cwd standing; see
@@ -1219,7 +1224,7 @@ class Scope:
     def child(self):
         return Scope(self.cwd, self.known, dict(self.assigns), self.sealed,
                      dict(self.exported), self.allexport, self.lastpipe,
-                     self.monitor, self.physical)
+                     self.monitor, self.physical, self.spelled)
 
     def last_member_stays(self):
         """Whether a pipeline's last member runs in this shell: True, False
@@ -1373,7 +1378,8 @@ class Scanner:
         # `OLDPWD` is left unanswered for the same reason `cd -` is: the
         # directory it names is in the launching shell's history, not here.
         if name == "PWD":
-            return self.scope.cwd if self.scope.known else UNKNOWN
+            return self.scope.cwd if self.scope.known and self.scope.spelled \
+                else UNKNOWN
         if name == "OLDPWD":
             return UNKNOWN
         if self.scope.sealed:
@@ -1478,8 +1484,16 @@ class Scanner:
                 # Only a plain reference is answered. An expansion with an
                 # operator -- `${X:-/d}`, `${X#p}` -- names a value that
                 # depends on more than the variable, and guessing it names
-                # some other store.
-                if part.get("Exp") or part.get("Slice") or part.get("Repl"):
+                # some other store. So does one that reads something other
+                # than the variable's value: `${!X}` the variable X names,
+                # `${#X}` its length, `${X[1]}` an element, `${!X*}` the
+                # names that start with X. Answered with X's own value,
+                # `ref=STORE; STORE=/ext; bd -C "${!ref}" close X` named
+                # `<cwd>/STORE` rather than /ext.
+                if part.get("Exp") or part.get("Slice") or part.get("Repl") \
+                        or part.get("Excl") or part.get("Length") \
+                        or part.get("Width") or part.get("Index") \
+                        or part.get("Names"):
                     return UNKNOWN
                 got = self.get(part["Param"]["Value"])
                 if got is UNKNOWN:
@@ -1633,7 +1647,7 @@ class Scanner:
                 return UNKNOWN
             return home + rest
         if prefix == "~+":
-            if not self.scope.known:
+            if not self.scope.known or not self.scope.spelled:
                 return UNKNOWN
             # `or "/"` so a cwd of `/` does not strip to the empty string, which
             # reads downstream as no value at all rather than as the root.
@@ -1663,6 +1677,11 @@ class Scanner:
         if value.startswith("/"):
             return value
         if not self.scope.known:
+            return None
+        # A `..` read from a directory whose PWD spelling is unknown may climb
+        # out through a symlink or not; anything else names the same
+        # directory whichever spelling the PWD has.
+        if not self.scope.spelled and ".." in value.split("/"):
             return None
         return self.scope.cwd.rstrip("/") + "/" + value
 
@@ -2476,16 +2495,17 @@ class Scanner:
         return i
 
     @staticmethod
-    def shell_physical(words):
+    def shell_physical(words, physical=False):
         """Whether a shell started with the options `words` is in physical
         mode, as `bash -P` and `bash -o physical` are: True, False or UNKNOWN.
 
         A new shell starts in logical mode whatever its parent was in, so
         `set -P; bash -c 'cd /ws/link/..'` lands in /ws -- but its own options
         can turn physical mode on, and then the same `cd` lands where the link
-        points. The last of `-P`, `+P`, `-o physical` and `+o physical` wins.
+        points. `physical` is the mode its environment starts it in; see
+        `shellopts_physical`. The last of `-P`, `+P`, `-o physical` and `+o
+        physical` wins over it.
         """
-        physical = False
         i = 0
         while i < len(words):
             word = words[i].value
@@ -3262,15 +3282,17 @@ class Scanner:
         # one to apply, so an unwrapped `cd` still reaches the command after it.
         end = split[1] if split is not None else start
         cwd = None if end is None else self.wrapper_chdir(fields, end)
-        cwd = self.wrapper_pwd(cmd, fields, end, cwd)
+        cwd, spelled = self.wrapper_pwd(cmd, fields, end, cwd)
         if cwd is not None:
             self.scoped(lambda: self.dispatch(cmd, fields, start, split,
-                                              conditional, follows, cwd))
+                                              conditional, follows, cwd,
+                                              spelled))
             return
         self.dispatch(cmd, fields, start, split, conditional, follows, None)
 
     def wrapper_pwd(self, cmd, args, end, cwd):
-        """The directory the wrappers moved the command to, as it names it.
+        """The directory the wrappers moved the command to, as it names it,
+        and whether that spelling is known.
 
         A wrapper's `chdir` leaves `PWD` in the environment as it was, and
         bash -- like Go's `os.Getwd`, which `bd` uses -- keeps an inherited PWD
@@ -3278,23 +3300,31 @@ class Scanner:
         the command's PWD is still /a/link, and a `cd ..` or `bd -C ..` inside
         it reads `..` from there and lands in /a. Where PWD names some other
         directory, or none reaches the command, it starts from the physical
-        path `getcwd` gives, which is what `cwd` holds. A PWD this scan cannot
-        read is taken as not naming it.
+        path `getcwd` gives, which is what `cwd` holds.
+
+        A PWD this scan cannot read may be such an alias or not. The directory
+        is still the one `cwd` names, so the store `bd` walks up to is known,
+        but the spelling is not: a `..`, `$PWD` or `~+` read from it is left
+        unresolved rather than read physically; see `Scope.spelled`.
         """
         if cwd is None or cwd is UNKNOWN:
-            return cwd
+            return cwd, True
         pwd = self.command_env(cmd, args, end, "PWD")
+        if pwd is UNKNOWN:
+            return cwd, False
         if not isinstance(pwd, str) or not pwd.startswith("/") or \
                 not same_dir(pwd, cwd):
-            return cwd
-        return logical_path(pwd) or cwd
+            return cwd, True
+        return logical_path(pwd) or cwd, True
 
-    def dispatch(self, cmd, fields, start, split, conditional, follows, cwd):
+    def dispatch(self, cmd, fields, start, split, conditional, follows, cwd,
+                 spelled=True):
         """Hands the command at `fields[start]` to the reader that knows it.
 
-        `cwd` is the directory a wrapper runs it in, or None when it runs here.
-        Applied to this frame rather than passed on, so every reader below --
-        and every scope nested inside them -- resolves against it.
+        `cwd` is the directory a wrapper runs it in, or None when it runs here,
+        and `spelled` whether its PWD spelling is known. Applied to this frame
+        rather than passed on, so every reader below -- and every scope nested
+        inside them -- resolves against it.
         """
         if cwd is not None:
             if cwd is UNKNOWN:
@@ -3304,7 +3334,7 @@ class Scanner:
                 # command never opened.
                 self.leave_cwd()
             else:
-                self.enter_cwd(cwd)
+                self.enter_cwd(cwd, spelled)
 
         if split is not None:
             self.split_wrapper(cmd, fields, start, split)
@@ -3565,16 +3595,18 @@ class Scanner:
         """
         return None if value is UNSET else value
 
-    def enter_cwd(self, path):
+    def enter_cwd(self, path, spelled=True):
         """Moves this scope to `path`, as a `cd` that succeeded does.
 
         A successful `cd` overwrites the shell's PWD and OLDPWD, so an explicit
         assignment to either no longer speaks: `PWD=/decoy; cd /external; bd -C
         "$PWD" close X` writes /external's store. Left standing, the assignment
-        won over the tracked cwd in `get` and named the decoy.
+        won over the tracked cwd in `get` and named the decoy. `spelled` says
+        whether `path` is also the PWD's spelling; see `Scope.spelled`.
         """
         self.scope.cwd = path
         self.scope.known = True
+        self.scope.spelled = spelled
         self.scope.moved = True
         self.scope.assigns.pop("PWD", None)
         self.scope.assigns.pop("OLDPWD", None)
@@ -3658,10 +3690,16 @@ class Scanner:
             self.leave_cwd()
             return
         dest = cd_dest(target, physical)
+        # The PWD a `cd` leaves is spelled when the shell knew the spelling it
+        # started from, when the operand was absolute, or when `-P` made it
+        # the physical path. A relative one from an unknown spelling extends
+        # that spelling, whatever it was.
+        spelled = self.scope.spelled or physical is True or args[i].tilde \
+            or args[i].value.startswith("/")
         if dest is UNKNOWN:
             self.leave_cwd()
         elif dest is not None:
-            self.enter_cwd(dest)
+            self.enter_cwd(dest, spelled)
 
     def cdpath_target(self, field):
         """Where `CDPATH` sends a `cd` to `field`, if it sends it anywhere.
@@ -3996,8 +4034,32 @@ class Scanner:
         wrapper_assigns, sealed = self.prefix_env(args, start)
         seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
+        physical = self.shell_physical(args[start + 1:idx],
+                                       self.shellopts_physical(cmd, args, start))
         self.scan_script(script, seed=seed, sealed=sealed, process=True,
-                         physical=self.shell_physical(args[start + 1:idx]))
+                         physical=physical)
+
+    def shellopts_physical(self, cmd, args, start):
+        """Whether the shell at `args[start]` starts in physical mode from the
+        `SHELLOPTS` in its environment: True, False or UNKNOWN.
+
+        bash turns on every option an inherited SHELLOPTS lists before reading
+        its own arguments, so `env SHELLOPTS=physical bash -c 'cd
+        /ws/link/..'` lands where the link points. Only bash reads it; `sh` is
+        bash on some systems and not on others, so there the answer is in
+        doubt, and the other shells ignore it.
+        """
+        name = args[start].value.rsplit("/", 1)[-1]
+        if name not in ("bash", "sh"):
+            return False
+        shellopts = self.command_env(cmd, args, start, "SHELLOPTS")
+        if shellopts is None:
+            return False
+        if shellopts is UNKNOWN:
+            return UNKNOWN
+        if "physical" not in shellopts.split(":"):
+            return False
+        return True if name == "bash" else UNKNOWN
 
     def split_wrapper(self, cmd, args, start, split):
         """Scans what `env -S <string>` runs, the string naming the command.
@@ -4195,4 +4257,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

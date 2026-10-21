@@ -2298,6 +2298,19 @@ check_target "$WS_DIR" "set -P; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "bash -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "bash -o physical -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "bash -P +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# bash also starts in physical mode when its SHELLOPTS lists it, before its
+# own options. Only bash reads it; `sh` may or may not be bash.
+check_target "$EXT" "env SHELLOPTS=physical bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "env SHELLOPTS=braceexpand:physical bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "env SHELLOPTS=physical bash +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "env SHELLOPTS=physical dash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_unresolved "env SHELLOPTS=physical sh -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# A wrapper's directory with a PWD that cannot be read: the store `bd` walks
+# up to is still known, but a `..` read from there may climb through a link.
+check_target "$EXT" "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bash -c 'bd close CHR-1'"
+check_unresolved "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bash -c 'cd ..; bd close CHR-1'"
+check_unresolved "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bd -C .. close CHR-1"
+check_unresolved "sudo -D $WS_DIR/link bd -C .. close CHR-1"
 # A sourced file may change it, so after one the two readings are in doubt.
 check_unresolved "set -P; source ./opts.sh; cd $WS_DIR/link/..; bd close CHR-1"
 # The last of `-L` and `-P` wins, as in bash.
@@ -2330,6 +2343,15 @@ check_target "$EXT" "cd $EXT; cd $WS_DIR/missing/..; bd close CHR-1"
 ln -s "$STORE" "$CD/alias"
 check_target "$CD/alias" "cd $CD/alias && bd close CHR-1"
 check_target "$STORE" "cd -P $CD/alias && bd close CHR-1"
+
+# --- parameter expansions that read something other than the value -----
+# `${!X}` reads the variable X names, `${#X}` X's length, `${X[1]}` an
+# element and `${!X*}` the names starting with X, so none is X's own value.
+check_unresolved 'ref=STORE; STORE=/tmp/store; bd -C "${!ref}" close CHR-1'
+check_unresolved 'X=/tmp/store; bd -C "${#X}" close CHR-1'
+check_unresolved 'X=/tmp/store; bd -C "${X[1]}" close CHR-1'
+check_unresolved 'X=/tmp/store; bd -C "${!X*}" close CHR-1'
+check_target '/tmp/store' 'X=/tmp/store; bd -C "${X}" close CHR-1'
 
 # --- work budget ---------------------------------------------------------
 # Nested loops multiply work that the cap on each loop does not bound: five
