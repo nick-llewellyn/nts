@@ -2305,6 +2305,22 @@ check_target "$EXT" "env SHELLOPTS=braceexpand:physical bash -c 'cd $WS_DIR/link
 check_target "$WS_DIR" "env SHELLOPTS=physical bash +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "env SHELLOPTS=physical dash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_unresolved "env SHELLOPTS=physical sh -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# A privileged shell ignores an inherited SHELLOPTS; its own `-P` still counts,
+# and the last of `-p` and `+p` decides.
+check_target "$WS_DIR" "env SHELLOPTS=physical bash -p -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "env SHELLOPTS=physical bash -o privileged -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "env SHELLOPTS=physical bash -p -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$EXT" "env SHELLOPTS=physical bash -p +p -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# An exported SHELLOPTS carries the parent's physical mode as it is now, not
+# as it was inherited; a wrapper that drops it, or clears the environment,
+# leaves the child logical, and a prefix assignment to it is refused.
+check_target "$EXT" "export SHELLOPTS; set -P; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "env SHELLOPTS=physical bash -c 'set +P; bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$EXT" "env SHELLOPTS=physical bash -c 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target "$WS_DIR" "export SHELLOPTS; set -P; env -u SHELLOPTS bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "export SHELLOPTS; set -P; env -i bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target "$WS_DIR" "SHELLOPTS=physical bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_unresolved "true && set -P; export SHELLOPTS; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 # A wrapper's directory with a PWD that cannot be read: the store `bd` walks
 # up to is still known, but a `..` read from there may climb through a link.
 check_target "$EXT" "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bash -c 'bd close CHR-1'"

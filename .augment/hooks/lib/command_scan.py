@@ -1261,7 +1261,13 @@ class Scanner:
         # need not share that directory, so resolving a relative target against
         # its cwd names a store under some unrelated path. Unknown from the
         # start instead, which leaves such a target unresolved.
-        self.scope = Scope(launch_cwd, bool(launch_cwd), {})
+        #
+        # The shell the command runs in imports an inherited SHELLOPTS, so one
+        # listing `physical` starts it in physical mode; see
+        # `shellopts_physical`.
+        self.scope = Scope(launch_cwd, bool(launch_cwd), {},
+                           physical="physical" in
+                           os.environ.get("SHELLOPTS", "").split(":"))
         self.depth = 0
         # Bodies of the functions defined so far, by name, and the names whose
         # bodies are being scanned right now. A body is scanned twice -- once
@@ -2495,16 +2501,17 @@ class Scanner:
         return i
 
     @staticmethod
-    def shell_physical(words, physical=False):
-        """Whether a shell started with the options `words` is in physical
-        mode, as `bash -P` and `bash -o physical` are: True, False or UNKNOWN.
+    def shell_option(words, letter, name, value=False):
+        """The state the shell options `words` leave an option in: True,
+        False or UNKNOWN.
 
-        A new shell starts in logical mode whatever its parent was in, so
-        `set -P; bash -c 'cd /ws/link/..'` lands in /ws -- but its own options
-        can turn physical mode on, and then the same `cd` lands where the link
-        points. `physical` is the mode its environment starts it in; see
-        `shellopts_physical`. The last of `-P`, `+P`, `-o physical` and `+o
-        physical` wins over it.
+        The option is the one `-<letter>` and `-o <name>` set and `+<letter>`
+        and `+o <name>` clear, as `-P` and `-o physical` do, and the last of
+        them wins over `value`, the state it starts in. A new shell starts in
+        logical mode unless its environment says otherwise -- see
+        `shellopts_physical` -- so `set -P; bash -c 'cd /ws/link/..'` lands in
+        /ws, while `bash -P -c ...` lands where the link points. An option word
+        this scan cannot read may be any of them.
         """
         i = 0
         while i < len(words):
@@ -2515,18 +2522,18 @@ class Scanner:
                 option = words[i + 1].value if i + 1 < len(words) else None
                 if option is UNKNOWN:
                     return UNKNOWN
-                if option == "physical":
-                    physical = word == "-o"
+                if option == name:
+                    value = word == "-o"
                 i += 2
                 continue
             if word in SHELL_OPT_ARGS:
                 i += 2
                 continue
             if word[:1] in ("-", "+") and not word.startswith("--") and \
-                    "P" in word[1:]:
-                physical = word.startswith("-")
+                    letter in word[1:]:
+                value = word.startswith("-")
             i += 1
-        return physical
+        return value
 
     # --- the walk ---------------------------------------------------------
 
@@ -2620,7 +2627,7 @@ class Scanner:
         which is the exported names alone -- see `environment_view`. `seed` is
         what the command line handed the process on top of that, and is
         exported there, having arrived as environment. `physical` is the
-        process's own `set -P` state; see `shell_physical`.
+        process's own `set -P` state; see `shell_wrapper`.
 
         `frame` is "tentative" for text that runs in this shell rather than a
         subshell, as `eval`'s does; see `tentative`. `conditional` is then what
@@ -4034,8 +4041,19 @@ class Scanner:
         wrapper_assigns, sealed = self.prefix_env(args, start)
         seed = {} if sealed else self.prefix_seed(cmd)
         seed.update(wrapper_assigns)
-        physical = self.shell_physical(args[start + 1:idx],
-                                       self.shellopts_physical(cmd, args, start))
+        # Physical mode starts from SHELLOPTS unless the shell is privileged,
+        # which ignores it -- `env SHELLOPTS=physical bash -p -c 'cd
+        # /ws/link/..'` lands in /ws -- and its own `-P` or `+P` wins over
+        # either. Whether it is privileged is settled by the last of `-p`,
+        # `+p` and `-o privileged` among its options.
+        words = args[start + 1:idx]
+        privileged = self.shell_option(words, "p", "privileged")
+        inherited = self.shellopts_physical(cmd, args, start)
+        if privileged is True:
+            inherited = False
+        elif privileged is UNKNOWN and inherited is not False:
+            inherited = UNKNOWN
+        physical = self.shell_option(words, "P", "physical", inherited)
         self.scan_script(script, seed=seed, sealed=sealed, process=True,
                          physical=physical)
 
@@ -4043,22 +4061,39 @@ class Scanner:
         """Whether the shell at `args[start]` starts in physical mode from the
         `SHELLOPTS` in its environment: True, False or UNKNOWN.
 
-        bash turns on every option an inherited SHELLOPTS lists before reading
-        its own arguments, so `env SHELLOPTS=physical bash -c 'cd
-        /ws/link/..'` lands where the link points. Only bash reads it; `sh` is
-        bash on some systems and not on others, so there the answer is in
-        doubt, and the other shells ignore it.
+        bash turns on every option an inherited SHELLOPTS lists, so `env
+        SHELLOPTS=physical bash -c 'cd /ws/link/..'` lands where the link
+        points. Only bash reads it; `sh` is bash on some systems and not on
+        others, so there the answer is in doubt, and the other shells ignore
+        it.
+
+        A wrapper that sets, unsets or clears the environment decides the
+        value. Otherwise it is this shell's own SHELLOPTS, and bash keeps that
+        in step with its options: exported, it carries the physical mode in
+        force now, so `export SHELLOPTS; set -P; bash -c ...` starts the child
+        physical, and a `set +P` before it starts the child logical whatever
+        was inherited. Unexported, it reaches no child. A prefix assignment
+        does not change it, as bash refuses one to a readonly variable and
+        runs the command with the value it had.
         """
         name = args[start].value.rsplit("/", 1)[-1]
         if name not in ("bash", "sh"):
             return False
-        shellopts = self.command_env(cmd, args, start, "SHELLOPTS")
-        if shellopts is None:
-            return False
-        if shellopts is UNKNOWN:
-            return UNKNOWN
-        if "physical" not in shellopts.split(":"):
-            return False
+        wrapper_assigns, sealed = self.prefix_env(args, start)
+        if sealed or "SHELLOPTS" in wrapper_assigns:
+            shellopts = self.command_env(cmd, args, start, "SHELLOPTS")
+            if shellopts is None:
+                return False
+            if shellopts is UNKNOWN:
+                return UNKNOWN
+            physical = "physical" in shellopts.split(":")
+        else:
+            exported = self.is_exported("SHELLOPTS")
+            if exported is not True:
+                return exported
+            physical = self.scope.physical
+        if physical is not True:
+            return physical
         return True if name == "bash" else UNKNOWN
 
     def split_wrapper(self, cmd, args, start, split):
