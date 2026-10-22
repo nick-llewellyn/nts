@@ -2300,6 +2300,9 @@ check_target '/tmp/store' 'env -- OUT="$(pwd)" bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'sudo OUT="$(pwd)" bash -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'env OUT="$(pwd)" A=/tmp/store bash -c "bd -C \"\$A\" close CHR-1"'
 check_unresolved 'env OUT="$(pwd)" bash -c "bd -C \"\$OUT\" close CHR-1"'
+# Its name is read with the shell's escapes applied.
+check_unresolved 'env BEADS\_DIR="$(printf %s /tmp/store/.beads)" bd close CHR-1'
+check_unresolved 'env BEADS_DIR\="$(printf %s /tmp/store/.beads)" bd close CHR-1'
 # An unquoted one may split, so it may hold options and the command alike:
 # the invocation is given up on, and the write after it still counts.
 check_unresolved 'env OUT=$(pwd) bash -c "bd -C /tmp/store close CHR-1"'
@@ -2317,6 +2320,11 @@ check_unresolved "cd $STORE; bd close \$(printf %s CHR-1)"
 check_unresolved "cd $STORE; bd close \"\$(printf %s CHR-1)\""
 check_target "$STORE" "cd $STORE; bd close \"CHR-\$(printf %s 1)\""
 check_target "$STORE" "cd $STORE; bd create X -d \"\$(printf %s body)\""
+check_target "$STORE" "cd $STORE; bd create X --description \"\$(printf %s body)\""
+# After a flag known to take nothing, it is read as it stands.
+check_unresolved 'CS_FLAG=-C; bd ready --claim "${CS_FLAG[0]}" /tmp/store'
+check_unresolved 'CS_FLAG=-C; bd close --force "${CS_FLAG[0]}" /tmp/store CHR-1'
+check_unresolved 'CS_FLAG=-C; bd sync -y "${CS_FLAG[0]}" /tmp/store'
 check_target "$STORE" "cd $STORE; bd close -- \$(printf %s CHR-1)"
 # A later prefix assignment sees an earlier one in dash, zsh and bash from
 # 4.0, but not everywhere in bash 3.2, so in bash a value the two readings

@@ -253,7 +253,50 @@ BD_STORE_ENV = ("BEADS_DIR", "BEADS_DB")
 # in a bundle before one that does: `bd -qC/tmp/store close X` writes that
 # store. Needed to read the attached form of `-C`, since the letters before it
 # must be known to take nothing for the rest of the word to be its value.
-BD_OPT_NOARG = {"-q", "-v", "-V"}
+BD_OPT_NOARG = {"-q", "-v", "-V", "-w", "-y"}
+
+# `bd`'s long flags that take nothing under every command that has them, from
+# `--help` across `bd` 1.3.1. The word after one is read as it stands rather
+# than as a possible value: `bd ready --claim "${FLAG[0]}" /ext`, FLAG holding
+# `-C`, writes /ext. A flag that takes a value under any command -- `bd create
+# --description` does, `bd edit --description` does not -- is left out, as is
+# any a later release adds, and may still take the word after it.
+BD_LONG_NOARG = set("""
+--agent --all --all-fields --allow-empty-description --allow-git-origin
+--allow-non-loopback --allow-stale --analyze --any-replica --apply --assigned
+--auto --auto-merge --beads --blocking --bootstrap-match --box --brief
+--brief-deps --by-assignee --by-label --by-priority --by-status --by-type
+--cascade --chain --check-health --children --claim --claim-next --clean
+--closed --compact --conclude --continue --contributor --cpu-profile
+--create-only --csv --current --debug --dedup --deep --deferred --delete
+--details --discard-remote --dolt --dot --dry-run --eligible-only
+--empty-description --ephemeral --escalate --events --explain --export
+--external --fix --fix-child-parent --flat --follow --force
+--force-git-tracked --from-jsonl --full --gated --global --help --history
+--hook-json --html --ignore-references --ignore-schema-skew
+--include-comments --include-deferred --include-dependents
+--include-ephemeral --include-gates --include-infra --include-memories
+--include-templates --init-if-missing --insecure-no-auth --inspect
+--interactive --json --keep-children --list --local-time --long --mcp
+--memories-only --milestones --no-activity --no-adopt --no-assignee --no-auto
+--no-blocked --no-color --no-commit --no-create --no-cycle-check
+--no-ephemeral --no-history --no-inherit-labels --no-labels --no-memories
+--no-pager --no-parent --no-pinned --no-wait --non-interactive --open
+--orchestrator --ours --overdue --parallel --parse-only --perf --persist
+--persistent --pinned --plain --pour --prefer-ado --prefer-github
+--prefer-gitlab --prefer-jira --prefer-linear --prefer-local --prefer-newer
+--prefer-notion --pretty --print --proxied-server
+--proxied-server-external-tls --proxied-server-external-tls-skip-verify
+--pull --pull-if-stale --pull-only --push --push-only --quiet --readonly
+--ready --reconcile --refs --reinit-local --relations --remove --repair
+--reverse --root-only --sandbox --schema --scrub --sections --server
+--server-tls --setup-exclude --shared --shared-server --short
+--show-all-paths --silent --skip-agents --skip-decay --skip-dolt --skip-hooks
+--skip-labels --skip-lint --stats --stdin --stdout --stealth --strict
+--suggest-next --team-server --thanks --theirs --thread --tree --unassigned
+--update-config --update-refs --update-repo-id --validate --verbose --version
+--wait --watch --whats-new --wisps-plane --within-from-only --yes
+""".split())
 
 # The wrapper whose `VAR=value` arguments this scan reads as the environment it
 # gives the command: `env OUT=/tmp/store bash -c 'bd -C "$OUT" ...'` writes
@@ -883,12 +926,16 @@ def assignment_name(word):
     on paths. Read as an unknown word it was taken for the command, and the
     write behind it was missed. A word that may split may supply the command
     itself, so it is no such argument.
+
+    The literal is read with its escapes applied, as the wrapper receives it:
+    `env BEADS\\_DIR="$(...)" bd close X` assigns BEADS_DIR, and matched as
+    written the name kept its backslash and BEADS_DIR looked unset.
     """
     parts = list(word_parts(word))
     if not parts or parts[0][1] or parts[0][0]["Type"] != "Lit" or \
             may_split(word):
         return None
-    match = ASSIGN_WORD.match(parts[0][0].get("Value", ""))
+    match = ASSIGN_WORD.match(unescape(parts[0][0].get("Value", "")))
     if not match or match.group(0).startswith("-"):
         return None
     return match.group(0)[:-1]
@@ -2529,12 +2576,13 @@ class Scanner:
         opaque = False
         # Whether the word before this one was an option whose arity this scan
         # does not know, which makes this word possibly its value rather than
-        # an option of `bd`'s own. Only the help reading turns on it: `bd
-        # update CHR-1 --title --help` sets the title to `--help` and writes
-        # the store, and reading that token as a help request suppressed the
-        # sync. The target and operand readings are left as they were, since a
-        # word skipped as a supposed value is a `-C` that goes unseen, and a
-        # write whose target is lost is the one outcome worse than a no-op.
+        # an option of `bd`'s own. The help reading turns on it -- `bd update
+        # CHR-1 --title --help` sets the title to `--help` and writes the
+        # store, and reading that token as a help request suppressed the sync
+        # -- as does whether an unreadable word may be an option. The target
+        # and operand readings are left as they were, since a word skipped as
+        # a supposed value is a `-C` that goes unseen, and a write whose target
+        # is lost is the one outcome worse than a no-op.
         may_be_value = False
         while i < len(args):
             word = args[i].value
@@ -2555,7 +2603,8 @@ class Scanner:
                 # directory's store. A quoted one after an option of unknown
                 # arity is taken for its value, as `bd create X -d "$(cat f)"`
                 # makes it: an option that takes one takes the next argument
-                # whatever it holds.
+                # whatever it holds. After one known to take nothing, `--claim`
+                # among them, it is read as it stands; see `BD_LONG_NOARG`.
                 if not end_of_opts and (args[i].split or (
                         args[i].dash and not after_unknown_opt)):
                     opaque = True
@@ -2588,10 +2637,10 @@ class Scanner:
                     elif name == BD_DB_OPT and i + 1 < len(args):
                         store = args[i + 1]
                     i += 1
-                else:
-                    # A long flag neither table knows may still take the word
-                    # after it -- every per-verb option is one, `--title`
-                    # among them -- so what follows is not certainly an option.
+                elif name not in BD_LONG_NOARG:
+                    # A long flag no table knows may still take the word after
+                    # it -- every per-verb option is one, `--title` among them
+                    # -- so what follows is not certainly an option.
                     may_be_value = True
                 i += 1
                 continue
