@@ -2411,6 +2411,18 @@ check_async "" "setsid bd -C $STORE close CHR-1"
 check_async "" "set -m; setsid -w bd -C $STORE close CHR-1"
 check_async "" "setsid bd -C $STORE close CHR-1 -f"
 check_async "" "sudo -u -b bd -C $STORE close CHR-1"
+# A `setsid` after another leads the session the first made, so it forks
+# unless it waits itself; the outer one's `-w` does not make it.
+check_async "$STORE" "setsid setsid bd -C $STORE close CHR-1"
+check_async "$STORE" "setsid -w setsid bd -C $STORE close CHR-1"
+check_async "$STORE" "setsid -w nice setsid bd -C $STORE close CHR-1"
+check_async "" "setsid setsid -w bd -C $STORE close CHR-1"
+check_async "" "setsid -w setsid -w bd -C $STORE close CHR-1"
+# A sourced file may `set -m` or `shopt -s lastpipe`, so after one whether
+# `setsid` forks, and where a pipeline's last member runs, are in doubt.
+check_async "$STORE" "source ./cs-opts.sh; setsid bd -C $STORE close CHR-1"
+check_unresolved "source ./cs-opts.sh; cd $STORE; true | cd $CD/wr; bd -C . close CHR-1"
+check_unresolved "shopt -s lastpipe; source ./cs-opts.sh; cd $STORE; true | cd $CD/wr; bd -C . close CHR-1"
 
 # --- symlinks ------------------------------------------------------------
 # `link` points into ext, which holds a store, from ws, which holds another.

@@ -2342,11 +2342,15 @@ class Scanner:
         before the write landed; see `in_background`. `-w` makes `setsid`
         wait, and without `-f` it forks only as a process group leader, which
         a command is under job control: `set -m; setsid sleep 2` returns in no
-        time, where without `set -m` it takes two seconds. Only each
+        time, where without `set -m` it takes two seconds. A `setsid` after
+        another is one too, the first having made it lead a session of its
+        own, so `setsid -w setsid sleep 2` returns at once as well: the outer
+        `-w` waits only on a fork the outer one never made. Only each
         wrapper's own options are read, so `setsid bd ... -f` waits.
         """
         if start is None:
             return False
+        leader = False
         i = 0
         while i < start:
             word = args[i].value
@@ -2355,11 +2359,11 @@ class Scanner:
                 i += 1
                 continue
             seen, i = self.wrapper_flags(args, i, start, name)
-            if seen & WRAPPER_WAIT_OPTS.get(name, set()):
-                continue
-            if seen & WRAPPER_DETACH_OPTS[name] or (
-                    name == "setsid" and self.scope.monitor is not False):
+            forks = bool(seen & WRAPPER_DETACH_OPTS[name]) or (
+                name == "setsid" and (leader or self.scope.monitor is not False))
+            if forks and not seen & WRAPPER_WAIT_OPTS.get(name, set()):
                 return True
+            leader = leader or name == "setsid"
         return False
 
     @staticmethod
@@ -3853,10 +3857,14 @@ class Scanner:
         # ./select-store.sh; bd close X` may have moved the shell or set
         # BEADS_DIR, and reading on with the old state named a store the
         # command never opened, with no warning. It may `set -P` or `set +P`
-        # too, so how a later `cd` reads `..` is in doubt with the rest.
+        # too, so how a later `cd` reads `..` is in doubt with the rest, and
+        # `set -m` or `shopt -s lastpipe`, so whether a pipeline's last member
+        # runs here and whether a `setsid` forks are in doubt as well.
         if word in SOURCE_WORDS:
             self.seal_opaque(cwd=True)
             self.scope.physical = UNKNOWN
+            self.scope.monitor = UNKNOWN
+            self.scope.lastpipe = UNKNOWN
             return
 
         if name in READ_WORDS:
