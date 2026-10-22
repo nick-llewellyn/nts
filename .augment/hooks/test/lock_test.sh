@@ -895,17 +895,18 @@ teardown
 
 # --- a background write to a store that does not exist yet -------------
 # The backgrounded command may create the store before it writes, so the
-# store can be missing when PostToolUse runs and present by SessionEnd.
+# store can be missing when PostToolUse runs and present by SessionEnd. The
+# record names the directory `bd` walks up from, marked `+`.
 setup
 PARENT=$(mktemp -d)
 NEW="$PARENT/store"
 CONV=conv-a fire "(sleep 5; mkdir -p $NEW/.beads; bd -C $NEW close CHR-1) &"
-registered "$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
+registered "+$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
   report bad "a background write to a store not there yet must be kept for SessionEnd (async: $(reg_dump "$WS/.beads/.augment-sync.async"))"
 # Another session ending before the store exists must keep the record: the
 # job that will create it belongs to the session still running.
 CONV=conv-b fire_end
-registered "$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
+registered "+$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
   report bad "another session's SessionEnd must keep a record whose store is not there yet (async: $(reg_dump "$WS/.beads/.augment-sync.async"))"
 mkdir -p "$NEW/.beads"
 : >"$BD_LOG.dirs"
@@ -913,6 +914,44 @@ CONV=conv-a fire_end
 grep -q "push $NEW" "$BD_LOG.dirs" && report ok ||
   report bad "SessionEnd must sync a store that appeared after its background write was seen (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
 rm -rf "$PARENT"
+teardown
+
+# --- a background -C below a store made later --------------------------
+# `bd -C` walks up from its directory, and the job may make the store it
+# finds first, above that directory: SessionEnd walks up from the directory
+# the record names rather than looking in it alone.
+setup
+PARENT=$(mktemp -d)
+ASYNC="$WS/.beads/.augment-sync.async"
+CONV=conv-a fire "(sleep 5; mkdir -p $PARENT/.beads $PARENT/sub; bd -C $PARENT/sub close CHR-1) &"
+registered "+$PARENT/sub" "$ASYNC" && report ok ||
+  report bad "a background -C must be kept as a directory to walk up from (async: $(reg_dump "$ASYNC"))"
+mkdir -p "$PARENT/.beads" "$PARENT/sub"
+: >"$BD_LOG.dirs"
+CONV=conv-a fire_end
+grep -qxF "push $PARENT" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync the store a background -C walks up to (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+[ ! -e "$ASYNC" ] && report ok ||
+  report bad "SessionEnd must hand over a walked-up record once its store is synced (async: $(reg_dump "$ASYNC"))"
+rm -rf "$PARENT"
+teardown
+
+# --- a background bd below a store, nearer one made later --------------
+# A plain `bd` in a directory under a store opens a nearer one if the job
+# makes it first, so the directory is kept beside the store found now.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads" "$OUT/child"
+ASYNC="$WS/.beads/.augment-sync.async"
+CONV=conv-a fire "(sleep 5; cd $OUT/child; bd init; bd create X) &"
+registered "$OUT" "$ASYNC" && registered "+$OUT/child" "$ASYNC" && report ok ||
+  report bad "a background bd must keep both the store found and the directory it walks up from (async: $(reg_dump "$ASYNC"))"
+mkdir -p "$OUT/child/.beads"
+: >"$BD_LOG.dirs"
+CONV=conv-a fire_end
+grep -qxF "push $OUT/child" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync a nearer store the background job made (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+rm -rf "$OUT"
 teardown
 
 # --- a settled external target is forgotten ----------------------------

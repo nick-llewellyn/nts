@@ -843,6 +843,15 @@ check_target "$CD/one/two/store" "cd $CD/one; unset CDPATH; cd two; bd -C store 
 check_unresolved "CDPATH=\$(pick); cd two; bd -C store close CHR-1"
 check_unresolved "false && CDPATH=$CD/one; cd two; bd -C store close CHR-1"
 check_unresolved "cd \$(pick); CDPATH=one:$CD/one; cd two; bd -C store close CHR-1"
+# A CDPATH in the `cd`'s own prefix is the one it searches, in bash, dash and
+# ksh, and lasts only for that `cd`; zsh ignores it.
+mkdir -p "$CD/cdp/repo" "$CD/cdp/ext/repo"
+check_target "$CD/cdp/ext/repo/store" "cd $CD/cdp; CDPATH=$CD/cdp/ext cd repo; bd -C store close CHR-1"
+check_target "$CD/cdp/ext/repo/store" "cd $CD/cdp; dash -c 'CDPATH=$CD/cdp/ext cd repo; bd -C store close CHR-1'"
+check_target "$CD/cdp/repo/store" "cd $CD/cdp; zsh -c 'CDPATH=$CD/cdp/ext cd repo; bd -C store close CHR-1'"
+check_target "$CD/cdp/repo/store" "cd $CD/cdp; CDPATH=$CD/cdp/ext; CDPATH= cd repo; bd -C store close CHR-1"
+check_target "$CD/cdp/repo/store" "cd $CD/cdp; CDPATH=$CD/cdp/ext cd repo; cd $CD/cdp; cd repo; bd -C store close CHR-1"
+check_unresolved "cd $CD/cdp; CDPATH=\$(pick) cd repo; bd -C store close CHR-1"
 check_target "$CD/one/two/store" "cd \$(pick); CDPATH=$CD/one; cd two; bd -C store close CHR-1"
 # The hook's own environment answers when the text says nothing.
 export CDPATH="$CD/one"
@@ -1232,6 +1241,10 @@ check_target '/tmp/store' 'env -S"bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' '/usr/bin/env -S "bd -C /tmp/store close CHR-1"'
 # `-S` may end a bundle whose other letters take nothing.
 check_target '/tmp/store' 'env -iS "bd -C /tmp/store close CHR-1"'
+# A letter that takes a value takes the rest of its word, so the `S` in
+# `-uSHELL` is part of the name unset, and the `-S` after it is the flag.
+check_target '/tmp/store' "env -uSHELL -S 'bd -C /tmp/store close CHR-1'"
+check_target '/tmp/store' "env -uS -S 'bd -C /tmp/store close CHR-1'"
 # The options before it are still its own.
 check_target '/tmp/store' 'env -u FOO -S "bd -C /tmp/store close CHR-1"'
 check sync 'env -S "bd close CHR-1"'
@@ -1269,6 +1282,9 @@ check skip 'env -S "bd -C /tmp/store close '"'"'CHR-1"'
 check_target '/tmp/store' 'CS_W_STORE=/tmp/store env -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
 check_target '/tmp/store' 'export CS_W_STORE=/tmp/store; env -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
 check_unresolved 'CS_W_STORE=/tmp/store; env -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
+# `${PWD}` is read from the environment `env` was started with, before its
+# `-C` moves it.
+check_target "$CD/base/store" "cd $CD/base; env -C $CD/other -S 'bd -C \${PWD}/store close CHR-1'"
 check_unresolved 'CS_W_STORE=/old env CS_W_STORE=/tmp/store -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
 check_unresolved 'CS_W_STORE=/tmp/store env -u CS_W_STORE -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
 check_unresolved 'CS_W_STORE=/tmp/store env -i -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
@@ -1893,7 +1909,7 @@ check skip 'echo )))'
 check skip ''
 check skip '   '
 # A coprocess is a subshell, and the command in one is a real invocation.
-check_target '/tmp/store' 'coproc bd -C /tmp/store close CHR-1'
+check_target "$STORE" "coproc bd -C $STORE close CHR-1"
 check skip 'coproc bd list'
 # `eval` runs its operand as script, so a write inside it is a write and the
 # store it names is the store. Read as an opaque word instead, this asserted a
@@ -2264,6 +2280,16 @@ check_target '/tmp/store' 'env -- OUT="$(pwd)" bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'sudo OUT="$(pwd)" bash -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'env OUT="$(pwd)" A=/tmp/store bash -c "bd -C \"\$A\" close CHR-1"'
 check_unresolved 'env OUT="$(pwd)" bash -c "bd -C \"\$OUT\" close CHR-1"'
+# An unquoted one may split, so it may hold options and the command alike:
+# the invocation is given up on, and the write after it still counts.
+check_unresolved 'env OUT=$(pwd) bash -c "bd -C /tmp/store close CHR-1"'
+check_unresolved 'env $CS_FLAGS bd -C /tmp/store close CHR-1'
+# So may one among `bd`'s own arguments, which may then name its store; a
+# quoted one is one argument, and one after `--` an operand.
+check_unresolved 'CS_OPTS=$(printf "%s" "-C /tmp/x"); bd $CS_OPTS close CHR-1'
+check_unresolved "cd $STORE; bd close \$(printf %s CHR-1)"
+check_target "$STORE" "cd $STORE; bd close \"\$(printf %s CHR-1)\""
+check_target "$STORE" "cd $STORE; bd close -- \$(printf %s CHR-1)"
 # A later prefix assignment sees an earlier one in dash, zsh and bash from
 # 4.0, but not everywhere in bash 3.2, so in bash a value the two readings
 # disagree on is unknown, and one they agree on stands.
@@ -2276,29 +2302,43 @@ check_target '/tmp/store' "dash -c 'D=/tmp/old; D=/tmp/store OUT=\"\$D\" bash -c
 # The shell does not wait for a command after `&`, in a coprocess or in a
 # process substitution, so the tool call can return, and the hook sync,
 # before the write lands.
-check_async '/tmp/store' 'bd -C /tmp/store close CHR-1 &'
-check_async '/tmp/store' '(sleep 5; bd -C /tmp/store close CHR-1) >/dev/null 2>&1 &'
-check_async '/tmp/store' 'coproc bd -C /tmp/store close CHR-1'
-check_async '/tmp/store' ': < <(sleep 5; bd -C /tmp/store close CHR-1)'
-check_async '/tmp/store' 'cat <(bd -C /tmp/store close CHR-1)'
+check_async '+/tmp/store' 'bd -C /tmp/store close CHR-1 &'
+check_async '+/tmp/store' '(sleep 5; bd -C /tmp/store close CHR-1) >/dev/null 2>&1 &'
+check_async '+/tmp/store' 'coproc bd -C /tmp/store close CHR-1'
+check_async '+/tmp/store' ': < <(sleep 5; bd -C /tmp/store close CHR-1)'
+check_async '+/tmp/store' 'cat <(bd -C /tmp/store close CHR-1)'
 # A command substitution is waited for.
 check_async '' 'echo "$(bd -C /tmp/store close CHR-1)"'
-check_async '/tmp/store' 'bash -c "bd -C /tmp/store close CHR-1 &"'
-check_async '/tmp/store' 'f() { bd -C /tmp/store close CHR-1; }; f &'
-# Still a target to sync now, as the write may already have landed.
-check_target '/tmp/store' 'bd -C /tmp/store close CHR-1 &'
+check_async '+/tmp/store' 'bash -c "bd -C /tmp/store close CHR-1 &"'
+check_async '+/tmp/store' 'f() { bd -C /tmp/store close CHR-1; }; f &'
+# A store there now is still a target to sync now, as the write may already
+# have landed. A directory holding none is not: it is walked up from when
+# SessionEnd comes, marked `+`, as the job may make the store first.
+check_target "$STORE" "bd -C $STORE close CHR-1 &"
+check_async "$STORE" "bd -C $STORE close CHR-1 &"
+check_target '' 'bd -C /tmp/store close CHR-1 &'
 # A command the shell waits for is not one, beside a backgrounded one or not.
 check_async '' 'bd -C /tmp/store close CHR-1'
 check_async '' 'sleep 1 & bd -C /tmp/store close CHR-1'
 check_async '' "cd $CD/other & bd -C /tmp/store close CHR-1"
 # Only the store written in the background is.
-check_async '/tmp/b' 'bd -C /tmp/a close CHR-1; bd -C /tmp/b close CHR-2 &'
-check_target '/tmp/a /tmp/b' 'bd -C /tmp/a close CHR-1; bd -C /tmp/b close CHR-2 &'
-# A plain `bd` in the background may write a store `bd init` has not made
-# yet, so its directory is reported, as a `-C` naming it would be.
-check_async "$CD/one" "(cd $CD/one; bd init; bd create X) &"
-check_async "$CD/one" "(cd $CD/one && bd init) &"
-check_async "$CD/one" "(bd -C $CD/one init) &"
+check_async '+/tmp/b' 'bd -C /tmp/a close CHR-1; bd -C /tmp/b close CHR-2 &'
+check_target '/tmp/a' 'bd -C /tmp/a close CHR-1; bd -C /tmp/b close CHR-2 &'
+# A `bd` in the background may write a store the job makes first, where
+# there was none or nearer than the one above, so the directory it walks up
+# from is reported beside what the walk finds now -- unless that holds the
+# store itself.
+check_async "+$CD/one" "(cd $CD/one; bd init; bd create X) &"
+check_async "+$CD/one" "(cd $CD/one && bd init) &"
+check_async "+$CD/one" "(bd -C $CD/one init) &"
+check_async "$STORE +$STORE/sub" "(cd $STORE/sub; bd init; bd create X) &"
+check_target "$STORE" "(cd $STORE/sub; bd init; bd create X) &"
+check_async "$STORE +$STORE/sub" "(bd -C $STORE/sub init) &"
+check_async "+$CD/n/sub" "(sleep 5; mkdir -p $CD/n/.beads $CD/n/sub; bd -C $CD/n/sub close CHR-1) &"
+check_async "$STORE" "(cd $STORE; bd close CHR-1) &"
+# A `cd` in the background to a directory not there now may reach one the
+# job makes first, so where it lands is unknown, not where it was.
+check_unresolved "(mkdir -p $CD/later; cd $CD/later; bd init; bd create X) &"
 
 # --- symlinks ------------------------------------------------------------
 # `link` points into ext, which holds a store, from ws, which holds another.
@@ -2386,12 +2426,21 @@ check_target "$WS_DIR" "export SHELLOPTS; set -P; env -S '-u SHELLOPTS bash -c \
 check_target "$WS_DIR" "export SHELLOPTS; set -P; env -u SHELLOPTS -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
 check_target "$WS_DIR" "export SHELLOPTS; set -P; env -i -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
 check_unresolved "true && set -P; export SHELLOPTS; env -S 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
-# A wrapper's directory with a PWD that cannot be read: the store `bd` walks
-# up to is still known, but a `..` read from there may climb through a link.
-check_target "$EXT" "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bash -c 'bd close CHR-1'"
+# A wrapper's directory with a PWD that cannot be read: the PWD may hold a
+# `..` after a symlink, which `bd` collapses by name, so where it walks up
+# from is unknown, and so is a `..` or a CDPATH entry read from there.
+mkdir -p "$WS_DIR/sibling/.beads" "$EXT/sibling/.beads"
+check_unresolved "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bash -c 'bd close CHR-1'"
 check_unresolved "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bash -c 'cd ..; bd close CHR-1'"
 check_unresolved "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bd -C .. close CHR-1"
-check_unresolved "sudo -D $WS_DIR/link bd -C .. close CHR-1"
+check_unresolved "cd $EXT/child; export PWD=\"\$(printf %s $WS_DIR/link)\"; env -C . bash -c 'CDPATH=..; cd sibling; bd close CHR-1'"
+# `sudo` passes the PWD it was handed or none. Neither names the link here,
+# so `bd` reads `..` from where it points; from inside the link either may
+# reach it, so a `..` is in doubt, though a path without one is not.
+check_target "$EXT" "sudo -D $WS_DIR/link bd -C .. close CHR-1"
+check_unresolved "cd $WS_DIR/link; sudo -D . bd -C .. close CHR-1"
+check_target "$EXT" "cd $WS_DIR/link; sudo -D . bd -C . close CHR-1"
+check_unresolved "cd $WS_DIR/link; sudo -D . bash -c 'CDPATH=..; cd sibling; bd close CHR-1'"
 # A sourced file may change it, so after one the two readings are in doubt.
 check_unresolved "set -P; source ./opts.sh; cd $WS_DIR/link/..; bd close CHR-1"
 # The last of `-L` and `-P` wins, as in bash.
@@ -2410,6 +2459,9 @@ check_target "$WS_DIR" "cd $WS_DIR/link; cd ..; bd close CHR-1"
 # A wrapper's `chdir` leaves PWD as it was, and a command started where that
 # PWD still names keeps it -- bash does, and so does `bd` reading `-C ..`.
 check_target "$WS_DIR" "cd $WS_DIR/link; env -C . bash -c 'cd ..; bd close CHR-1'"
+# A prefix is expanded before the wrapper moves the command, so the PWD it
+# gives is read from the shell running the wrapper.
+check_target "$WS_DIR" "cd $WS_DIR; PWD=\"\$PWD/link\" env -C link bash -c 'cd ..; bd close CHR-1'"
 check_target "$WS_DIR" "cd $WS_DIR/link; env -C . bd -C .. close CHR-1"
 # Without a PWD that names it, the command starts from the physical path.
 check_target "$EXT" "cd $WS_DIR/link; env -i -C . bash -c 'cd ..; bd close CHR-1'"
@@ -2437,6 +2489,11 @@ check_target "$EXT" "cd $EXT; env PWD=$WS_DIR/link/.. zsh -c 'bd close CHR-1'"
 check_target "$WS_DIR" "cd $EXT; env PWD=$WS_DIR/link/.. bash -c 'bd close CHR-1'"
 check_target "$WS_DIR" "cd $EXT; env PWD=$WS_DIR/link/.. dash -c 'bd close CHR-1'"
 check_target "$WS_DIR" "cd $EXT; env -C . PWD=$WS_DIR/link/.. bd close CHR-1"
+# So does a physical `cd` through CDPATH, its entry read from that PWD; a
+# logical one collapses it by name in both.
+check_unresolved "cd $EXT; env PWD=$WS_DIR/link/.. bash -c 'CDPATH=.; cd -P sibling; bd close CHR-1'"
+check_target "$WS_DIR/sibling" "cd $EXT; env PWD=$WS_DIR/link/.. bash -c 'CDPATH=.; cd sibling; bd close CHR-1'"
+check_target "$EXT/sibling" "cd $EXT; env PWD=$WS_DIR/link/.. dash -c 'CDPATH=.; cd -P sibling; bd close CHR-1'"
 # A logical `cd` through a directory that does not exist fails, as bash
 # checks each directory a `..` leaves, so the shell stays where it was.
 check_target "$EXT" "cd $EXT; cd $WS_DIR/missing/..; bd close CHR-1"

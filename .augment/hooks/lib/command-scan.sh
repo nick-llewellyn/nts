@@ -32,7 +32,10 @@ SCAN_FAILED=0
 #
 # SCAN_ASYNC is the targets written by a command the shell does not wait for,
 # which the scanner marks with a leading `&`. Each is in SCAN_TARGETS too, as
-# the write may already have landed.
+# the write may already have landed -- except one marked `&+`, a directory
+# such a `bd` walks up from rather than a store, whose store may not be made
+# yet. That stays in SCAN_ASYNC alone, its `+` kept, for SessionEnd to walk
+# up from; see `take_async`.
 #
 # Targets are read back NUL-separated rather than by line, because a store path
 # may contain a newline and a target silently truncated at one names some other
@@ -66,6 +69,7 @@ scan_command() {
       2) SCAN_UNRESOLVED=$field ;;
       *)
         case "$field" in
+          '&+'*) SCAN_ASYNC+=("${field#&}") ;;
           '&'*)
             SCAN_ASYNC+=("${field#&}")
             SCAN_TARGETS+=("${field#&}")

@@ -815,15 +815,34 @@ class Field:
     `tilde` says the field began with an unquoted `~`, which names $HOME, and
     is true only of the first field a word produces. `assign` is the name an
     unreadable field certainly assigns, as a wrapper reads it; see
-    `assignment_name`.
+    `assignment_name`. `split` says an unreadable field may stand for several
+    arguments or none; see `may_split`.
     """
 
-    __slots__ = ("value", "tilde", "assign")
+    __slots__ = ("value", "tilde", "assign", "split")
 
-    def __init__(self, value, tilde=False, assign=None):
+    def __init__(self, value, tilde=False, assign=None, split=False):
         self.value = value
         self.tilde = tilde
         self.assign = assign
+        self.split = split
+
+
+def may_split(word):
+    """Whether `word` may expand to other than one argument.
+
+    An unquoted expansion is split on IFS and an unquoted pattern matched on
+    paths, so `bd $OPTS close X`, OPTS holding `-C /ext`, passes `-C` and
+    `/ext` as two arguments, where `"$OPTS"` stays one. A process
+    substitution is one path whatever it runs.
+    """
+    for part, quoted in word_parts(word):
+        kind = part["Type"]
+        if quoted or kind in ("SglQuoted", "ProcSubst"):
+            continue
+        if kind != "Lit" or is_pattern(part.get("Value", "")):
+            return True
+    return False
 
 
 def assignment_name(word):
@@ -837,16 +856,12 @@ def assignment_name(word):
     itself, so it is no such argument.
     """
     parts = list(word_parts(word))
-    if not parts or parts[0][1] or parts[0][0]["Type"] != "Lit":
+    if not parts or parts[0][1] or parts[0][0]["Type"] != "Lit" or \
+            may_split(word):
         return None
     match = ASSIGN_WORD.match(parts[0][0].get("Value", ""))
     if not match or match.group(0).startswith("-"):
         return None
-    for part, quoted in parts:
-        if quoted or part["Type"] == "SglQuoted":
-            continue
-        if part["Type"] != "Lit" or is_pattern(part.get("Value", "")):
-            return None
     return match.group(0)[:-1]
 
 
@@ -1248,13 +1263,16 @@ class Scope:
 
     def __init__(self, cwd, known, assigns, sealed=False, exported=None,
                  allexport=False, lastpipe=False, monitor=False,
-                 physical=False, spelled=True, bash=True):
+                 physical=False, spelled=True, bash=True, zsh=False):
         self.cwd = cwd
         self.known = known
-        # Whether `cwd` is also how the shell's PWD spells the directory. False
-        # where a wrapper moved the command and the PWD it inherits cannot be
-        # read: the directory is known, but whether a `..` or `$PWD` read from
-        # there goes through a symlink is not; see `wrapper_pwd`.
+        # Whether `cwd` is also how the shell's PWD spells the directory:
+        # True; False where the PWD is one of two spellings of it, through a
+        # symlink or not, so a `..` read from it may climb out either way; and
+        # UNKNOWN where the PWD it inherits cannot be read at all, so it may
+        # hold a `..` after a symlink itself and nothing read from it by name
+        # is known -- a relative path, `$PWD`, or the walk `bd` makes, which
+        # collapses the PWD it inherits by name. See `wrapper_pwd`.
         self.spelled = spelled
         # Whether anything in this frame acted on the cwd -- a `cd` taken or
         # given up on, a wrapper's directory, a sealed scope. A tentative
@@ -1297,11 +1315,15 @@ class Scope:
         # -- dash, zsh, or what `env -S` runs, which is no shell at all -- and
         # UNKNOWN for `sh`. The command itself runs in bash.
         self.bash = bash
+        # Whether this shell is zsh, which unlike the others ignores a CDPATH
+        # in a `cd`'s own prefix; see `cd_path`.
+        self.zsh = zsh
 
     def child(self):
         return Scope(self.cwd, self.known, dict(self.assigns), self.sealed,
                      dict(self.exported), self.allexport, self.lastpipe,
-                     self.monitor, self.physical, self.spelled, self.bash)
+                     self.monitor, self.physical, self.spelled, self.bash,
+                     self.zsh)
 
     def last_member_stays(self):
         """Whether a pipeline's last member runs in this shell: True, False
@@ -1367,6 +1389,9 @@ class Scanner:
         # and the stores written inside one; see `in_background`.
         self.background = 0
         self.async_targets = set()
+        # The scope each command a wrapper moved was invoked from, by the
+        # command's node; see `call`.
+        self.callers = {}
 
     def found_target(self, path):
         if path not in self.targets:
@@ -1478,7 +1503,8 @@ class Scanner:
         # `OLDPWD` is left unanswered for the same reason `cd -` is: the
         # directory it names is in the launching shell's history, not here.
         if name == "PWD":
-            return self.scope.cwd if self.scope.known and self.scope.spelled \
+            return self.scope.cwd if self.scope.known and \
+                self.scope.spelled is True \
                 else UNKNOWN
         if name == "OLDPWD":
             return UNKNOWN
@@ -1650,7 +1676,8 @@ class Scanner:
         for word in args:
             fields = self.expand(word)
             if fields is UNKNOWN:
-                out.append(Field(UNKNOWN, assign=assignment_name(word)))
+                out.append(Field(UNKNOWN, assign=assignment_name(word),
+                                 split=may_split(word)))
             else:
                 out.extend(fields)
         return out
@@ -1749,7 +1776,7 @@ class Scanner:
                 return UNKNOWN
             return home + rest
         if prefix == "~+":
-            if not self.scope.known or not self.scope.spelled:
+            if not self.scope.known or self.scope.spelled is not True:
                 return UNKNOWN
             # `or "/"` so a cwd of `/` does not strip to the empty string, which
             # reads downstream as no value at all rather than as the root.
@@ -1780,10 +1807,14 @@ class Scanner:
             return value
         if not self.scope.known:
             return None
-        # A `..` read from a directory whose PWD spelling is unknown may climb
-        # out through a symlink or not; anything else names the same
-        # directory whichever spelling the PWD has.
-        if not self.scope.spelled and ".." in value.split("/"):
+        # A relative path read from a directory whose PWD spelling is unknown
+        # is read by name from that spelling, as `bd` and a logical `cd` read
+        # it. Of two spellings, through a symlink or not, only a `..` may climb
+        # out differently; a spelling that cannot be read at all may hold a
+        # `..` after a symlink itself, so any relative path may name another
+        # directory. See `Scope.spelled`.
+        if self.scope.spelled is UNKNOWN or \
+                (not self.scope.spelled and ".." in value.split("/")):
             return None
         return self.scope.cwd.rstrip("/") + "/" + value
 
@@ -2004,18 +2035,24 @@ class Scanner:
                 continue
             # `-S` may end a bundle of flags that take nothing -- `env -iS
             # '...'` -- and may carry its string directly: `env -S'...'`. A
-            # bundle holding a letter that may take a value is left to
-            # `skip_wrapper_opts`, which gives up on it as before.
-            letters = word[1:]
-            if "S" not in letters:
-                i += 2 if word in WRAPPER_OPT_ARGS["env"] else 1
+            # letter before it that takes a value takes the rest of the word,
+            # so the `S` in `env -uSHELL` is part of a name: read as the flag,
+            # the real `-S` after it went unseen, and the write with it. A
+            # letter neither table knows is left to `skip_wrapper_opts`, which
+            # gives up on it.
+            if word in ENV_CLEAR_OPTS:
+                i += 1
                 continue
-            head, _, rest = letters.partition("S")
-            if not all("-" + ch in WRAPPER_OPT_NOARG["env"] for ch in head):
+            bundle = short_opts(word, WRAPPER_OPT_ARGS["env"],
+                                WRAPPER_OPT_NOARG["env"])
+            if bundle is None:
                 return None
-            if rest:
-                return rest, i + 1
-            return self.opt_value(args, i), i + 2
+            _, opt, inline = bundle
+            if opt == "-S":
+                if inline is not None:
+                    return inline, i + 1
+                return self.opt_value(args, i), i + 2
+            i += 1 if opt is None or inline is not None else 2
         return None
 
     @staticmethod
@@ -2035,10 +2072,12 @@ class Scanner:
 
         A wrapper with operands of its own -- `timeout 30 bd ...` -- names the
         command that many words past its options. An unreadable word among the
-        options may be an option or an operand, so the command word is unknown
-        from there, as it is for `env $FLAGS bd ...` -- unless it is certainly
-        an assignment, as `env OUT="$(pwd)" bd ...` makes; see
-        `assignment_name`.
+        options is taken for the command word, as `env "$CMD" ...` makes it,
+        unless it is certainly an assignment, as `env OUT="$(pwd)" bd ...`
+        makes; see `assignment_name`. One that may split may hold options and
+        the command alike -- `env $FLAGS bd ...` -- so the invocation is given
+        up on, which still counts the `bd` after it; see `abandoned`. Taken for
+        the command, it hid that write.
         """
         takes = WRAPPER_OPT_ARGS[wrapper]
         alone = WRAPPER_OPT_NOARG[wrapper]
@@ -2046,11 +2085,11 @@ class Scanner:
         i = start + 1
         while i < len(args):
             word = args[i].value
-            if word is UNKNOWN and args[i].assign is not None:
-                i += 1
-                continue
             if word is UNKNOWN:
-                return i
+                if args[i].assign is not None:
+                    i += 1
+                    continue
+                return None if args[i].split else i
             if word == "--":
                 i += 1
                 if wrapper == "env":
@@ -2061,11 +2100,11 @@ class Scanner:
                     # a read of something that was not `bd`.
                     while i < len(args):
                         word = args[i].value
-                        if word is UNKNOWN and args[i].assign is not None:
-                            i += 1
-                            continue
                         if word is UNKNOWN:
-                            return i
+                            if args[i].assign is not None:
+                                i += 1
+                                continue
+                            return None if args[i].split else i
                         if not ASSIGN_WORD.match(word):
                             break
                         i += 1
@@ -2447,6 +2486,7 @@ class Scanner:
         flags = set()
         i = start + 1
         end_of_opts = False
+        opaque = False
         # Whether the word before this one was an option whose arity this scan
         # does not know, which makes this word possibly its value rather than
         # an option of `bd`'s own. Only the help reading turns on it: `bd
@@ -2466,6 +2506,13 @@ class Scanner:
                 # list` reads the read-only `list` as its verb and suppresses
                 # the write the substitution named. An unknown verb is no verb
                 # this scan knows to be read-only, which is the safe reading.
+                #
+                # One that may split may be options as well -- `bd $OPTS close
+                # X`, OPTS holding `-C /ext`, writes /ext -- so the store is
+                # unknown once one stands before the options end. Read as a
+                # single operand, it named the launch directory's store.
+                if args[i].split and not end_of_opts:
+                    opaque = True
                 operands.append(word)
                 i += 1
                 continue
@@ -2537,6 +2584,8 @@ class Scanner:
                 continue
             operands.append(word)
             i += 1
+        if opaque:
+            store = Field(UNKNOWN)
         return operands, target, store, helped, flags
 
     @staticmethod
@@ -2736,7 +2785,7 @@ class Scanner:
 
     def sub_scan(self, stmts, cwd=None, known=None, seed=None, text=None,
                  sealed=False, conditional=False, frame="subshell",
-                 process=False, physical=False, bash=None, pwd=None):
+                 process=False, physical=False, shell=None, pwd=None):
         """Scans `stmts` as a subshell: its writes count, its state does not.
 
         `text` is the source those statements were parsed from, needed when they
@@ -2756,8 +2805,9 @@ class Scanner:
         which is the exported names alone -- see `environment_view`. `seed` is
         what the command line handed the process on top of that, and is
         exported there, having arrived as environment. `physical` is the
-        process's own `set -P` state; see `shell_wrapper`. `bash` is whether
-        the process is bash, as `Scope.bash` has it, and `pwd`, for a shell,
+        process's own `set -P` state; see `shell_wrapper`. `shell` names the
+        program the process is -- a shell, or `env` for what `env -S` runs --
+        which settles `Scope.bash` and `Scope.zsh`, and `pwd`, for a shell,
         the directory it starts in as its PWD names it and whether that
         spelling is known; see `shell_pwd`.
 
@@ -2793,8 +2843,9 @@ class Scanner:
                 self.scope.assigns.update(seed)
                 for name, value in seed.items():
                     self.scope.exported[name] = value is not UNSET
-            if bash is not None:
-                self.scope.bash = bash
+            if shell is not None:
+                self.scope.bash = bash_kind(shell)
+                self.scope.zsh = shell == "zsh"
             if pwd is not None:
                 # Every shell sets PWD as it starts, and exports it, whatever
                 # it inherited: after `env -i bash -c 'cd /ws/link; ...'` a
@@ -3432,9 +3483,21 @@ class Scanner:
         cwd = None if end is None else self.wrapper_chdir(fields, end)
         cwd, spelled = self.wrapper_pwd(cmd, fields, end, cwd)
         if cwd is not None:
-            self.scoped(lambda: self.dispatch(cmd, fields, start, split,
-                                              conditional, follows, cwd,
-                                              spelled))
+            # The command's environment was settled before the wrapper moved
+            # it: its prefix is expanded, and PWD inherited, in the shell that
+            # runs the wrapper. So that is the scope `command_env` reads it
+            # in, while everything else resolves against the wrapper's
+            # directory: from /old, `env -C /new -S 'bd -C ${PWD} ...'` passes
+            # `-C /old`, and `PWD="$PWD/link" env -C link bash -c ...` hands
+            # the shell /ws/link, where reading either in the moved frame
+            # named /new and /ws/link/link.
+            self.callers[id(cmd)] = self.scope
+            try:
+                self.scoped(lambda: self.dispatch(cmd, fields, start, split,
+                                                  conditional, follows, cwd,
+                                                  spelled))
+            finally:
+                self.callers.pop(id(cmd), None)
             return
         self.dispatch(cmd, fields, start, split, conditional, follows, None)
 
@@ -3459,16 +3522,32 @@ class Scanner:
         never opened. `bd` does collapse it as it reads it, and walks up from
         /ws, as `bead_root` does; so does bash from 4.4, which `cd` allows for.
 
-        A PWD this scan cannot read may be such an alias or not. The directory
-        is still the one `cwd` names, so the store `bd` walks up to is known,
-        but the spelling is not: a `..`, `$PWD` or `~+` read from it is left
-        unresolved rather than read physically; see `Scope.spelled`.
+        A PWD this scan cannot read may be anything naming the directory, a
+        `..` after a symlink included, so its spelling is UNKNOWN: a relative
+        path, `$PWD`, `~+` and the walk `bd` makes from there are left
+        unresolved; see `Scope.spelled`. `sudo` and `doas` are read more
+        closely, as their policy passes the PWD they were handed or drops it
+        and sets none of its own: the spelling is that one or the physical
+        path, and only where the two differ is it in doubt -- False, or
+        UNKNOWN where the one handed over hides a `..` after a symlink.
         """
         if cwd is None or cwd is UNKNOWN:
             return cwd, True
         pwd = self.command_env(cmd, args, end, "PWD")
-        if pwd is UNKNOWN:
-            return cwd, False
+        if pwd is not UNKNOWN:
+            return self.pwd_spelling(pwd, cwd, posix)
+        handed = self.handed_pwd(cmd, args, end)
+        if handed is UNKNOWN:
+            return cwd, UNKNOWN
+        kept = self.pwd_spelling(handed, cwd, posix)
+        if kept == (cwd, True):
+            return kept
+        return cwd, UNKNOWN if ".." in kept[0].split("/") else False
+
+    @staticmethod
+    def pwd_spelling(pwd, cwd, posix):
+        """How a process started in `cwd` with PWD `pwd` spells its
+        directory, as `(spelling, True)`; see `wrapper_pwd`."""
         if not isinstance(pwd, str) or not pwd.startswith("/") or \
                 not same_dir(pwd, cwd):
             return cwd, True
@@ -3478,6 +3557,20 @@ class Scanner:
         if collapsed is not None and same_dir(collapsed, pwd):
             return collapsed, True
         return pwd, True
+
+    def handed_pwd(self, cmd, args, end):
+        """The PWD the last `sudo` or `doas` in `args[:end]` was handed, or
+        UNKNOWN when something else may have left it unread."""
+        last = None
+        for i in range(end):
+            word = args[i].value
+            if word is UNKNOWN:
+                return UNKNOWN
+            if word.rsplit("/", 1)[-1] in WRAPPER_ENV_UNREADABLE:
+                last = i
+        if last is None:
+            return UNKNOWN
+        return self.command_env(cmd, args, last, "PWD")
 
     def dispatch(self, cmd, fields, start, split, conditional, follows, cwd,
                  spelled=True):
@@ -3509,7 +3602,7 @@ class Scanner:
         name = word.rsplit("/", 1)[-1]
 
         if name in CHDIR_WORDS:
-            self.cd(fields, start, conditional, follows, name)
+            self.cd(fields, start, conditional, follows, name, cmd)
             return
 
         if name == "unset":
@@ -3641,19 +3734,19 @@ class Scanner:
                     # inside it, with the store found from the value's parent.
                     self.found_target(store_root(resolved))
                 return
-            if not self.scope.known:
+            # `bd` reads its directory from PWD where that names it, and
+            # collapses a `..` in it by name, so where the PWD's spelling is
+            # unknown so is where the walk starts; see `Scope.spelled`.
+            if not self.scope.known or self.scope.spelled is UNKNOWN:
                 self.unresolved += 1
                 return
             # No ancestor holding a store is no store to sync: `bd` itself fails
-            # there, so there is nothing stranded and nothing to report. In the
-            # background it may be a store not made yet: `(cd /ext; bd init; bd
-            # create X) &` writes one that `bd init` makes after this scan, so
-            # the directory is reported as `-C`'s would be, for SessionEnd.
+            # there, so there is nothing stranded and nothing to report -- in
+            # the foreground. In the background see `walk_from`.
             root = bead_root(self.scope.cwd)
-            if root is None and self.background:
-                root = os.path.normpath(self.scope.cwd)
             if root is not None:
                 self.found_target(root)
+            self.walk_from(self.scope.cwd, root)
             return
         resolved = self.resolve_field(target)
         # A `-C` that was named and could not be resolved is the one case with
@@ -3673,9 +3766,33 @@ class Scanner:
         # A `-C` naming no directory is reported as it stands rather than walked
         # up from: `bd` refuses such a path outright, so no store is written, and
         # walking would name an ancestor's store that this command never opened.
-        if os.path.isdir(resolved):
-            resolved = bead_root(resolved) or resolved
-        self.found_target(resolved)
+        # In the background the job may make it first; see `walk_from`.
+        root = bead_root(resolved) if os.path.isdir(resolved) else None
+        if root is not None:
+            self.found_target(root)
+        elif not self.background:
+            self.found_target(resolved)
+        self.walk_from(resolved, root)
+
+    def walk_from(self, start, root):
+        """Reports `start`, a directory a `bd` in the background walks up
+        from, for SessionEnd to walk up from in its turn.
+
+        `root` is what the walk finds now, which need not be what it finds
+        when the write lands: the job may make a store first, where there was
+        none or nearer than the one there is -- `(cd /ws/child; bd init; bd
+        create X) &` under /ws's store, or `(mkdir -p /n/.beads /n/sub; bd -C
+        /n/sub close X) &` -- and syncing only what the walk finds now left
+        that store unsynced and unrecorded. So the start is reported too,
+        marked with a leading `+`, and the hook walks up from it when
+        SessionEnd comes. Not where the store is the start itself, as none can
+        come nearer than that.
+        """
+        if not self.background:
+            return
+        if root is not None and same_dir(root, start):
+            return
+        self.found_target("+" + os.path.normpath(start))
 
     def command_env(self, cmd, args, start, name):
         """The value `name` has in the environment this command runs with.
@@ -3707,6 +3824,10 @@ class Scanner:
         Reading every assignment as exported named the decoy in the first
         case and the stale value in the second, stranding the store written.
         """
+        caller = self.callers.get(id(cmd))
+        if caller is not None and caller is not self.scope:
+            return self.in_scope(caller, self.command_env, cmd, args, start,
+                                 name)
         wrapper_assigns, sealed = self.prefix_env(args, start)
         if name in wrapper_assigns:
             return self.env_value(wrapper_assigns[name])
@@ -3788,7 +3909,7 @@ class Scanner:
         self.scope.assigns.pop("PWD", None)
         self.scope.assigns.pop("OLDPWD", None)
 
-    def cd(self, args, start, conditional, follows, name="cd"):
+    def cd(self, args, start, conditional, follows, name="cd", cmd=None):
         """Replays a `cd` that certainly runs, and gives up on one that may not.
 
         `false && cd /tmp/other; bd -C store ...` does not run in /tmp/other.
@@ -3843,50 +3964,81 @@ class Scanner:
         if i >= len(args) or args[i].value == "-":
             self.leave_cwd()
             return
-        target = self.cdpath_target(args[i])
-        if target is UNKNOWN:
-            self.leave_cwd()
-            return
-        searched = target is not None
-        if target is None:
-            target = self.resolve_field(args[i])
-        # A `cd` that fails leaves the shell where it was, and the command after
-        # it runs there: `cd /missing; bd -C store ...` writes under the launch
-        # directory, not under /missing. The scan cannot know the exit status,
-        # but it can see that a path which is no directory now was no directory
-        # then either -- and where that is so, the honest answer is that the cwd
-        # is whatever it already was. A path that cannot be resolved at all
-        # leaves the cwd unknown, as before.
-        if target is None:
-            self.leave_cwd()
-            return
-        dest = cd_dest(target, physical)
+        cdpath = self.cd_path(cmd)
+        dest = self.cd_landing(args[i], physical, cdpath)
         # bash from 4.4 collapses an inherited PWD by name as it starts and
         # resolves a relative `cd` from that, where bash 3.2 resolves it from
         # the PWD as given; see `wrapper_pwd`. The two differ where a `..` in
         # it follows a symlink -- with PWD=/ws/link/.. in /ext, `cd -P .`
-        # stays in /ext in 3.2 and lands in /ws in 5 -- and there the cwd is
-        # unknown.
+        # stays in /ext in 3.2 and lands in /ws in 5, and so does `set -P;
+        # CDPATH=.; cd sibling` -- and there the cwd is unknown.
         if self.scope.bash is not False and dest is not UNKNOWN and \
-                not searched and not args[i].tilde and \
-                not args[i].value.startswith("/"):
+                self.scope.known:
             cwd = self.scope.cwd
             base = logical_path(cwd) or chdir_path(cwd)
-            if base != cwd and cd_dest(base.rstrip("/") + "/" +
-                                       args[i].value, physical) != dest:
-                dest = UNKNOWN
+            if base != cwd:
+                moved = self.scope.child()
+                moved.cwd = base
+                if self.in_scope(moved, self.cd_landing, args[i], physical,
+                                 cdpath) != dest:
+                    dest = UNKNOWN
+        # A path that is no directory now was none when a `cd` ran in the
+        # foreground, the hook scanning after the command -- but a job in the
+        # background may not have made it yet: `(mkdir -p /ext/new; cd
+        # /ext/new; bd init) &` is scanned before the `mkdir` runs, and
+        # staying put named the launch directory's store.
+        if dest is None and self.background:
+            dest = UNKNOWN
+        if dest is UNKNOWN:
+            self.leave_cwd()
+            return
+        if dest is None:
+            return
         # The PWD a `cd` leaves is spelled when the shell knew the spelling it
         # started from, when the operand was absolute, or when `-P` made it
         # the physical path. A relative one from an unknown spelling extends
         # that spelling, whatever it was.
-        spelled = self.scope.spelled or physical is True or args[i].tilde \
-            or args[i].value.startswith("/")
-        if dest is UNKNOWN:
-            self.leave_cwd()
-        elif dest is not None:
-            self.enter_cwd(dest, spelled)
+        spelled = True if physical is True or args[i].tilde or \
+            args[i].value.startswith("/") else self.scope.spelled
+        self.enter_cwd(dest, spelled)
 
-    def cdpath_target(self, field):
+    def cd_landing(self, field, physical, cdpath):
+        """Where a `cd` to `field` lands from this scope, `cdpath` being the
+        CDPATH it searches: the directory, None when it fails, or UNKNOWN.
+
+        A `cd` that fails leaves the shell where it was, and the command after
+        it runs there: `cd /missing; bd -C store ...` writes under the launch
+        directory, not under /missing. The scan cannot know the exit status,
+        but it can see that a path which is no directory now was no directory
+        then either -- and where that is so, the honest answer is that the cwd
+        is whatever it already was. A path that cannot be resolved at all
+        leaves the cwd unknown.
+        """
+        target = self.cdpath_target(field, cdpath)
+        if target is None:
+            target = self.resolve_field(field)
+            if target is None:
+                return UNKNOWN
+        if target is UNKNOWN:
+            return UNKNOWN
+        return cd_dest(target, physical)
+
+    def cd_path(self, cmd):
+        """The CDPATH a `cd` searches: its value, None when unset, or UNKNOWN.
+
+        bash, dash and ksh honour one in the `cd`'s own prefix, so
+        `CDPATH=/ext cd repo` lands in /ext/repo, and `CDPATH= cd repo`
+        searches nothing, whatever this shell's CDPATH says; reading this
+        shell's alone named the store under the cwd's `repo`. zsh ignores the
+        prefix.
+        """
+        if cmd is not None and not self.scope.zsh:
+            prefix = self.prefix_values(cmd)
+            if "CDPATH" in prefix:
+                return prefix["CDPATH"]
+        return self.shell_var("CDPATH")
+
+    def cdpath_target(self, field, cdpath):
         """Where `CDPATH` sends a `cd` to `field`, if it sends it anywhere.
 
         A relative operand that does not open with `.` or `..` is looked for
@@ -3899,7 +4051,10 @@ class Scanner:
         None when CDPATH does not apply or names nothing that exists, so the
         operand resolves against the cwd as before. UNKNOWN when it may send
         the shell somewhere this scan cannot see: a CDPATH it cannot read, or
-        an entry it cannot resolve before the one that would have matched.
+        an entry it cannot resolve before the one that would have matched --
+        among them one read from a cwd whose PWD spelling is unknown, which
+        `cd` reads by name; see `resolve_value`. `cdpath` is the CDPATH
+        searched; see `cd_path`.
         """
         value = field.value
         if value is UNKNOWN or not value or field.tilde:
@@ -3907,22 +4062,21 @@ class Scanner:
         if value.startswith("/") or value == "." or value == ".." or \
                 value.startswith("./") or value.startswith("../"):
             return None
-        cdpath = self.shell_var("CDPATH")
         if cdpath is None:
             return None
         if cdpath is UNKNOWN:
             return UNKNOWN
         for entry in cdpath.split(":"):
-            if entry in ("", "."):
-                base = self.scope.cwd if self.scope.known else None
-            elif entry.startswith("/"):
+            if entry.startswith("/"):
                 base = entry
-            elif self.scope.known:
-                base = self.scope.cwd.rstrip("/") + "/" + entry
-            else:
-                base = None
-            if base is None:
+            elif not self.scope.known or self.scope.spelled is UNKNOWN or \
+                    (not self.scope.spelled and
+                     ".." in (entry + "/" + value).split("/")):
                 return UNKNOWN
+            elif entry in ("", "."):
+                base = self.scope.cwd
+            else:
+                base = self.scope.cwd.rstrip("/") + "/" + entry
             candidate = base.rstrip("/") + "/" + value
             if os.path.isdir(candidate):
                 return candidate
@@ -4210,6 +4364,9 @@ class Scanner:
         bash -c ...` hands the child the SHELLOPTS this shell had. In `sh`,
         which may be bash or not, the value is UNKNOWN.
         """
+        caller = self.callers.get(id(cmd))
+        if caller is not None and caller is not self.scope:
+            return self.in_scope(caller, self.prefix_values, cmd)
         values = {}
         bash = self.scope.bash
         for arg in cmd.get("Assigns") or ():
@@ -4235,6 +4392,15 @@ class Scanner:
         saved = self.scope
         self.scope = saved.child()
         self.scope.assigns.update(values)
+        try:
+            return fn(*args)
+        finally:
+            self.scope = saved
+
+    def in_scope(self, scope, fn, *args):
+        """`fn(*args)` read with `scope` in force, this one being restored."""
+        saved = self.scope
+        self.scope = scope
         try:
             return fn(*args)
         finally:
@@ -4292,7 +4458,7 @@ class Scanner:
             physical = UNKNOWN
         self.scan_script(script, seed=seed, sealed=sealed, process=True,
                          physical=physical,
-                         bash=bash_kind(args[start].value),
+                         shell=args[start].value.rsplit("/", 1)[-1],
                          pwd=self.shell_pwd(cmd, args, start))
 
     def shellopts_physical(self, cmd, args, start):
@@ -4460,7 +4626,7 @@ class Scanner:
         # that: `export SHELLOPTS; set -P; env -S 'bash -c ...'` starts that
         # bash physical, as it would without the `-S`.
         self.scan_script("env " + " ".join(rendered), seed=seed,
-                         sealed=sealed, process=True, bash=False)
+                         sealed=sealed, process=True, shell="env")
 
     def eval_builtin(self, cmd, args, start, conditional):
         """Scans what `eval` runs, which is script and not an argument list.
@@ -4509,7 +4675,7 @@ class Scanner:
 
     def scan_script(self, script, seed=None, sealed=False, cwd=None,
                     known=None, conditional=False, frame="subshell",
-                    process=False, physical=False, bash=None, pwd=None):
+                    process=False, physical=False, shell=None, pwd=None):
         """Scans `script` as shell text, in a scope of its own.
 
         The text is parsed afresh, so its offsets index it and not the command
@@ -4532,7 +4698,7 @@ class Scanner:
             self.sub_scan(tree.get("Stmts") or (), seed=seed, text=parsed,
                           sealed=sealed, cwd=cwd, known=known,
                           conditional=conditional, frame=frame,
-                          process=process, physical=physical, bash=bash,
+                          process=process, physical=physical, shell=shell,
                           pwd=pwd)
         finally:
             self.scripts.discard(script)
@@ -4543,7 +4709,9 @@ def scan(command, launch_cwd):
 
     `launch_cwd` empty says the directory is unknown rather than being this
     process's own, so a relative target under it stays unresolved. The last of
-    the four answers is the set of targets written in the background.
+    the four answers is the set of targets written in the background, where
+    one with a leading `+` is a directory `bd` walks up from rather than a
+    store; see `walk_from`.
     """
     tree, parsed = parse(command)
     scanner = Scanner(launch_cwd, parsed)

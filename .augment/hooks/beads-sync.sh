@@ -814,7 +814,7 @@ remember_async() {
     [ "$existing" = "$candidate" ] && return 0
   done
   if ! take_guard_waiting "$list.guard" 5; then
-    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
+    WARNINGS+=("beads: could not record the external bead store ${candidate#+} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
     return 0
   fi
   if [ -r "$list" ]; then
@@ -828,9 +828,48 @@ remember_async() {
       printf '%s\0%s\0' "$CONVERSATION_ID" "$candidate" >>"$list.$$" &&
       mv -f "$list.$$" "$list"; }; then
     rm -f "$list.$$"
-    WARNINGS+=("beads: could not record the external bead store ${candidate} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
+    WARNINGS+=("beads: could not record the external bead store ${candidate#+} as written in the background; if that write lands after this sync, run ${SYNC_BY_HAND} there.")
   fi
   drop_lock "$list.guard"
+  return 0
+}
+
+# Sets WALKED to the root of the store `bd` opens walking up from directory
+# $1 now, or to nothing when $1 is no directory or nothing above it holds one.
+# The walk is `bd`'s, which resolves symlinks first, so /ws/link with `link`
+# pointing at /ext/child walks up from /ext/child. Read back with a sentinel,
+# as a command substitution drops the trailing newlines a path may end in.
+# The spelling given is kept where it finds the same store, so a root still
+# matches the workspace root it is.
+WALKED=
+walk_store() {
+  local real
+  WALKED=
+  real=$(cd -P -- "$1" 2>/dev/null && pwd -P && printf x) || return 0
+  real=${real%x}
+  nearest_store "${real%$'\n'}"
+  [ -n "$NEAREST" ] || return 0
+  WALKED=$NEAREST
+  nearest_store "$1"
+  [ -n "$NEAREST" ] && [ "$NEAREST" -ef "$WALKED" ] && WALKED=$NEAREST
+  return 0
+}
+
+# Sets NEAREST to the nearest of directory $1 and its parents, by name, that
+# holds a `.beads`, or to nothing.
+NEAREST=
+nearest_store() {
+  local dir="$1"
+  NEAREST=
+  while [ -n "$dir" ]; do
+    if [ -d "$dir/.beads" ]; then
+      NEAREST=$dir
+      return 0
+    fi
+    [ "$dir" = / ] && return 0
+    dir=${dir%/*}
+    [ -n "$dir" ] || dir=/
+  done
   return 0
 }
 
@@ -848,11 +887,18 @@ remember_async() {
 # init; bd -C /ext create X) &` -- and dropping its record then left the store
 # named by nothing once it did.
 #
+# An entry with a leading `+` names a directory a `bd` walks up from rather
+# than a store, and the store is whatever that walk finds now: the job may
+# have made one since, above the directory or nearer than the one there was.
+# `(sleep 5; mkdir -p /n/.beads /n/sub; bd -C /n/sub close X) &` writes /n's
+# store, and looking for a `.beads` in /n/sub alone dropped the record with
+# that store unsynced.
+#
 # The list is rewritten by replacement, under its guard, after every store has
 # been handed off, so a SessionEnd killed part-way leaves it whole for the
 # next, whose hand-off costs a no-op commit at most.
 take_async() {
-  local list="$1" owner entry kept=0 failed=0
+  local list="$1" owner entry store kept=0 failed=0
   [ -r "$list" ] || return 0
   if ! take_guard_waiting "$list.guard" 5; then
     WARNINGS+=("beads: could not read ${list}, so the bead stores it names as written in the background were not synced; the next session end retries them.")
@@ -860,9 +906,16 @@ take_async() {
   fi
   : >"$list.$$" 2>/dev/null || failed=1
   while IFS= read -r -d '' owner && IFS= read -r -d '' entry; do
-    if [ -d "$entry/.beads" ]; then
-      add_root "$entry"
-      remember_external "$entry" && [ "$owner" = "$CONVERSATION_ID" ] && continue
+    store=$entry
+    case "$entry" in
+      +*)
+        walk_store "${entry#+}"
+        store=$WALKED
+        ;;
+    esac
+    if [ -n "$store" ] && [ -d "$store/.beads" ]; then
+      add_root "$store"
+      remember_external "$store" && [ "$owner" = "$CONVERSATION_ID" ] && continue
     elif [ "$owner" = "$CONVERSATION_ID" ]; then
       continue
     fi
