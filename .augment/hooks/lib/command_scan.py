@@ -587,6 +587,28 @@ CLEARED = "cleared"
 OPAQUE = "opaque"
 
 
+class ShellOpts:
+    """A SHELLOPTS that bash made, as the process it reaches holds it.
+
+    bash keeps the variable in step with every option in force, its defaults
+    among them -- `braceexpand:hashall:interactive-comments` before any is
+    set -- and this scan follows only `physical`. So the string is unknowable,
+    as is a word expanding it, while whether it lists `physical` is known:
+    True, False or UNKNOWN, which is all a bash started from it reads.
+    """
+
+    __slots__ = ("physical",)
+
+    def __init__(self, physical):
+        self.physical = physical
+
+    def __eq__(self, other):
+        return isinstance(other, ShellOpts) and other.physical is self.physical
+
+    def __hash__(self):
+        return hash(ShellOpts)
+
+
 def opts_physical(value):
     """Whether the SHELLOPTS `value` lists `physical`: True, False or UNKNOWN.
 
@@ -596,6 +618,8 @@ def opts_physical(value):
         return False
     if value is UNKNOWN:
         return UNKNOWN
+    if isinstance(value, ShellOpts):
+        return value.physical
     return "physical" in value.split(":")
 
 
@@ -789,14 +813,41 @@ class Field:
     """One argument of a command, after expansion.
 
     `tilde` says the field began with an unquoted `~`, which names $HOME, and
-    is true only of the first field a word produces.
+    is true only of the first field a word produces. `assign` is the name an
+    unreadable field certainly assigns, as a wrapper reads it; see
+    `assignment_name`.
     """
 
-    __slots__ = ("value", "tilde")
+    __slots__ = ("value", "tilde", "assign")
 
-    def __init__(self, value, tilde=False):
+    def __init__(self, value, tilde=False, assign=None):
         self.value = value
         self.tilde = tilde
+        self.assign = assign
+
+
+def assignment_name(word):
+    """The name `word` assigns as one argument, whatever its value, or None.
+
+    `env OUT="$(pwd)" bash -c ...` hands `env` an assignment whose value this
+    scan cannot read, but which is certainly one argument and an assignment:
+    it opens with an unquoted `NAME=`, and nothing in it is split or matched
+    on paths. Read as an unknown word it was taken for the command, and the
+    write behind it was missed. A word that may split may supply the command
+    itself, so it is no such argument.
+    """
+    parts = list(word_parts(word))
+    if not parts or parts[0][1] or parts[0][0]["Type"] != "Lit":
+        return None
+    match = ASSIGN_WORD.match(parts[0][0].get("Value", ""))
+    if not match or match.group(0).startswith("-"):
+        return None
+    for part, quoted in parts:
+        if quoted or part["Type"] == "SglQuoted":
+            continue
+        if part["Type"] != "Lit" or is_pattern(part.get("Value", "")):
+            return None
+    return match.group(0)[:-1]
 
 
 def split_fields(segments, separators):
@@ -1388,12 +1439,11 @@ class Scanner:
             else:
                 exported[name] = True
         # bash hands a child the SHELLOPTS its options make now, not the one
-        # it inherited; see `bash_shellopts`.
+        # it inherited; see `ShellOpts`.
         if not sealed and self.scope.bash is not False:
             state = self.is_exported("SHELLOPTS")
             if state is True:
-                assigns["SHELLOPTS"] = self.bash_shellopts(
-                    self.carried_physical())
+                assigns["SHELLOPTS"] = ShellOpts(self.carried_physical())
                 exported["SHELLOPTS"] = True
             elif state is UNKNOWN:
                 assigns["SHELLOPTS"] = UNKNOWN
@@ -1409,13 +1459,14 @@ class Scanner:
         its own shell, so a variable it uses is either assigned in the same
         text -- which the walk has recorded, in order -- or inherited.
         """
-        # bash's SHELLOPTS is its options as they stand; see `bash_shellopts`.
+        # bash's SHELLOPTS lists options this scan does not follow, so `bd -C
+        # "/tmp/$SHELLOPTS"` names a store it cannot read; see `ShellOpts`.
         if name == "SHELLOPTS" and self.scope.bash is not False:
-            return self.bash_shellopts() if self.scope.bash is True \
-                else UNKNOWN
+            return UNKNOWN
         if name in self.scope.assigns:
             value = self.scope.assigns[name]
-            return UNKNOWN if value is UNSET else value
+            return UNKNOWN if value is UNSET or isinstance(value, ShellOpts) \
+                else value
         # `PWD` is the one name the inherited environment answers wrongly. The
         # hook runs in its own process, whose cwd is not the launch directory
         # the command runs in and does not follow the `cd`s the command makes,
@@ -1599,7 +1650,7 @@ class Scanner:
         for word in args:
             fields = self.expand(word)
             if fields is UNKNOWN:
-                out.append(Field(UNKNOWN))
+                out.append(Field(UNKNOWN, assign=assignment_name(word)))
             else:
                 out.extend(fields)
         return out
@@ -1643,6 +1694,8 @@ class Scanner:
         """
         if name in self.scope.assigns:
             value = self.scope.assigns[name]
+            if isinstance(value, ShellOpts):
+                return UNKNOWN
             return "" if value is UNSET else value
         if name in ("PWD", "OLDPWD"):
             return self.get(name)
@@ -1929,6 +1982,9 @@ class Scanner:
         i = start + 1
         while i < len(args):
             word = args[i].value
+            if word is UNKNOWN and args[i].assign is not None:
+                i += 1
+                continue
             if word is UNKNOWN or word == "--":
                 return None
             if not word.startswith("-"):
@@ -1980,7 +2036,9 @@ class Scanner:
         A wrapper with operands of its own -- `timeout 30 bd ...` -- names the
         command that many words past its options. An unreadable word among the
         options may be an option or an operand, so the command word is unknown
-        from there, as it is for `env $FLAGS bd ...`.
+        from there, as it is for `env $FLAGS bd ...` -- unless it is certainly
+        an assignment, as `env OUT="$(pwd)" bd ...` makes; see
+        `assignment_name`.
         """
         takes = WRAPPER_OPT_ARGS[wrapper]
         alone = WRAPPER_OPT_NOARG[wrapper]
@@ -1988,6 +2046,9 @@ class Scanner:
         i = start + 1
         while i < len(args):
             word = args[i].value
+            if word is UNKNOWN and args[i].assign is not None:
+                i += 1
+                continue
             if word is UNKNOWN:
                 return i
             if word == "--":
@@ -2000,6 +2061,9 @@ class Scanner:
                     # a read of something that was not `bd`.
                     while i < len(args):
                         word = args[i].value
+                        if word is UNKNOWN and args[i].assign is not None:
+                            i += 1
+                            continue
                         if word is UNKNOWN:
                             return i
                         if not ASSIGN_WORD.match(word):
@@ -2242,6 +2306,12 @@ class Scanner:
             i += 1
             while i < start:
                 word = args[i].value
+                if word is UNKNOWN and args[i].assign is not None:
+                    # An assignment whose value this scan cannot read leaves
+                    # that one name in doubt; see `assignment_name`.
+                    assigns[args[i].assign] = UNKNOWN
+                    i += 1
+                    continue
                 if word is UNKNOWN:
                     # An option, an unset or an assignment this scan cannot
                     # read, so every name read so far is in doubt.
@@ -2257,6 +2327,10 @@ class Scanner:
                     i += 1
                     while i < start:
                         word = args[i].value
+                        if word is UNKNOWN and args[i].assign is not None:
+                            assigns[args[i].assign] = UNKNOWN
+                            i += 1
+                            continue
                         if word is UNKNOWN:
                             assigns = {}
                             sealed = OPAQUE
@@ -3364,17 +3438,26 @@ class Scanner:
             return
         self.dispatch(cmd, fields, start, split, conditional, follows, None)
 
-    def wrapper_pwd(self, cmd, args, end, cwd):
+    def wrapper_pwd(self, cmd, args, end, cwd, posix=False):
         """The directory the wrappers moved the command to, as it names it,
         and whether that spelling is known.
 
         A wrapper's `chdir` leaves `PWD` in the environment as it was, and
-        bash -- like Go's `os.Getwd`, which `bd` uses -- keeps an inherited PWD
-        that names the directory it starts in. So after `cd /a/link; env -C .`
-        the command's PWD is still /a/link, and a `cd ..` or `bd -C ..` inside
-        it reads `..` from there and lands in /a. Where PWD names some other
-        directory, or none reaches the command, it starts from the physical
-        path `getcwd` gives, which is what `cwd` holds.
+        bash, dash and ksh -- like Go's `os.Getwd`, which `bd` uses -- keep an
+        inherited PWD that names the directory they start in. So after `cd
+        /a/link; env -C .` the command's PWD is still /a/link, and a `cd ..` or
+        `bd -C ..` inside it reads `..` from there and lands in /a. Where PWD
+        names some other directory, or none reaches the command, it starts
+        from the physical path `getcwd` gives, which is what `cwd` holds. So
+        it does in zsh, with `posix`, where a component of PWD is `.` or `..`,
+        as POSIX asks.
+
+        A PWD whose `..` follows a symlink keeps its spelling, collapsing it
+        by name naming another directory: with `link` pointing at /ext/child,
+        PWD=/ws/link/.. names /ext, and `cd -P .` there stays in /ext in bash
+        3.2 and dash, where reading the PWD as /ws named a store the command
+        never opened. `bd` does collapse it as it reads it, and walks up from
+        /ws, as `bead_root` does; so does bash from 4.4, which `cd` allows for.
 
         A PWD this scan cannot read may be such an alias or not. The directory
         is still the one `cwd` names, so the store `bd` walks up to is known,
@@ -3389,7 +3472,12 @@ class Scanner:
         if not isinstance(pwd, str) or not pwd.startswith("/") or \
                 not same_dir(pwd, cwd):
             return cwd, True
-        return logical_path(pwd) or cwd, True
+        if posix and {".", ".."} & set(pwd.split("/")):
+            return cwd, True
+        collapsed = logical_path(pwd)
+        if collapsed is not None and same_dir(collapsed, pwd):
+            return collapsed, True
+        return pwd, True
 
     def dispatch(self, cmd, fields, start, split, conditional, follows, cwd,
                  spelled=True):
@@ -3563,7 +3651,7 @@ class Scanner:
             # the directory is reported as `-C`'s would be, for SessionEnd.
             root = bead_root(self.scope.cwd)
             if root is None and self.background:
-                root = self.scope.cwd
+                root = os.path.normpath(self.scope.cwd)
             if root is not None:
                 self.found_target(root)
             return
@@ -3635,12 +3723,8 @@ class Scanner:
         if name in prefix:
             return prefix[name]
         if name == "SHELLOPTS" and self.scope.bash is not False:
-            # bash's own, as its options make it; see `bash_shellopts`.
-            exported = self.is_exported(name)
-            if exported is not True:
-                return None if exported is False else UNKNOWN
-            return self.bash_shellopts() if self.scope.bash is True \
-                else UNKNOWN
+            # bash's own, which no word can spell; see `ShellOpts`.
+            return None if self.is_exported(name) is False else UNKNOWN
         if name in self.scope.assigns:
             value = self.scope.assigns[name]
             if value is UNSET:
@@ -3648,7 +3732,9 @@ class Scanner:
             exported = self.is_exported(name)
             if exported is UNKNOWN:
                 return UNKNOWN
-            return value if exported else None
+            if not exported:
+                return None
+            return UNKNOWN if isinstance(value, ShellOpts) else value
         exported = self.is_exported(name)
         if exported is UNKNOWN:
             return UNKNOWN
@@ -3761,6 +3847,7 @@ class Scanner:
         if target is UNKNOWN:
             self.leave_cwd()
             return
+        searched = target is not None
         if target is None:
             target = self.resolve_field(args[i])
         # A `cd` that fails leaves the shell where it was, and the command after
@@ -3774,6 +3861,20 @@ class Scanner:
             self.leave_cwd()
             return
         dest = cd_dest(target, physical)
+        # bash from 4.4 collapses an inherited PWD by name as it starts and
+        # resolves a relative `cd` from that, where bash 3.2 resolves it from
+        # the PWD as given; see `wrapper_pwd`. The two differ where a `..` in
+        # it follows a symlink -- with PWD=/ws/link/.. in /ext, `cd -P .`
+        # stays in /ext in 3.2 and lands in /ws in 5 -- and there the cwd is
+        # unknown.
+        if self.scope.bash is not False and dest is not UNKNOWN and \
+                not searched and not args[i].tilde and \
+                not args[i].value.startswith("/"):
+            cwd = self.scope.cwd
+            base = logical_path(cwd) or chdir_path(cwd)
+            if base != cwd and cd_dest(base.rstrip("/") + "/" +
+                                       args[i].value, physical) != dest:
+                dest = UNKNOWN
         # The PWD a `cd` leaves is spelled when the shell knew the spelling it
         # started from, when the operand was absolute, or when `-P` made it
         # the physical path. A relative one from an unknown spelling extends
@@ -4255,30 +4356,6 @@ class Scanner:
             answers.add(opts_physical(self.shell_var("SHELLOPTS")))
         return answers.pop() if len(answers) == 1 else UNKNOWN
 
-    def bash_shellopts(self, physical=None):
-        """SHELLOPTS as bash holds it here, its mode being `physical` --
-        this scope's unless given -- or UNKNOWN.
-
-        bash keeps the variable in step with its options, so after a `set +P`
-        the value it inherited no longer speaks: `env SHELLOPTS="$SHELLOPTS"
-        bash -c ...` hands the child the mode in force. Of those options this
-        scan follows only `physical`, the rest being read as inherited, which
-        leaves right the one thing a bash started from the value reads here.
-        """
-        if physical is None:
-            physical = self.scope.physical
-        if physical is UNKNOWN:
-            return UNKNOWN
-        base = self.scope.assigns.get("SHELLOPTS")
-        if base is None and not self.scope.sealed:
-            base = os.environ.get("SHELLOPTS")
-        if not isinstance(base, str):
-            base = ""
-        options = {opt for opt in base.split(":") if opt} - {"physical"}
-        if physical:
-            options.add("physical")
-        return ":".join(sorted(options))
-
     def shell_pwd(self, cmd, args, start):
         """The directory the shell at `args[start]` starts in, as the PWD it
         sets names it, and whether that spelling is known.
@@ -4286,12 +4363,15 @@ class Scanner:
         A shell keeps an inherited PWD that names the directory it starts in
         and otherwise sets PWD from `getcwd`, the physical path: `cd /ws/link;
         env -i bash -c 'cd ..; ...'` lands in /ext, the cleared environment
-        having carried no PWD. See `wrapper_pwd`, which reads it the same way.
+        having carried no PWD. zsh also refuses one with a `.` or `..` in it.
+        See `wrapper_pwd`, which reads it the same way.
         """
         cwd = self.scope.cwd
         if not self.scope.known or not os.path.isdir(cwd):
             return cwd, self.scope.spelled
-        return self.wrapper_pwd(cmd, args, start, chdir_path(cwd))
+        return self.wrapper_pwd(cmd, args, start, chdir_path(cwd),
+                                posix=args[start].value.rsplit("/", 1)[-1]
+                                == "zsh")
 
     def split_wrapper(self, cmd, args, start, split):
         """Scans what `env -S <string>` runs, the string naming the command.
