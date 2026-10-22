@@ -370,7 +370,11 @@ check skip 'xargs -i bd show {}'
 check_target '/tmp/store' 'xargs -I{} bd -C /tmp/store close {}'
 # A replacement string this scan cannot read leaves the arguments as they are:
 # the words it would match carry the same expansion and are unreadable already.
-check_target '/tmp/store' 'xargs -I "$CS_SOMETHING_UNSET" bd -C /tmp/store close "$CS_SOMETHING_UNSET"'
+check_target '/tmp/store' 'xargs -I "$CS_SOMETHING_UNSET" bd -C /tmp/store close -- "$CS_SOMETHING_UNSET"'
+# Without one, `xargs` appends its input, which an option at the end takes;
+# otherwise it is read as operands.
+check_unresolved "printf '%s\n' /tmp/store | xargs -n1 bd close CHR-1 -C"
+check_target "$STORE" "cd $STORE; bd ready | xargs bd close"
 # The command word itself may come from the input, in which case nothing here
 # names it.
 check skip 'xargs -I{} {} close CHR-1'
@@ -1285,6 +1289,10 @@ check_unresolved 'CS_W_STORE=/tmp/store; env -S '"'"'bd -C ${CS_W_STORE} close C
 # `${PWD}` is read from the environment `env` was started with, before its
 # `-C` moves it.
 check_target "$CD/base/store" "cd $CD/base; env -C $CD/other -S 'bd -C \${PWD}/store close CHR-1'"
+# An assignment whose value cannot be read keeps its name, so the command
+# after it is still found.
+check_target '/tmp/store' "export SHELLOPTS; env -S 'OPTS=\${SHELLOPTS} bd -C /tmp/store close CHR-1'"
+check_target '/tmp/store' "env -u CS_A -S 'OUT=\${CS_A} bd -C /tmp/store close CHR-1'"
 check_unresolved 'CS_W_STORE=/old env CS_W_STORE=/tmp/store -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
 check_unresolved 'CS_W_STORE=/tmp/store env -u CS_W_STORE -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
 check_unresolved 'CS_W_STORE=/tmp/store env -i -S '"'"'bd -C ${CS_W_STORE} close CHR-1'"'"''
@@ -1538,6 +1546,12 @@ check_target "$CD/other/store" "(cd $CD/other; bd -C store close CHR-1)"
 # what they change resolves the write after them under a directory the real
 # shell never entered.
 check_target "$BASE/store" "cd $CD/other & bd -C store close CHR-1"
+# A builtin behind a wrapper that runs a program runs in a process of its
+# own, so it does not move this shell; behind `command` or `builtin` it does.
+check_target "$STORE" "cd $STORE; env cd $CD/other; bd close CHR-1"
+check_target "$STORE" "cd $STORE; nohup cd $CD/other; bd close CHR-1"
+check_target "$CD/other/store" "cd $STORE; command cd $CD/other; bd -C store close CHR-1"
+check_target "$CD/other/store" "cd $STORE; builtin cd $CD/other; bd -C store close CHR-1"
 check_target "$BASE/store" "cd $CD/other | bd -C store close CHR-1"
 check_target "$BASE/store" "cd $CD/other | true; bd -C store close CHR-1"
 check_target "$BASE/store" "true | cd $CD/other; bd -C store close CHR-1"
@@ -1566,6 +1580,9 @@ check_target "$BASE/store" "shopt -s extglob; true | cd $CD/other; bd -C store c
 # Job control switches `lastpipe` off again; `set -m` turns it on.
 check_target "$BASE/store" "shopt -s lastpipe; set -m; true | cd $CD/other; bd -C store close CHR-1"
 check_target "$BASE/store" "shopt -s lastpipe; set -o monitor; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$BASE/store" "shopt -s lastpipe; shopt -so monitor; true | cd $CD/other; bd -C store close CHR-1"
+check_target "$CD/other/store" "shopt -s lastpipe; shopt -so monitor; shopt -uo monitor; true | cd $CD/other; bd -C store close CHR-1"
+check_unresolved "shopt -s lastpipe; shopt -so \$cs_opt; true | cd $CD/other; bd -C store close CHR-1"
 check_target "$CD/other/store" "shopt -s lastpipe; set -m; set +m; true | cd $CD/other; bd -C store close CHR-1"
 # A subshell's `lastpipe` dies with it, and a new shell starts without it.
 check_target "$BASE/store" "shopt -s lastpipe; (true | cd $CD/other); bd -C store close CHR-1"
@@ -2252,8 +2269,11 @@ check skip 'bd list "$(printf x)"'
 check sync 'bd ready "$(printf %s --claim)"'
 check sync 'bd ready $UNSET_BY_ANY_TEST_XYZ'
 check sync 'bd ready --label foo "$(printf x)"'
-# The `-C` target is still found past an unknown operand.
-check_target '/tmp/store' 'bd -C /tmp/store "$(printf close)" CHR-1'
+# The `-C` target is still found past an unknown operand -- one that cannot
+# open with a `-`. One that may is perhaps an option itself, so the store is
+# unknown past it, the write still counting.
+check_target '/tmp/store' 'bd -C /tmp/store "close$(printf x)" CHR-1'
+check_unresolved 'bd -C /tmp/store "$(printf close)" CHR-1'
 
 # --- a wrapper's environment reaches the command --------------------------
 # `env VAR=value` is the syntactic prefix's twin: it reaches the child, and the
@@ -2284,11 +2304,19 @@ check_unresolved 'env OUT="$(pwd)" bash -c "bd -C \"\$OUT\" close CHR-1"'
 # the invocation is given up on, and the write after it still counts.
 check_unresolved 'env OUT=$(pwd) bash -c "bd -C /tmp/store close CHR-1"'
 check_unresolved 'env $CS_FLAGS bd -C /tmp/store close CHR-1'
-# So may one among `bd`'s own arguments, which may then name its store; a
-# quoted one is one argument, and one after `--` an operand.
+# So is a quoted one, which may be an option or the command.
+check_unresolved 'CS_MODE=-i; env "${CS_MODE[0]}" bd -C /tmp/store close CHR-1'
+check_unresolved 'timeout "$CS_SOMETHING_UNSET" bd -C /tmp/store close CHR-1'
+check_unresolved 'xargs "$CS_SOMETHING_UNSET" bd -C /tmp/store close CHR-1'
+# One among `bd`'s own arguments may be options too, which may then name its
+# store, if it may split or open with a `-`. One after an option of unknown
+# arity is taken for its value, and one after `--` is an operand.
 check_unresolved 'CS_OPTS=$(printf "%s" "-C /tmp/x"); bd $CS_OPTS close CHR-1'
+check_unresolved 'CS_FLAG=-C; bd "${CS_FLAG[0]}" /tmp/store close CHR-1'
 check_unresolved "cd $STORE; bd close \$(printf %s CHR-1)"
-check_target "$STORE" "cd $STORE; bd close \"\$(printf %s CHR-1)\""
+check_unresolved "cd $STORE; bd close \"\$(printf %s CHR-1)\""
+check_target "$STORE" "cd $STORE; bd close \"CHR-\$(printf %s 1)\""
+check_target "$STORE" "cd $STORE; bd create X -d \"\$(printf %s body)\""
 check_target "$STORE" "cd $STORE; bd close -- \$(printf %s CHR-1)"
 # A later prefix assignment sees an earlier one in dash, zsh and bash from
 # 4.0, but not everywhere in bash 3.2, so in bash a value the two readings
@@ -2336,6 +2364,17 @@ check_target "$STORE" "(cd $STORE/sub; bd init; bd create X) &"
 check_async "$STORE +$STORE/sub" "(bd -C $STORE/sub init) &"
 check_async "+$CD/n/sub" "(sleep 5; mkdir -p $CD/n/.beads $CD/n/sub; bd -C $CD/n/sub close CHR-1) &"
 check_async "$STORE" "(cd $STORE; bd close CHR-1) &"
+# So does the parent of a `--db` or BEADS_DB value, which `bd` walks up from
+# unless it is a `.beads` itself.
+check_async "$STORE +$STORE/sub" "(bd --db $STORE/sub/x.db close CHR-1) &"
+check_target "$STORE" "(bd --db $STORE/sub/x.db close CHR-1) &"
+check_async "$STORE +$STORE/sub" "(BEADS_DB=$STORE/sub/x.db bd close CHR-1) &"
+check_async "$STORE" "(bd --db $STORE/.beads/beads.db close CHR-1) &"
+# The directory `-C` walks up from is the one `bd` reads, `..` collapsed by
+# name before any link is followed.
+mkdir -p "$CD/wr/.beads" "$CD/wr/sub" "$CD/wr/child"
+ln -s "$CD/wr/child" "$CD/wr/sub/link"
+check_async "$CD/wr +$CD/wr/sub" "(sleep 5; mkdir -p $CD/wr/sub/.beads; bd -C $CD/wr/sub/link/.. close CHR-1) &"
 # A `cd` in the background to a directory not there now may reach one the
 # job makes first, so where it lands is unknown, not where it was.
 check_unresolved "(mkdir -p $CD/later; cd $CD/later; bd init; bd create X) &"
@@ -2441,6 +2480,12 @@ check_target "$EXT" "sudo -D $WS_DIR/link bd -C .. close CHR-1"
 check_unresolved "cd $WS_DIR/link; sudo -D . bd -C .. close CHR-1"
 check_target "$EXT" "cd $WS_DIR/link; sudo -D . bd -C . close CHR-1"
 check_unresolved "cd $WS_DIR/link; sudo -D . bash -c 'CDPATH=..; cd sibling; bd close CHR-1'"
+# CDPATH entries are tried in the `cd`'s mode: a logical one reads `..` by
+# name, so /ws/link/.. holds `repo` though /ext does not; a physical one
+# moves on to the next entry.
+mkdir -p "$WS_DIR/repo" "$CD/backup/repo" "$CD/backup/.beads"
+check_target "$WS_DIR" "cd $CD; CDPATH=$WS_DIR/link/..:$CD/backup; cd repo; bd close CHR-1"
+check_target "$CD/backup" "cd $CD; set -P; CDPATH=$WS_DIR/link/..:$CD/backup; cd repo; bd close CHR-1"
 # A sourced file may change it, so after one the two readings are in doubt.
 check_unresolved "set -P; source ./opts.sh; cd $WS_DIR/link/..; bd close CHR-1"
 # The last of `-L` and `-P` wins, as in bash.
@@ -2462,6 +2507,9 @@ check_target "$WS_DIR" "cd $WS_DIR/link; env -C . bash -c 'cd ..; bd close CHR-1
 # A prefix is expanded before the wrapper moves the command, so the PWD it
 # gives is read from the shell running the wrapper.
 check_target "$WS_DIR" "cd $WS_DIR; PWD=\"\$PWD/link\" env -C link bash -c 'cd ..; bd close CHR-1'"
+# `env` keeps the PWD it inherited whatever its `-C` does, so what its `-S`
+# string runs reads that one.
+check_target "$WS_DIR" "cd $WS_DIR/link; env -C $CD/other -S 'env -C $EXT/child bash -c \"cd ..; bd close CHR-1\"'"
 check_target "$WS_DIR" "cd $WS_DIR/link; env -C . bd -C .. close CHR-1"
 # Without a PWD that names it, the command starts from the physical path.
 check_target "$EXT" "cd $WS_DIR/link; env -i -C . bash -c 'cd ..; bd close CHR-1'"
