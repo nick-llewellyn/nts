@@ -1289,6 +1289,15 @@ check_unresolved 'CS_W_STORE=/tmp/store; env -S '"'"'bd -C ${CS_W_STORE} close C
 # `${PWD}` is read from the environment `env` was started with, before its
 # `-C` moves it.
 check_target "$CD/base/store" "cd $CD/base; env -C $CD/other -S 'bd -C \${PWD}/store close CHR-1'"
+# `env` changes directory once, to the last `-C` among all its options -- the
+# string's included -- read from where it started.
+mkdir -p "$CD/sl/launch/repo/.beads" "$CD/sl/other/repo/.beads"
+check_target "$CD/sl/launch/repo" "cd $CD/sl/launch; env -C $CD/sl/other -S '-C repo bd close CHR-1'"
+check_target "$CD/sl/launch/repo" "cd $CD/sl/launch; env -C $CD/sl/other --split-string='-C repo bd close CHR-1'"
+check_target "$CD/sl/launch/repo" "cd $CD/sl/launch; env -C $CD/sl/missing -S '-C repo bd close CHR-1'"
+check_target "$CD/sl/other/repo" "cd $CD/sl/launch; env -C $CD/sl/other/repo -S 'bd close CHR-1'"
+check_target "$CD/sl/other/repo" "cd $CD/sl/launch; env -S '-C repo' -C $CD/sl/other/repo bd close CHR-1"
+check_unresolved "cd $CD/sl/launch; env -C $CD/sl/missing -S 'bd close CHR-1'"
 # An assignment whose value cannot be read keeps its name, so the command
 # after it is still found.
 check_target '/tmp/store' "export SHELLOPTS; env -S 'OPTS=\${SHELLOPTS} bd -C /tmp/store close CHR-1'"
@@ -2386,6 +2395,22 @@ check_async "$CD/wr +$CD/wr/sub" "(sleep 5; mkdir -p $CD/wr/sub/.beads; bd -C $C
 # A `cd` in the background to a directory not there now may reach one the
 # job makes first, so where it lands is unknown, not where it was.
 check_unresolved "(mkdir -p $CD/later; cd $CD/later; bd init; bd create X) &"
+# A wrapper that may return before its command finishes runs it in the
+# background too: `setsid -f`, `setsid` under job control, and `sudo -b`,
+# unless `-w` makes `setsid` wait. Only the wrapper's own options count.
+check_async "$STORE" "setsid -f bash -c 'sleep 5; bd -C $STORE close CHR-1'"
+check_target "$STORE" "setsid -f bash -c 'sleep 5; bd -C $STORE close CHR-1'"
+check_async "$STORE" "setsid --fork bd -C $STORE close CHR-1"
+check_async "$STORE" "set -m; setsid bd -C $STORE close CHR-1"
+check_async "$STORE" "sudo -b bd -C $STORE close CHR-1"
+check_async "$STORE" "sudo -bu nick bd -C $STORE close CHR-1"
+check_async "+$CD/n2/sub" "setsid -f bash -c 'sleep 5; mkdir -p $CD/n2/.beads $CD/n2/sub; bd -C $CD/n2/sub close CHR-1'"
+check_async "" "setsid -f -w bd -C $STORE close CHR-1"
+check_async "" "setsid -fw bd -C $STORE close CHR-1"
+check_async "" "setsid bd -C $STORE close CHR-1"
+check_async "" "set -m; setsid -w bd -C $STORE close CHR-1"
+check_async "" "setsid bd -C $STORE close CHR-1 -f"
+check_async "" "sudo -u -b bd -C $STORE close CHR-1"
 
 # --- symlinks ------------------------------------------------------------
 # `link` points into ext, which holds a store, from ws, which holds another.

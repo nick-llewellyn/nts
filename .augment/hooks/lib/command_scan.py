@@ -332,6 +332,17 @@ WRAPPER_CHDIR_OPTS = {
     "sudo": {"-D", "--chdir"},
 }
 
+# The options by which a wrapper returns before the command it runs has
+# finished, and those that make it wait after all. `sudo -b` runs the command
+# in the background; `setsid -f` forks and returns unless `-w` is given, and
+# forks without `-f` too whenever it starts as a process group leader, as
+# every command is under job control. See `detaches`.
+WRAPPER_DETACH_OPTS = {
+    "setsid": {"-f", "--fork"},
+    "sudo": {"-b", "--background"},
+}
+WRAPPER_WAIT_OPTS = {"setsid": {"-w", "--wait"}}
+
 # `cd`'s own options, stepped over to find the operand. `-P` and `-L` decide
 # how a `..` in it is read, which `cd_dest` settles; `-e` and `-@` say nothing
 # about where it lands.
@@ -2322,6 +2333,71 @@ class Scanner:
             return args[i + 1]
         return Field(UNKNOWN)
 
+    def detaches(self, args, start):
+        """Whether a wrapper in `args[:start]` may return before the command
+        it runs has finished, as `&` does.
+
+        `setsid -f bash -c 'sleep 5; bd -C /ext close X'` returns at once, so
+        scanned as a command waited for, the hook synced and retired /ext
+        before the write landed; see `in_background`. `-w` makes `setsid`
+        wait, and without `-f` it forks only as a process group leader, which
+        a command is under job control: `set -m; setsid sleep 2` returns in no
+        time, where without `set -m` it takes two seconds. Only each
+        wrapper's own options are read, so `setsid bd ... -f` waits.
+        """
+        if start is None:
+            return False
+        i = 0
+        while i < start:
+            word = args[i].value
+            name = None if word is UNKNOWN else word.rsplit("/", 1)[-1]
+            if name not in WRAPPER_DETACH_OPTS:
+                i += 1
+                continue
+            seen, i = self.wrapper_flags(args, i, start, name)
+            if seen & WRAPPER_WAIT_OPTS.get(name, set()):
+                continue
+            if seen & WRAPPER_DETACH_OPTS[name] or (
+                    name == "setsid" and self.scope.monitor is not False):
+                return True
+        return False
+
+    @staticmethod
+    def wrapper_flags(args, i, start, name):
+        """The options the wrapper `name` at `args[i]` was given, as spelled,
+        and the index of the word after them."""
+        takes = WRAPPER_OPT_ARGS[name]
+        alone = WRAPPER_OPT_NOARG[name]
+        seen = set()
+        i += 1
+        while i < start:
+            word = args[i].value
+            if word is UNKNOWN:
+                i += 1
+                continue
+            if word == "--":
+                return seen, i + 1
+            if not word.startswith("-") or word == "-":
+                if name not in WRAPPER_ENV_UNREADABLE or \
+                        not ASSIGN_WORD.match(word):
+                    break
+                i += 1
+                continue
+            if word.startswith("--"):
+                opt, sep, _ = word.partition("=")
+                seen.add(opt)
+                i += 1 if sep or opt not in takes else 2
+                continue
+            bundle = short_opts(word, takes, alone)
+            if bundle is None:
+                break
+            letters, opt, inline = bundle
+            seen.update("-" + letter for letter in letters)
+            if opt is not None:
+                seen.add(opt)
+            i += 1 if opt is None or inline is not None else 2
+        return seen, i
+
     def chdir_to(self, cwd, field):
         """`field` as the directory in force after changing to it from `cwd`.
 
@@ -3574,9 +3650,11 @@ class Scanner:
         # directory is a property of the invocation, and `-C`, BEADS_DIR and the
         # walk up all resolve against it. A frame is entered only when there is
         # one to apply, so an unwrapped `cd` still reaches the command after it.
-        end = split[1] if split is not None else start
-        cwd = None if end is None else self.wrapper_chdir(fields, end)
-        cwd, spelled = self.wrapper_pwd(cmd, fields, end, cwd)
+        # An `env -S` changes directory only once its string's options are
+        # read too, so its own `-C` is left to `split_wrapper`: `start` is
+        # that `env` itself.
+        cwd = None if start is None else self.wrapper_chdir(fields, start)
+        cwd, spelled = self.wrapper_pwd(cmd, fields, start, cwd)
         if cwd is None and split is None:
             cwd, spelled = self.given_pwd(cmd, fields, start)
         # A builtin behind a wrapper that runs a program runs as a process of
@@ -3596,11 +3674,15 @@ class Scanner:
             # `-C /old`, and `PWD="$PWD/link" env -C link bash -c ...` hands
             # the shell /ws/link, where reading either in the moved frame
             # named /new and /ws/link/link.
+            #
+            # A wrapper that may return before its command finishes runs it
+            # as `&` does; see `detaches`.
+            run = self.in_background if self.detaches(fields, start) \
+                else self.scoped
             self.callers[id(cmd)] = self.scope
             try:
-                self.scoped(lambda: self.dispatch(cmd, fields, start, split,
-                                                  conditional, follows, cwd,
-                                                  spelled))
+                run(lambda: self.dispatch(cmd, fields, start, split,
+                                          conditional, follows, cwd, spelled))
             finally:
                 self.callers.pop(id(cmd), None)
             return
@@ -4795,6 +4877,16 @@ class Scanner:
             rendered.append(shlex.quote(arg.value))
         if not rendered:
             return
+        # `env` changes directory once, to the last directory among all its
+        # options -- the string's included -- read from where it started, as
+        # GNU and BSD `env` both do: from /launch, `env -C /other -S '-C repo
+        # bd close X'` runs in /launch/repo, where entering /other first named
+        # /other/repo. So the one named before the string leads what the
+        # string runs, and a later `-C` there replaces it.
+        outer = self.wrapper_chdir(args[start:prefix_end], prefix_end - start)
+        if outer is not None:
+            rendered[:0] = ["-C", UNREADABLE_WORD if outer is UNKNOWN
+                            else shlex.quote(outer)]
         # The assignments `env` was given before the string reach the command
         # the string names, and were stepped over rather than read while the
         # string was being found. Layered over the prefix as in

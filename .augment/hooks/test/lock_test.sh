@@ -851,6 +851,29 @@ registered "$OUT" "$REG" && report ok ||
 rm -rf "$OUT"
 teardown
 
+# --- a detaching wrapper's write waits for SessionEnd too --------------
+# `setsid -f` returns before what it runs has finished, as `&` does, so the
+# store it writes is kept for SessionEnd rather than settled now; `setsid -w`
+# waits, so its store is settled as any other.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+ASYNC="$WS/.beads/.augment-sync.async"
+CONV=conv-a fire "setsid -f bash -c 'sleep 5; bd -C $OUT close CHR-1'"
+registered "$OUT" "$ASYNC" && report ok ||
+  report bad "a detaching wrapper's external store must be kept for SessionEnd (async: $(reg_dump "$ASYNC"))"
+: >"$BD_LOG.dirs"
+CONV=conv-a fire_end
+grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync a detaching wrapper's external store (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+[ ! -e "$ASYNC" ] && report ok ||
+  report bad "SessionEnd must hand a detaching wrapper's record over (async: $(reg_dump "$ASYNC"))"
+CONV=conv-a fire "setsid -w bash -c 'bd -C $OUT close CHR-1'"
+! registered "$OUT" "$ASYNC" && report ok ||
+  report bad "a waiting setsid's store must not be kept as written in the background (async: $(reg_dump "$ASYNC"))"
+rm -rf "$OUT"
+teardown
+
 # --- a background record outlives a hand-off that failed ---------------
 # Once the record is gone the registry entry is the only thing naming the
 # store, so a SessionEnd that could not write one must keep the record. An
