@@ -2418,6 +2418,16 @@ check_async "$STORE" "setsid -w setsid bd -C $STORE close CHR-1"
 check_async "$STORE" "setsid -w nice setsid bd -C $STORE close CHR-1"
 check_async "" "setsid setsid -w bd -C $STORE close CHR-1"
 check_async "" "setsid -w setsid -w bd -C $STORE close CHR-1"
+# Leadership lasts through an `exec` and `env -S`, and a shell execs its last
+# command, so a `setsid` in what a led process runs leads too; it ends with
+# that command.
+check_async "$STORE" "setsid -w env -S 'setsid bd -C $STORE close CHR-1'"
+check_async "$STORE" "setsid bash -c 'exec setsid bd -C $STORE close CHR-1'"
+check_async "$STORE" "setsid bash -c 'setsid bd -C $STORE close CHR-1'"
+check_async "" "setsid -w env -S 'setsid -w bd -C $STORE close CHR-1'"
+check_async "" "setsid bash -c 'exec setsid -w bd -C $STORE close CHR-1'"
+check_async "" "bash -c 'setsid bd -C $STORE close CHR-1'"
+check_async "" "setsid bash -c true; setsid bd -C $STORE close CHR-1"
 # A sourced file may `set -m` or `shopt -s lastpipe`, so after one whether
 # `setsid` forks, and where a pipeline's last member runs, are in doubt.
 check_async "$STORE" "source ./cs-opts.sh; setsid bd -C $STORE close CHR-1"

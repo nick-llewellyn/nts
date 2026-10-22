@@ -1476,6 +1476,10 @@ class Scanner:
         # and the stores written inside one; see `in_background`.
         self.background = 0
         self.async_targets = set()
+        # Whether the frames being scanned run in a process a `setsid` made a
+        # process group leader, which an `exec` or `env -S` keeps; see
+        # `detaches`.
+        self.leader = False
         # The scope each command a wrapper moved was invoked from, by the
         # command's node; see `call`.
         self.callers = {}
@@ -2345,12 +2349,18 @@ class Scanner:
         time, where without `set -m` it takes two seconds. A `setsid` after
         another is one too, the first having made it lead a session of its
         own, so `setsid -w setsid sleep 2` returns at once as well: the outer
-        `-w` waits only on a fork the outer one never made. Only each
-        wrapper's own options are read, so `setsid bd ... -f` waits.
+        `-w` waits only on a fork the outer one never made. Leadership lasts
+        through an `exec` and through `env -S`, and a shell execs its last
+        command, so a `setsid` anywhere in what such a process runs is read
+        as leading too: `setsid bash -c 'setsid sleep 2'` and `setsid -w env
+        -S 'setsid sleep 2'` return at once. One the shell forks would not
+        lead, which costs only a record SessionEnd did not need; see
+        `leads`. Only each wrapper's own options are read, so `setsid bd ...
+        -f` waits.
         """
         if start is None:
             return False
-        leader = False
+        leader = self.leader
         i = 0
         while i < start:
             word = args[i].value
@@ -2365,6 +2375,15 @@ class Scanner:
                 return True
             leader = leader or name == "setsid"
         return False
+
+    def leads(self, args, start):
+        """Whether the command at `args[start]` runs as a process group
+        leader: a `setsid` among its wrappers made it one, or it runs inside
+        a process that already was; see `detaches`."""
+        return self.leader or (start is not None and any(
+            args[j].value is not UNKNOWN and
+            args[j].value.rsplit("/", 1)[-1] == "setsid"
+            for j in range(start)))
 
     @staticmethod
     def wrapper_flags(args, i, start, name):
@@ -3680,15 +3699,19 @@ class Scanner:
             # named /new and /ws/link/link.
             #
             # A wrapper that may return before its command finishes runs it
-            # as `&` does; see `detaches`.
+            # as `&` does, and one a `setsid` leads passes that on to what it
+            # runs; see `detaches`.
             run = self.in_background if self.detaches(fields, start) \
                 else self.scoped
+            leader = self.leader
+            self.leader = self.leads(fields, start)
             self.callers[id(cmd)] = self.scope
             try:
                 run(lambda: self.dispatch(cmd, fields, start, split,
                                           conditional, follows, cwd, spelled))
             finally:
                 self.callers.pop(id(cmd), None)
+                self.leader = leader
             return
         self.dispatch(cmd, fields, start, split, conditional, follows, None)
 
