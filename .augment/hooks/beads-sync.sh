@@ -1284,10 +1284,13 @@ sync_root() {
 
   # A store with `dolt.auto-push: false` stays local: each pass below still
   # commits, and the push is skipped. Unset or any other value pushes, so a
-  # store whose setting cannot be read is synced as it was before.
+  # store whose setting cannot be read is synced as it was before. The value
+  # is read as text, so a JSON `false` counts as the string does; `//` drops
+  # `false` as it drops `null`, which pushed to a remote the store lacks.
   push_enabled=1
   [ "$(bd -C "$root" config get dolt.auto-push --json 2>/dev/null |
-    jq -r '.value // empty' 2>/dev/null)" = false ] && push_enabled=0
+    jq -r '.value | select(. != null) | tostring' 2>/dev/null)" = false ] &&
+    push_enabled=0
 
   for ((pass = 1; pass <= 3; pass++)); do
     mv -f "$pending" "$inflight" 2>/dev/null || : >"$inflight"

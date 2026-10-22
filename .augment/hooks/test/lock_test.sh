@@ -52,11 +52,15 @@ setup() {
 LOG="${BD_LOG:?}"
 # `bd -C <dir> config get dolt.auto-push --json`, answered before the op
 # logging below, whose `push` match would otherwise read the key as a push:
-# false under BD_AUTO_PUSH_OFF, a failure under BD_CONFIG_FAIL, unset
-# otherwise.
+# false under BD_AUTO_PUSH_OFF (a JSON boolean when it is `bool`), a failure
+# under BD_CONFIG_FAIL, unset otherwise.
 if [ "${3:-}" = config ]; then
   [ -n "${BD_CONFIG_FAIL:-}" ] && exit 1
-  [ -n "${BD_AUTO_PUSH_OFF:-}" ] && echo '{"value": "false"}' || echo '{"value": ""}'
+  case "${BD_AUTO_PUSH_OFF:-}" in
+    "") echo '{"value": ""}' ;;
+    bool) echo '{"value": false}' ;;
+    *) echo '{"value": "false"}' ;;
+  esac
   exit 0
 fi
 # `bd -C <dir> dolt <op>`: record which root each op was aimed at, so the
@@ -1824,6 +1828,14 @@ export BD_AUTO_PUSH_OFF=1
 fire_end
 [ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 0 ] && report ok ||
   report bad "SessionEnd with auto-push off must commit without pushing (log: $(tr '\n' ',' <"$BD_LOG"))"
+teardown
+
+# ... whether `bd` reports the setting as a string or as a JSON boolean.
+setup
+export BD_AUTO_PUSH_OFF=bool
+fire 'bd close CHR-1'
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 0 ] && report ok ||
+  report bad "auto-push off as a JSON boolean must commit without pushing (log: $(tr '\n' ',' <"$BD_LOG"))"
 teardown
 
 # ... and an external store synced that way is settled, not kept as owed.
