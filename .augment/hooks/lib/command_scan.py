@@ -3676,8 +3676,10 @@ class Scanner:
         where reading `..` from the shell's own spelling named /ext. A prefix
         or a wrapper that sets, unsets or clears PWD, or passes it by a
         policy this scan cannot read, is read as `wrapper_pwd` reads one
-        that moves the command, and as `shell_pwd` reads a child shell. A
-        builtin or a function runs in this shell and reads none of it.
+        that moves the command, and as `shell_pwd` reads a child shell. So
+        is a PWD this shell assigned or unset since its last `cd`, or stopped
+        exporting: `export PWD=/ws/link; bd -C .. close X` writes /ws's store
+        too. A builtin or a function runs in this shell and reads none of it.
         """
         if start is None or start >= len(args) or not self.scope.known:
             return None, True
@@ -3686,9 +3688,11 @@ class Scanner:
                 word.rsplit("/", 1)[-1] != "bd":
             return None, True
         assigns, sealed = self.prefix_env(args, start)
-        if not sealed and "PWD" not in assigns and not any(
-                gives_value(arg) and arg["Name"]["Value"] == "PWD"
-                for arg in cmd.get("Assigns") or ()):
+        if not sealed and "PWD" not in assigns and \
+                "PWD" not in self.scope.assigns and \
+                self.scope.exported.get("PWD", True) is True and not any(
+                    gives_value(arg) and arg["Name"]["Value"] == "PWD"
+                    for arg in cmd.get("Assigns") or ()):
             return None, True
         if not os.path.isdir(self.scope.cwd):
             return None, True

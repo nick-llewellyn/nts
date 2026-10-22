@@ -2534,6 +2534,14 @@ check_target "$EXT" "cd $WS_DIR/link; env -u PWD bd -C .. close CHR-1"
 check_target "$EXT" "cd $WS_DIR/link; env -i bd -C .. close CHR-1"
 check_unresolved "cd $EXT/child; env PWD=\"\$(printf %s $WS_DIR/link)\" bd -C .. close CHR-1"
 check_unresolved "cd $WS_DIR/link; sudo bd -C .. close CHR-1"
+# So is a PWD the shell assigned or unset since its last `cd`, or stopped
+# exporting.
+check_target "$WS_DIR" "cd $EXT/child; export PWD=$WS_DIR/link; bd -C .. close CHR-1"
+check_target "$WS_DIR" "cd $EXT/child; PWD=$WS_DIR/link; bd -C .. close CHR-1"
+check_target "$EXT" "cd $EXT/child; PWD=$WS_DIR/link; cd .; bd -C .. close CHR-1"
+check_target "$EXT" "cd $WS_DIR/link; unset PWD; bd -C .. close CHR-1"
+check_target "$EXT" "cd $WS_DIR/link; export -n PWD; bd -C .. close CHR-1"
+check_target "$EXT" "cd $WS_DIR/link; export -n PWD; cd .; bd -C .. close CHR-1"
 check_target "$EXT" "cd $EXT/child; PWD=$WS_DIR/link cd ..; bd close CHR-1"
 check_target "$EXT" "cd $EXT/child; PWD=$WS_DIR/link command cd ..; bd close CHR-1"
 # Every shell sets PWD as it starts, and exports it, so a child of one keeps
