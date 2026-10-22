@@ -2523,6 +2523,19 @@ check_target "$WS_DIR" "cd $WS_DIR/link; env -C . bd -C .. close CHR-1"
 check_target "$EXT" "cd $WS_DIR/link; env -i -C . bash -c 'cd ..; bd close CHR-1'"
 check_target "$EXT" "cd $WS_DIR/link; env -u PWD -C . bash -c 'cd ..; bd close CHR-1'"
 check_target "$EXT" "cd $WS_DIR; env -C link bash -c 'cd ..; bd close CHR-1'"
+# So it is with no `-C`: `bd` reads `-C ..` from a PWD it is given that names
+# where it starts, and from the physical path without one, though it walks up
+# from the physical path either way. A builtin given one reads its own.
+check_target "$WS_DIR" "cd $EXT/child; env PWD=$WS_DIR/link bd -C .. close CHR-1"
+check_target "$WS_DIR" "cd $EXT/child; PWD=$WS_DIR/link bd -C .. close CHR-1"
+check_target "$WS_DIR" "cd $EXT/child; env PWD=$WS_DIR/link -C . bd -C .. close CHR-1"
+check_target "$EXT" "cd $EXT/child; env PWD=$WS_DIR/link bd close CHR-1"
+check_target "$EXT" "cd $WS_DIR/link; env -u PWD bd -C .. close CHR-1"
+check_target "$EXT" "cd $WS_DIR/link; env -i bd -C .. close CHR-1"
+check_unresolved "cd $EXT/child; env PWD=\"\$(printf %s $WS_DIR/link)\" bd -C .. close CHR-1"
+check_unresolved "cd $WS_DIR/link; sudo bd -C .. close CHR-1"
+check_target "$EXT" "cd $EXT/child; PWD=$WS_DIR/link cd ..; bd close CHR-1"
+check_target "$EXT" "cd $EXT/child; PWD=$WS_DIR/link command cd ..; bd close CHR-1"
 # Every shell sets PWD as it starts, and exports it, so a child of one keeps
 # the spelling a `cd` gave it even in a cleared environment; a shell that
 # inherited no PWD naming its directory starts from the physical path.

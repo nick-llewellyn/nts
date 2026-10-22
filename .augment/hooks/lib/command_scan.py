@@ -3577,6 +3577,8 @@ class Scanner:
         end = split[1] if split is not None else start
         cwd = None if end is None else self.wrapper_chdir(fields, end)
         cwd, spelled = self.wrapper_pwd(cmd, fields, end, cwd)
+        if cwd is None and split is None:
+            cwd, spelled = self.given_pwd(cmd, fields, start)
         # A builtin behind a wrapper that runs a program runs as a process of
         # its own, if at all, so what it changes dies with it: after `env cd
         # /decoy` the shell is where it was, and dispatching the `cd` here
@@ -3660,6 +3662,37 @@ class Scanner:
         if collapsed is not None and same_dir(collapsed, pwd):
             return collapsed, True
         return pwd, True
+
+    def given_pwd(self, cmd, args, start):
+        """Where the `bd` at `args[start]` reads its directory from when no
+        wrapper moved it but its PWD was given rather than inherited, as
+        `(cwd, spelled)` for `dispatch`; `(None, True)` when it is this
+        shell's own.
+
+        `bd` takes a PWD naming the directory it starts in as that
+        directory's spelling, and reads `-C ..` from there, so from
+        /ext/child, with `link` pointing there, `env PWD=/ws/link bd -C ..
+        close X` and `PWD=/ws/link bd -C .. close X` both write /ws's store,
+        where reading `..` from the shell's own spelling named /ext. A prefix
+        or a wrapper that sets, unsets or clears PWD, or passes it by a
+        policy this scan cannot read, is read as `wrapper_pwd` reads one
+        that moves the command, and as `shell_pwd` reads a child shell. A
+        builtin or a function runs in this shell and reads none of it.
+        """
+        if start is None or start >= len(args) or not self.scope.known:
+            return None, True
+        word = args[start].value
+        if word is UNKNOWN or word in self.functions or \
+                word.rsplit("/", 1)[-1] != "bd":
+            return None, True
+        assigns, sealed = self.prefix_env(args, start)
+        if not sealed and "PWD" not in assigns and not any(
+                gives_value(arg) and arg["Name"]["Value"] == "PWD"
+                for arg in cmd.get("Assigns") or ()):
+            return None, True
+        if not os.path.isdir(self.scope.cwd):
+            return None, True
+        return self.wrapper_pwd(cmd, args, start, chdir_path(self.scope.cwd))
 
     def handed_pwd(self, cmd, args, end):
         """The PWD the last `sudo` or `doas` in `args[:end]` was handed, or
