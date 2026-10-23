@@ -420,10 +420,19 @@ take_guard() {
 # As `take_guard`, but waits. Losing the registry guard outright would drop
 # the record of an external store, which is the one thing that makes a failed
 # sync there recoverable, so that caller is worth a short retry.
+#
+# The waits share one budget, GUARD_WAIT_LEFT seconds for the invocation, and
+# once it is spent a take tries once. Each take is made per store, and the
+# hook is killed at 60 seconds: with a live holder keeping a guard busy, 13
+# stores written in the background waited five seconds each, and the kill
+# came before any of them was registered or synced.
+GUARD_WAIT_LEFT=10
 take_guard_waiting() {
   local guard="$1" attempts="${2:-5}" i
   for ((i = 1; i <= attempts; i++)); do
     take_guard "$guard" && return 0
+    [ "$GUARD_WAIT_LEFT" -gt 0 ] || return 1
+    GUARD_WAIT_LEFT=$((GUARD_WAIT_LEFT - 1))
     sleep 1
   done
   return 1

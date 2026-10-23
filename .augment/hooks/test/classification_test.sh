@@ -539,6 +539,10 @@ check_target "$STORE/nested/inner" \
   "cd $STORE && BEADS_DB=$STORE/nested/inner/.beads bd close CHR-1"
 check_unresolved "cd $STORE && BEADS_DB=\$(pwd) bd close CHR-1"
 check_target "$STORE" "cd $STORE && BEADS_DB= bd close CHR-1"
+# `bd` reads an empty BEADS_DIR as unset too, so BEADS_DB is read after it.
+check_target "$STORE/nested/inner" "cd $STORE && BEADS_DIR= BEADS_DB=$STORE/nested/inner/.beads bd close CHR-1"
+check_target "$STORE/nested/inner" "cd $STORE && env BEADS_DIR= BEADS_DB=$STORE/nested/inner/.beads bd close CHR-1"
+check_target "$STORE" "cd $STORE && env BEADS_DIR= bd close CHR-1"
 check_target "$STORE" "cd $STORE && BEADS_DB=$CD/other/.beads env -u BEADS_DB bd close CHR-1"
 check_target "$STORE" "cd $STORE; BEADS_DB=$CD/other/.beads; bd close CHR-1"
 check_target "$STORE/nested/inner" "cd $STORE; export BEADS_DB=$STORE/nested/inner/.beads; bd close CHR-1"
@@ -727,6 +731,12 @@ check_target '/tmp/a' 'IFS=:; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
 # `-p '' bd`, and the empty prompt is an argument `-p` takes. Dropping it
 # handed `bd` to `-p` and lost the write.
 check_target '/tmp/store' 'IFS=:; OPTS="-p::bd"; sudo $OPTS -C /tmp/store close CHR-1'
+# bash 3.2 drops a quoted null after a split where later bash and dash keep
+# it: with X=' ', `sudo -p $X'' bd ...` passes an empty prompt in one and none
+# in the other. The word is in doubt, and the write behind it still counts.
+check_target '/tmp/store' "X=' '; sudo -p \$X'' bd -C /tmp/store close CHR-1"
+check_target '/tmp/store' "X=' '; sudo -p \$X\"\" bd -C /tmp/store close CHR-1"
+check_target '/tmp/store' "X=; sudo -p \$X'' bd -C /tmp/store close CHR-1"
 check_target '/tmp/store' 'IFS=:; OPTS="-C:/tmp/store"; bd $OPTS close CHR-1'
 # The empty field is `-C`'s value and the path is the verb, so the store is
 # not named; dropping the field would have named it.
@@ -1560,6 +1570,12 @@ check_target "$BASE/store" "cd $CD/other & bd -C store close CHR-1"
 check_target "$STORE" "cd $STORE; env cd $CD/other; bd close CHR-1"
 check_target "$STORE" "cd $STORE; nohup cd $CD/other; bd close CHR-1"
 check_target "$CD/other/store" "cd $STORE; command cd $CD/other; bd -C store close CHR-1"
+# Named by a path, a builtin is a program in a process of its own, if it is
+# there at all, so it cannot act on this shell either.
+check_target "$STORE" "cd $STORE; /usr/bin/cd $CD/other; bd close CHR-1"
+check_target "$STORE" "cd $STORE; ./cd $CD/other; bd close CHR-1"
+check_target "$STORE" "cd $STORE; /bin/pushd $CD/other; bd close CHR-1"
+check_target "$STORE/nested/inner" "cd $STORE; export BEADS_DIR=$STORE/nested/inner/.beads; /usr/bin/unset BEADS_DIR; bd close CHR-1"
 check_target "$CD/other/store" "cd $STORE; builtin cd $CD/other; bd -C store close CHR-1"
 check_target "$BASE/store" "cd $CD/other | bd -C store close CHR-1"
 check_target "$BASE/store" "cd $CD/other | true; bd -C store close CHR-1"
@@ -1656,10 +1672,19 @@ check_target '/tmp/store' "bash -c 'bd -C /tmp/store close CHR-1'"
 # value or not.
 check_target '/tmp/store' 'bash -x -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'bash -o pipefail -c "bd -C /tmp/store close CHR-1"'
+# In a bundle, `o` and `O` each take a word after it, in order.
+check_target '/tmp/store' 'bash -euo pipefail -c "bd -C /tmp/store close CHR-1"'
+check_target '/tmp/store' 'bash -oe pipefail -c "bd -C /tmp/store close CHR-1"'
+check_target '/tmp/store' 'bash -eO extglob -c "bd -C /tmp/store close CHR-1"'
+check_target '/tmp/store' 'bash -co pipefail "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'bash -c -x "bd -C /tmp/store close CHR-1"'
 # A flag the scan cannot delimit may or may not take the word after it, so
 # the operand it would name is a guess and the invocation is left alone.
 check skip 'bash -Q "bd -C /tmp/store close CHR-1"'
+# With a `-c` that may follow, though, the script may still run, so the write
+# counts, with no store named.
+check_unresolved 'bash -Q -c "bd -C /tmp/store close CHR-1"'
+check_unresolved 'bash $CS_FLAGS "bd -C /tmp/store close CHR-1"'
 # A long option is one name, not a bundle of letters. Read letter by letter,
 # the first `-` inside `--noprofile` was a flag the scan did not know, and
 # `bash --noprofile --norc -c '...'` was left alone with the write inside it.
@@ -2511,6 +2536,8 @@ check_target "$WS_DIR" "env SHELLOPTS=physical bash -o privileged -c 'cd $WS_DIR
 check_target "$EXT" "env SHELLOPTS=physical bash -p -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "env SHELLOPTS=physical bash -p +p -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "env SHELLOPTS=physical bash -p +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# An option named in a bundle counts as one named alone.
+check_target "$EXT" "bash -eo physical -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 # An exported SHELLOPTS carries the parent's physical mode as it is now, not
 # as it was inherited; a wrapper that drops it, or clears the environment,
 # leaves the child logical, and a prefix assignment to it is refused.

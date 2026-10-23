@@ -403,6 +403,11 @@ READ_WORDS = {
 # or define anything: every value, attribute, function and the cwd are in
 # doubt after it.
 SOURCE_WORDS = {"source", "."}
+# The builtins read for what they do to this shell. Named by a path, each is a
+# program in a process of its own, if it is there at all, which cannot act on
+# the shell: `/usr/bin/cd /decoy; bd close X` writes the store it started in.
+SHELL_STATE_WORDS = CHDIR_WORDS | set(READ_WORDS) | {
+    "unset", "set", "shopt", "eval", "getopts", "printf"}
 
 # What `env -S` splits its string on, and the escapes it decodes. Outside
 # single quotes `\_` is a separator too, and inside double quotes it is a
@@ -856,16 +861,20 @@ def is_pattern(text):
     return False
 
 
-def word_parts(word, quoted=False):
+def word_parts(word, quoted=False, nulls=False):
     """The parts of `word`, each with whether quoting protects it.
 
     Double quotes group their contents rather than adding a part of their own,
     so they are flattened -- but which side of them a part sits on decides both
     what its backslashes mean and whether an expansion inside it is split, so
-    the context travels with the part instead of being discarded.
+    the context travels with the part instead of being discarded. With
+    `nulls`, an empty pair is a quoted empty literal, as `''` is, where a
+    field's count turns on it; see `split_fields`.
     """
     for part in word.get("Parts") or ():
         if part["Type"] == "DblQuoted":
+            if nulls and not part.get("Parts"):
+                yield {"Type": "Lit", "Value": ""}, True
             for inner, _ in word_parts(part, True):
                 yield inner, True
         else:
@@ -993,7 +1002,7 @@ def assignment_name(word, raw=None):
     return match.group(0)[:-1]
 
 
-def split_fields(segments, separators):
+def split_fields(segments, separators, keep_nulls=False):
     """The fields `segments` make, splitting only where splitting applies.
 
     Each segment is `(text, splittable)`. Splitting is a property of the text's
@@ -1019,13 +1028,15 @@ def split_fields(segments, separators):
     # here: at the start, and after another such delimiter, it does; after a
     # field closed by whitespace it is the whitespace's own split.
     empty_next = True
-    # Whether anything has been read yet. A quoted null -- `""` -- opens a
-    # field of its own only before anything else has: `$X""` with X unset is
-    # one empty argument, and with X=` ` or X=`a:` it is none and one.
+    # Whether anything has been read yet. In bash 3.2 a quoted null -- `""`
+    # -- opens a field of its own only before anything else has: `$X""` with
+    # X unset is one empty argument, and with X=` ` or X=`a:` it is none and
+    # one. Later bash and dash open one wherever it stands, making those one
+    # and two, which is how `keep_nulls` reads it.
     seen = False
     for text, splittable in segments:
         if not splittable:
-            if text or current is not None or not seen:
+            if text or current is not None or not seen or keep_nulls:
                 current = (current or "") + text
             seen = seen or bool(text)
             continue
@@ -1715,7 +1726,7 @@ class Scanner:
         later `bd -C "$OUT"` opens.
         """
         segments = []
-        for part, quoted in word_parts(word):
+        for part, quoted in word_parts(word, nulls=True):
             kind = part["Type"]
             if kind == "Lit":
                 text = part.get("Value", "")
@@ -1787,7 +1798,14 @@ class Scanner:
         separators = self.separators()
         if separators is UNKNOWN:
             return UNKNOWN
-        fields = split_fields(segments, separators)
+        # bash 3.2 drops a quoted null after a split where later bash keeps
+        # it: with X=` `, `sudo -p $X'' bd -C /ext close X` passes `sudo` an
+        # empty prompt in bash 5.2 and none in the bash macOS ships. Where the
+        # two readings disagree, so does the argument list.
+        fields = split_fields(segments, separators, self.scope.bash is False)
+        if self.scope.bash is not False and \
+                fields != split_fields(segments, separators, True):
+            return UNKNOWN
         if not fields:
             # Every field was separator: the word contributes no argument at
             # all, as `set -- $EMPTY` passes none.
@@ -2881,7 +2899,10 @@ class Scanner:
         while i < len(args):
             word = args[i].value
             if word is UNKNOWN:
-                return i if seen_c else None
+                if seen_c:
+                    return i
+                self.shell_abandoned(args, start, i)
+                return None
             if word == "--":
                 i += 1
                 break
@@ -2894,22 +2915,49 @@ class Scanner:
                 # A long option is one name, not a bundle of letters. One
                 # that carries its value -- `--rcfile=FILE` -- takes no word
                 # after it; one not known here may take one, so the
-                # invocation is abandoned as for an unknown letter.
+                # invocation is abandoned. Unlike an unknown letter, which
+                # some shell may take, it is no write: bash refuses an
+                # option it does not know, and `--help` runs no script.
                 opt = word.partition("=")[0]
                 if opt in SHELL_LONG_NOARG or \
                         (opt in SHELL_OPT_ARGS and "=" in word):
                     i += 1
                     continue
                 return None
+            # In a bundle, `o` and `O` take a word after it each, in order,
+            # as alone they do: `bash -euo pipefail -c '...'` runs its script
+            # with pipefail on. Read as an unknown letter, the invocation was
+            # dropped and the write inside missed.
+            taken = 0
             for ch in word[1:]:
+                if ch in "oO":
+                    taken += 1
+                    continue
                 if ch not in SHELL_NOARG_LETTERS:
+                    self.shell_abandoned(args, start, i)
                     return None
                 if ch == "c":
                     seen_c = True
-            i += 1
+            i += 1 + taken
         if not seen_c or i >= len(args):
             return None
         return i
+
+    def shell_abandoned(self, args, start, i):
+        """Records the shell at `args[start]`, whose options could not be
+        delimited at `args[i]`, as a write with no store where it may still
+        run a `-c` script: `bash -Q -c 'bd -C /ext close X'` runs it if `-Q`
+        takes nothing, and left alone the write was reported by nothing; see
+        `abandoned`. With no `-c` that may be there, the word after is a
+        script file or an option's value, not a command.
+        """
+        for arg in args[i:]:
+            word = arg.value
+            if word is UNKNOWN or (word[:1] in ("-", "+") and
+                                   not word.startswith("--") and
+                                   "c" in word[1:]):
+                self.abandoned(args, start)
+                return
 
     @staticmethod
     def shell_option(words, letter, name, value=False):
@@ -2929,21 +2977,29 @@ class Scanner:
             word = words[i].value
             if word is UNKNOWN:
                 return UNKNOWN
-            if word in ("-o", "+o"):
-                option = words[i + 1].value if i + 1 < len(words) else None
-                if option is UNKNOWN:
-                    return UNKNOWN
-                if option == name:
-                    value = word == "-o"
-                i += 2
+            if word.startswith("--"):
+                i += 2 if word in SHELL_OPT_ARGS else 1
                 continue
-            if word in SHELL_OPT_ARGS:
-                i += 2
+            if word[:1] not in ("-", "+"):
+                i += 1
                 continue
-            if word[:1] in ("-", "+") and not word.startswith("--") and \
-                    letter in word[1:]:
-                value = word.startswith("-")
-            i += 1
+            # `o` and `O` take a word each, bundled or not: `-eo physical` is
+            # `-e -o physical`. Only `o` names an option of `set`.
+            on = word.startswith("-")
+            taken = 0
+            for ch in word[1:]:
+                if ch == letter:
+                    value = on
+                elif ch in "oO":
+                    taken += 1
+                    if ch == "o":
+                        at = i + taken
+                        option = words[at].value if at < len(words) else None
+                        if option is UNKNOWN:
+                            return UNKNOWN
+                        if option == name:
+                            value = on
+            i += 1 + taken
         return value
 
     # --- the walk ---------------------------------------------------------
@@ -3897,6 +3953,8 @@ class Scanner:
         if word is UNKNOWN:
             return
         name = word.rsplit("/", 1)[-1]
+        if name != word and name in SHELL_STATE_WORDS:
+            return
 
         if name in CHDIR_WORDS:
             self.cd(fields, start, conditional, follows, name, cmd)
@@ -4001,10 +4059,13 @@ class Scanner:
             # BEADS_DIR names the store outright, and only when no `-C` overrides
             # it; BEADS_DB does the same and is consulted only when BEADS_DIR is
             # unset. Both point at the store rather than the root holding it.
+            # `bd` reads an empty one as unset, so after `env BEADS_DIR=
+            # BEADS_DB=/ext/.beads bd close X` it writes /ext's store, where
+            # stopping at the empty BEADS_DIR reported the launch directory's.
             named = None
             for env_name in BD_STORE_ENV:
                 named = self.command_env(cmd, fields, start, env_name)
-                if named is not None:
+                if named is not None and named != "":
                     break
             if named is None:
                 named = ""

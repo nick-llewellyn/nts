@@ -920,6 +920,40 @@ wait "$HOLDER" 2>/dev/null
 rm -rf "$OUT"
 teardown
 
+# --- many background records behind a busy guard stay inside the timeout -
+# Each store waits for the guard in turn, so 13 of them behind a live holder
+# waited 65 seconds, past the hook's 60-second kill, before any was synced.
+# The waits share one budget, and every store is still synced and warned of.
+setup
+OUT=$(mktemp -d)
+CMD="("
+for i in $(seq 1 13); do
+  mkdir -p "$OUT/s$i/.beads"
+  CMD+="bd -C $OUT/s$i close CHR-1; "
+done
+CMD+=") &"
+sleep 300 &
+HOLDER=$!
+hold_lock "$WS/.beads/.augment-sync.async.guard" "$HOLDER"
+STARTED=$SECONDS
+OUTPUT=$(event "$CMD" | "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null)
+ELAPSED=$((SECONDS - STARTED))
+[ "$ELAPSED" -le 20 ] && report ok ||
+  report bad "13 background records behind a busy guard must finish well inside the timeout (took ${ELAPSED}s)"
+MISSED=0
+for i in $(seq 1 13); do
+  grep -qxF "push $OUT/s$i" "$BD_LOG.dirs" 2>/dev/null || MISSED=$((MISSED + 1))
+done
+[ "$MISSED" -eq 0 ] && report ok ||
+  report bad "every store behind a busy guard must still be synced ($MISSED of 13 missed)"
+WARNED=$(grep -o "as written in the background" <<<"$OUTPUT" | wc -l | tr -d ' ')
+[ "$WARNED" -eq 13 ] && report ok ||
+  report bad "every store behind a busy guard must be warned about ($WARNED of 13)"
+kill "$HOLDER" 2>/dev/null
+wait "$HOLDER" 2>/dev/null
+rm -rf "$OUT"
+teardown
+
 # --- a background write to a store that does not exist yet -------------
 # The backgrounded command may create the store before it writes, so the
 # store can be missing when PostToolUse runs and present by SessionEnd. The
