@@ -50,6 +50,19 @@ setup() {
   cat >"$WS/bin/bd" <<'STUB'
 #!/usr/bin/env bash
 LOG="${BD_LOG:?}"
+# `bd -C <dir> config get dolt.auto-push --json`, answered before the op
+# logging below, whose `push` match would otherwise read the key as a push:
+# false under BD_AUTO_PUSH_OFF (a JSON boolean when it is `bool`), a failure
+# under BD_CONFIG_FAIL, unset otherwise.
+if [ "${3:-}" = config ]; then
+  [ -n "${BD_CONFIG_FAIL:-}" ] && exit 1
+  case "${BD_AUTO_PUSH_OFF:-}" in
+    "") echo '{"value": ""}' ;;
+    bool) echo '{"value": false}' ;;
+    *) echo '{"value": "false"}' ;;
+  esac
+  exit 0
+fi
 # `bd -C <dir> dolt <op>`: record which root each op was aimed at, so the
 # multi-root cases can tell the difference.
 [ "${1:-}" = -C ] && TARGET="${2:-}" || TARGET=""
@@ -91,7 +104,8 @@ STUB
 teardown() {
   rm -rf "$WS"
   PATH="$ORIG_PATH"
-  unset BD_PUSH_FAIL BD_PUSH_SLEEP BD_COMMIT_FAIL BD_COMMIT_NOOP
+  unset BD_PUSH_FAIL BD_PUSH_SLEEP BD_COMMIT_FAIL BD_COMMIT_NOOP \
+    BD_AUTO_PUSH_OFF BD_CONFIG_FAIL
 }
 
 # Feeds one event of type $1 carrying $2 as the command. Remaining
@@ -100,12 +114,13 @@ teardown() {
 #
 # `$FIRE_CWD` sets the directory the tool call was launched from, which is
 # what a relative `-C` target resolves against. Empty by default, since the
-# field is optional on the real event.
+# field is optional on the real event. `$CONV` sets the `conversation_id`,
+# which is left out when empty.
 event_as() {
   local e="$1" c="$2"; shift 2
   jq -n --arg e "$e" --arg w "$WS" --arg c "$c" \
-    --arg d "${FIRE_CWD:-}" --args \
-    '{hook_event_name:$e, workspace_roots:([$w] + $ARGS.positional), tool_name:"launch-process", tool_input:({command:$c} + (if $d == "" then {} else {cwd:$d} end))}' \
+    --arg d "${FIRE_CWD:-}" --arg v "${CONV:-}" --args \
+    '{hook_event_name:$e, workspace_roots:([$w] + $ARGS.positional), tool_name:"launch-process", tool_input:({command:$c} + (if $d == "" then {} else {cwd:$d} end))} + (if $v == "" then {} else {conversation_id:$v} end)' \
     "$@"
 }
 
@@ -800,6 +815,172 @@ grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
 rm -rf "$OUT"
 teardown
 
+# --- a background write's external store waits for SessionEnd ----------
+# A command can return while a write it started is still running: `(sleep 5;
+# bd -C /ext close X) &`. The sync that follows finds nothing there yet, and
+# settling the entry then left the write, when it landed, named by nothing --
+# not the registry, and so not SessionEnd either.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+ASYNC="$WS/.beads/.augment-sync.async"
+REG="$WS/.beads/.augment-sync.external"
+CONV=conv-a fire "(sleep 5; bd -C $OUT close CHR-1) &"
+registered "$OUT" "$ASYNC" && report ok ||
+  report bad "a background write's external store must be kept for SessionEnd (async: $(reg_dump "$ASYNC"))"
+# Kept apart from the registry, so later invocations are not made to sync it.
+: >"$BD_LOG.dirs"
+CONV=conv-a fire 'bd list'
+! grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
+  report bad "a background entry must not make a later invocation sync (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+# Another session sharing the workspace syncs the store when it ends, but
+# leaves the record for the session whose write may still be running.
+CONV=conv-b fire_end
+grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
+  report bad "every SessionEnd must sync a background write's external store (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+registered "$OUT" "$ASYNC" && report ok ||
+  report bad "another session's SessionEnd must keep the background record (async: $(reg_dump "$ASYNC"))"
+# The session's own SessionEnd hands it over through the registry, so a
+# failure there is still retried later.
+: >"$BD_LOG.dirs"
+export BD_PUSH_FAIL=1
+CONV=conv-a fire_end
+unset BD_PUSH_FAIL
+grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync its own background write's external store (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+registered "$OUT" "$REG" && report ok ||
+  report bad "a failed SessionEnd sync must leave the store registered (registry: $(reg_dump "$REG"))"
+[ ! -e "$ASYNC" ] && report ok ||
+  report bad "SessionEnd must hand its own background records over (async: $(reg_dump "$ASYNC"))"
+rm -rf "$OUT"
+teardown
+
+# --- a detaching wrapper's write waits for SessionEnd too --------------
+# `setsid -f` returns before what it runs has finished, as `&` does, so the
+# store it writes is kept for SessionEnd rather than settled now; `setsid -w`
+# waits, so its store is settled as any other.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+ASYNC="$WS/.beads/.augment-sync.async"
+CONV=conv-a fire "setsid -f bash -c 'sleep 5; bd -C $OUT close CHR-1'"
+registered "$OUT" "$ASYNC" && report ok ||
+  report bad "a detaching wrapper's external store must be kept for SessionEnd (async: $(reg_dump "$ASYNC"))"
+: >"$BD_LOG.dirs"
+CONV=conv-a fire_end
+grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync a detaching wrapper's external store (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+[ ! -e "$ASYNC" ] && report ok ||
+  report bad "SessionEnd must hand a detaching wrapper's record over (async: $(reg_dump "$ASYNC"))"
+CONV=conv-a fire "setsid -w bash -c 'bd -C $OUT close CHR-1'"
+! registered "$OUT" "$ASYNC" && report ok ||
+  report bad "a waiting setsid's store must not be kept as written in the background (async: $(reg_dump "$ASYNC"))"
+rm -rf "$OUT"
+teardown
+
+# --- a background record outlives a hand-off that failed ---------------
+# Once the record is gone the registry entry is the only thing naming the
+# store, so a SessionEnd that could not write one must keep the record. An
+# older entry for the store is no proof the hand-off landed: whoever holds
+# the guard may be settling it, so the case starts with one in place.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+ASYNC="$WS/.beads/.augment-sync.async"
+REG="$WS/.beads/.augment-sync.external"
+fire "bd -C $OUT close CHR-1 &"
+reg_write "$REG" "$OUT"
+sleep 300 &
+HOLDER=$!
+hold_lock "$REG.guard" "$HOLDER"
+fire_end
+registered "$OUT" "$ASYNC" && report ok ||
+  report bad "a SessionEnd that could not register the store must keep its background record (async: $(reg_dump "$ASYNC"))"
+kill "$HOLDER" 2>/dev/null
+wait "$HOLDER" 2>/dev/null
+rm -rf "$OUT"
+teardown
+
+# --- a background record that cannot be written still syncs and warns --
+# The warning runs only when the list's guard or write fails, so a fault in
+# it -- a name unset under `set -u` -- would end the hook before the sync.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+sleep 300 &
+HOLDER=$!
+hold_lock "$WS/.beads/.augment-sync.async.guard" "$HOLDER"
+OUTPUT=$(event "bd -C $OUT close CHR-1 &" | "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null)
+grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
+  report bad "a background record that cannot be written must not stop the sync (dirs: $(tr '\n' ',' <"$BD_LOG.dirs" 2>/dev/null))"
+grep -q "as written in the background" <<<"$OUTPUT" && report ok ||
+  report bad "a background record that cannot be written must be warned about (output: $OUTPUT)"
+kill "$HOLDER" 2>/dev/null
+wait "$HOLDER" 2>/dev/null
+rm -rf "$OUT"
+teardown
+
+# --- a background write to a store that does not exist yet -------------
+# The backgrounded command may create the store before it writes, so the
+# store can be missing when PostToolUse runs and present by SessionEnd. The
+# record names the directory `bd` walks up from, marked `+`.
+setup
+PARENT=$(mktemp -d)
+NEW="$PARENT/store"
+CONV=conv-a fire "(sleep 5; mkdir -p $NEW/.beads; bd -C $NEW close CHR-1) &"
+registered "+$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
+  report bad "a background write to a store not there yet must be kept for SessionEnd (async: $(reg_dump "$WS/.beads/.augment-sync.async"))"
+# Another session ending before the store exists must keep the record: the
+# job that will create it belongs to the session still running.
+CONV=conv-b fire_end
+registered "+$NEW" "$WS/.beads/.augment-sync.async" && report ok ||
+  report bad "another session's SessionEnd must keep a record whose store is not there yet (async: $(reg_dump "$WS/.beads/.augment-sync.async"))"
+mkdir -p "$NEW/.beads"
+: >"$BD_LOG.dirs"
+CONV=conv-a fire_end
+grep -q "push $NEW" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync a store that appeared after its background write was seen (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+rm -rf "$PARENT"
+teardown
+
+# --- a background -C below a store made later --------------------------
+# `bd -C` walks up from its directory, and the job may make the store it
+# finds first, above that directory: SessionEnd walks up from the directory
+# the record names rather than looking in it alone.
+setup
+PARENT=$(mktemp -d)
+ASYNC="$WS/.beads/.augment-sync.async"
+CONV=conv-a fire "(sleep 5; mkdir -p $PARENT/.beads $PARENT/sub; bd -C $PARENT/sub close CHR-1) &"
+registered "+$PARENT/sub" "$ASYNC" && report ok ||
+  report bad "a background -C must be kept as a directory to walk up from (async: $(reg_dump "$ASYNC"))"
+mkdir -p "$PARENT/.beads" "$PARENT/sub"
+: >"$BD_LOG.dirs"
+CONV=conv-a fire_end
+grep -qxF "push $PARENT" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync the store a background -C walks up to (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+[ ! -e "$ASYNC" ] && report ok ||
+  report bad "SessionEnd must hand over a walked-up record once its store is synced (async: $(reg_dump "$ASYNC"))"
+rm -rf "$PARENT"
+teardown
+
+# --- a background bd below a store, nearer one made later --------------
+# A plain `bd` in a directory under a store opens a nearer one if the job
+# makes it first, so the directory is kept beside the store found now.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads" "$OUT/child"
+ASYNC="$WS/.beads/.augment-sync.async"
+CONV=conv-a fire "(sleep 5; cd $OUT/child; bd init; bd create X) &"
+registered "$OUT" "$ASYNC" && registered "+$OUT/child" "$ASYNC" && report ok ||
+  report bad "a background bd must keep both the store found and the directory it walks up from (async: $(reg_dump "$ASYNC"))"
+mkdir -p "$OUT/child/.beads"
+: >"$BD_LOG.dirs"
+CONV=conv-a fire_end
+grep -qxF "push $OUT/child" "$BD_LOG.dirs" && report ok ||
+  report bad "SessionEnd must sync a nearer store the background job made (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+rm -rf "$OUT"
+teardown
+
 # --- a settled external target is forgotten ----------------------------
 # The record exists only to carry unfinished work forward. Kept past that,
 # every later invocation would commit a store it has no reason to touch --
@@ -1142,7 +1323,7 @@ wait "$DEAD" 2>/dev/null
 mv -f "$WS/bin/bd" "$WS/bin/bd.real"
 cat >"$WS/bin/bd" <<STUB
 #!/usr/bin/env bash
-if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && grep -q push <<<"\$*"; then
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && [ "\${3:-}" = dolt ] && [ "\${4:-}" = push ]; then
   ln -sf "$DEAD" "$REG.guard"
 fi
 exec "$WS/bin/bd.real" "\$@"
@@ -1188,7 +1369,7 @@ wait "$DEAD" 2>/dev/null
 mv -f "$WS/bin/bd" "$WS/bin/bd.real"
 cat >"$WS/bin/bd" <<STUB
 #!/usr/bin/env bash
-if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && grep -q push <<<"\$*"; then
+if [ "\${1:-}" = -C ] && [ "\${2:-}" = "$OUT" ] && [ "\${3:-}" = dolt ] && [ "\${4:-}" = push ]; then
   ln -sf "$DEAD" "$REG.guard"
   ln -sf "$OUT/.beads/no-such-dir/pending" "$OUT/.beads/.augment-sync.pending"
 fi
@@ -1620,10 +1801,65 @@ teardown
 setup
 export BD_PUSH_FAIL=1
 fire_end
-grep -q "NOT on DoltHub" "$WS/err" && report ok ||
+grep -q "NOT on the remote" "$WS/err" && report ok ||
   report bad "SessionEnd push failure must warn on stderr (err: $(tr '\n' ',' <"$WS/err"))"
 ! grep -q hookSpecificOutput "$WS/err" && report ok ||
   report bad "SessionEnd must not emit the PostToolUse envelope"
+teardown
+
+# --- `dolt.auto-push: false` commits and skips the push ----------------
+# A store kept local has no remote to push to. Each pass still commits, so
+# the write is in the store's history, and the markers clear as they would
+# after a push that succeeded.
+setup
+export BD_AUTO_PUSH_OFF=1
+FIRE_CWD="$WS" event 'bd close CHR-1' | "$BASH_UNDER_TEST" "$HOOK" >"$WS/out" 2>/dev/null
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 0 ] && report ok ||
+  report bad "auto-push off must commit without pushing (log: $(tr '\n' ',' <"$BD_LOG"))"
+! pending && ! inflight && report ok ||
+  report bad "auto-push off must clear the markers once the commit is made"
+[ ! -s "$WS/out" ] && report ok ||
+  report bad "a skipped push must not be warned about (out: $(tr '\n' ',' <"$WS/out"))"
+teardown
+
+# ... on SessionEnd as well ...
+setup
+export BD_AUTO_PUSH_OFF=1
+fire_end
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 0 ] && report ok ||
+  report bad "SessionEnd with auto-push off must commit without pushing (log: $(tr '\n' ',' <"$BD_LOG"))"
+teardown
+
+# ... whether `bd` reports the setting as a string or as a JSON boolean.
+setup
+export BD_AUTO_PUSH_OFF=bool
+fire 'bd close CHR-1'
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 0 ] && report ok ||
+  report bad "auto-push off as a JSON boolean must commit without pushing (log: $(tr '\n' ',' <"$BD_LOG"))"
+teardown
+
+# ... and an external store synced that way is settled, not kept as owed.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+REG="$WS/.beads/.augment-sync.external"
+export BD_AUTO_PUSH_OFF=1
+fire "bd -C $OUT close CHR-1"
+grep -q "commit $OUT" "$BD_LOG.dirs" && ! grep -q "push $OUT" "$BD_LOG.dirs" &&
+  report ok || report bad "an external store with auto-push off must be committed, not pushed (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
+! registered "$OUT" && report ok ||
+  report bad "a commit-only sync must settle the external entry (reg: $(reg_dump))"
+rm -rf "$OUT"
+teardown
+
+# --- a setting that cannot be read still pushes ------------------------
+# Only an explicit `false` keeps a store local. A `bd` that fails to answer
+# must not turn the push off for a store that relies on it.
+setup
+export BD_CONFIG_FAIL=1
+fire 'bd close CHR-1'
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 1 ] && report ok ||
+  report bad "an unreadable auto-push setting must still push (log: $(tr '\n' ',' <"$BD_LOG"))"
 teardown
 
 # --- a workspace root holding a newline is one root, not two -----------
@@ -2084,23 +2320,28 @@ teardown
 # value, the store above the launch directory was pushed and recorded while the
 # one the write opened was in neither -- and being outside every root, nothing
 # later could rediscover it.
+#
+# The wrapper's `chdir` leaves the command where `getcwd` names it, every
+# symlink resolved, and that is the name the store is reported by. `mktemp`
+# under macOS's /var is spelled through a symlink, so the two differ there.
 setup
 REG="$WS/.beads/.augment-sync.external"
 ELSE=$(mktemp -d)
 mkdir -p "$ELSE/.beads" "$ELSE/sub"
+ELSE_AT=$(cd "$ELSE" && pwd -P)
 fire_in "$WS" "env -C $ELSE bd close CHR-1"
-grep -qF "push $ELSE" "$BD_LOG.dirs" && report ok ||
+grep -qF "push $ELSE_AT" "$BD_LOG.dirs" && report ok ||
   report bad "a wrapper's directory must select the store (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
 export BD_PUSH_FAIL=1
 fire_in "$WS" "env -C $ELSE bd close CHR-1"
 unset BD_PUSH_FAIL
-registered "$ELSE" && report ok ||
+registered "$ELSE_AT" && report ok ||
   report bad "a store the wrapper's directory selects must be recorded (registry: $(reg_dump))"
 # A relative `-C` of `bd`'s own resolves there too, the wrapper having moved
 # before `bd` reads it.
 : >"$BD_LOG.dirs"
 fire_in "$WS" "env -C $ELSE bd -C sub close CHR-1"
-grep -qF "push $ELSE" "$BD_LOG.dirs" && report ok ||
+grep -qF "push $ELSE_AT" "$BD_LOG.dirs" && report ok ||
   report bad "a relative -C must resolve in the wrapper's directory (dirs: $(tr '\n' ',' <"$BD_LOG.dirs"))"
 rm -rf "$ELSE"
 teardown

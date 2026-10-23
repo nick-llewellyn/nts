@@ -1089,8 +1089,10 @@ write (`bd create` / `close` / `update` / `config set` / … — anything not on
 its read-only allow-list), the hook runs `bd dolt commit` followed by
 `bd dolt push --remote origin` in the store that was written, under a lock
 with a pending-marker so concurrent invocations and the 60 s hook timeout
-cannot lose a write or double-push. `bd prime` is injected at
-`SessionStart` by `.augment/hooks/beads-prime.sh`.
+cannot lose a write or double-push. The push is skipped for a store that
+sets `dolt.auto-push: false`; this repository's store leaves it unset, so it
+pushes. `bd prime` is injected at `SessionStart` by
+`.augment/hooks/beads-prime.sh`.
 
 The hooks need `bd`, `jq`, `shfmt` and `python3` on `PATH` — `shfmt` and
 `python3` are the command scanner, which parses each command's syntax tree
@@ -1099,7 +1101,9 @@ event at all, so it reports that and stands down, leaving bead writes local.
 Without the scanner it keeps going: it reports the failed scan and syncs the
 workspace roots anyway, so only a store outside them can be missed — one
 named by `bd -C <dir>`, `bd --db <path>`, `BEADS_DIR` or `BEADS_DB`, or
-found by walking up from wherever the command ran.
+found by walking up from wherever the command ran. A command that nests
+loops, functions or scripts too deeply to scan within a few seconds is
+treated the same way.
 `HOMEBREW_NO_AUTO_UPDATE=1 brew install jq shfmt` if either warning appears.
 
 The scan is static. It follows assignments, `cd`, wrappers (`sudo`, `env`,
@@ -1114,10 +1118,12 @@ cannot name (a `-C` path built from a substitution, a pattern such as
 `-C /tmp/store-*`, or a variable last assigned on a path that may not
 have run) is reported as unresolved rather than guessed, and so is script
 the scan cannot read at all (`eval "$X"`, `bash -c "$(…)"`); act on that
-warning the same way.
+warning the same way. A store outside the workspace roots written by a
+command the shell does not wait for (`&`, `coproc`, `<(…)`) is synced again
+at `SessionEnd`, since that write can land after the tool call returns.
 
 **Act on hook warnings.** Failures are prefixed `beads:` — e.g. `beads:
-'bd dolt push' failed in <root>, local bead writes are NOT on DoltHub.` —
+'bd dolt push' failed in <root>, local bead writes are NOT on the remote.` —
 and reach you on two channels: a `PostToolUse` failure is delivered as
 `additionalContext` on the tool result, while a `SessionEnd` failure and
 the missing-`jq` case (`beads: jq not found, …`, on every event) go to
