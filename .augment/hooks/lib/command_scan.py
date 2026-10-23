@@ -199,8 +199,11 @@ SHELL_WORDS = {"sh", "bash", "dash", "ksh", "mksh", "zsh"}
 # reported -- no sync, no warning, and a store no later event would find.
 ABANDONED_RUNNERS = {"bd", "eval"} | SHELL_WORDS
 # What separates the words of a script read as text rather than parsed, for
-# the runners above anywhere in it; see `shell_abandoned`.
-SCRIPT_WORD_BREAKS = re.compile(r"[\s;&|()<>`'\"{}$!]+")
+# the runners above anywhere in it, and the quoting removed before it splits:
+# quotes join what they quote, so `b"d"` and `b$'d'` run `bd`. See
+# `shell_abandoned`.
+SCRIPT_WORD_BREAKS = re.compile(r"[\s;&|()<>`{}$!]+")
+SCRIPT_QUOTING = re.compile(r"\$(?=['\"])|['\"\\]")
 
 # The historic spelling of a niceness, which `nice` takes without a letter:
 # `nice -10 cmd` is `nice -n 10 cmd`, and GNU takes `--10` and `-+10` too. Read
@@ -898,6 +901,11 @@ def word_parts(word, quoted=False, nulls=False):
 
 # What splits an unquoted expansion when nothing has assigned IFS.
 DEFAULT_IFS = " \t\n"
+
+# The shells that start with the default IFS whatever their environment holds,
+# as checked for bash 3.2 and 5.2, dash and zsh 5.9. POSIX lets a shell import
+# it instead, so the others keep the view their environment gives them.
+IFS_RESET_SHELLS = {"sh", "bash", "dash", "zsh"}
 
 
 class Field:
@@ -3033,21 +3041,35 @@ class Scanner:
         is read as one: any that names `bd`, `eval` or a shell anywhere in it
         counts, not only at its start, as `abandoned` reads a wrapper's. `bash
         -Q -c 'cd /ext && bd close X'` writes as surely as `bash -Q -c 'bd -C
-        /ext close X'` does.
+        /ext close X'` does, and `bash -Q -c 'b"d" -C /ext close X'` too, its
+        quoting removed. A word this scan cannot read after a `-c` that may be
+        there may be the script itself, which runs whatever it says: `bash
+        "${FLAG[0]}" -c "$CODE"`. See `unreadable_script`.
         """
-        if not any(arg.value is UNKNOWN or (
-                arg.value[:1] in ("-", "+") and
-                not arg.value.startswith("--") and "c" in arg.value[1:])
-                for arg in args[i:]):
+        if not any(self.may_be_c(arg) for arg in args[i:]):
             return
+        after_c = False
         for arg in args[start + 1:]:
             if arg.value is UNKNOWN:
+                if after_c:
+                    self.unreadable_script()
+                    return
+                after_c = True
                 continue
+            text = SCRIPT_QUOTING.sub("", arg.value)
             if any(word.rsplit("/", 1)[-1] in ABANDONED_RUNNERS
-                   for word in SCRIPT_WORD_BREAKS.split(arg.value)):
+                   for word in SCRIPT_WORD_BREAKS.split(text)):
                 self.mutates = True
                 self.unresolved += 1
                 return
+            after_c = after_c or self.may_be_c(arg)
+
+    @staticmethod
+    def may_be_c(arg):
+        """Whether the shell option word `arg` may hold a `-c`."""
+        return arg.value is UNKNOWN or (
+            arg.value[:1] in ("-", "+") and
+            not arg.value.startswith("--") and "c" in arg.value[1:])
 
     @staticmethod
     def shell_option(words, letter, name, value=False):
@@ -3261,6 +3283,11 @@ class Scanner:
                 self.scope.cwd, self.scope.spelled = pwd
                 self.scope.assigns.pop("PWD", None)
                 self.scope.exported["PWD"] = True
+            if process and shell in IFS_RESET_SHELLS:
+                # These shells set IFS as they start, too, ignoring the one
+                # they inherit: `IFS=: bash -c 'OUT=/ext:; bd -C $OUT close
+                # X'` passes `/ext:` whole.
+                self.scope.assigns.pop("IFS", None)
             if startup:
                 self.seal_opaque(cwd=True)
                 self.scope.physical = UNKNOWN
@@ -3434,7 +3461,10 @@ class Scanner:
         itself: an `unset` of a name it cannot read, an arithmetic assignment
         to one, a `source`d file. With `cwd`, the directory is in doubt too.
         """
-        self.scope.assigns = {}
+        # IFS is recorded rather than dropped, since `separators` reads a
+        # missing one as the default: a startup or sourced file that sets
+        # `IFS=:` makes `OUT=/ext:; bd -C $OUT close X` write /ext.
+        self.scope.assigns = {"IFS": UNKNOWN}
         self.scope.exported = {}
         self.scope.sealed = OPAQUE
         self.functions = {}
@@ -5024,17 +5054,23 @@ class Scanner:
         store that file exports, and what it does is as unknown as a
         `source`d file's; see `sub_scan`. bash as `sh` reads none of them for
         a `-c` script, and other shells are not read for theirs.
+
+        Each control is read as an option, where it stands as one and as the
+        last word on it says: `bash --rcfile --posix -c ...` names a file
+        `--posix` and reads BASH_ENV, as does `bash --posix +o posix -c ...`.
+        `-o norc` and `-o noprofile` read as the long options too, which
+        costs nothing: bash refuses both and runs nothing.
         """
         if bash_kind(args[start].value) is not True:
             return False
-        names = {word.value for word in words}
         login = self.shell_option(words, "l", "login")
-        if "--login" in names or login is not False:
-            if "--noprofile" not in names:
-                return True
+        if login is not False and \
+                self.shell_option(words, "", "noprofile") is not True:
+            return True
         if interactive is not False:
-            return interactive is UNKNOWN or "--norc" not in names
-        if privileged is True or "--posix" in names or \
+            return interactive is UNKNOWN or \
+                self.shell_option(words, "", "norc") is not True
+        if privileged is True or \
                 self.shell_option(words, "", "posix") is True:
             return False
         posix = self.command_env(cmd, args, start, "POSIXLY_CORRECT")

@@ -774,6 +774,15 @@ check_unresolved 'IFS=:; false && unset IFS; OUT=/tmp/a:b; bd -C $OUT close CHR-
 # A body that touches IFS leaves it unknown after the call, as it does any
 # name it assigns: which of its paths ran is not inferred.
 check_unresolved 'IFS=:; f() { local IFS=" "; unset IFS; }; f; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
+# A startup or sourced file may set IFS, so after one it is unknowable until
+# the text sets or unsets it. A new shell starts with the default, whatever
+# it inherits.
+check_unresolved "BASH_ENV=/tmp/select-store.sh bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
+check_unresolved 'source ./cs-ifs.sh; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
+check_target '/tmp/a' "BASH_ENV=/tmp/select-store.sh bash -c 'IFS=:; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
+check_target '/tmp/a:b' "BASH_ENV=/tmp/select-store.sh bash -c 'unset IFS; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
+check_target '/tmp/a:b' "IFS=: bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
+check_target '/tmp/a:b' "export IFS=:; bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 # An expansion that is all separators supplies no argument at all, so what
 # follows it is still the verb.
 check sync 'E=""; bd $E close CHR-1'
@@ -1709,6 +1718,13 @@ check_target "$STORE" "cd $STORE; BASH_ENV=/tmp/select-store.sh sh -c 'bd close 
 check_target "$STORE" "cd $STORE; BASH_ENV= bash -c 'bd close CHR-1'"
 check_target "$STORE" "cd $STORE; bash --noprofile -l -c 'bd close CHR-1'"
 check_target "$STORE" "cd $STORE; bash --norc -i -c 'bd -C . close CHR-1'"
+# Each control is read as an option, where it stands as one and as the last
+# word on it says: `--rcfile` takes the word after it as its file.
+check_unresolved "cd $STORE; BASH_ENV=/tmp/select-store.sh bash --rcfile --posix -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; BASH_ENV=/tmp/select-store.sh bash --posix +o posix -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; bash --rcfile --noprofile -l -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; bash --rcfile --norc -i -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; bash --rcfile --login -c 'bd close CHR-1'"
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -c "bd list"'
 # Single quotes around the script keep the shell from expanding it, but the
@@ -1735,6 +1751,13 @@ check_unresolved "bash -Q -c 'cd /tmp/store && bd close CHR-1'"
 check_unresolved "bash -Q -c 'set -e; bd close CHR-1'"
 check skip "bash -Q -c 'echo hi'"
 check_unresolved 'bash $CS_FLAGS "bd -C /tmp/store close CHR-1"'
+# A word the scan cannot read after a `-c` that may be there may be the
+# script itself, and a script's quoting joins what it quotes. One before any
+# `-c` is not a script.
+check_unresolved 'CS_FLAG=-e; CS_CODE="bd -C /tmp/store close CHR-1"; bash "${CS_FLAG[0]}" -c "${CS_CODE[0]}"'
+check_unresolved "CS_FLAG=-e; bash \"\${CS_FLAG[0]}\" -c 'b\"d\" -C /tmp/store close CHR-1'"
+check_unresolved "bash -Q -c \"b\\\$'d' close CHR-1\""
+check skip 'bash -Q "$CS_X"'
 # A long option is one name, not a bundle of letters. Read letter by letter,
 # the first `-` inside `--noprofile` was a flag the scan did not know, and
 # `bash --noprofile --norc -c '...'` was left alone with the write inside it.
