@@ -115,12 +115,13 @@ teardown() {
 # `$FIRE_CWD` sets the directory the tool call was launched from, which is
 # what a relative `-C` target resolves against. Empty by default, since the
 # field is optional on the real event. `$CONV` sets the `conversation_id`,
-# which is left out when empty.
+# which is left out when empty. `$FIRE_WAIT`, `true` or `false`, sets the
+# launch's `wait`, which is left out when empty.
 event_as() {
   local e="$1" c="$2"; shift 2
   jq -n --arg e "$e" --arg w "$WS" --arg c "$c" \
-    --arg d "${FIRE_CWD:-}" --arg v "${CONV:-}" --args \
-    '{hook_event_name:$e, workspace_roots:([$w] + $ARGS.positional), tool_name:"launch-process", tool_input:({command:$c} + (if $d == "" then {} else {cwd:$d} end))} + (if $v == "" then {} else {conversation_id:$v} end)' \
+    --arg d "${FIRE_CWD:-}" --arg v "${CONV:-}" --arg t "${FIRE_WAIT:-}" --args \
+    '{hook_event_name:$e, workspace_roots:([$w] + $ARGS.positional), tool_name:"launch-process", tool_input:({command:$c} + (if $d == "" then {} else {cwd:$d} end) + (if $t == "" then {} else {wait:($t == "true")} end))} + (if $v == "" then {} else {conversation_id:$v} end)' \
     "$@"
 }
 
@@ -876,6 +877,28 @@ CONV=conv-a fire "setsid -w bash -c 'bd -C $OUT close CHR-1'"
 ! registered "$OUT" "$ASYNC" && report ok ||
   report bad "a waiting setsid's store must not be kept as written in the background (async: $(reg_dump "$ASYNC"))"
 rm -rf "$OUT"
+teardown
+
+# --- a launch not waited for keeps its stores for SessionEnd -----------
+# `launch-process` with `wait: false` returns as its command starts, so a
+# write in it can land after the sync with no `&` in the text: `sleep 5; bd
+# -C /ext close X`. A store not there yet is kept as a directory to walk up
+# from, and a launch waited for is settled as any other.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+PARENT=$(mktemp -d)
+NEW="$PARENT/store"
+WAITED=$(mktemp -d)
+mkdir -p "$WAITED/.beads"
+ASYNC="$WS/.beads/.augment-sync.async"
+CONV=conv-a FIRE_WAIT=false fire "sleep 5; bd -C $OUT close CHR-1; mkdir -p $NEW/.beads; bd -C $NEW close CHR-2"
+registered "$OUT" "$ASYNC" && registered "+$NEW" "$ASYNC" && report ok ||
+  report bad "a launch not waited for must keep its stores for SessionEnd (async: $(reg_dump "$ASYNC"))"
+CONV=conv-a FIRE_WAIT=true fire "sleep 5; bd -C $WAITED close CHR-1"
+! registered "$WAITED" "$ASYNC" && report ok ||
+  report bad "a launch waited for must not keep its store as written in the background (async: $(reg_dump "$ASYNC"))"
+rm -rf "$OUT" "$PARENT" "$WAITED"
 teardown
 
 # --- a background record outlives a hand-off that failed ---------------

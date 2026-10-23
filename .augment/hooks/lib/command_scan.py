@@ -2803,6 +2803,10 @@ class Scanner:
         # a supposed value is a `-C` that goes unseen, and a write whose target
         # is lost is the one outcome worse than a no-op.
         may_be_value = False
+        # Whether an unreadable word before this one may have been `--`, after
+        # which no word is an option: with FLAG=--, `bd kv set "${FLAG[0]}"
+        # key --help` sets key to `--help`. A help flag read before one stands.
+        may_have_ended = False
         while i < len(args):
             word = args[i].value
             after_unknown_opt = may_be_value
@@ -2831,6 +2835,7 @@ class Scanner:
                     # with FLAG=--title, `bd update CHR-1 "${FLAG[0]}" --help`
                     # sets the title to `--help` and writes the store.
                     may_be_value = True
+                    may_have_ended = True
                 operands.append(word)
                 i += 1
                 continue
@@ -2841,7 +2846,7 @@ class Scanner:
             # A help flag is a whole argument here, so the `--help` inside
             # `--title "document --help output"` is part of its value.
             if not end_of_opts and not after_unknown_opt \
-                    and word in ("-h", "--help"):
+                    and not may_have_ended and word in ("-h", "--help"):
                 helped = True
                 i += 1
                 continue
@@ -2868,6 +2873,7 @@ class Scanner:
                         opaque = True
                         operands.append(UNKNOWN)
                         may_be_value = True
+                        may_have_ended = True
                     i += 1
                 elif name not in BD_LONG_NOARG:
                     # A long flag no table knows may still take the word after
@@ -2892,7 +2898,8 @@ class Scanner:
                     i += 1
                     continue
                 letters, opt, inline = bundle
-                if "h" in letters and not after_unknown_opt:
+                if "h" in letters and not after_unknown_opt \
+                        and not may_have_ended:
                     helped = True
                 if opt is None:
                     i += 1
@@ -2911,6 +2918,7 @@ class Scanner:
                     opaque = True
                     operands.append(UNKNOWN)
                     may_be_value = True
+                    may_have_ended = True
                 i += 1 if inline is not None else 2
                 continue
             operands.append(word)
@@ -3290,6 +3298,7 @@ class Scanner:
                 self.scope.assigns.pop("IFS", None)
             if startup:
                 self.seal_opaque(cwd=True)
+                self.scope.allexport = UNKNOWN
                 self.scope.physical = UNKNOWN
                 self.scope.monitor = UNKNOWN
                 self.scope.lastpipe = UNKNOWN
@@ -3775,13 +3784,19 @@ class Scanner:
 
         self.scoped(run)
 
-    def call_function(self, name):
+    def call_function(self, name, seed=None):
         """Scans the body of `name` as it runs here, in the caller's directory.
 
         This is what makes `f() { bd -C store ...; }; cd /x; f` name /x/store.
         The definition alone cannot: it does not say where its caller stands, so
         scanning it in place leaves a relative target unresolvable. At the call
         the cwd is known, and the body is the same text.
+
+        `seed` is the call's temporary prefix, which is in force and exported
+        while the body runs, and gives way to the values from before it once
+        the body returns, whatever the body did to those names: `OUT=/decoy;
+        f() { bd -C "$OUT" close X; }; OUT=/ext f` writes /ext, and OUT is
+        /decoy again after it. bash, POSIX-mode bash, dash and zsh agree.
 
         Recursion is refused rather than bounded by depth, since a function that
         calls itself names no further store on the second pass. That is the whole
@@ -3791,6 +3806,27 @@ class Scanner:
         if name in self.calling:
             return
         body = self.functions[name]
+        seed = seed or {}
+
+        def run():
+            missing = object()
+            before = {each: (self.scope.assigns.get(each, missing),
+                             self.scope.exported.get(each, missing))
+                      for each in seed}
+            for each, value in seed.items():
+                self.scope.assigns[each] = value
+                self.scope.exported[each] = value is not UNSET
+            try:
+                self.stmt(body)
+            finally:
+                for each, (value, exported) in before.items():
+                    for table, old in ((self.scope.assigns, value),
+                                       (self.scope.exported, exported)):
+                        if old is missing:
+                            table.pop(each, None)
+                        else:
+                            table[each] = old
+
         self.calling.add(name)
         self.depth += 1
         try:
@@ -3799,7 +3835,7 @@ class Scanner:
             # to the end, and which of its branches it took, is exactly what
             # the scan declines to infer -- so what it changed is unknown
             # afterwards, as it is after any compound command.
-            self.tentative(lambda: self.stmt(body))
+            self.tentative(run)
         finally:
             self.depth -= 1
             self.calling.discard(name)
@@ -4147,9 +4183,11 @@ class Scanner:
         # command never opened, with no warning. It may `set -P` or `set +P`
         # too, so how a later `cd` reads `..` is in doubt with the rest, and
         # `set -m` or `shopt -s lastpipe`, so whether a pipeline's last member
-        # runs here and whether a `setsid` forks are in doubt as well.
+        # runs here and whether a `setsid` forks are in doubt as well. So is
+        # `set -a`, which exports a later plain `BEADS_DIR=...` to `bd`.
         if word in SOURCE_WORDS:
             self.seal_opaque(cwd=True)
+            self.scope.allexport = UNKNOWN
             self.scope.physical = UNKNOWN
             self.scope.monitor = UNKNOWN
             self.scope.lastpipe = UNKNOWN
@@ -4177,9 +4215,11 @@ class Scanner:
         # A call runs the body defined earlier in this text, and runs it here,
         # where the cwd is known. Without this a relative store named inside a
         # function was reported by nothing: the definition cannot resolve it and
-        # the call did not look.
-        if word in self.functions:
-            self.call_function(word)
+        # the call did not look. Only a command named first is one: `command`
+        # and every other wrapper run a program, so `bd() { command bd -C /ext
+        # close X; }; bd` writes /ext.
+        if start == 0 and word in self.functions:
+            self.call_function(word, self.prefix_seed(cmd))
             return
 
         if name != "bd":
@@ -5060,6 +5100,11 @@ class Scanner:
         `--posix` and reads BASH_ENV, as does `bash --posix +o posix -c ...`.
         `-o norc` and `-o noprofile` read as the long options too, which
         costs nothing: bash refuses both and runs nothing.
+
+        An interactive shell in POSIX mode reads the file ENV names in place
+        of `.bashrc`, `--norc` or not, unless privileged: `ENV=/tmp/s.sh bash
+        --posix --norc -i -c ...` runs it. POSIXLY_CORRECT puts bash in that
+        mode whatever a `+o posix` says.
         """
         if bash_kind(args[start].value) is not True:
             return False
@@ -5067,14 +5112,24 @@ class Scanner:
         if login is not False and \
                 self.shell_option(words, "", "noprofile") is not True:
             return True
+        option = self.shell_option(words, "", "posix")
+        variable = self.command_env(cmd, args, start, "POSIXLY_CORRECT")
+        if option is True or (variable is not None and variable is not UNKNOWN):
+            posix = True
+        elif option is UNKNOWN or variable is UNKNOWN:
+            posix = UNKNOWN
+        else:
+            posix = False
         if interactive is not False:
-            return interactive is UNKNOWN or \
-                self.shell_option(words, "", "norc") is not True
-        if privileged is True or \
-                self.shell_option(words, "", "posix") is True:
-            return False
-        posix = self.command_env(cmd, args, start, "POSIXLY_CORRECT")
-        if posix is not None and posix is not UNKNOWN:
+            if interactive is UNKNOWN:
+                return True
+            bashrc = self.shell_option(words, "", "norc") is not True
+            env = self.command_env(cmd, args, start, "ENV")
+            env = privileged is not True and (env is UNKNOWN or bool(env))
+            if posix is UNKNOWN:
+                return bashrc or env
+            return env if posix else bashrc
+        if privileged is True or posix is True:
             return False
         env = self.command_env(cmd, args, start, "BASH_ENV")
         # `sudo` removes BASH_ENV whatever its policy keeps, so behind one
@@ -5365,17 +5420,20 @@ class Scanner:
             self.scripts.discard(script)
 
 
-def scan(command, launch_cwd):
+def scan(command, launch_cwd, unwaited=False):
     """What `command` writes, launched from `launch_cwd`.
 
     `launch_cwd` empty says the directory is unknown rather than being this
     process's own, so a relative target under it stays unresolved. The last of
     the four answers is the set of targets written in the background, where
     one with a leading `+` is a directory `bd` walks up from rather than a
-    store; see `walk_from`.
+    store; see `walk_from`. `unwaited` says the caller returned as the command
+    started, so every write in it is one; see `in_background`.
     """
     tree, parsed = parse(command)
     scanner = Scanner(launch_cwd, parsed)
+    if unwaited:
+        scanner.background += 1
     if tree is not None:
         scanner.stmts(tree.get("Stmts") or (), conditional=False)
     return (scanner.mutates, scanner.unresolved, scanner.targets,
@@ -5385,8 +5443,10 @@ def scan(command, launch_cwd):
 def main():
     command = sys.stdin.read()
     launch_cwd = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+    unwaited = len(sys.argv) > 2 and sys.argv[2] == "unwaited"
     try:
-        mutates, unresolved, targets, background = scan(command, launch_cwd)
+        mutates, unresolved, targets, background = scan(command, launch_cwd,
+                                                        unwaited)
     except Unavailable as err:
         # Nothing is written to stdout, so a caller reading the first field
         # cannot mistake a scan that did not happen for one that found no

@@ -1029,11 +1029,18 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # sync and the warning says which store could not be named.
   LAUNCH_CWD=$(jq -r '.tool_input.cwd // ""' <<<"$EVENT_JSON")
 
+  # A launch with `wait: false` returns as its command starts, so any write
+  # in it may land after this sync, as one behind `&` may: `sleep 6; bd -C
+  # /ext close X` launched so was synced and settled before it wrote. Its
+  # stores are recorded for SessionEnd instead; see `remember_async`.
+  WAIT_MODE=$(jq -r 'if (.tool_input.wait | tostring) == "false"
+    then "unwaited" else "" end' <<<"$EVENT_JSON")
+
   # Every `bd` in the command is examined rather than stopping at the first,
   # because each may name a different store via `-C`. A read-only one does
   # not speak for a write beside it: `bd config get x && bd update CHR-1
   # --claim` syncs.
-  scan_command "$COMMAND" "$LAUNCH_CWD"
+  scan_command "$COMMAND" "$LAUNCH_CWD" "$WAIT_MODE"
   MUTATES=$SCAN_MUTATES
 
   # A scanner that failed answered nothing, which is not the same as answering

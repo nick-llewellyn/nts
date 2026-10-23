@@ -92,10 +92,10 @@ check_unresolved() {
 }
 
 # Asserts the stores a command writes in the background, space-separated and
-# in order.
+# in order. A third argument is scan_command's launch mode.
 check_async() {
-  local want="$1" command="$2" got
-  scan_command "$command" "$BASE"
+  local want="$1" command="$2" mode="${3:-}" got
+  scan_command "$command" "$BASE" "$mode"
   got="${SCAN_ASYNC[*]:+${SCAN_ASYNC[*]}}"
   if [ "$got" = "$want" ]; then
     PASS=$((PASS + 1))
@@ -264,6 +264,12 @@ check sync 'bd create --notes --help "x"'
 check_unresolved 'FLAG=--title; bd -C /tmp/store update CHR-1 "${FLAG[0]}" --help'
 check_unresolved 'bd -C /tmp/store update CHR-1 $CS_OPTS --help'
 check skip 'bd -C /tmp/store update CHR-1 --help'
+# Nor may a help flag after a word that may be `--`, after which no word is
+# an option: with FLAG=--, `"${FLAG[0]}" key --help` sets key to `--help`.
+check_unresolved 'FLAG=--; bd -C /tmp/store kv set "${FLAG[0]}" key --help'
+check_unresolved 'FLAG=--; bd -C /tmp/store kv set "${FLAG[0]}" key -qh'
+check_unresolved "OPTS=\$(printf 'me --'); bd -C /tmp/store kv set --actor \$OPTS key --help"
+check skip 'FLAG=--; bd -C /tmp/store --help kv set "${FLAG[0]}" key'
 # A help flag two words past such an option is a help request again: the
 # option consumed one word, not every word after it.
 check skip 'bd update --title x --help'
@@ -1507,6 +1513,11 @@ check_unresolved 'CS_V=/tmp/a; . ./lib.sh; bd -C "$CS_V" close CHR-1'
 check_unresolved "if true; then source ./select-store.sh; fi; cd $STORE; bd close CHR-1"
 check_unresolved "true && { . ./select-store.sh; }; cd $STORE; bd close CHR-1"
 check_unresolved "eval '. ./select-store.sh'; cd $STORE; bd close CHR-1"
+# It may `set -a`, as may a startup file, which exports a later plain
+# BEADS_DIR to `bd` though the cwd is known again.
+check_unresolved "source ./cs-opts.sh; unset BEADS_DIR BEADS_DB; cd -L $STORE; BEADS_DIR=/tmp/store/.beads; bd close CHR-1"
+check_unresolved "BASH_ENV=/tmp/select-store.sh bash -c 'unset BEADS_DIR BEADS_DB; cd -L $STORE; BEADS_DIR=/tmp/store/.beads; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd -L $STORE; BEADS_DIR=/tmp/store/.beads; bd close CHR-1"
 # Only the name written is touched: an arithmetic read, another name, or a
 # `printf` to stdout leaves the value standing.
 check_target '/tmp/a' 'CS_V=/tmp/a; : $((CS_W = 1)); bd -C "$CS_V" close CHR-1'
@@ -1725,6 +1736,14 @@ check_unresolved "cd $STORE; BASH_ENV=/tmp/select-store.sh bash --posix +o posix
 check_unresolved "cd $STORE; bash --rcfile --noprofile -l -c 'bd close CHR-1'"
 check_unresolved "cd $STORE; bash --rcfile --norc -i -c 'bd close CHR-1'"
 check_target "$STORE" "cd $STORE; bash --rcfile --login -c 'bd close CHR-1'"
+# An interactive shell in POSIX mode reads ENV in place of `.bashrc`, `--norc`
+# or not, unless privileged, and POSIXLY_CORRECT makes that mode too.
+check_unresolved "cd $STORE; ENV=/tmp/select-store.sh bash --posix --norc -i -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; ENV=/tmp/select-store.sh POSIXLY_CORRECT=1 bash --norc -i -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; ENV=/tmp/select-store.sh bash --posix --norc -p -i -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; ENV=/tmp/select-store.sh bash --posix --norc +o posix -i -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; ENV=/tmp/select-store.sh bash --norc -i -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; ENV= bash --posix --norc -i -c 'bd close CHR-1'"
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -c "bd list"'
 # Single quotes around the script keep the shell from expanding it, but the
@@ -1975,6 +1994,14 @@ check_unresolved 'cs_f; cs_f() { bd -C store close CHR-1; }'
 check_unresolved "cs_f() { cd $CD/other; }; bash -l -c true; cs_f; bd -C store close CHR-1"
 check_unresolved "cs_f() { cd $CD/other; }; (unset -f cs_f); cs_f; bd -C store close CHR-1"
 check_target "$BASE/store" "(cs_f() { cd $CD/other; }); cs_f; bd -C store close CHR-1"
+# A call's temporary prefix is in force, and exported, while the body runs,
+# and gives way to the value from before it afterwards, whatever the body did.
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd $CD/base/two; cs_f() { bd close CHR-1; }; BEADS_DIR=$STORE/.beads cs_f"
+check_target "$CD/base/two" "CS_OUT=$CD/base/two; cs_f() { CS_OUT=$STORE; }; CS_OUT=$STORE cs_f; bd -C \"\$CS_OUT\" close CHR-1"
+# Only a command named first calls a function: `command` and every other
+# wrapper run the program.
+check_target "$STORE" "bd() { command bd -C $STORE close CHR-1; }; bd"
+check_target "$STORE" "bd() { env bd -C $STORE close CHR-1; }; bd"
 
 # --- comments -------------------------------------------------------------
 # A `#` that opens a word begins a comment, and what follows is not script.
@@ -2527,6 +2554,11 @@ check_async "" "setsid bd -C $STORE close CHR-1"
 check_async "" "set -m; setsid -w bd -C $STORE close CHR-1"
 check_async "" "setsid bd -C $STORE close CHR-1 -f"
 check_async "" "sudo -u -b bd -C $STORE close CHR-1"
+# A launch the tool call does not wait for runs every write in it in the
+# background, with no `&` in the text.
+check_async "$STORE" "sleep 6; bd -C $STORE close CHR-1" unwaited
+check_async "+$CD/n3/sub" "sleep 6; mkdir -p $CD/n3/.beads $CD/n3/sub; bd -C $CD/n3/sub close CHR-1" unwaited
+check_async "" "sleep 6; bd -C $STORE close CHR-1"
 # A `setsid` after another leads the session the first made, so it forks
 # unless it waits itself; the outer one's `-w` does not make it.
 check_async "$STORE" "setsid setsid bd -C $STORE close CHR-1"
