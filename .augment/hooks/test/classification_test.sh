@@ -259,6 +259,11 @@ check sync 'bd create "x" --notes "pass -h for usage"'
 check sync 'bd update CHR-1 --title --help'
 check sync 'bd update CHR-1 --title -h'
 check sync 'bd create --notes --help "x"'
+# So may a word this scan cannot read, which may be that option: with
+# FLAG=--title, `"${FLAG[0]}" --help` titles the issue too.
+check_unresolved 'FLAG=--title; bd -C /tmp/store update CHR-1 "${FLAG[0]}" --help'
+check_unresolved 'bd -C /tmp/store update CHR-1 $CS_OPTS --help'
+check skip 'bd -C /tmp/store update CHR-1 --help'
 # A help flag two words past such an option is a help request again: the
 # option consumed one word, not every word after it.
 check skip 'bd update --title x --help'
@@ -622,6 +627,10 @@ check_target "$STORE/nested/inner" "cd $STORE; typeset -x BEADS_DIR=$STORE/neste
 check_target "$STORE/nested/inner" "cd $STORE; BEADS_DIR=$STORE/nested/inner/.beads; export BEADS_DIR; bd close CHR-1"
 check_target "$STORE/nested/inner" "cd $STORE; set -a; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
 check_target "$STORE/nested/inner" "cd $STORE; set -o allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+# An `o` in a bundle takes the next word as an option's name, as alone.
+check_target "$STORE/nested/inner" "cd $STORE; set -eo allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$STORE/nested/inner" "cd $STORE; set -oe allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$STORE" "cd $STORE; set -a; set +eo allexport; BEADS_DIR=$CD/other/.beads; bd close CHR-1"
 check_target "$STORE" "cd $STORE; set -a; set +a; BEADS_DIR=$CD/other/.beads; bd close CHR-1"
 check_target "$STORE" "cd $STORE; declare BEADS_DIR=$CD/other/.beads; bd close CHR-1"
 # An assignment keeps the attribute the name already had, so an inherited
@@ -1508,6 +1517,11 @@ check sync 'let CS_V=$(bd close CHR-1 | wc -c)'
 # A global option's value is not the verb. Reading it as one lets a value
 # that happens to name a read-only verb suppress the write behind it.
 check sync 'bd --actor list close CHR-1'
+# A value that may split may hand the options after it more words, `-C`
+# among them, so the store is in doubt; one that stays whole is not.
+check_unresolved "cd $STORE; OPTS=\$(printf 'me -C /tmp/store'); bd --actor \$OPTS close CHR-1"
+check_unresolved "cd $STORE; bd --dolt-auto-commit \$CS_OPTS close CHR-1"
+check_target "$STORE" "cd $STORE; bd --actor \"\$(whoami)\" close CHR-1"
 check sync 'bd --db /tmp/x.db close CHR-1'
 check sync 'bd --dolt-auto-commit off close CHR-1'
 check sync 'bd --actor show create "x"'
@@ -1663,6 +1677,28 @@ check sync 'bash -c "bd close CHR-1"'
 check_target '/tmp/store' 'bash -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'sh -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'zsh -c "bd -C /tmp/store close CHR-1"'
+# zsh splits an unquoted expansion only under SH_WORD_SPLIT, which the text
+# may set, so a value holding a separator is in doubt there; one without is
+# the same either way.
+check_unresolved "zsh -c 'OUT=\"/tmp/a b\"; bd -C \$OUT close CHR-1'"
+check_target '/tmp/store' "zsh -c 'OUT=/tmp/store; bd -C \$OUT close CHR-1'"
+check_target '/tmp/a' "bash -c 'OUT=\"/tmp/a b\"; bd -C \$OUT close CHR-1'"
+# bash runs a startup file before a `-c` script -- BASH_ENV, or a login or
+# interactive shell's own -- and what it sets is as unknown as a sourced
+# file's. Privileged and POSIX-mode shells read no BASH_ENV, and `sh` and
+# other shells are not read for theirs.
+check_unresolved "cd $STORE; BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; env BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; bash -l -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; bash -i -c 'bd close CHR-1'"
+check_target '/tmp/store' "BASH_ENV=/tmp/select-store.sh bash -c 'bd -C /tmp/store close CHR-1'"
+check_target "$STORE" "cd $STORE; BASH_ENV=/tmp/select-store.sh bash -p -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; BASH_ENV=/tmp/select-store.sh bash --posix -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; BASH_ENV=/tmp/select-store.sh POSIXLY_CORRECT=1 bash -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; BASH_ENV=/tmp/select-store.sh sh -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; BASH_ENV= bash -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; bash --noprofile -l -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; bash --norc -i -c 'bd -C . close CHR-1'"
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -c "bd list"'
 # Single quotes around the script keep the shell from expanding it, but the
@@ -1684,6 +1720,10 @@ check skip 'bash -Q "bd -C /tmp/store close CHR-1"'
 # With a `-c` that may follow, though, the script may still run, so the write
 # counts, with no store named.
 check_unresolved 'bash -Q -c "bd -C /tmp/store close CHR-1"'
+# Which word is the script cannot be told, so a `bd` anywhere in one counts.
+check_unresolved "bash -Q -c 'cd /tmp/store && bd close CHR-1'"
+check_unresolved "bash -Q -c 'set -e; bd close CHR-1'"
+check skip "bash -Q -c 'echo hi'"
 check_unresolved 'bash $CS_FLAGS "bd -C /tmp/store close CHR-1"'
 # A long option is one name, not a bundle of letters. Read letter by letter,
 # the first `-` inside `--noprofile` was a flag the scan did not know, and
@@ -2466,6 +2506,17 @@ check_async "" "setsid -w env -S 'setsid -w bd -C $STORE close CHR-1'"
 check_async "" "setsid bash -c 'exec setsid -w bd -C $STORE close CHR-1'"
 check_async "" "bash -c 'setsid bd -C $STORE close CHR-1'"
 check_async "" "setsid bash -c true; setsid bd -C $STORE close CHR-1"
+# Job control puts each command the shell forks in a group of its own, and
+# that leadership lasts through `env -S`, a wrapper and a shell's last
+# command too, so a `setsid` they exec forks.
+check_async "$STORE" "set -m; env -S 'setsid bash -c \"sleep 5; bd -C $STORE close CHR-1\"' >/dev/null 2>&1"
+check_async "$STORE" "set -m; bash -c 'setsid bd -C $STORE close CHR-1'; true"
+check_async "$STORE" "set -m; nice bash -c 'setsid bd -C $STORE close CHR-1'; true"
+check_async "$STORE" "set -m; bash -c 'true; setsid bd -C $STORE close CHR-1'; true"
+check_async "" "env -S 'setsid bd -C $STORE close CHR-1'; true"
+check_async "" "set -m; set +m; bash -c 'setsid bd -C $STORE close CHR-1'; true"
+# An `o` in a bundle names an option for `set` as it does alone.
+check_async "$STORE" "set -eo monitor; setsid bd -C $STORE close CHR-1; true"
 # A sourced file may `set -m` or `shopt -s lastpipe`, so after one whether
 # `setsid` forks, and where a pipeline's last member runs, are in doubt.
 check_async "$STORE" "source ./cs-opts.sh; setsid bd -C $STORE close CHR-1"
@@ -2507,6 +2558,9 @@ check_target "$WS_DIR" "cd $WS_DIR/link/.. && bd close CHR-1"
 check_target "$EXT" "cd -P $WS_DIR/link/.. && bd close CHR-1"
 check_target "$EXT" "set -P; cd $WS_DIR/link/.. && bd close CHR-1"
 check_target "$EXT" "set -o physical; cd $WS_DIR/link/.. && bd close CHR-1"
+check_target "$EXT" "set -eo physical; cd $WS_DIR/link/.. && bd close CHR-1"
+check_target "$EXT" "set -oe physical; cd $WS_DIR/link/.. && bd close CHR-1"
+check_target "$WS_DIR" "set -P; set +eo physical; cd $WS_DIR/link/.. && bd close CHR-1"
 check_target "$EXT" "env -C $WS_DIR/link/.. bd close CHR-1"
 check_target "$WS_DIR" "set -P; set +P; cd $WS_DIR/link/.. && bd close CHR-1"
 # `shopt -o` is another spelling of `set -o`.
