@@ -678,29 +678,31 @@ class ShellOpts:
 
     bash keeps the variable in step with every option in force, its defaults
     among them -- `braceexpand:hashall:interactive-comments` before any is
-    set -- and this scan follows only `physical` and `monitor`. So the string
-    is unknowable, as is a word expanding it, while whether it lists each of
-    those is known: True, False or UNKNOWN, which is all a bash started from
-    it reads.
+    set -- and this scan follows only `physical` and `monitor`, and `posix`
+    as far as it can. So the string is unknowable, as is a word expanding
+    it, while whether it lists each of those is known: True, False or
+    UNKNOWN, which is all a bash started from it reads.
     """
 
-    __slots__ = ("physical", "monitor")
+    __slots__ = ("physical", "monitor", "posix")
 
-    def __init__(self, physical, monitor):
+    def __init__(self, physical, monitor, posix):
         self.physical = physical
         self.monitor = monitor
+        self.posix = posix
 
     def __eq__(self, other):
         return isinstance(other, ShellOpts) and \
-            other.physical is self.physical and other.monitor is self.monitor
+            other.physical is self.physical and \
+            other.monitor is self.monitor and other.posix is self.posix
 
     def __hash__(self):
         return hash(ShellOpts)
 
 
 def opts_option(value, option):
-    """Whether the SHELLOPTS `value` lists `option`, `physical` or `monitor`:
-    True, False or UNKNOWN.
+    """Whether the SHELLOPTS `value` lists `option`, `physical`, `monitor` or
+    `posix`: True, False or UNKNOWN.
 
     None or UNSET is a SHELLOPTS that is not there, which lists nothing.
     """
@@ -1638,7 +1640,8 @@ class Scanner:
             if state is True:
                 assigns["SHELLOPTS"] = ShellOpts(
                     self.carried_option("physical"),
-                    self.carried_option("monitor"))
+                    self.carried_option("monitor"),
+                    self.carried_option("posix"))
                 exported["SHELLOPTS"] = True
             elif state is UNKNOWN:
                 assigns["SHELLOPTS"] = UNKNOWN
@@ -5041,7 +5044,7 @@ class Scanner:
         words = args[start + 1:idx]
         privileged = self.shell_option(words, "p", "privileged")
         inherited = {}
-        for option in ("physical", "monitor"):
+        for option in ("physical", "monitor", "posix"):
             state = self.shellopts_option(cmd, args, start, option)
             if privileged is True:
                 state = False
@@ -5071,7 +5074,7 @@ class Scanner:
         else:
             monitor = UNKNOWN
         startup = self.startup_runs(cmd, args, start, words, privileged,
-                                    interactive)
+                                    interactive, inherited["posix"])
         leader = self.leader
         self.leader = self.leads(args, start)
         try:
@@ -5083,7 +5086,8 @@ class Scanner:
         finally:
             self.leader = leader
 
-    def startup_runs(self, cmd, args, start, words, privileged, interactive):
+    def startup_runs(self, cmd, args, start, words, privileged, interactive,
+                     inherited):
         """Whether the shell at `args[start]` may run a startup file before
         its `-c` script.
 
@@ -5104,7 +5108,10 @@ class Scanner:
         An interactive shell in POSIX mode reads the file ENV names in place
         of `.bashrc`, `--norc` or not, unless privileged: `ENV=/tmp/s.sh bash
         --posix --norc -i -c ...` runs it. POSIXLY_CORRECT puts bash in that
-        mode whatever a `+o posix` says.
+        mode whatever a `+o posix` says, and so does `inherited`, a SHELLOPTS
+        listing `posix` that a privileged shell has not ignored: `env
+        SHELLOPTS=posix ENV=/tmp/s.sh bash --norc -i -c ...` runs the file,
+        and `env SHELLOPTS=posix BASH_ENV=/tmp/s.sh bash -c ...` none.
         """
         if bash_kind(args[start].value) is not True:
             return False
@@ -5114,9 +5121,14 @@ class Scanner:
             return True
         option = self.shell_option(words, "", "posix")
         variable = self.command_env(cmd, args, start, "POSIXLY_CORRECT")
-        if option is True or (variable is not None and variable is not UNKNOWN):
+        if variable is not None and variable is not UNKNOWN:
+            variable = True
+        elif variable is None:
+            variable = False
+        states = {option, variable, inherited}
+        if True in states:
             posix = True
-        elif option is UNKNOWN or variable is UNKNOWN:
+        elif UNKNOWN in states:
             posix = UNKNOWN
         else:
             posix = False
@@ -5183,7 +5195,7 @@ class Scanner:
 
     def carried_option(self, option):
         """Whether this shell's own SHELLOPTS hands a child `option`, physical
-        mode or job control: True, False or UNKNOWN.
+        mode, job control or POSIX mode: True, False or UNKNOWN.
 
         Only an exported one reaches a child. bash keeps its SHELLOPTS in step
         with its options, so that carries the option as it stands now: `export
@@ -5199,7 +5211,11 @@ class Scanner:
             return exported
         answers = set()
         if self.scope.bash is not False:
-            answers.add(getattr(self.scope, option))
+            # This scan does not follow bash's own POSIX mode, which `set -o
+            # posix` turns on and so does assigning POSIXLY_CORRECT, so what
+            # its SHELLOPTS says of `posix` is in doubt.
+            answers.add(UNKNOWN if option == "posix"
+                        else getattr(self.scope, option))
         if self.scope.bash is not True:
             answers.add(opts_option(self.shell_var("SHELLOPTS"), option))
         return answers.pop() if len(answers) == 1 else UNKNOWN

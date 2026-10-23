@@ -1744,6 +1744,15 @@ check_target "$STORE" "cd $STORE; ENV=/tmp/select-store.sh bash --posix --norc -
 check_target "$STORE" "cd $STORE; ENV=/tmp/select-store.sh bash --posix --norc +o posix -i -c 'bd close CHR-1'"
 check_target "$STORE" "cd $STORE; ENV=/tmp/select-store.sh bash --norc -i -c 'bd close CHR-1'"
 check_target "$STORE" "cd $STORE; ENV= bash --posix --norc -i -c 'bd close CHR-1'"
+# So does an inherited SHELLOPTS listing `posix`, which a `+o posix` does not
+# undo and a privileged shell ignores, and which stops BASH_ENV being read.
+# bash refuses a prefix assignment to SHELLOPTS, so that one does nothing.
+check_unresolved "cd $STORE; env SHELLOPTS=posix ENV=/tmp/select-store.sh bash --norc -i -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; env SHELLOPTS=braceexpand:posix ENV=/tmp/select-store.sh bash --norc +o posix -i -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; export SHELLOPTS; set -o posix; ENV=/tmp/select-store.sh bash --norc -i -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; env SHELLOPTS=posix ENV=/tmp/select-store.sh bash --norc -p -i -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; env SHELLOPTS=posix BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; SHELLOPTS=posix ENV=/tmp/select-store.sh bash --norc -i -c 'bd close CHR-1'"
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -c "bd list"'
 # Single quotes around the script keep the shell from expanding it, but the
