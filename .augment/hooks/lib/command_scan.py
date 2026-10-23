@@ -915,19 +915,30 @@ def may_be_option(word):
     return False
 
 
-def expands_elements(part):
+def expands_elements(part, raw=None):
     """Whether the parameter expansion `part` makes a field of each element
     it reads, quoted or not.
 
     `"$@"` and `"${A[@]}"` do, with any operator after them, and so do
     `"${!A[@]}"`, the keys, and `"${!P@}"`, the names that start with P.
     `"${A[*]}"`, `"${!P*}"` and a length, `"${#A[@]}"`, are one field.
+
+    Which of `*` and `@` closes a `${!P...}` is read out of `raw`, the
+    encoded source, just before the closing brace: shfmt names the operator
+    as text in some versions and as an index into its operator table in
+    others, where the index moves; see `join_op`. Unreadable, it may be `@`.
     """
     if part.get("Length"):
         return False
     names = part.get("Names")
     if names:
-        return names != "*"
+        if names in ("*", "@"):
+            return names == "@"
+        try:
+            at = part["Rbrace"]["Offset"] - 1
+        except (KeyError, TypeError):
+            return True
+        return raw is None or raw[at:at + 1] != b"*"
     index = (part.get("Index") or {}).get("Parts") or ()
     if len(index) == 1 and index[0]["Type"] == "Lit" and \
             index[0].get("Value") == "@":
@@ -935,7 +946,7 @@ def expands_elements(part):
     return part["Param"]["Value"] == "@"
 
 
-def may_split(word):
+def may_split(word, raw=None):
     """Whether `word` may expand to other than one argument.
 
     An unquoted expansion is split on IFS and an unquoted pattern matched on
@@ -944,11 +955,12 @@ def may_split(word):
     substitution is one path whatever it runs. Quoting does not hold
     elements together, though: `A=(unused BEADS_DIR=/ext/.beads); env
     OUT="${A[@]}" bd close X` passes `env` both, and read as one OUT
-    assignment the store it selects was missed; see `expands_elements`.
+    assignment the store it selects was missed; see `expands_elements`,
+    which `raw` is passed to.
     """
     for part, quoted in word_parts(word):
         kind = part["Type"]
-        if kind == "ParamExp" and expands_elements(part):
+        if kind == "ParamExp" and expands_elements(part, raw):
             return True
         if quoted or kind in ("SglQuoted", "ProcSubst"):
             continue
@@ -957,7 +969,7 @@ def may_split(word):
     return False
 
 
-def assignment_name(word):
+def assignment_name(word, raw=None):
     """The name `word` assigns as one argument, whatever its value, or None.
 
     `env OUT="$(pwd)" bash -c ...` hands `env` an assignment whose value this
@@ -973,7 +985,7 @@ def assignment_name(word):
     """
     parts = list(word_parts(word))
     if not parts or parts[0][1] or parts[0][0]["Type"] != "Lit" or \
-            may_split(word):
+            may_split(word, raw):
         return None
     match = ASSIGN_WORD.match(unescape(parts[0][0].get("Value", "")))
     if not match or match.group(0).startswith("-"):
@@ -1800,8 +1812,9 @@ class Scanner:
         for word in args:
             fields = self.expand(word)
             if fields is UNKNOWN:
-                out.append(Field(UNKNOWN, assign=assignment_name(word),
-                                 split=may_split(word),
+                out.append(Field(UNKNOWN,
+                                 assign=assignment_name(word, self.raw),
+                                 split=may_split(word, self.raw),
                                  dash=may_be_option(word)))
             else:
                 out.extend(fields)
