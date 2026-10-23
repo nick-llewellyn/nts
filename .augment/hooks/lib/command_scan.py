@@ -229,6 +229,10 @@ SHELL_LONG_NOARG = {"--noprofile", "--norc", "--posix", "--login",
                     "--noediting", "--restricted", "--verbose", "--debugger",
                     "--pretty-print", "--protected", "--no-rcs",
                     "--no-globalrcs", "--interactive"}
+# Those of them only zsh takes. bash refuses them as it does any long option it
+# does not know, and runs neither a startup file nor the script: `bash
+# --interactive -c '...'` exits 2 at once.
+SHELL_ZSH_LONG = {"--no-rcs", "--no-globalrcs", "--interactive", "--emulate"}
 
 # `bd`'s own global options that consume the word after them. The verb is the
 # first operand that is not an option, so an option's value must be stepped
@@ -659,6 +663,11 @@ UNSET = object()
 # -i bd close X` unresolved, and the store the walk would have found unsynced.
 CLEARED = "cleared"
 OPAQUE = "opaque"
+
+# The process group leadership of a shell that leads, in the statements before
+# its last: it forks each of them into its group, where none leads, so only a
+# command it runs with `exec` inherits the leadership; see `leading`.
+EXEC_ONLY = "exec only"
 
 
 class ShellOpts:
@@ -1537,8 +1546,8 @@ class Scanner:
         self.background = 0
         self.async_targets = set()
         # Whether the frames being scanned run in a process a `setsid` made a
-        # process group leader, which an `exec` or `env -S` keeps; see
-        # `detaches`.
+        # process group leader, which an `exec` or `env -S` keeps, or
+        # EXEC_ONLY; see `detaches` and `leading`.
         self.leader = False
         # The scope each command a wrapper moved was invoked from, by the
         # command's node; see `call`.
@@ -2439,7 +2448,7 @@ class Scanner:
         """
         if start is None:
             return False
-        leader = self.leader
+        leader = self.leading(args, start)
         i = 0
         while i < start:
             word = args[i].value
@@ -2462,11 +2471,31 @@ class Scanner:
         each command it forks in a group of its own; see `detaches`. So
         `set -m; env -S 'setsid X' >/dev/null` returns at once, as `env`
         execs a `setsid` that leads."""
-        return self.leader or self.scope.monitor is not False or (
-            start is not None and any(
-                args[j].value is not UNKNOWN and
-                args[j].value.rsplit("/", 1)[-1] == "setsid"
-                for j in range(start)))
+        return self.leading(args, start) or \
+            self.scope.monitor is not False or (
+                start is not None and any(
+                    args[j].value is not UNKNOWN and
+                    args[j].value.rsplit("/", 1)[-1] == "setsid"
+                    for j in range(start)))
+
+    def leading(self, args, start):
+        """Whether the command at `args[start]` runs in the process that
+        leads where this scan stands: always, never, or under EXEC_ONLY only
+        when the shell runs it with `exec`, perhaps behind `command` or
+        `builtin`. `setsid -w bash -c 'exec setsid sleep 2; true'` returns at
+        once, the `exec` keeping the leadership the fork of a statement
+        before the last would lose, where `setsid -w bash -c 'setsid sleep 2;
+        true'` waits. A word this scan cannot read may be the `exec`."""
+        if self.leader is not EXEC_ONLY:
+            return self.leader
+        for j in range(start or 0):
+            word = args[j].value
+            if word is UNKNOWN or word == "exec":
+                return True
+            if word not in ("builtin", "command") and \
+                    not word.startswith("-"):
+                return False
+        return False
 
     @staticmethod
     def wrapper_flags(args, i, start, name):
@@ -2822,8 +2851,15 @@ class Scanner:
                         target = args[i + 1]
                     elif name == BD_DB_OPT and i + 1 < len(args):
                         store = args[i + 1]
-                    elif self.splits_value(args, i + 1):
+                    # The words a split value hands on stand where the
+                    # unreadable word that may split does above: any may be
+                    # the verb, a write flag, `-C`, or an option taking the
+                    # word after. With OPTS=`me --title`, `bd update CHR-1
+                    # --actor $OPTS --help` titles the issue `--help`.
+                    if self.splits_value(args, i + 1):
                         opaque = True
+                        operands.append(UNKNOWN)
+                        may_be_value = True
                     i += 1
                 elif name not in BD_LONG_NOARG:
                     # A long flag no table knows may still take the word after
@@ -2863,6 +2899,10 @@ class Scanner:
                                        else inline)
                     elif i + 1 < len(args):
                         target = args[i + 1]
+                if inline is None and self.splits_value(args, i + 1):
+                    opaque = True
+                    operands.append(UNKNOWN)
+                    may_be_value = True
                 i += 1 if inline is not None else 2
                 continue
             operands.append(word)
@@ -2875,9 +2915,10 @@ class Scanner:
     def splits_value(args, i):
         """Whether the value an option takes at `args[i]` may be other than
         one argument. The option takes the first, and the rest are read on as
-        options: with OPTS=`reviewer -C /ext`, `bd --actor $OPTS close X`
+        arguments: with OPTS=`reviewer -C /ext`, `bd --actor $OPTS close X`
         writes /ext, where stepping over the word as one value named the
-        launch directory's store."""
+        launch directory's store, and with OPTS=`me create`, `bd --actor $OPTS
+        list` creates an issue."""
         return i < len(args) and args[i].value is UNKNOWN and args[i].split
 
     @staticmethod
@@ -2942,6 +2983,9 @@ class Scanner:
                 break
             if not (word.startswith("-") or word.startswith("+")):
                 break
+            if word.partition("=")[0] in SHELL_ZSH_LONG and \
+                    bash_kind(args[start].value) is True:
+                return None
             if word in SHELL_OPT_ARGS:
                 i += 2
                 continue
@@ -3024,6 +3068,10 @@ class Scanner:
             if word is UNKNOWN:
                 return UNKNOWN
             if word.startswith("--"):
+                # `--<name>` sets the option as `-o <name>` does: zsh's
+                # `--interactive` is its `-i`, and bash's `--login` its `-l`.
+                if word == "--" + name:
+                    value = True
                 i += 2 if word in SHELL_OPT_ARGS else 1
                 continue
             if word[:1] not in ("-", "+"):
@@ -3051,13 +3099,27 @@ class Scanner:
     # --- the walk ---------------------------------------------------------
 
     def scoped(self, fn):
-        """Runs `fn` in a frame of its own, as a subshell of this scope."""
+        """Runs `fn` in a frame of its own, as a subshell of this scope.
+
+        A subshell is a forked copy of this shell. It starts with the
+        functions defined here, and what it defines, unsets or forgets dies
+        with it: after `go() { cd /ext; }; bash -l -c true`, or `(unset -f
+        go)`, `go; bd close X` still writes /ext. A leadership only an `exec`
+        would pass on does not reach it; see `leading`.
+        """
         saved = self.scope
+        functions = self.functions
+        leader = self.leader
         self.scope = saved.child()
+        self.functions = dict(functions)
+        if leader is EXEC_ONLY:
+            self.leader = False
         try:
             fn()
         finally:
             self.scope = saved
+            self.functions = functions
+            self.leader = leader
 
     def in_background(self, fn):
         """Runs `fn` as a subshell the shell does not wait for.
@@ -3212,11 +3274,13 @@ class Scanner:
             self.depth += 1
             try:
                 # A process leads its group in the command it execs, and a
-                # shell forks every command but its last, which it may exec:
-                # under `set -m`, `bash -c 'setsid sleep 2; true'` waits,
-                # where `bash -c 'true; setsid sleep 2'` returns at once.
-                if process and self.leader and len(stmts) > 1:
-                    self.leader = False
+                # shell forks every command but its last, which it may exec,
+                # and those it runs with `exec`: under `set -m`, `bash -c
+                # 'setsid sleep 2; true'` waits, where `bash -c 'true; setsid
+                # sleep 2'` and `bash -c 'exec setsid sleep 2; true'` return
+                # at once. See `leading`.
+                if process and self.leader is True and len(stmts) > 1:
+                    self.leader = EXEC_ONLY
                     try:
                         self.stmts(stmts[:-1], conditional)
                     finally:

@@ -1522,6 +1522,14 @@ check sync 'bd --actor list close CHR-1'
 check_unresolved "cd $STORE; OPTS=\$(printf 'me -C /tmp/store'); bd --actor \$OPTS close CHR-1"
 check_unresolved "cd $STORE; bd --dolt-auto-commit \$CS_OPTS close CHR-1"
 check_target "$STORE" "cd $STORE; bd --actor \"\$(whoami)\" close CHR-1"
+# Any of the words it hands on may be the verb, a write flag, or an option
+# taking the word after, so neither a read-only verb nor a help flag is
+# certain once one has.
+check_unresolved "OPTS=\$(printf 'me --title'); bd -C /tmp/store update CHR-1 --actor \$OPTS --help"
+check_unresolved "OPTS=\$(printf 'me create'); bd -C /tmp/store --actor \$OPTS list"
+check_unresolved "OPTS=\$(printf 'me --claim'); bd -C /tmp/store ready --actor \$OPTS"
+check_unresolved "OPTS=\$(printf '/tmp/store create'); bd -C \$OPTS list"
+check skip 'bd -C /tmp/store --actor "$(whoami)" list'
 check sync 'bd --db /tmp/x.db close CHR-1'
 check sync 'bd --dolt-auto-commit off close CHR-1'
 check sync 'bd --actor show create "x"'
@@ -1691,6 +1699,8 @@ check_unresolved "cd $STORE; BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR
 check_unresolved "cd $STORE; env BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR-1'"
 check_unresolved "cd $STORE; bash -l -c 'bd close CHR-1'"
 check_unresolved "cd $STORE; bash -i -c 'bd close CHR-1'"
+# bash refuses zsh's `--interactive` and runs neither.
+check skip "cd $STORE; bash --interactive -c 'bd close CHR-1'"
 check_target '/tmp/store' "BASH_ENV=/tmp/select-store.sh bash -c 'bd -C /tmp/store close CHR-1'"
 check_target "$STORE" "cd $STORE; BASH_ENV=/tmp/select-store.sh bash -p -c 'bd close CHR-1'"
 check_target "$STORE" "cd $STORE; BASH_ENV=/tmp/select-store.sh bash --posix -c 'bd close CHR-1'"
@@ -1937,6 +1947,11 @@ check skip 'cs_undefined_fn'
 # The definition must come first, as it must for the shell: a call before it
 # runs no body.
 check_unresolved 'cs_f; cs_f() { bd -C store close CHR-1; }'
+# A subshell or child shell starts with this shell's functions, and what it
+# does to them dies with it, so a call after one still runs the body.
+check_unresolved "cs_f() { cd $CD/other; }; bash -l -c true; cs_f; bd -C store close CHR-1"
+check_unresolved "cs_f() { cd $CD/other; }; (unset -f cs_f); cs_f; bd -C store close CHR-1"
+check_target "$BASE/store" "(cs_f() { cd $CD/other; }); cs_f; bd -C store close CHR-1"
 
 # --- comments -------------------------------------------------------------
 # A `#` that opens a word begins a comment, and what follows is not script.
@@ -2506,6 +2521,14 @@ check_async "" "setsid -w env -S 'setsid -w bd -C $STORE close CHR-1'"
 check_async "" "setsid bash -c 'exec setsid -w bd -C $STORE close CHR-1'"
 check_async "" "bash -c 'setsid bd -C $STORE close CHR-1'"
 check_async "" "setsid bash -c true; setsid bd -C $STORE close CHR-1"
+# A statement before the shell's last is forked and does not lead, unless the
+# shell runs it with `exec`, whatever follows it.
+check_async "$STORE" "setsid -w bash -c 'exec setsid bash -c \"sleep 5; bd -C $STORE close CHR-1\"; true'"
+check_async "$STORE" "setsid -w bash -c 'true && command exec setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "set -m; bash -c 'exec setsid bd -C $STORE close CHR-1; true'; true"
+check_async "" "setsid -w bash -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "" "setsid -w bash -c '(exec setsid bd -C $STORE close CHR-1); true'"
+check_async "" "bash -c 'exec setsid bd -C $STORE close CHR-1; true'"
 # Job control puts each command the shell forks in a group of its own, and
 # that leadership lasts through `env -S`, a wrapper and a shell's last
 # command too, so a `setsid` they exec forks.
@@ -2525,8 +2548,8 @@ check_unresolved "shopt -s lastpipe; source ./cs-opts.sh; cd $STORE; true | cd $
 # A child bash has job control when the SHELLOPTS it inherits lists
 # `monitor`, which `export SHELLOPTS` makes of this shell's `set -m`, and a
 # `+m` does not stop it; a privileged one ignores SHELLOPTS, and `env -i`
-# carries none. `-m` and `-i` only ask for it, which takes a terminal, so
-# after either a `setsid` may fork.
+# carries none. `-m` and `-i`, zsh's `--interactive` too, only ask for it,
+# which takes a terminal, so after either a `setsid` may fork.
 check_async "$STORE" "env SHELLOPTS=monitor bash -c 'setsid bash -c \"sleep 5; bd -C $STORE close CHR-1\" >/dev/null 2>&1; true'"
 check_async "$STORE" "env SHELLOPTS=braceexpand:monitor bash -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "$STORE" "env SHELLOPTS=monitor bash +m -c 'setsid bd -C $STORE close CHR-1; true'"
@@ -2536,6 +2559,7 @@ check_async "$STORE" "export SHELLOPTS; set -m; env -S \"bash -c 'setsid bd -C $
 check_async "$STORE" "env SHELLOPTS=monitor sh -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "$STORE" "bash -m -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "$STORE" "bash -i -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "zsh --interactive -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "" "env SHELLOPTS=monitor bash -p -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "" "env SHELLOPTS=monitor bash -c 'set +m; setsid bd -C $STORE close CHR-1; true'"
 check_async "" "set -m; bash -c 'setsid bd -C $STORE close CHR-1; true'"
