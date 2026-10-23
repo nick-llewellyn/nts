@@ -2320,6 +2320,19 @@ check_unresolved 'env $CS_FLAGS bd -C /tmp/store close CHR-1'
 check_unresolved 'CS_MODE=-i; env "${CS_MODE[0]}" bd -C /tmp/store close CHR-1'
 check_unresolved 'timeout "$CS_SOMETHING_UNSET" bd -C /tmp/store close CHR-1'
 check_unresolved 'xargs "$CS_SOMETHING_UNSET" bd -C /tmp/store close CHR-1'
+# Quoting does not hold elements together: `"${A[@]}"`, `"$@"`, the keys
+# `"${!A[@]}"` and the names `"${!P@}"` make an argument of each, so one may
+# assign BEADS_DIR or be the command. `"${A[*]}"`, `"$*"`, `"${!P*}"` and a
+# length stay one argument, and one assignment.
+check_unresolved "A=(x BEADS_DIR=$STORE/nested/inner/.beads); cd $STORE; env OUT=\"\${A[@]}\" bd close CHR-1"
+check_unresolved "set -- x BEADS_DIR=$STORE/nested/inner/.beads; cd $STORE; env OUT=\"\$@\" bd close CHR-1"
+check_unresolved "cd $STORE; env OUT=\"x\${A[@]:1}\" bd close CHR-1"
+check_unresolved "cd $STORE; env OUT=\"\${!A[@]}\" bd close CHR-1"
+check_unresolved "cd $STORE; env OUT=\"\${!BEADS@}\" bd close CHR-1"
+check_target "$STORE" "A=(x BEADS_DIR=$STORE/nested/inner/.beads); cd $STORE; env OUT=\"\${A[*]}\" bd close CHR-1"
+check_target "$STORE" "cd $STORE; env OUT=\"\$*\" bd close CHR-1"
+check_target "$STORE" "cd $STORE; env OUT=\"\${!BEADS*}\" bd close CHR-1"
+check_target "$STORE" "cd $STORE; env OUT=\"\${#A[@]}\" bd close CHR-1"
 # One among `bd`'s own arguments may be options too, which may then name its
 # store, if it may split or open with a `-`. One after an option of unknown
 # arity is taken for its value, and one after `--` is an operand.
@@ -2433,6 +2446,26 @@ check_async "" "setsid bash -c true; setsid bd -C $STORE close CHR-1"
 check_async "$STORE" "source ./cs-opts.sh; setsid bd -C $STORE close CHR-1"
 check_unresolved "source ./cs-opts.sh; cd $STORE; true | cd $CD/wr; bd -C . close CHR-1"
 check_unresolved "shopt -s lastpipe; source ./cs-opts.sh; cd $STORE; true | cd $CD/wr; bd -C . close CHR-1"
+# A child bash has job control when the SHELLOPTS it inherits lists
+# `monitor`, which `export SHELLOPTS` makes of this shell's `set -m`, and a
+# `+m` does not stop it; a privileged one ignores SHELLOPTS, and `env -i`
+# carries none. `-m` and `-i` only ask for it, which takes a terminal, so
+# after either a `setsid` may fork.
+check_async "$STORE" "env SHELLOPTS=monitor bash -c 'setsid bash -c \"sleep 5; bd -C $STORE close CHR-1\" >/dev/null 2>&1; true'"
+check_async "$STORE" "env SHELLOPTS=braceexpand:monitor bash -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "env SHELLOPTS=monitor bash +m -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "export SHELLOPTS; set -m; bash -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "export SHELLOPTS; set -m; bash -c 'bash -c \"setsid bd -C $STORE close CHR-1; true\"'"
+check_async "$STORE" "export SHELLOPTS; set -m; env -S \"bash -c 'setsid bd -C $STORE close CHR-1; true'\""
+check_async "$STORE" "env SHELLOPTS=monitor sh -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "bash -m -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "bash -i -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "" "env SHELLOPTS=monitor bash -p -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "" "env SHELLOPTS=monitor bash -c 'set +m; setsid bd -C $STORE close CHR-1; true'"
+check_async "" "set -m; bash -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "" "export SHELLOPTS; set -m; env -i bash -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "" "env SHELLOPTS=monitor dash -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "" "bash +m -c 'setsid bd -C $STORE close CHR-1; true'"
 
 # --- symlinks ------------------------------------------------------------
 # `link` points into ext, which holds a store, from ws, which holds another.

@@ -655,25 +655,29 @@ class ShellOpts:
 
     bash keeps the variable in step with every option in force, its defaults
     among them -- `braceexpand:hashall:interactive-comments` before any is
-    set -- and this scan follows only `physical`. So the string is unknowable,
-    as is a word expanding it, while whether it lists `physical` is known:
-    True, False or UNKNOWN, which is all a bash started from it reads.
+    set -- and this scan follows only `physical` and `monitor`. So the string
+    is unknowable, as is a word expanding it, while whether it lists each of
+    those is known: True, False or UNKNOWN, which is all a bash started from
+    it reads.
     """
 
-    __slots__ = ("physical",)
+    __slots__ = ("physical", "monitor")
 
-    def __init__(self, physical):
+    def __init__(self, physical, monitor):
         self.physical = physical
+        self.monitor = monitor
 
     def __eq__(self, other):
-        return isinstance(other, ShellOpts) and other.physical is self.physical
+        return isinstance(other, ShellOpts) and \
+            other.physical is self.physical and other.monitor is self.monitor
 
     def __hash__(self):
         return hash(ShellOpts)
 
 
-def opts_physical(value):
-    """Whether the SHELLOPTS `value` lists `physical`: True, False or UNKNOWN.
+def opts_option(value, option):
+    """Whether the SHELLOPTS `value` lists `option`, `physical` or `monitor`:
+    True, False or UNKNOWN.
 
     None or UNSET is a SHELLOPTS that is not there, which lists nothing.
     """
@@ -682,8 +686,8 @@ def opts_physical(value):
     if value is UNKNOWN:
         return UNKNOWN
     if isinstance(value, ShellOpts):
-        return value.physical
-    return "physical" in value.split(":")
+        return getattr(value, option)
+    return option in value.split(":")
 
 
 def bash_kind(word):
@@ -911,16 +915,41 @@ def may_be_option(word):
     return False
 
 
+def expands_elements(part):
+    """Whether the parameter expansion `part` makes a field of each element
+    it reads, quoted or not.
+
+    `"$@"` and `"${A[@]}"` do, with any operator after them, and so do
+    `"${!A[@]}"`, the keys, and `"${!P@}"`, the names that start with P.
+    `"${A[*]}"`, `"${!P*}"` and a length, `"${#A[@]}"`, are one field.
+    """
+    if part.get("Length"):
+        return False
+    names = part.get("Names")
+    if names:
+        return names != "*"
+    index = (part.get("Index") or {}).get("Parts") or ()
+    if len(index) == 1 and index[0]["Type"] == "Lit" and \
+            index[0].get("Value") == "@":
+        return True
+    return part["Param"]["Value"] == "@"
+
+
 def may_split(word):
     """Whether `word` may expand to other than one argument.
 
     An unquoted expansion is split on IFS and an unquoted pattern matched on
     paths, so `bd $OPTS close X`, OPTS holding `-C /ext`, passes `-C` and
     `/ext` as two arguments, where `"$OPTS"` stays one. A process
-    substitution is one path whatever it runs.
+    substitution is one path whatever it runs. Quoting does not hold
+    elements together, though: `A=(unused BEADS_DIR=/ext/.beads); env
+    OUT="${A[@]}" bd close X` passes `env` both, and read as one OUT
+    assignment the store it selects was missed; see `expands_elements`.
     """
     for part, quoted in word_parts(word):
         kind = part["Type"]
+        if kind == "ParamExp" and expands_elements(part):
+            return True
         if quoted or kind in ("SglQuoted", "ProcSubst"):
             continue
         if kind != "Lit" or is_pattern(part.get("Value", "")):
@@ -1449,13 +1478,15 @@ class Scanner:
         # start instead, which leaves such a target unresolved.
         #
         # The shell the command runs in imports an inherited SHELLOPTS, so one
-        # listing `physical` starts it in physical mode; see
-        # `shellopts_physical`. It sets and exports PWD as it starts, whatever
-        # this process's environment holds; see `sub_scan`.
+        # listing `physical` starts it in physical mode, and one listing
+        # `monitor` with job control; see `shellopts_option`. It sets and
+        # exports PWD as it starts, whatever this process's environment
+        # holds; see `sub_scan`.
+        opts = os.environ.get("SHELLOPTS", "").split(":")
         self.scope = Scope(launch_cwd, bool(launch_cwd), {},
                            exported={"PWD": True},
-                           physical="physical" in
-                           os.environ.get("SHELLOPTS", "").split(":"))
+                           monitor="monitor" in opts,
+                           physical="physical" in opts)
         self.depth = 0
         # Bodies of the functions defined so far, by name, and the names whose
         # bodies are being scanned right now. A body is scanned twice -- once
@@ -1559,7 +1590,9 @@ class Scanner:
         if not sealed and self.scope.bash is not False:
             state = self.is_exported("SHELLOPTS")
             if state is True:
-                assigns["SHELLOPTS"] = ShellOpts(self.carried_physical())
+                assigns["SHELLOPTS"] = ShellOpts(
+                    self.carried_option("physical"),
+                    self.carried_option("monitor"))
                 exported["SHELLOPTS"] = True
             elif state is UNKNOWN:
                 assigns["SHELLOPTS"] = UNKNOWN
@@ -2874,7 +2907,7 @@ class Scanner:
         and `+o <name>` clear, as `-P` and `-o physical` do, and the last of
         them wins over `value`, the state it starts in. A new shell starts in
         logical mode unless its environment says otherwise -- see
-        `shellopts_physical` -- so `set -P; bash -c 'cd /ws/link/..'` lands in
+        `shellopts_option` -- so `set -P; bash -c 'cd /ws/link/..'` lands in
         /ws, while `bash -P -c ...` lands where the link points. An option word
         this scan cannot read may be any of them.
         """
@@ -2979,7 +3012,8 @@ class Scanner:
 
     def sub_scan(self, stmts, cwd=None, known=None, seed=None, text=None,
                  sealed=False, conditional=False, frame="subshell",
-                 process=False, physical=False, shell=None, pwd=None):
+                 process=False, physical=False, monitor=False, shell=None,
+                 pwd=None):
         """Scans `stmts` as a subshell: its writes count, its state does not.
 
         `text` is the source those statements were parsed from, needed when they
@@ -2998,8 +3032,9 @@ class Scanner:
         of this shell, variables and all; a new process gets the environment,
         which is the exported names alone -- see `environment_view`. `seed` is
         what the command line handed the process on top of that, and is
-        exported there, having arrived as environment. `physical` is the
-        process's own `set -P` state; see `shell_wrapper`. `shell` names the
+        exported there, having arrived as environment. `physical` and
+        `monitor` are the process's own `set -P` and `set -m` states; see
+        `shell_wrapper`. `shell` names the
         program the process is -- a shell, or `env` for what `env -S` runs --
         which settles `Scope.bash` and `Scope.zsh`, and `pwd`, for a shell,
         the directory it starts in as its PWD names it and whether that
@@ -3029,7 +3064,7 @@ class Scanner:
                 self.scope.exported = exported
                 self.scope.allexport = False
                 self.scope.lastpipe = False
-                self.scope.monitor = False
+                self.scope.monitor = monitor
                 self.scope.physical = physical
             if sealed:
                 self.scope.sealed = sealed
@@ -4396,7 +4431,7 @@ class Scanner:
                 self.functions.pop(name, None)
                 continue
             # bash refuses to unset its readonly SHELLOPTS, which still
-            # carries its options to a child; see `carried_physical`.
+            # carries its options to a child; see `carried_option`.
             refused = self.scope.bash if name == "SHELLOPTS" else False
             if refused is True:
                 continue
@@ -4730,82 +4765,101 @@ class Scanner:
         # privileged` among its options.
         words = args[start + 1:idx]
         privileged = self.shell_option(words, "p", "privileged")
-        inherited = self.shellopts_physical(cmd, args, start)
-        if privileged is True:
-            inherited = False
-        elif privileged is UNKNOWN and inherited is not False:
-            inherited = UNKNOWN
+        inherited = {}
+        for option in ("physical", "monitor"):
+            state = self.shellopts_option(cmd, args, start, option)
+            if privileged is True:
+                state = False
+            elif privileged is UNKNOWN and state is not False:
+                state = UNKNOWN
+            inherited[option] = state
         own = self.shell_option(words, "P", "physical")
-        if inherited is True or own is True:
+        if inherited["physical"] is True or own is True:
             physical = True
-        elif inherited is False and own is False:
+        elif inherited["physical"] is False and own is False:
             physical = False
         else:
             physical = UNKNOWN
+        # Job control comes on from SHELLOPTS the same way, a `+m` not
+        # stopping it: `env SHELLOPTS=monitor bash -c 'setsid sleep 2; true'`
+        # returns at once, the `setsid` forking; see `detaches`. `-m` and
+        # `-i` only ask for it, and bash grants it only with a terminal to
+        # control, which a command may or may not have, so either leaves it
+        # in doubt.
+        asked = self.shell_option(words, "m", "monitor")
+        interactive = self.shell_option(words, "i", "interactive")
+        if inherited["monitor"] is True:
+            monitor = True
+        elif inherited["monitor"] is False and asked is False and \
+                interactive is False:
+            monitor = False
+        else:
+            monitor = UNKNOWN
         self.scan_script(script, seed=seed, sealed=sealed, process=True,
-                         physical=physical,
+                         physical=physical, monitor=monitor,
                          shell=args[start].value.rsplit("/", 1)[-1],
                          pwd=self.shell_pwd(cmd, args, start))
 
-    def shellopts_physical(self, cmd, args, start):
-        """Whether the shell at `args[start]` starts in physical mode from the
+    def shellopts_option(self, cmd, args, start, option):
+        """Whether the shell at `args[start]` starts with `option` on from the
         `SHELLOPTS` in its environment: True, False or UNKNOWN.
 
         bash turns on every option an inherited SHELLOPTS lists, so `env
         SHELLOPTS=physical bash -c 'cd /ws/link/..'` lands where the link
-        points; see `env_physical` for what the environment carries. Only bash
+        points; see `env_option` for what the environment carries. Only bash
         reads it; `sh` is bash on some systems and not on others, so there the
         answer is in doubt, and the other shells ignore it.
         """
         kind = bash_kind(args[start].value)
         if kind is False:
             return False
-        physical = self.env_physical(cmd, args, start)
-        if physical is not True:
-            return physical
+        state = self.env_option(cmd, args, start, option)
+        if state is not True:
+            return state
         return True if kind is True else UNKNOWN
 
-    def env_physical(self, cmd, args, start):
+    def env_option(self, cmd, args, start, option):
         """Whether the environment the command at `args[start]` runs with
-        carries a SHELLOPTS listing `physical`: True, False or UNKNOWN.
+        carries a SHELLOPTS listing `option`: True, False or UNKNOWN.
 
         A wrapper that sets, unsets or clears the environment decides it, and
         then a prefix assignment, where the shell takes one; see
         `prefix_values`. Otherwise it is what this shell's own SHELLOPTS
-        carries; see `carried_physical`.
+        carries; see `carried_option`.
         """
         wrapper_assigns, sealed = self.prefix_env(args, start)
         if "SHELLOPTS" in wrapper_assigns:
-            return opts_physical(wrapper_assigns["SHELLOPTS"])
+            return opts_option(wrapper_assigns["SHELLOPTS"], option)
         if sealed is OPAQUE:
             return UNKNOWN
         if sealed is CLEARED:
             return False
         prefix = self.prefix_values(cmd)
         if "SHELLOPTS" in prefix:
-            return opts_physical(prefix["SHELLOPTS"])
-        return self.carried_physical()
+            return opts_option(prefix["SHELLOPTS"], option)
+        return self.carried_option(option)
 
-    def carried_physical(self):
-        """Whether this shell's own SHELLOPTS hands a child physical mode:
-        True, False or UNKNOWN.
+    def carried_option(self, option):
+        """Whether this shell's own SHELLOPTS hands a child `option`, physical
+        mode or job control: True, False or UNKNOWN.
 
         Only an exported one reaches a child. bash keeps its SHELLOPTS in step
-        with its options, so that carries the physical mode in force now:
-        `export SHELLOPTS; set -P; bash -c ...` starts the child physical, and
-        a `set +P` before it starts the child logical whatever was inherited.
-        Any other shell holds SHELLOPTS as the plain variable it inherited or
-        was given, which its own options do not touch: `env SHELLOPTS=physical
-        dash -c 'bash -c ...'` starts that bash physical.
+        with its options, so that carries the option as it stands now: `export
+        SHELLOPTS; set -P; bash -c ...` starts the child physical, and `export
+        SHELLOPTS; set -m; bash -c ...` with job control, while a `set +P`
+        before it starts the child logical whatever was inherited. Any other
+        shell holds SHELLOPTS as the plain variable it inherited or was given,
+        which its own options do not touch: `env SHELLOPTS=physical dash -c
+        'bash -c ...'` starts that bash physical.
         """
         exported = self.is_exported("SHELLOPTS")
         if exported is not True:
             return exported
         answers = set()
         if self.scope.bash is not False:
-            answers.add(self.scope.physical)
+            answers.add(getattr(self.scope, option))
         if self.scope.bash is not True:
-            answers.add(opts_physical(self.shell_var("SHELLOPTS")))
+            answers.add(opts_option(self.shell_var("SHELLOPTS"), option))
         return answers.pop() if len(answers) == 1 else UNKNOWN
 
     def shell_pwd(self, cmd, args, start):
@@ -4987,7 +5041,8 @@ class Scanner:
 
     def scan_script(self, script, seed=None, sealed=False, cwd=None,
                     known=None, conditional=False, frame="subshell",
-                    process=False, physical=False, shell=None, pwd=None):
+                    process=False, physical=False, monitor=False, shell=None,
+                    pwd=None):
         """Scans `script` as shell text, in a scope of its own.
 
         The text is parsed afresh, so its offsets index it and not the command
@@ -5010,8 +5065,8 @@ class Scanner:
             self.sub_scan(tree.get("Stmts") or (), seed=seed, text=parsed,
                           sealed=sealed, cwd=cwd, known=known,
                           conditional=conditional, frame=frame,
-                          process=process, physical=physical, shell=shell,
-                          pwd=pwd)
+                          process=process, physical=physical,
+                          monitor=monitor, shell=shell, pwd=pwd)
         finally:
             self.scripts.discard(script)
 
