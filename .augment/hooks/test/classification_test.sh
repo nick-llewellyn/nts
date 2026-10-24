@@ -1786,6 +1786,15 @@ check_target '/tmp/store' 'bash -oe pipefail -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'bash -eO extglob -c "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'bash -co pipefail "bd -C /tmp/store close CHR-1"'
 check_target '/tmp/store' 'bash -c -x "bd -C /tmp/store close CHR-1"'
+# A value one takes that may split may hand on a `-c` and a script of its
+# own, which runs ahead of the one after it, so that is a script the scan
+# cannot read. The later one is read as well, running if the value does not
+# split, and a quoted value is one word.
+check_unresolved "CS_OPTS=\$(printf '%s' 'pipefail -c bd'); bash -eo \$CS_OPTS -c true"
+check_unresolved 'bash -o $CS_OPTS -c "bd list"'
+check_unresolved 'bash --rcfile $CS_OPTS -c true'
+check_target '/tmp/store' 'bash -O $CS_OPTS -c "bd -C /tmp/store close CHR-1"'
+check skip 'bash -o "$CS_OPTS" -c true'
 # A flag the scan cannot delimit may or may not take the word after it, so
 # the operand it would name is a guess and the invocation is left alone.
 check skip 'bash -Q "bd -C /tmp/store close CHR-1"'
@@ -1797,6 +1806,8 @@ check_unresolved "bash -Q -c 'cd /tmp/store && bd close CHR-1'"
 check_unresolved "bash -Q -c 'set -e; bd close CHR-1'"
 check skip "bash -Q -c 'echo hi'"
 check_unresolved 'bash $CS_FLAGS "bd -C /tmp/store close CHR-1"'
+# An option word that may split may hold the `-c` and its script both.
+check_unresolved 'bash $CS_FLAGS -c true'
 # A word the scan cannot read after a `-c` that may be there may be the
 # script itself, and a script's quoting joins what it quotes. One before any
 # `-c` is not a script.

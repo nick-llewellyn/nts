@@ -3060,8 +3060,16 @@ class Scanner:
         up on. The shell runs that text whatever it says, so it is the operand as
         far as this scan can tell, and the caller counts it as a write with no
         target -- the answer `eval` and `env -S` already give their own.
+
+        An option's value that may split is no single argument either: with
+        OPTS=`pipefail -c 'bd ...'`, `bash -eo $OPTS -c true` runs that `bd`,
+        the `-c` and the script among the words the value hands on. So it is
+        counted as a script this scan cannot read, and the one found after it
+        is read as well, being the one that runs when the value does not
+        split; see `splits_value`.
         """
         seen_c = False
+        uncertain = False
         i = start + 1
         while i < len(args):
             word = args[i].value
@@ -3079,6 +3087,7 @@ class Scanner:
                     bash_kind(args[start].value) is True:
                 return None
             if word in SHELL_OPT_ARGS:
+                uncertain = uncertain or self.splits_value(args, i + 1)
                 i += 2
                 continue
             if word.startswith("--"):
@@ -3108,7 +3117,12 @@ class Scanner:
                     return None
                 if ch == "c":
                     seen_c = True
+            uncertain = uncertain or any(
+                self.splits_value(args, j)
+                for j in range(i + 1, i + 1 + taken))
             i += 1 + taken
+        if uncertain:
+            self.unreadable_script()
         if not seen_c or i >= len(args):
             return None
         return i
@@ -3129,15 +3143,16 @@ class Scanner:
         does a script spelling `bd` with `$'b\\x64'` or a line continuation,
         its quoting and escapes removed; see `script_text`. A word this scan
         cannot read after a `-c` that may be there may be the script itself,
-        which runs whatever it says: `bash "${FLAG[0]}" -c "$CODE"`. See
-        `unreadable_script`.
+        which runs whatever it says: `bash "${FLAG[0]}" -c "$CODE"`. One that
+        may split may hold the `-c` and the script both: with FLAGS=`-c 'bd
+        ...'`, `bash $FLAGS -c true` runs that `bd`. See `unreadable_script`.
         """
         if not any(self.may_be_c(arg) for arg in args[i:]):
             return
         after_c = False
         for arg in args[start + 1:]:
             if arg.value is UNKNOWN:
-                if after_c:
+                if after_c or arg.split:
                     self.unreadable_script()
                     return
                 after_c = True
