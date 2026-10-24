@@ -4090,12 +4090,15 @@ class Scanner:
         that moves the command, and as `shell_pwd` reads a child shell. So
         is a PWD this shell assigned or unset since its last `cd`, or stopped
         exporting: `export PWD=/ws/link; bd -C .. close X` writes /ws's store
-        too. A builtin or a function runs in this shell and reads none of it.
+        too. A builtin or a function runs in this shell and reads none of it,
+        but only a command named first calls a function, as in `dispatch`:
+        with a function `bd` defined, `export PWD=/ws/link; command bd -C ..
+        close X` runs the program, which writes /ws's store.
         """
         if start is None or start >= len(args) or not self.scope.known:
             return None, True
         word = args[start].value
-        if word is UNKNOWN or word in self.functions or \
+        if word is UNKNOWN or (start == 0 and word in self.functions) or \
                 word.rsplit("/", 1)[-1] != "bd":
             return None, True
         assigns, sealed = self.prefix_env(args, start)

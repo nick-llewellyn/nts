@@ -2793,6 +2793,12 @@ check_target "$EXT" "cd $WS_DIR/link; export -n PWD; bd -C .. close CHR-1"
 check_target "$EXT" "cd $WS_DIR/link; export -n PWD; cd .; bd -C .. close CHR-1"
 check_target "$EXT" "cd $EXT/child; PWD=$WS_DIR/link cd ..; bd close CHR-1"
 check_target "$EXT" "cd $EXT/child; PWD=$WS_DIR/link command cd ..; bd close CHR-1"
+# A function named `bd` reads none of it, but a wrapper in front of the name
+# runs the program, which does.
+check_target "$WS_DIR" "bd() { :; }; cd $EXT/child; export PWD=$WS_DIR/link; command bd -C .. close CHR-1"
+check_target "$WS_DIR" "bd() { :; }; cd $EXT/child; PWD=$WS_DIR/link command bd -C .. close CHR-1"
+check_target "$WS_DIR" "bd() { :; }; cd $EXT/child; env PWD=$WS_DIR/link bd -C .. close CHR-1"
+check skip "bd() { :; }; cd $EXT/child; export PWD=$WS_DIR/link; bd -C .. close CHR-1"
 # Every shell sets PWD as it starts, and exports it, so a child of one keeps
 # the spelling a `cd` gave it even in a cleared environment; a shell that
 # inherited no PWD naming its directory starts from the physical path.
