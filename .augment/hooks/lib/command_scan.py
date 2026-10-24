@@ -948,8 +948,10 @@ def word_parts(word, quoted=False, nulls=False):
             yield part, quoted
 
 
-# What splits an unquoted expansion when nothing has assigned IFS.
+# What splits an unquoted expansion when nothing has assigned IFS, and the
+# value zsh starts with, which adds a NUL.
 DEFAULT_IFS = " \t\n"
+ZSH_DEFAULT_IFS = " \t\n\0"
 
 # The shells that start with the default IFS whatever their environment holds,
 # as checked for bash 3.2 and 5.2, dash and zsh 5.9. POSIX lets a shell import
@@ -2641,6 +2643,30 @@ class Scanner:
             i += 1 if opt is None or inline is not None else 2
         return False
 
+    def wrapper_words(self, args, start):
+        """The indices of the wrappers in `args[:start]` that run one another
+        and then the command at `args[start]`, as `command_word` walks them,
+        or None when that walk does not end there.
+
+        A word among a wrapper's options or operands is no wrapper: in `env
+        -u sudo bash -c ...`, `sudo` is the name `-u` unsets.
+        """
+        found = []
+        i = 0
+        while i is not None and i < start:
+            word = args[i].value
+            name = None if word is UNKNOWN else word.rsplit("/", 1)[-1]
+            if name not in PREFIX_WORDS:
+                return None
+            found.append(i)
+            if name not in WRAPPER_OPT_ARGS:
+                i += 1
+            elif name == "xargs":
+                i = self.xargs_opts(args, i)
+            else:
+                i = self.skip_wrapper_opts(args, i, name)
+        return found if i == start else None
+
     def prefix_env(self, args, start):
         """The environment the wrappers in `args[:start]` give the command.
 
@@ -3346,8 +3372,11 @@ class Scanner:
             if process and shell in IFS_RESET_SHELLS:
                 # These shells set IFS as they start, too, ignoring the one
                 # they inherit: `IFS=: bash -c 'OUT=/ext:; bd -C $OUT close
-                # X'` passes `/ext:` whole.
-                self.scope.assigns.pop("IFS", None)
+                # X'` passes `/ext:` whole. The value is set rather than the
+                # name dropped, which would read it from the hook's own
+                # environment: `bash -c 'bd${IFS}close${IFS}X'` runs `bd`.
+                self.scope.assigns["IFS"] = \
+                    ZSH_DEFAULT_IFS if shell == "zsh" else DEFAULT_IFS
             if startup:
                 self.seal_opaque(cwd=True)
                 self.scope.allexport = UNKNOWN
@@ -5164,10 +5193,15 @@ class Scanner:
         listing `posix` that a privileged shell has not ignored: `env
         SHELLOPTS=posix ENV=/tmp/s.sh bash --norc -i -c ...` runs the file,
         and `env SHELLOPTS=posix BASH_ENV=/tmp/s.sh bash -c ...` none.
+
+        A wrapper may make it a login shell too, by the name it runs it
+        under; see `argv0_login`.
         """
         if bash_kind(args[start].value) is not True:
             return False
         login = self.shell_option(words, "l", "login")
+        if login is False:
+            login = self.argv0_login(args, start)
         if login is not False and \
                 self.shell_option(words, "", "noprofile") is not True:
             return True
@@ -5197,14 +5231,67 @@ class Scanner:
             return False
         env = self.command_env(cmd, args, start, "BASH_ENV")
         # `sudo` removes BASH_ENV whatever its policy keeps, so behind one
-        # only an assignment made after it can pass.
+        # only an assignment made after it can pass. Only a `sudo` among the
+        # wrappers is one; see `wrapper_words`.
         assigned = self.prefix_env(args, start)[0]
+        found = self.wrapper_words(args, start) or ()
         if env is UNKNOWN and "BASH_ENV" not in assigned and any(
-                arg.value is not UNKNOWN and
-                arg.value.rsplit("/", 1)[-1] == "sudo"
-                for arg in args[:start]):
+                args[j].value.rsplit("/", 1)[-1] == "sudo" for j in found):
             return False
         return env is not None and env != ""
+
+    def argv0_login(self, args, start):
+        """Whether the wrapper that runs the shell at `args[start]` names it
+        with a leading `-`, which makes bash a login shell: True, False or
+        UNKNOWN.
+
+        `exec -l` adds the `-`, and `exec -a NAME` and `env -a NAME` name
+        it outright, so `exec -l bash -c ...` and `exec -a -bash bash -c
+        ...` are login shells. Only the last wrapper counts, since each names
+        only what it runs: `exec -l nohup bash -c ...` names `nohup`. Debian's
+        bash reads its profile then even for a `-c` script, where the bash
+        macOS ships does so only when interactive, so `startup_runs` takes
+        such a shell for one that may.
+        """
+        found = self.wrapper_words(args, start)
+        if not found:
+            return False if found == [] else UNKNOWN
+        i = found[-1]
+        name = args[i].value.rsplit("/", 1)[-1]
+        if name not in ("exec", "env"):
+            return False
+        takes, alone = WRAPPER_OPT_ARGS[name], WRAPPER_OPT_NOARG[name]
+        dash, argv0 = False, None
+        i += 1
+        while i < start:
+            word = args[i].value
+            if word is UNKNOWN:
+                if args[i].assign is not None:
+                    break
+                return UNKNOWN
+            if word == "-" and name == "env":
+                i += 1
+                continue
+            if word in ("-", "--") or not word.startswith("-"):
+                break
+            if word.startswith("--"):
+                opt, sep, inline = word.partition("=")
+                if opt == "--argv0":
+                    argv0 = inline if sep else self.opt_value(args, i)
+                i += 1 if sep or opt not in takes else 2
+                continue
+            bundle = short_opts(word, takes, alone)
+            if bundle is None:
+                return UNKNOWN
+            letters, opt, inline = bundle
+            dash = dash or (name == "exec" and "l" in letters)
+            if opt == "-a":
+                argv0 = inline if inline is not None else \
+                    self.opt_value(args, i)
+            i += 1 if opt is None or inline is not None else 2
+        if dash or argv0 is UNKNOWN:
+            return True if dash else UNKNOWN
+        return argv0 is not None and argv0.startswith("-")
 
     def shellopts_option(self, cmd, args, start, option):
         """Whether the shell at `args[start]` starts with `option` on from the

@@ -789,6 +789,9 @@ check_target '/tmp/a' "BASH_ENV=/tmp/select-store.sh bash -c 'IFS=:; OUT=/tmp/a:
 check_target '/tmp/a:b' "BASH_ENV=/tmp/select-store.sh bash -c 'unset IFS; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 check_target '/tmp/a:b' "IFS=: bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 check_target '/tmp/a:b' "export IFS=:; bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
+# That default is what `$IFS` expands to there, too.
+check_target '/tmp/store' "bash -c 'bd\${IFS}-C\${IFS}/tmp/store\${IFS}close\${IFS}CHR-1'"
+check_target '/tmp/store' "IFS=:; export IFS; bash -c 'bd\${IFS}-C\${IFS}/tmp/store\${IFS}close\${IFS}CHR-1'"
 # An expansion that is all separators supplies no argument at all, so what
 # follows it is still the verb.
 check sync 'E=""; bd $E close CHR-1'
@@ -1193,9 +1196,11 @@ check_unresolved 'env -iuFOO bash -c "bd -C \"\$CS_TEST_STORE/x\" close CHR-1"'
 # command never opened while the one it wrote went unregistered.
 check_unresolved 'exec -c bash -c "bd -C \"\$CS_TEST_STORE/x\" close CHR-1"'
 check_unresolved 'exec -lc bash -c "bd -C \"\$CS_TEST_STORE/x\" close CHR-1"'
-# The other two do not, `-a` naming the command and `-l` its argv[0] dash.
+# The other two do not, `-a` naming the command and `-l` its argv[0] dash,
+# though that dash makes bash a login shell, whose profile `--noprofile`
+# keeps from running.
 check_target '/tmp/inherited/x' 'exec bash -c "bd -C \"\$CS_TEST_STORE/x\" close CHR-1"'
-check_target '/tmp/inherited/x' 'exec -l bash -c "bd -C \"\$CS_TEST_STORE/x\" close CHR-1"'
+check_target '/tmp/inherited/x' 'exec -l bash --noprofile -c "bd -C \"\$CS_TEST_STORE/x\" close CHR-1"'
 unset CS_TEST_STORE
 
 # --- a wrapper that runs the command elsewhere ---------------------------
@@ -1753,6 +1758,19 @@ check_unresolved "cd $STORE; export SHELLOPTS; set -o posix; ENV=/tmp/select-sto
 check_target "$STORE" "cd $STORE; env SHELLOPTS=posix ENV=/tmp/select-store.sh bash --norc -p -i -c 'bd close CHR-1'"
 check_target "$STORE" "cd $STORE; env SHELLOPTS=posix BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR-1'"
 check_target "$STORE" "cd $STORE; SHELLOPTS=posix ENV=/tmp/select-store.sh bash --norc -i -c 'bd close CHR-1'"
+# A wrapper makes it a login shell too, by the name it runs it under: `exec
+# -l`, or `exec -a` or `env -a` with a name opening with `-`. Only the last
+# wrapper names the shell.
+check_unresolved "cd $STORE; exec -l bash -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; exec -a -bash bash -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; env --argv0=-bash bash -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; exec -a bash bash -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; exec -l bash --noprofile -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; exec -l nohup bash -c 'bd close CHR-1'"
+# `sudo` drops BASH_ENV, but only a `sudo` among the wrappers is one: as the
+# name `env -u` unsets, it stops nothing.
+check_target "$STORE" "cd $STORE; sudo bash -c 'bd -C . close CHR-1'"
+check_unresolved "cd $STORE; BASH_ENV=\"\$(printf %s /tmp/select-store.sh)\" env -u sudo bash -c 'bd -C . close CHR-1'"
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -c "bd list"'
 # Single quotes around the script keep the shell from expanding it, but the
