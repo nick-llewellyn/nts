@@ -1592,6 +1592,9 @@ class Scanner:
         # reported twice, since a caller would sync it twice for no purpose.
         self.functions = {}
         self.calling = set()
+        # Whether the table has been put in doubt, so that a command named
+        # first may be a function it does not list; see `seal_opaque`.
+        self.functions_sealed = False
         # The scripts being scanned right now, by their text. What makes text
         # that contains itself terminate: `s='eval "$s"'` names the same script
         # at every level, so the second sight of it is refused. Held by text
@@ -3066,10 +3069,20 @@ class Scanner:
         the `-c` and the script among the words the value hands on. So it is
         counted as a script this scan cannot read, and the one found after it
         is read as well, being the one that runs when the value does not
-        split; see `splits_value`.
+        split; see `splits_value`. It is counted as it is taken, since what
+        follows it is no longer what bash reads: `bash -o $OPTS --help` runs
+        that script too, `--help` its `$0`.
         """
         seen_c = False
         uncertain = False
+
+        def taken(first, end):
+            nonlocal uncertain
+            if not uncertain and any(self.splits_value(args, j)
+                                     for j in range(first, end)):
+                uncertain = True
+                self.unreadable_script()
+
         i = start + 1
         while i < len(args):
             word = args[i].value
@@ -3087,7 +3100,7 @@ class Scanner:
                     bash_kind(args[start].value) is True:
                 return None
             if word in SHELL_OPT_ARGS:
-                uncertain = uncertain or self.splits_value(args, i + 1)
+                taken(i + 1, i + 2)
                 i += 2
                 continue
             if word.startswith("--"):
@@ -3107,22 +3120,18 @@ class Scanner:
             # as alone they do: `bash -euo pipefail -c '...'` runs its script
             # with pipefail on. Read as an unknown letter, the invocation was
             # dropped and the write inside missed.
-            taken = 0
+            values = 0
             for ch in word[1:]:
                 if ch in "oO":
-                    taken += 1
+                    values += 1
                     continue
                 if ch not in SHELL_NOARG_LETTERS:
                     self.shell_abandoned(args, start, i)
                     return None
                 if ch == "c":
                     seen_c = True
-            uncertain = uncertain or any(
-                self.splits_value(args, j)
-                for j in range(i + 1, i + 1 + taken))
-            i += 1 + taken
-        if uncertain:
-            self.unreadable_script()
+            taken(i + 1, i + 1 + values)
+            i += 1 + values
         if not seen_c or i >= len(args):
             return None
         return i
@@ -3232,6 +3241,7 @@ class Scanner:
         """
         saved = self.scope
         functions = self.functions
+        sealed = self.functions_sealed
         leader = self.leader
         self.scope = saved.child()
         self.functions = dict(functions)
@@ -3242,6 +3252,7 @@ class Scanner:
         finally:
             self.scope = saved
             self.functions = functions
+            self.functions_sealed = sealed
             self.leader = leader
 
     def in_background(self, fn):
@@ -3565,6 +3576,8 @@ class Scanner:
         The state after something this scan cannot read acts on the shell
         itself: an `unset` of a name it cannot read, an arithmetic assignment
         to one, a `source`d file. With `cwd`, the directory is in doubt too.
+        A function the file defines is no longer one the scan can follow, so
+        the table is emptied and marked; see `dispatch`.
         """
         # IFS is recorded rather than dropped, since `separators` reads a
         # missing one as the default: a startup or sourced file that sets
@@ -3573,6 +3586,7 @@ class Scanner:
         self.scope.exported = {}
         self.scope.sealed = OPAQUE
         self.functions = {}
+        self.functions_sealed = True
         if cwd:
             self.leave_cwd()
 
@@ -4328,6 +4342,14 @@ class Scanner:
         if self.readonly(operands, helped, flags):
             return
         self.mutates = True
+        # Named first after a startup or sourced file, `bd` may be a function
+        # that file defined, which may write any store: with BASH_ENV defining
+        # `bd() { command bd -C /ext close X; }`, `bash -c 'bd -C /expected
+        # close X'` writes /ext. The store the arguments name is still
+        # reported, being the one the program opens. A read-only call is left
+        # alone, a wrapper of that kind passing its verb on.
+        if start == 0 and self.functions_sealed:
+            self.unresolved += 1
 
         # A store outside every workspace root is one no later event would
         # revisit: SessionEnd builds its list the same way, so that write would

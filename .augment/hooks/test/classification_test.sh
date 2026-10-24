@@ -91,6 +91,21 @@ check_unresolved() {
   fi
 }
 
+# Asserts the stores a command addresses, as check_target does, and a store it
+# may also have written that the scan could not name.
+check_target_unresolved() {
+  local want="$1" command="$2" got
+  scan_command "$command" "$BASE"
+  got="${SCAN_TARGETS[*]:+${SCAN_TARGETS[*]}}"
+  if [ "$got" = "$want" ] && [ "$SCAN_UNRESOLVED" -ge 1 ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    printf 'FAIL want=[%s] and unresolved got=[%s] unresolved=%s %s\n' \
+      "$want" "$got" "$SCAN_UNRESOLVED" "$command"
+  fi
+}
+
 # Asserts the stores a command writes in the background, space-separated and
 # in order. A third argument is scan_command's launch mode.
 check_async() {
@@ -1771,6 +1786,15 @@ check_target "$STORE" "cd $STORE; exec -l nohup bash -c 'bd close CHR-1'"
 # name `env -u` unsets, it stops nothing.
 check_target "$STORE" "cd $STORE; sudo bash -c 'bd -C . close CHR-1'"
 check_unresolved "cd $STORE; BASH_ENV=\"\$(printf %s /tmp/select-store.sh)\" env -u sudo bash -c 'bd -C . close CHR-1'"
+# The file may define a function named `bd`, which may write any store, so a
+# write by that name after it may be one the scan cannot name, though the
+# store its arguments name is still reported. `command bd` runs the program,
+# and a sourced file may do the same.
+check_target_unresolved '/tmp/store' "BASH_ENV=/tmp/select-store.sh bash -c 'bd -C /tmp/store close CHR-1'"
+check_target_unresolved '/tmp/store' '. ./select-store.sh; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' "BASH_ENV=/tmp/select-store.sh bash -c 'command bd -C /tmp/store close CHR-1'"
+check_target '/tmp/store' '(. ./select-store.sh); bd -C /tmp/store close CHR-1'
+check skip '. ./select-store.sh; bd list'
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -c "bd list"'
 # Single quotes around the script keep the shell from expanding it, but the
@@ -1793,8 +1817,13 @@ check_target '/tmp/store' 'bash -c -x "bd -C /tmp/store close CHR-1"'
 check_unresolved "CS_OPTS=\$(printf '%s' 'pipefail -c bd'); bash -eo \$CS_OPTS -c true"
 check_unresolved 'bash -o $CS_OPTS -c "bd list"'
 check_unresolved 'bash --rcfile $CS_OPTS -c true'
-check_target '/tmp/store' 'bash -O $CS_OPTS -c "bd -C /tmp/store close CHR-1"'
+check_target_unresolved '/tmp/store' 'bash -O $CS_OPTS -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -o "$CS_OPTS" -c true'
+# It counts as it is taken, whatever follows: `--help` there is that
+# script's `$0`.
+check_unresolved "IFS=:; CS_OPTS=\$(printf '%s' 'pipefail:-c:bd -C /tmp/store close CHR-1'); bash -o \$CS_OPTS --help"
+check_unresolved 'bash -eo $CS_OPTS --help'
+check skip 'bash -o pipefail --help'
 # A flag the scan cannot delimit may or may not take the word after it, so
 # the operand it would name is a guess and the invocation is left alone.
 check skip 'bash -Q "bd -C /tmp/store close CHR-1"'
