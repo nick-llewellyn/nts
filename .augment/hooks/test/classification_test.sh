@@ -1785,6 +1785,14 @@ check_unresolved 'bash $CS_FLAGS "bd -C /tmp/store close CHR-1"'
 check_unresolved 'CS_FLAG=-e; CS_CODE="bd -C /tmp/store close CHR-1"; bash "${CS_FLAG[0]}" -c "${CS_CODE[0]}"'
 check_unresolved "CS_FLAG=-e; bash \"\${CS_FLAG[0]}\" -c 'b\"d\" -C /tmp/store close CHR-1'"
 check_unresolved "bash -Q -c \"b\\\$'d' close CHR-1\""
+# Its escapes are decoded and its line continuations joined, as the shell
+# does, but a single-quoted backslash-newline joins nothing.
+check_unresolved "CS_FLAG=-e; bash \"\${CS_FLAG[0]}\" -c \"\\\$'b\\\\x64' -C /tmp/store close CHR-1\""
+check_unresolved "CS_FLAG=-e; bash \"\${CS_FLAG[0]}\" -c 'b\\
+d -C /tmp/store close CHR-1'"
+check_unresolved "bash -Q -c \"\\\$'\\\\142d' close CHR-1\""
+check skip "bash -Q -c \"'b\\\\
+d' close CHR-1\""
 check skip 'bash -Q "$CS_X"'
 # A long option is one name, not a bundle of letters. Read letter by letter,
 # the first `-` inside `--noprofile` was a flag the scan did not know, and

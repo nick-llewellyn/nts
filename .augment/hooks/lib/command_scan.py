@@ -199,11 +199,9 @@ SHELL_WORDS = {"sh", "bash", "dash", "ksh", "mksh", "zsh"}
 # reported -- no sync, no warning, and a store no later event would find.
 ABANDONED_RUNNERS = {"bd", "eval"} | SHELL_WORDS
 # What separates the words of a script read as text rather than parsed, for
-# the runners above anywhere in it, and the quoting removed before it splits:
-# quotes join what they quote, so `b"d"` and `b$'d'` run `bd`. See
-# `shell_abandoned`.
+# the runners above anywhere in it, once `script_text` has removed its
+# quoting. See `shell_abandoned`.
 SCRIPT_WORD_BREAKS = re.compile(r"[\s;&|()<>`{}$!]+")
-SCRIPT_QUOTING = re.compile(r"\$(?=['\"])|['\"\\]")
 
 # The historic spelling of a niceness, which `nice` takes without a letter:
 # `nice -10 cmd` is `nice -n 10 cmd`, and GNU takes `--10` and `-+10` too. Read
@@ -857,6 +855,55 @@ def unescape_ansi_c(text):
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return UNKNOWN
+
+
+# The body of a `$'...'` word: up to the quote no backslash escapes.
+ANSI_C_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
+
+
+def script_text(text):
+    """`text` with the shell's quoting removed, read as script rather than
+    parsed; see `shell_abandoned`.
+
+    Quotes join what they quote, so `b"d"` runs `bd`, and so do `$'b\\x64'`
+    and `$'\\142d'`, whose escapes are bash's, and `b` + backslash-newline +
+    `d`, which a line continuation joins. Single quotes keep everything, a
+    backslash-newline included, and double quotes keep a backslash before a
+    character they do not escape; see `unescape_dquoted`. A body that is not
+    text is kept as written, and a quote left open runs to the end.
+    """
+    out = []
+    quote = None
+    i = 0
+    while i < len(text):
+        char, nxt = text[i], text[i + 1:i + 2]
+        if quote == "'":
+            if char != "'":
+                out.append(char)
+            else:
+                quote = None
+            i += 1
+        elif char == "\\" and nxt:
+            if nxt != "\n":
+                escapes = quote is None or nxt in DQ_ESCAPES
+                out.append(nxt if escapes else char + nxt)
+            i += 2
+        elif char == '"' or (quote is None and char == "$" and nxt == '"'):
+            quote = None if quote else '"'
+            i += 1 if char == '"' else 2
+        elif quote is None and char == "'":
+            quote = "'"
+            i += 1
+        elif quote is None and char == "$" and nxt == "'":
+            end = ANSI_C_BODY.match(text, i + 2).end()
+            body = text[i + 2:end]
+            value = unescape_ansi_c(body)
+            out.append(body if value is UNKNOWN else value)
+            i = end + 1
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
 
 
 def is_pattern(text):
@@ -3052,10 +3099,12 @@ class Scanner:
         is read as one: any that names `bd`, `eval` or a shell anywhere in it
         counts, not only at its start, as `abandoned` reads a wrapper's. `bash
         -Q -c 'cd /ext && bd close X'` writes as surely as `bash -Q -c 'bd -C
-        /ext close X'` does, and `bash -Q -c 'b"d" -C /ext close X'` too, its
-        quoting removed. A word this scan cannot read after a `-c` that may be
-        there may be the script itself, which runs whatever it says: `bash
-        "${FLAG[0]}" -c "$CODE"`. See `unreadable_script`.
+        /ext close X'` does, and `bash -Q -c 'b"d" -C /ext close X'` too, as
+        does a script spelling `bd` with `$'b\\x64'` or a line continuation,
+        its quoting and escapes removed; see `script_text`. A word this scan
+        cannot read after a `-c` that may be there may be the script itself,
+        which runs whatever it says: `bash "${FLAG[0]}" -c "$CODE"`. See
+        `unreadable_script`.
         """
         if not any(self.may_be_c(arg) for arg in args[i:]):
             return
@@ -3067,7 +3116,7 @@ class Scanner:
                     return
                 after_c = True
                 continue
-            text = SCRIPT_QUOTING.sub("", arg.value)
+            text = script_text(arg.value)
             if any(word.rsplit("/", 1)[-1] in ABANDONED_RUNNERS
                    for word in SCRIPT_WORD_BREAKS.split(text)):
                 self.mutates = True
