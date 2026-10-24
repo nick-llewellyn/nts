@@ -420,10 +420,19 @@ take_guard() {
 # As `take_guard`, but waits. Losing the registry guard outright would drop
 # the record of an external store, which is the one thing that makes a failed
 # sync there recoverable, so that caller is worth a short retry.
+#
+# The waits share one budget, GUARD_WAIT_LEFT seconds for the invocation, and
+# once it is spent a take tries once. Each take is made per store, and the
+# hook is killed at 60 seconds: with a live holder keeping a guard busy, 13
+# stores written in the background waited five seconds each, and the kill
+# came before any of them was registered or synced.
+GUARD_WAIT_LEFT=10
 take_guard_waiting() {
   local guard="$1" attempts="${2:-5}" i
   for ((i = 1; i <= attempts; i++)); do
     take_guard "$guard" && return 0
+    [ "$GUARD_WAIT_LEFT" -gt 0 ] || return 1
+    GUARD_WAIT_LEFT=$((GUARD_WAIT_LEFT - 1))
     sleep 1
   done
   return 1
@@ -1020,11 +1029,18 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # sync and the warning says which store could not be named.
   LAUNCH_CWD=$(jq -r '.tool_input.cwd // ""' <<<"$EVENT_JSON")
 
+  # A launch with `wait: false` returns as its command starts, so any write
+  # in it may land after this sync, as one behind `&` may: `sleep 6; bd -C
+  # /ext close X` launched so was synced and settled before it wrote. Its
+  # stores are recorded for SessionEnd instead; see `remember_async`.
+  WAIT_MODE=$(jq -r 'if (.tool_input.wait | tostring) == "false"
+    then "unwaited" else "" end' <<<"$EVENT_JSON")
+
   # Every `bd` in the command is examined rather than stopping at the first,
   # because each may name a different store via `-C`. A read-only one does
   # not speak for a write beside it: `bd config get x && bd update CHR-1
   # --claim` syncs.
-  scan_command "$COMMAND" "$LAUNCH_CWD"
+  scan_command "$COMMAND" "$LAUNCH_CWD" "$WAIT_MODE"
   MUTATES=$SCAN_MUTATES
 
   # A scanner that failed answered nothing, which is not the same as answering
