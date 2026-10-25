@@ -328,6 +328,10 @@ WRAPPER_ENV_UNREADABLE = {"sudo", "doas"}
 ENV_UNSET_OPTS = ("-u", "--unset")
 ENV_CLEAR_OPTS = {"-i", "--ignore-environment", "-"}
 
+# The environment entry bash passes an exported function in, by name, and
+# defines the function from in a new process; see `imported_functions`.
+BASH_FUNC_ENTRY = re.compile(r"^BASH_FUNC_(.+)%%$")
+
 # The options by which a wrapper runs the command somewhere other than here.
 # Which store a `bd` invocation writes turns on the directory it runs in, so
 # `env -C /other/repo bd close X` writes /other/repo's store: stepping over the
@@ -1585,11 +1589,12 @@ class Scanner:
                            monitor="monitor" in opts,
                            physical="physical" in opts)
         self.depth = 0
-        # Bodies of the functions defined so far, by name, and the names whose
-        # bodies are being scanned right now. A body is scanned twice -- once
-        # where it is defined and once at each call -- so the same store can be
-        # named more than once; a repeated target is dropped rather than
-        # reported twice, since a caller would sync it twice for no purpose.
+        # Bodies of the functions defined so far, by name, each with the text
+        # it was parsed from, and the names whose bodies are being scanned
+        # right now. A body is scanned twice -- once where it is defined and
+        # once at each call -- so the same store can be named more than once;
+        # a repeated target is dropped rather than reported twice, since a
+        # caller would sync it twice for no purpose.
         self.functions = {}
         self.calling = set()
         # Whether the table has been put in doubt, so that a command named
@@ -3626,7 +3631,7 @@ class Scanner:
         else:
             self.function_exports.discard(name)
 
-    def imported_functions(self, shell, sealed, privileged):
+    def imported_functions(self, shell, sealed, privileged, seed):
         """The function table a new `shell` process starts with, as `(table,
         in doubt, exported)` for `sub_scan`.
 
@@ -3638,14 +3643,29 @@ class Scanner:
         -- `sh`, which may be bash, a privileged mode this scan cannot read,
         an environment a wrapper may have filtered -- leaves the table in
         doubt, as does an export this scan could not read.
+
+        Each function travels as a `BASH_FUNC_<name>%%` entry, which `seed`,
+        what the command line handed the process, may remove or set: after
+        `env -u 'BASH_FUNC_bd%%'` bash defines no `bd`, and after `env
+        'BASH_FUNC_bd%%=() { ...; }'` one from text this scan does not read,
+        which leaves the table in doubt, in a cleared environment too.
         """
         kind = bash_kind(shell)
-        if sealed == CLEARED or privileged is True or kind is False:
+        if privileged is True or kind is False:
+            return {}, False, set()
+        entries = {}
+        for key, value in seed.items():
+            match = BASH_FUNC_ENTRY.match(key)
+            if match:
+                entries[match.group(1)] = value
+        if any(value is not UNSET for value in entries.values()):
+            return {}, True, UNKNOWN
+        if sealed == CLEARED:
             return {}, False, set()
         if self.function_exports is UNKNOWN:
             return {}, True, UNKNOWN
         table = {name: self.functions[name] for name in self.function_exports
-                 if name in self.functions}
+                 if name in self.functions and name not in entries}
         if table and (kind is UNKNOWN or privileged is UNKNOWN or
                       sealed == OPAQUE):
             return {}, True, UNKNOWN
@@ -3953,9 +3973,10 @@ class Scanner:
             return
         # Kept so a later call can scan it again under the cwd the caller
         # stands in, which is the only place a relative target inside it can be
-        # resolved from.
+        # resolved from. The text it was parsed from is kept with it; see
+        # `call_function`.
         if cmd.get("Name"):
-            self.functions[cmd["Name"]["Value"]] = body
+            self.functions[cmd["Name"]["Value"]] = (body, self.text, self.raw)
 
         def run():
             # Scanned here too, and with the cwd unknown. A definition that is
@@ -3992,6 +4013,12 @@ class Scanner:
         and so is every one after a seal in the body, which may have unset
         any.
 
+        The body is read against the text it was defined in, which its
+        offsets index: called from an `eval`, or from a child bash that
+        imported it, it is not the text being scanned there, and `f() {
+        ((OUT=1)); }; OUT=/decoy; eval 'f; bd -C "$OUT" close X'` read its
+        operator out of the `eval` text and kept /decoy.
+
         Recursion is refused rather than bounded by depth, since a function that
         calls itself names no further store on the second pass. That is the whole
         termination argument here: a body already being scanned is not scanned
@@ -3999,7 +4026,7 @@ class Scanner:
         """
         if name in self.calling:
             return
-        body = self.functions[name]
+        body, text, raw = self.functions[name]
         seed = seed or {}
 
         def run():
@@ -4012,9 +4039,12 @@ class Scanner:
                 self.scope.exported[each] = value is not UNSET
             outer_unset, self.unset_names = self.unset_names, set()
             seals = self.seals
+            outer_text, outer_raw = self.text, self.raw
+            self.text, self.raw = text, raw
             try:
                 self.stmt(body)
             finally:
+                self.text, self.raw = outer_text, outer_raw
                 unset = self.unset_names
                 self.unset_names = outer_unset | unset
                 for each, (value, exported) in before.items():
@@ -5336,7 +5366,7 @@ class Scanner:
                              pwd=self.shell_pwd(cmd, args, start),
                              startup=startup,
                              functions=self.imported_functions(
-                                 shell, sealed, privileged))
+                                 shell, sealed, privileged, seed))
         finally:
             self.leader = leader
 

@@ -2105,6 +2105,15 @@ check_target '/tmp/store' "bd() { :; }; export -f bd; env -i bash -c 'bd -C /tmp
 check_target '/tmp/store' "bd() { :; }; export -f bd; bash -p -c 'bd -C /tmp/store close CHR-1'"
 check_target '/tmp/store' "bd() { :; }; export -f bd; dash -c 'bd -C /tmp/store close CHR-1'"
 check_target_unresolved '/tmp/store' "bd() { :; }; export -f bd; sh -c 'bd -C /tmp/store close CHR-1'"
+# A function travels as an environment entry, which a wrapper may remove,
+# or set to a definition the scan cannot read.
+check_target '/tmp/store' "bd() { :; }; export -f bd; env -u 'BASH_FUNC_bd%%' bash -c 'bd -C /tmp/store close CHR-1'"
+check skip "bd() { :; }; export -f bd; env -u 'BASH_FUNC_x%%' bash -c 'bd -C /tmp/store close CHR-1'"
+check_target_unresolved '/tmp/store' "env -i 'BASH_FUNC_bd%%=() { :; }' bash -c 'bd -C /tmp/store close CHR-1'"
+# A body is read against the text it was defined in, wherever it is called.
+check_unresolved "cs_f() { ((CS_OUT=1)); }; export -f cs_f; export CS_OUT=/tmp/store; bash -c 'cs_f; bd -C \"\$CS_OUT\" close CHR-1'"
+check_unresolved "cs_f() { ((CS_OUT=1)); }; CS_OUT=/tmp/store; eval 'cs_f; bd -C \"\$CS_OUT\" close CHR-1'"
+check_unresolved "eval 'cs_f() { ((CS_OUT=1)); }'; CS_OUT=/tmp/store; cs_f; bd -C \"\$CS_OUT\" close CHR-1"
 # A call's temporary prefix is in force, and exported, while the body runs,
 # and gives way to the value from before it afterwards, whatever the body
 # assigned. An `unset` there takes the temporary value away, so what is
