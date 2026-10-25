@@ -3976,7 +3976,14 @@ class Scanner:
         # resolved from. The text it was parsed from is kept with it; see
         # `call_function`.
         if cmd.get("Name"):
-            self.functions[cmd["Name"]["Value"]] = (body, self.text, self.raw)
+            name = cmd["Name"]["Value"]
+            self.functions[name] = (body, self.text, self.raw)
+            # Under `set -a` a function is exported as it is defined, and
+            # stays exported after `set +a`: `set -a; go() { cd /ext; }; set
+            # +a; bash -c 'go; bd close X'` writes /ext. See
+            # `imported_functions`.
+            if self.scope.allexport is not False:
+                self.export_function(name, self.scope.allexport)
 
         def run():
             # Scanned here too, and with the cwd unknown. A definition that is

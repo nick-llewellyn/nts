@@ -2105,6 +2105,9 @@ check_target '/tmp/store' "bd() { :; }; export -f bd; env -i bash -c 'bd -C /tmp
 check_target '/tmp/store' "bd() { :; }; export -f bd; bash -p -c 'bd -C /tmp/store close CHR-1'"
 check_target '/tmp/store' "bd() { :; }; export -f bd; dash -c 'bd -C /tmp/store close CHR-1'"
 check_target_unresolved '/tmp/store' "bd() { :; }; export -f bd; sh -c 'bd -C /tmp/store close CHR-1'"
+# One defined under `set -a` is exported, and stays so after `set +a`.
+check skip "set -a; bd() { :; }; set +a; bash -c 'bd -C /tmp/store close CHR-1'"
+check_unresolved "set -a; cs_go() { builtin cd $STORE; }; set +a; bash -c 'cs_go; command bd close CHR-1'"
 # A function travels as an environment entry, which a wrapper may remove,
 # or set to a definition the scan cannot read.
 check_target '/tmp/store' "bd() { :; }; export -f bd; env -u 'BASH_FUNC_bd%%' bash -c 'bd -C /tmp/store close CHR-1'"
