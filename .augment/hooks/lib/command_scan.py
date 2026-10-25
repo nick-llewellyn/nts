@@ -3404,11 +3404,7 @@ class Scanner:
                 self.scope.assigns["IFS"] = \
                     ZSH_DEFAULT_IFS if shell == "zsh" else DEFAULT_IFS
             if startup:
-                self.seal_opaque(cwd=True)
-                self.scope.allexport = UNKNOWN
-                self.scope.physical = UNKNOWN
-                self.scope.monitor = UNKNOWN
-                self.scope.lastpipe = UNKNOWN
+                self.seal_sourced()
             outer = self.text
             outer_raw = self.raw
             if text is not None:
@@ -3590,6 +3586,33 @@ class Scanner:
         if cwd:
             self.leave_cwd()
 
+    def seal_sourced(self):
+        """Puts all of this shell's state in doubt, as a `source`d file does.
+
+        That is `seal_opaque` with the cwd, and with the options a later
+        command is read under as well; see `dispatch`.
+        """
+        self.seal_opaque(cwd=True)
+        self.scope.allexport = UNKNOWN
+        self.scope.physical = UNKNOWN
+        self.scope.monitor = UNKNOWN
+        self.scope.lastpipe = UNKNOWN
+
+    def intercepted(self, name):
+        """Whether a function stands in for the builtin `name`, named first.
+
+        One this text defined is called in its place. After a startup or
+        sourced file, one that file defined may be, so the state after it is
+        in doubt as the file's own is. See `dispatch`.
+        """
+        if name in self.functions:
+            self.call_function(name)
+            return True
+        if self.functions_sealed:
+            self.seal_sourced()
+            return True
+        return False
+
     def stmts(self, stmts, conditional):
         """Scans a list of statements in order.
 
@@ -3757,8 +3780,9 @@ class Scanner:
             self.arith_assigns(cmd.get("X"))
         elif kind == "LetClause":
             self.walk_words(cmd)
-            for expr in cmd.get("Exprs") or ():
-                self.arith_assigns(expr)
+            if not self.intercepted("let"):
+                for expr in cmd.get("Exprs") or ():
+                    self.arith_assigns(expr)
 
     def branch(self, stmts):
         """Scans statements that may or may not run.
@@ -3966,12 +3990,16 @@ class Scanner:
         # before that is consulted.
         for arg in args:
             self.node_subs(arg)
+        # The parse makes a clause of one only where it is named first, so a
+        # function may stand in for it; see `dispatch`.
+        variant = (cmd.get("Variant") or {}).get("Value")
+        if self.intercepted(variant):
+            return
         # What the builtin says about export. `export` and `declare -x` give
         # the attribute to every name they are handed, assigned or bare;
         # `export -n` and `declare +x` take it away; `local` makes a fresh
         # variable that has it only with `-x`. The flags come first, as words
         # the parse marks naked with no name.
-        variant = (cmd.get("Variant") or {}).get("Value")
         state = None
         if variant == "export":
             state = True
@@ -4264,6 +4292,33 @@ class Scanner:
         if name != word and name in SHELL_STATE_WORDS:
             return
 
+        # A function runs in place of a builtin or a program of its name, in
+        # bash and zsh alike, so a call runs the body defined earlier in this
+        # text whatever it is named: after `cd() { builtin cd /ext; }`, `cd
+        # /known; env -i bd close X` writes /ext. It runs it here, where the
+        # cwd is known. Without this a relative store named inside a function
+        # was reported by nothing: the definition cannot resolve it and the
+        # call did not look. Only a command named first is one: `command` and
+        # every other wrapper run a builtin or a program, so `bd() { command
+        # bd -C /ext close X; }; bd` writes /ext.
+        if start == 0 and word in self.functions:
+            self.call_function(word, self.prefix_seed(cmd))
+            return
+
+        # After a startup or sourced file, a builtin read for what it does to
+        # this shell may be a function that file defined, which may do
+        # anything there: with BASH_ENV defining `cd() { builtin cd /ext; }`,
+        # `bash -c 'cd -L /known; env -i bd close X'` writes /ext. So the
+        # state after one named first is in doubt as the file's own is.
+        # `eval`'s text is still read, a write in it being one the builtin
+        # makes. `builtin cd` and `command cd` pass any function by, and are
+        # read as before.
+        if start == 0 and self.functions_sealed and name in SHELL_STATE_WORDS:
+            if name == "eval":
+                self.eval_builtin(cmd, fields, start, conditional)
+            self.seal_sourced()
+            return
+
         if name in CHDIR_WORDS:
             self.cd(fields, start, conditional, follows, name, cmd)
             return
@@ -4299,11 +4354,7 @@ class Scanner:
         # runs here and whether a `setsid` forks are in doubt as well. So is
         # `set -a`, which exports a later plain `BEADS_DIR=...` to `bd`.
         if word in SOURCE_WORDS:
-            self.seal_opaque(cwd=True)
-            self.scope.allexport = UNKNOWN
-            self.scope.physical = UNKNOWN
-            self.scope.monitor = UNKNOWN
-            self.scope.lastpipe = UNKNOWN
+            self.seal_sourced()
             return
 
         if name in READ_WORDS:
@@ -4323,16 +4374,6 @@ class Scanner:
 
         if name == "printf":
             self.printf_builtin(fields, start)
-            return
-
-        # A call runs the body defined earlier in this text, and runs it here,
-        # where the cwd is known. Without this a relative store named inside a
-        # function was reported by nothing: the definition cannot resolve it and
-        # the call did not look. Only a command named first is one: `command`
-        # and every other wrapper run a program, so `bd() { command bd -C /ext
-        # close X; }; bd` writes /ext.
-        if start == 0 and word in self.functions:
-            self.call_function(word, self.prefix_seed(cmd))
             return
 
         if name != "bd":

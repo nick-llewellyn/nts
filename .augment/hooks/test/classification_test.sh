@@ -796,12 +796,14 @@ check_unresolved 'IFS=:; false && unset IFS; OUT=/tmp/a:b; bd -C $OUT close CHR-
 # name it assigns: which of its paths ran is not inferred.
 check_unresolved 'IFS=:; f() { local IFS=" "; unset IFS; }; f; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
 # A startup or sourced file may set IFS, so after one it is unknowable until
-# the text sets or unsets it. A new shell starts with the default, whatever
-# it inherits.
+# the text sets or unsets it -- by `builtin unset`, a plain `unset` being one
+# a function the file defined may stand in for. A new shell starts with the
+# default, whatever it inherits.
 check_unresolved "BASH_ENV=/tmp/select-store.sh bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 check_unresolved 'source ./cs-ifs.sh; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
 check_target '/tmp/a' "BASH_ENV=/tmp/select-store.sh bash -c 'IFS=:; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
-check_target '/tmp/a:b' "BASH_ENV=/tmp/select-store.sh bash -c 'unset IFS; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
+check_target '/tmp/a:b' "BASH_ENV=/tmp/select-store.sh bash -c 'builtin unset IFS; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
+check_unresolved "BASH_ENV=/tmp/select-store.sh bash -c 'unset IFS; OUT=/tmp/a:b; command bd -C \$OUT close CHR-1'"
 check_target '/tmp/a:b' "IFS=: bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 check_target '/tmp/a:b' "export IFS=:; bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 # That default is what `$IFS` expands to there, too.
@@ -1795,6 +1797,26 @@ check_target_unresolved '/tmp/store' '. ./select-store.sh; bd -C /tmp/store clos
 check_target '/tmp/store' "BASH_ENV=/tmp/select-store.sh bash -c 'command bd -C /tmp/store close CHR-1'"
 check_target '/tmp/store' '(. ./select-store.sh); bd -C /tmp/store close CHR-1'
 check skip '. ./select-store.sh; bd list'
+# So may every builtin read for what it does to the shell, which may then
+# have done anything: with BASH_ENV defining `cd() { builtin cd /ext; }`,
+# `cd -L /known` lands in /ext. The state after one named first is in doubt,
+# after a sourced file as after a startup file. `builtin` and `command` pass
+# any function by, and an assignment is no command at all. `eval`'s text is
+# still read.
+check_unresolved "BASH_ENV=/tmp/select-store.sh bash -c 'cd -L $STORE; env -i bd close CHR-1'"
+check_unresolved "source ./select-store.sh; cd $STORE; command bd -C . close CHR-1"
+check_unresolved ". ./select-store.sh; pushd $STORE; env -i bd close CHR-1"
+check_unresolved ". ./select-store.sh; export BEADS_DIR=$STORE/.beads; command bd close CHR-1"
+check_unresolved ". ./select-store.sh; OUT=$STORE; printf '%s\n' ok; command bd -C \"\$OUT\" close CHR-1"
+check_unresolved ". ./select-store.sh; OUT=$STORE; let N=1; command bd -C \"\$OUT\" close CHR-1"
+check_target "$STORE" ". ./select-store.sh; builtin cd -L $STORE; env -i bd close CHR-1"
+check_target "$STORE" ". ./select-store.sh; command cd -L $STORE; env -i bd close CHR-1"
+check_target "$STORE" "(. ./select-store.sh); cd -L $STORE; env -i bd close CHR-1"
+check_target "$STORE" ". ./select-store.sh; BEADS_DIR=$STORE/.beads command bd close CHR-1"
+check_target '/tmp/store' ". ./select-store.sh; eval 'command bd -C /tmp/store close CHR-1'"
+# One this text defined is called in that builtin's place.
+check_target "$STORE" "cd $STORE; cd() { :; }; cd -L $STORE/nested/inner; env -i bd close CHR-1"
+check_target '/tmp/store' "OUT=/tmp/store; function export { :; }; export OUT=/tmp/other; command bd -C \"\$OUT\" close CHR-1"
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -c "bd list"'
 # Single quotes around the script keep the shell from expanding it, but the
