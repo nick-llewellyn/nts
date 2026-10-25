@@ -1814,9 +1814,11 @@ check_target "$STORE" ". ./select-store.sh; command cd -L $STORE; env -i bd clos
 check_target "$STORE" "(. ./select-store.sh); cd -L $STORE; env -i bd close CHR-1"
 check_target "$STORE" ". ./select-store.sh; BEADS_DIR=$STORE/.beads command bd close CHR-1"
 check_target '/tmp/store' ". ./select-store.sh; eval 'command bd -C /tmp/store close CHR-1'"
-# One this text defined is called in that builtin's place.
-check_target "$STORE" "cd $STORE; cd() { :; }; cd -L $STORE/nested/inner; env -i bd close CHR-1"
-check_target '/tmp/store' "OUT=/tmp/store; function export { :; }; export OUT=/tmp/other; command bd -C \"\$OUT\" close CHR-1"
+# A function of its name this text defined does not displace the builtin:
+# in POSIX mode bash finds `export`, `unset` and the other special builtins
+# first, and that mode may be set at any point.
+check_target "$STORE" "function export { :; }; builtin set -o posix; export BEADS_DIR=$STORE/.beads; command bd close CHR-1"
+check_target "$STORE" "export BEADS_DIR=/tmp/store/.beads; function unset { :; }; builtin set -o posix; unset BEADS_DIR; cd $STORE; command bd close CHR-1"
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
 check skip 'bash -c "bd list"'
 # Single quotes around the script keep the shell from expanding it, but the
@@ -2086,19 +2088,40 @@ check skip 'cs_undefined_fn'
 # The definition must come first, as it must for the shell: a call before it
 # runs no body.
 check_unresolved 'cs_f; cs_f() { bd -C store close CHR-1; }'
-# A subshell or child shell starts with this shell's functions, and what it
-# does to them dies with it, so a call after one still runs the body.
+# What a subshell or child shell does to this shell's functions dies with
+# it, so a call after one still runs the body.
 check_unresolved "cs_f() { cd $CD/other; }; bash -l -c true; cs_f; bd -C store close CHR-1"
 check_unresolved "cs_f() { cd $CD/other; }; (unset -f cs_f); cs_f; bd -C store close CHR-1"
 check_target "$BASE/store" "(cs_f() { cd $CD/other; }); cs_f; bd -C store close CHR-1"
+# A subshell starts with this shell's functions, but a new bash process only
+# with those `export -f` exported, unless its environment is cleared or it
+# is privileged, and no other shell with any. `sh` may be bash.
+check skip 'bd() { :; }; (bd -C /tmp/store close CHR-1)'
+check_target '/tmp/store' "bd() { :; }; bash -c 'bd -C /tmp/store close CHR-1'"
+check_target "$STORE" "cd() { :; }; bash -c 'cd $STORE; bd close CHR-1'"
+check skip "bd() { :; }; export -f bd; bash -c 'bd -C /tmp/store close CHR-1'"
+check_target '/tmp/store' "bd() { :; }; export -f bd; export -nf bd; bash -c 'bd -C /tmp/store close CHR-1'"
+check_target '/tmp/store' "bd() { :; }; export -f bd; env -i bash -c 'bd -C /tmp/store close CHR-1'"
+check_target '/tmp/store' "bd() { :; }; export -f bd; bash -p -c 'bd -C /tmp/store close CHR-1'"
+check_target '/tmp/store' "bd() { :; }; export -f bd; dash -c 'bd -C /tmp/store close CHR-1'"
+check_target_unresolved '/tmp/store' "bd() { :; }; export -f bd; sh -c 'bd -C /tmp/store close CHR-1'"
 # A call's temporary prefix is in force, and exported, while the body runs,
-# and gives way to the value from before it afterwards, whatever the body did.
+# and gives way to the value from before it afterwards, whatever the body
+# assigned. An `unset` there takes the temporary value away, so what is
+# assigned after it outlives the call, and a seal may have done the same.
 check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd $CD/base/two; cs_f() { bd close CHR-1; }; BEADS_DIR=$STORE/.beads cs_f"
 check_target "$CD/base/two" "CS_OUT=$CD/base/two; cs_f() { CS_OUT=$STORE; }; CS_OUT=$STORE cs_f; bd -C \"\$CS_OUT\" close CHR-1"
+check_unresolved "CS_OUT=$CD/base/two; cs_f() { unset CS_OUT; CS_OUT=$STORE; }; CS_OUT=/tmp/store cs_f; command bd -C \"\$CS_OUT\" close CHR-1"
+check_unresolved "CS_OUT=$CD/base/two; cs_f() { . ./select-store.sh; }; CS_OUT=/tmp/store cs_f; command bd -C \"\$CS_OUT\" close CHR-1"
+check_target "$CD/base/two" "CS_OUT=$CD/base/two; cs_f() { (unset CS_OUT); CS_OUT=$STORE; }; CS_OUT=/tmp/store cs_f; command bd -C \"\$CS_OUT\" close CHR-1"
 # Only a command named first calls a function: `command` and every other
 # wrapper run the program.
 check_target "$STORE" "bd() { command bd -C $STORE close CHR-1; }; bd"
 check_target "$STORE" "bd() { env bd -C $STORE close CHR-1; }; bd"
+# A function's name may hold a `/`, and bash calls one so named rather than
+# running the program, even where the name ends in a builtin's.
+check_target "$STORE" "./cd() { bd -C . close CHR-1; }; cd $STORE; ./cd"
+check_unresolved "./cd() { builtin cd /tmp; }; ./cd $STORE; env -i bd close CHR-1"
 
 # --- comments -------------------------------------------------------------
 # A `#` that opens a word begins a comment, and what follows is not script.

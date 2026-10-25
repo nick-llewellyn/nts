@@ -1595,6 +1595,13 @@ class Scanner:
         # Whether the table has been put in doubt, so that a command named
         # first may be a function it does not list; see `seal_opaque`.
         self.functions_sealed = False
+        # The names of the functions `export -f` exported, or UNKNOWN; see
+        # `imported_functions`.
+        self.function_exports = set()
+        # The variables unset, and the number of seals, so far; see
+        # `call_function`.
+        self.unset_names = set()
+        self.seals = 0
         # The scripts being scanned right now, by their text. What makes text
         # that contains itself terminate: `s='eval "$s"'` names the same script
         # at every level, so the second sight of it is refused. Held by text
@@ -3242,9 +3249,15 @@ class Scanner:
         saved = self.scope
         functions = self.functions
         sealed = self.functions_sealed
+        exports = self.function_exports
+        unset_names = self.unset_names
+        seals = self.seals
         leader = self.leader
         self.scope = saved.child()
         self.functions = dict(functions)
+        if exports is not UNKNOWN:
+            self.function_exports = set(exports)
+        self.unset_names = set()
         if leader is EXEC_ONLY:
             self.leader = False
         try:
@@ -3253,6 +3266,9 @@ class Scanner:
             self.scope = saved
             self.functions = functions
             self.functions_sealed = sealed
+            self.function_exports = exports
+            self.unset_names = unset_names
+            self.seals = seals
             self.leader = leader
 
     def in_background(self, fn):
@@ -3324,7 +3340,7 @@ class Scanner:
     def sub_scan(self, stmts, cwd=None, known=None, seed=None, text=None,
                  sealed=False, conditional=False, frame="subshell",
                  process=False, physical=False, monitor=False, shell=None,
-                 pwd=None, startup=False):
+                 pwd=None, startup=False, functions=None):
         """Scans `stmts` as a subshell: its writes count, its state does not.
 
         `text` is the source those statements were parsed from, needed when they
@@ -3351,7 +3367,8 @@ class Scanner:
         the directory it starts in as its PWD names it and whether that
         spelling is known; see `shell_pwd`. `startup` says the shell may run
         a file before the text, which leaves its state as unknown as a
-        `source` does; see `startup_runs`.
+        `source` does; see `startup_runs`. `functions` is what a shell's
+        function table starts as; see `imported_functions`.
 
         `frame` is "tentative" for text that runs in this shell rather than a
         subshell, as `eval`'s does; see `tentative`. `conditional` is then what
@@ -3403,6 +3420,9 @@ class Scanner:
                 # environment: `bash -c 'bd${IFS}close${IFS}X'` runs `bd`.
                 self.scope.assigns["IFS"] = \
                     ZSH_DEFAULT_IFS if shell == "zsh" else DEFAULT_IFS
+            if functions is not None:
+                (self.functions, self.functions_sealed,
+                 self.function_exports) = functions
             if startup:
                 self.seal_sourced()
             outer = self.text
@@ -3573,7 +3593,8 @@ class Scanner:
         itself: an `unset` of a name it cannot read, an arithmetic assignment
         to one, a `source`d file. With `cwd`, the directory is in doubt too.
         A function the file defines is no longer one the scan can follow, so
-        the table is emptied and marked; see `dispatch`.
+        the table is emptied and marked; see `dispatch`. So is which of them
+        it exported.
         """
         # IFS is recorded rather than dropped, since `separators` reads a
         # missing one as the default: a startup or sourced file that sets
@@ -3583,8 +3604,52 @@ class Scanner:
         self.scope.sealed = OPAQUE
         self.functions = {}
         self.functions_sealed = True
+        self.function_exports = UNKNOWN
+        self.seals += 1
         if cwd:
             self.leave_cwd()
+
+    def export_function(self, name, state):
+        """Records `state`, True, False or UNKNOWN, as the export attribute
+        of the function `name`; see `imported_functions`.
+
+        bash exports only a function that is defined, so `export -f f`
+        before `f() { ...; }` exports nothing.
+        """
+        if self.function_exports is UNKNOWN:
+            return
+        if state is UNKNOWN:
+            self.function_exports = UNKNOWN
+        elif state:
+            if name in self.functions:
+                self.function_exports.add(name)
+        else:
+            self.function_exports.discard(name)
+
+    def imported_functions(self, shell, sealed, privileged):
+        """The function table a new `shell` process starts with, as `(table,
+        in doubt, exported)` for `sub_scan`.
+
+        A subshell is a copy of this shell, functions and all, but a new
+        process has only what its environment carries. bash defines from it
+        the functions `export -f` exported, unless privileged, and no other
+        shell defines any: `bd() { :; }; bash -c 'bd -C /ext close X'` runs
+        the program and writes /ext. A shell that may or may not define one
+        -- `sh`, which may be bash, a privileged mode this scan cannot read,
+        an environment a wrapper may have filtered -- leaves the table in
+        doubt, as does an export this scan could not read.
+        """
+        kind = bash_kind(shell)
+        if sealed == CLEARED or privileged is True or kind is False:
+            return {}, False, set()
+        if self.function_exports is UNKNOWN:
+            return {}, True, UNKNOWN
+        table = {name: self.functions[name] for name in self.function_exports
+                 if name in self.functions}
+        if table and (kind is UNKNOWN or privileged is UNKNOWN or
+                      sealed == OPAQUE):
+            return {}, True, UNKNOWN
+        return table, False, set(table)
 
     def seal_sourced(self):
         """Puts all of this shell's state in doubt, as a `source`d file does.
@@ -3597,21 +3662,6 @@ class Scanner:
         self.scope.physical = UNKNOWN
         self.scope.monitor = UNKNOWN
         self.scope.lastpipe = UNKNOWN
-
-    def intercepted(self, name):
-        """Whether a function stands in for the builtin `name`, named first.
-
-        One this text defined is called in its place. After a startup or
-        sourced file, one that file defined may be, so the state after it is
-        in doubt as the file's own is. See `dispatch`.
-        """
-        if name in self.functions:
-            self.call_function(name)
-            return True
-        if self.functions_sealed:
-            self.seal_sourced()
-            return True
-        return False
 
     def stmts(self, stmts, conditional):
         """Scans a list of statements in order.
@@ -3780,7 +3830,11 @@ class Scanner:
             self.arith_assigns(cmd.get("X"))
         elif kind == "LetClause":
             self.walk_words(cmd)
-            if not self.intercepted("let"):
+            # Named first, as one always is, it may be a function after a
+            # startup or sourced file; see `dispatch`.
+            if self.functions_sealed:
+                self.seal_sourced()
+            else:
                 for expr in cmd.get("Exprs") or ():
                     self.arith_assigns(expr)
 
@@ -3928,9 +3982,15 @@ class Scanner:
 
         `seed` is the call's temporary prefix, which is in force and exported
         while the body runs, and gives way to the values from before it once
-        the body returns, whatever the body did to those names: `OUT=/decoy;
-        f() { bd -C "$OUT" close X; }; OUT=/ext f` writes /ext, and OUT is
-        /decoy again after it. bash, POSIX-mode bash, dash and zsh agree.
+        the body returns, whatever the body assigned to those names:
+        `OUT=/decoy; f() { bd -C "$OUT" close X; }; OUT=/ext f` writes /ext,
+        and OUT is /decoy again after it. bash, POSIX-mode bash, dash and zsh
+        agree. An `unset` in the body takes the temporary value away instead,
+        so an assignment after it outlives the call: after `OUT=/old; f() {
+        unset OUT; OUT=/ext; }; OUT=/tmp f`, OUT is /ext in bash. A name the
+        body may have unset is unknown after the call rather than restored,
+        and so is every one after a seal in the body, which may have unset
+        any.
 
         Recursion is refused rather than bounded by depth, since a function that
         calls itself names no further store on the second pass. That is the whole
@@ -3950,10 +4010,18 @@ class Scanner:
             for each, value in seed.items():
                 self.scope.assigns[each] = value
                 self.scope.exported[each] = value is not UNSET
+            outer_unset, self.unset_names = self.unset_names, set()
+            seals = self.seals
             try:
                 self.stmt(body)
             finally:
+                unset = self.unset_names
+                self.unset_names = outer_unset | unset
                 for each, (value, exported) in before.items():
+                    if each in unset or self.seals != seals:
+                        self.scope.assigns[each] = UNKNOWN
+                        self.scope.exported[each] = UNKNOWN
+                        continue
                     for table, old in ((self.scope.assigns, value),
                                        (self.scope.exported, exported)):
                         if old is missing:
@@ -3990,17 +4058,21 @@ class Scanner:
         # before that is consulted.
         for arg in args:
             self.node_subs(arg)
-        # The parse makes a clause of one only where it is named first, so a
-        # function may stand in for it; see `dispatch`.
-        variant = (cmd.get("Variant") or {}).get("Value")
-        if self.intercepted(variant):
+        # The parse makes a clause of one only where it is named first, so
+        # after a startup or sourced file it may be a function; see
+        # `dispatch`.
+        if self.functions_sealed:
+            self.seal_sourced()
             return
         # What the builtin says about export. `export` and `declare -x` give
         # the attribute to every name they are handed, assigned or bare;
         # `export -n` and `declare +x` take it away; `local` makes a fresh
         # variable that has it only with `-x`. The flags come first, as words
-        # the parse marks naked with no name.
+        # the parse marks naked with no name. With `-f` the names are those
+        # of functions; see `export_function`.
+        variant = (cmd.get("Variant") or {}).get("Value")
         state = None
+        functions = False
         if variant == "export":
             state = True
         elif variant == "local":
@@ -4009,10 +4081,16 @@ class Scanner:
             if arg.get("Name") or not arg.get("Naked"):
                 continue
             flag = self.assigned_value(arg.get("Value"))
+            if flag is not UNKNOWN and flag.startswith("-") and \
+                    "f" in flag[1:]:
+                functions = True
             if flag is UNKNOWN:
-                # A flag this scan cannot read may be `-x` or `-n`, so what
-                # the builtin did to the attribute is unknown.
+                # A flag this scan cannot read may be `-x`, `-n` or `-f`, so
+                # what the builtin did to the attribute is unknown, and
+                # whether to a variable or a function.
                 state = UNKNOWN
+                if functions is False:
+                    functions = UNKNOWN
             elif flag == "--":
                 break
             elif variant == "export" and flag.startswith("-") and \
@@ -4026,6 +4104,14 @@ class Scanner:
                 state = False
         if conditional and state is not None:
             state = UNKNOWN
+        if functions is not False and state is not None:
+            for arg in args:
+                name = (arg.get("Name") or {}).get("Value")
+                if name:
+                    self.export_function(
+                        name, state if functions is True else UNKNOWN)
+        if functions is True:
+            return
         for arg in args:
             name = (arg.get("Name") or {}).get("Value")
             if not name:
@@ -4289,20 +4375,15 @@ class Scanner:
         if word is UNKNOWN:
             return
         name = word.rsplit("/", 1)[-1]
-        if name != word and name in SHELL_STATE_WORDS:
-            return
-
-        # A function runs in place of a builtin or a program of its name, in
-        # bash and zsh alike, so a call runs the body defined earlier in this
-        # text whatever it is named: after `cd() { builtin cd /ext; }`, `cd
-        # /known; env -i bd close X` writes /ext. It runs it here, where the
-        # cwd is known. Without this a relative store named inside a function
-        # was reported by nothing: the definition cannot resolve it and the
-        # call did not look. Only a command named first is one: `command` and
-        # every other wrapper run a builtin or a program, so `bd() { command
-        # bd -C /ext close X; }; bd` writes /ext.
-        if start == 0 and word in self.functions:
+        # A function's name may hold a `/`, and bash calls one so named, in
+        # POSIX mode too, rather than running the program the path names:
+        # after `./cd() { builtin cd /ext; }`, `./cd /known; bd close X`
+        # writes /ext. No builtin is named by a path, so one this text
+        # defined is called before the path is read as a program.
+        if start == 0 and name != word and word in self.functions:
             self.call_function(word, self.prefix_seed(cmd))
+            return
+        if name != word and name in SHELL_STATE_WORDS:
             return
 
         # After a startup or sourced file, a builtin read for what it does to
@@ -4374,6 +4455,16 @@ class Scanner:
 
         if name == "printf":
             self.printf_builtin(fields, start)
+            return
+
+        # A call runs the body defined earlier in this text, and runs it here,
+        # where the cwd is known. Without this a relative store named inside a
+        # function was reported by nothing: the definition cannot resolve it and
+        # the call did not look. Only a command named first is one: `command`
+        # and every other wrapper run a program, so `bd() { command bd -C /ext
+        # close X; }; bd` writes /ext.
+        if start == 0 and word in self.functions:
+            self.call_function(word, self.prefix_seed(cmd))
             return
 
         if name != "bd":
@@ -4864,12 +4955,14 @@ class Scanner:
         for name in names:
             if functions:
                 self.functions.pop(name, None)
+                self.export_function(name, False)
                 continue
             # bash refuses to unset its readonly SHELLOPTS, which still
             # carries its options to a child; see `carried_option`.
             refused = self.scope.bash if name == "SHELLOPTS" else False
             if refused is True:
                 continue
+            self.unset_names.add(name)
             if conditional or refused is UNKNOWN:
                 self.scope.assigns[name] = UNKNOWN
                 self.scope.exported[name] = UNKNOWN
@@ -5234,14 +5327,16 @@ class Scanner:
             monitor = UNKNOWN
         startup = self.startup_runs(cmd, args, start, words, privileged,
                                     interactive, inherited["posix"])
+        shell = args[start].value.rsplit("/", 1)[-1]
         leader = self.leader
         self.leader = self.leads(args, start)
         try:
             self.scan_script(script, seed=seed, sealed=sealed, process=True,
-                             physical=physical, monitor=monitor,
-                             shell=args[start].value.rsplit("/", 1)[-1],
+                             physical=physical, monitor=monitor, shell=shell,
                              pwd=self.shell_pwd(cmd, args, start),
-                             startup=startup)
+                             startup=startup,
+                             functions=self.imported_functions(
+                                 shell, sealed, privileged))
         finally:
             self.leader = leader
 
@@ -5623,7 +5718,7 @@ class Scanner:
     def scan_script(self, script, seed=None, sealed=False, cwd=None,
                     known=None, conditional=False, frame="subshell",
                     process=False, physical=False, monitor=False, shell=None,
-                    pwd=None, startup=False):
+                    pwd=None, startup=False, functions=None):
         """Scans `script` as shell text, in a scope of its own.
 
         The text is parsed afresh, so its offsets index it and not the command
@@ -5648,7 +5743,7 @@ class Scanner:
                           conditional=conditional, frame=frame,
                           process=process, physical=physical,
                           monitor=monitor, shell=shell, pwd=pwd,
-                          startup=startup)
+                          startup=startup, functions=functions)
         finally:
             self.scripts.discard(script)
 
