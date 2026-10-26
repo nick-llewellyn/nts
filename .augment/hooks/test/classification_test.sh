@@ -2093,28 +2093,42 @@ check_unresolved 'cs_f; cs_f() { bd -C store close CHR-1; }'
 check_unresolved "cs_f() { cd $CD/other; }; bash -l -c true; cs_f; bd -C store close CHR-1"
 check_unresolved "cs_f() { cd $CD/other; }; (unset -f cs_f); cs_f; bd -C store close CHR-1"
 check_target "$BASE/store" "(cs_f() { cd $CD/other; }); cs_f; bd -C store close CHR-1"
-# A subshell starts with this shell's functions, but a new bash process only
-# with those `export -f` exported, unless its environment is cleared or it
-# is privileged, and no other shell with any. `sh` may be bash.
+# A subshell starts with this shell's functions. A new bash process starts
+# with those exported to it, which are not read: after any definition it may
+# have any of them, so a command it names first may be one, and the state
+# after that command is in doubt. `builtin` and `command` pass any function
+# by. A cleared environment or a privileged bash has none, and no other shell
+# has any. `sh` may be bash.
 check skip 'bd() { :; }; (bd -C /tmp/store close CHR-1)'
-check_target '/tmp/store' "bd() { :; }; bash -c 'bd -C /tmp/store close CHR-1'"
-check_target "$STORE" "cd() { :; }; bash -c 'cd $STORE; bd close CHR-1'"
-check skip "bd() { :; }; export -f bd; bash -c 'bd -C /tmp/store close CHR-1'"
-check_target '/tmp/store' "bd() { :; }; export -f bd; export -nf bd; bash -c 'bd -C /tmp/store close CHR-1'"
-check_target '/tmp/store' "bd() { :; }; export -f bd; env -i bash -c 'bd -C /tmp/store close CHR-1'"
-check_target '/tmp/store' "bd() { :; }; export -f bd; bash -p -c 'bd -C /tmp/store close CHR-1'"
-check_target '/tmp/store' "bd() { :; }; export -f bd; dash -c 'bd -C /tmp/store close CHR-1'"
+check_target_unresolved '/tmp/store' "bd() { :; }; bash -c 'bd -C /tmp/store close CHR-1'"
+check_target_unresolved '/tmp/store' "bd() { :; }; export -f bd; bash -c 'bd -C /tmp/store close CHR-1'"
+check_target_unresolved '/tmp/store' "set -a; bd() { :; }; set +a; bash -c 'bd -C /tmp/store close CHR-1'"
+check_unresolved "cd() { :; }; bash -c 'cd $STORE; bd close CHR-1'"
+check_unresolved "cd $STORE/nested; cs_go() { builtin cd $CD/other; }; bash -c 'cs_go; command bd close CHR-1'"
+check_target "$STORE" "cs_go() { :; }; bash -c 'builtin cd $STORE; command bd close CHR-1'"
+check_target "$STORE" "bash -c 'cd $STORE; command bd close CHR-1'"
+check_target "$STORE" "cs_go() { :; }; export -f cs_go; env -i bash -c 'cd $STORE; command bd close CHR-1'"
+check_target "$STORE" "cs_go() { :; }; export -f cs_go; bash -p -c 'cd $STORE; command bd close CHR-1'"
+check_target "$STORE" "cs_go() { :; }; export -f cs_go; dash -c 'cd $STORE; command bd close CHR-1'"
 check_target_unresolved '/tmp/store' "bd() { :; }; export -f bd; sh -c 'bd -C /tmp/store close CHR-1'"
-# One defined under `set -a` is exported, and stays so after `set +a`.
-check skip "set -a; bd() { :; }; set +a; bash -c 'bd -C /tmp/store close CHR-1'"
-check_unresolved "set -a; cs_go() { builtin cd $STORE; }; set +a; bash -c 'cs_go; command bd close CHR-1'"
-# A function travels as an environment entry, which a wrapper may remove,
-# or set to a definition the scan cannot read.
-check_target '/tmp/store' "bd() { :; }; export -f bd; env -u 'BASH_FUNC_bd%%' bash -c 'bd -C /tmp/store close CHR-1'"
-check skip "bd() { :; }; export -f bd; env -u 'BASH_FUNC_x%%' bash -c 'bd -C /tmp/store close CHR-1'"
+# Whichever names `export -f` was given, quoted or expanded, and whichever
+# entries a wrapper removed or cleared, `env -S` included.
+check_target_unresolved '/tmp/store' "bd() { :; }; export -f 'bd'; bash -c 'bd -C /tmp/store close CHR-1'"
+check_target_unresolved '/tmp/store' "CS_FN=bd; bd() { :; }; export -f \"\$CS_FN\"; bash -c 'bd -C /tmp/store close CHR-1'"
+check_unresolved "cd $STORE/nested; cs_go() { builtin cd $CD/other; }; export -f 'cs_go'; bash -c 'cs_go; command bd close CHR-1'"
+check_target_unresolved '/tmp/store' "bd() { :; }; export -f bd; env -u 'BASH_FUNC_bd%%' bash -c 'bd -C /tmp/store close CHR-1'"
+check_target_unresolved '/tmp/store' "bd() { :; }; export -f bd; env -u 'BASH_FUNC_bd%%' -S 'bash -c \"bd -C /tmp/store close CHR-1\"'"
+check_target_unresolved '/tmp/store' "bd() { :; }; export -f bd; env -i -S 'bash -c \"bd -C /tmp/store close CHR-1\"'"
+# An entry the command line sets is a definition the scan cannot read, in a
+# cleared environment too.
 check_target_unresolved '/tmp/store' "env -i 'BASH_FUNC_bd%%=() { :; }' bash -c 'bd -C /tmp/store close CHR-1'"
+# `export -f` names functions, and exports no variable of the name.
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd $STORE; BEADS_DIR=/tmp/store/.beads; export -f BEADS_DIR; bd close CHR-1"
+# After a startup or sourced file, the same holds for a command named first
+# in this shell.
+check_unresolved ". ./select-store.sh; CS_OUT=$STORE; ls; command bd -C \"\$CS_OUT\" close CHR-1"
+check_target "$STORE" ". ./select-store.sh; CS_OUT=$STORE; command ls; command bd -C \"\$CS_OUT\" close CHR-1"
 # A body is read against the text it was defined in, wherever it is called.
-check_unresolved "cs_f() { ((CS_OUT=1)); }; export -f cs_f; export CS_OUT=/tmp/store; bash -c 'cs_f; bd -C \"\$CS_OUT\" close CHR-1'"
 check_unresolved "cs_f() { ((CS_OUT=1)); }; CS_OUT=/tmp/store; eval 'cs_f; bd -C \"\$CS_OUT\" close CHR-1'"
 check_unresolved "eval 'cs_f() { ((CS_OUT=1)); }'; CS_OUT=/tmp/store; cs_f; bd -C \"\$CS_OUT\" close CHR-1"
 # A call's temporary prefix is in force, and exported, while the body runs,
