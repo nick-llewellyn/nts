@@ -115,12 +115,13 @@ teardown() {
 # `$FIRE_CWD` sets the directory the tool call was launched from, which is
 # what a relative `-C` target resolves against. Empty by default, since the
 # field is optional on the real event. `$CONV` sets the `conversation_id`,
-# which is left out when empty.
+# which is left out when empty. `$FIRE_WAIT`, `true` or `false`, sets the
+# launch's `wait`, which is left out when empty.
 event_as() {
   local e="$1" c="$2"; shift 2
   jq -n --arg e "$e" --arg w "$WS" --arg c "$c" \
-    --arg d "${FIRE_CWD:-}" --arg v "${CONV:-}" --args \
-    '{hook_event_name:$e, workspace_roots:([$w] + $ARGS.positional), tool_name:"launch-process", tool_input:({command:$c} + (if $d == "" then {} else {cwd:$d} end))} + (if $v == "" then {} else {conversation_id:$v} end)' \
+    --arg d "${FIRE_CWD:-}" --arg v "${CONV:-}" --arg t "${FIRE_WAIT:-}" --args \
+    '{hook_event_name:$e, workspace_roots:([$w] + $ARGS.positional), tool_name:"launch-process", tool_input:({command:$c} + (if $d == "" then {} else {cwd:$d} end) + (if $t == "" then {} else {wait:($t == "true")} end))} + (if $v == "" then {} else {conversation_id:$v} end)' \
     "$@"
 }
 
@@ -878,6 +879,28 @@ CONV=conv-a fire "setsid -w bash -c 'bd -C $OUT close CHR-1'"
 rm -rf "$OUT"
 teardown
 
+# --- a launch not waited for keeps its stores for SessionEnd -----------
+# `launch-process` with `wait: false` returns as its command starts, so a
+# write in it can land after the sync with no `&` in the text: `sleep 5; bd
+# -C /ext close X`. A store not there yet is kept as a directory to walk up
+# from, and a launch waited for is settled as any other.
+setup
+OUT=$(mktemp -d)
+mkdir -p "$OUT/.beads"
+PARENT=$(mktemp -d)
+NEW="$PARENT/store"
+WAITED=$(mktemp -d)
+mkdir -p "$WAITED/.beads"
+ASYNC="$WS/.beads/.augment-sync.async"
+CONV=conv-a FIRE_WAIT=false fire "sleep 5; bd -C $OUT close CHR-1; mkdir -p $NEW/.beads; bd -C $NEW close CHR-2"
+registered "$OUT" "$ASYNC" && registered "+$NEW" "$ASYNC" && report ok ||
+  report bad "a launch not waited for must keep its stores for SessionEnd (async: $(reg_dump "$ASYNC"))"
+CONV=conv-a FIRE_WAIT=true fire "sleep 5; bd -C $WAITED close CHR-1"
+! registered "$WAITED" "$ASYNC" && report ok ||
+  report bad "a launch waited for must not keep its store as written in the background (async: $(reg_dump "$ASYNC"))"
+rm -rf "$OUT" "$PARENT" "$WAITED"
+teardown
+
 # --- a background record outlives a hand-off that failed ---------------
 # Once the record is gone the registry entry is the only thing naming the
 # store, so a SessionEnd that could not write one must keep the record. An
@@ -915,6 +938,40 @@ grep -q "push $OUT" "$BD_LOG.dirs" && report ok ||
   report bad "a background record that cannot be written must not stop the sync (dirs: $(tr '\n' ',' <"$BD_LOG.dirs" 2>/dev/null))"
 grep -q "as written in the background" <<<"$OUTPUT" && report ok ||
   report bad "a background record that cannot be written must be warned about (output: $OUTPUT)"
+kill "$HOLDER" 2>/dev/null
+wait "$HOLDER" 2>/dev/null
+rm -rf "$OUT"
+teardown
+
+# --- many background records behind a busy guard stay inside the timeout -
+# Each store waits for the guard in turn, so 13 of them behind a live holder
+# waited 65 seconds, past the hook's 60-second kill, before any was synced.
+# The waits share one budget, and every store is still synced and warned of.
+setup
+OUT=$(mktemp -d)
+CMD="("
+for i in $(seq 1 13); do
+  mkdir -p "$OUT/s$i/.beads"
+  CMD+="bd -C $OUT/s$i close CHR-1; "
+done
+CMD+=") &"
+sleep 300 &
+HOLDER=$!
+hold_lock "$WS/.beads/.augment-sync.async.guard" "$HOLDER"
+STARTED=$SECONDS
+OUTPUT=$(event "$CMD" | "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null)
+ELAPSED=$((SECONDS - STARTED))
+[ "$ELAPSED" -le 20 ] && report ok ||
+  report bad "13 background records behind a busy guard must finish well inside the timeout (took ${ELAPSED}s)"
+MISSED=0
+for i in $(seq 1 13); do
+  grep -qxF "push $OUT/s$i" "$BD_LOG.dirs" 2>/dev/null || MISSED=$((MISSED + 1))
+done
+[ "$MISSED" -eq 0 ] && report ok ||
+  report bad "every store behind a busy guard must still be synced ($MISSED of 13 missed)"
+WARNED=$(grep -o "as written in the background" <<<"$OUTPUT" | wc -l | tr -d ' ')
+[ "$WARNED" -eq 13 ] && report ok ||
+  report bad "every store behind a busy guard must be warned about ($WARNED of 13)"
 kill "$HOLDER" 2>/dev/null
 wait "$HOLDER" 2>/dev/null
 rm -rf "$OUT"

@@ -28,7 +28,8 @@ SCAN_FAILED=0
 # from command $1, which was launched from directory $2. An empty $2 says that
 # directory is unknown, which leaves a relative `-C` target unresolved rather
 # than resolving it against this process's own cwd -- a directory nothing
-# requires to be the tool call's.
+# requires to be the tool call's. $3 `unwaited` says the launch returned as
+# the command started, so every target it writes is one SCAN_ASYNC holds.
 #
 # SCAN_ASYNC is the targets written by a command the shell does not wait for,
 # which the scanner marks with a leading `&`. Each is in SCAN_TARGETS too, as
@@ -49,7 +50,7 @@ SCAN_FAILED=0
 # attempted, silently. SCAN_FAILED distinguishes the two, so the caller can say
 # so instead of standing down.
 scan_command() {
-  local command="$1" launch_cwd="$2" field seen=0 out status
+  local command="$1" launch_cwd="$2" mode="${3:-}" field seen=0 out status
   SCAN_MUTATES=0
   SCAN_UNRESOLVED=0
   SCAN_TARGETS=()
@@ -59,7 +60,8 @@ scan_command() {
     SCAN_FAILED=1
     return 0
   }
-  printf '%s' "$command" | python3 "$_SC_PY" "$launch_cwd" >"$out" 2>/dev/null
+  printf '%s' "$command" |
+    python3 "$_SC_PY" "$launch_cwd" ${mode:+"$mode"} >"$out" 2>/dev/null
   status=$?
   # The two counts come first and always; everything past them is a target.
   while IFS= read -r -d '' field; do
