@@ -1075,10 +1075,14 @@ if [ "$EVENT_NAME" = "PostToolUse" ]; then
   # the walk up has no place to start, so the store it would have found cannot
   # be named -- and script the scan could not read at all, as `eval "$X"` or
   # `bash -c "$(gen)"` runs, which may carry a `-C` nothing later can find.
+  # It covers, too, a `bd` argument known only at run time that stands before
+  # `--`, which may be an option such as `--db=<path>`: `bd defer "$ID"`, with
+  # ID taken from an earlier `bd create`, is the common case. That one has a
+  # fix the caller can make, `bd defer -- "$ID"`, so the warning names it.
   # Saying `-C` of all of these pointed recovery at a flag the command need not
   # have carried.
   if [ "$SCAN_UNRESOLVED" -gt 0 ]; then
-    WARNINGS+=("beads: a bead store that was written could not be resolved to a path, so it was not synced or recorded; run ${SYNC_BY_HAND} there if the write matters. This happens when a 'bd -C <dir>', 'bd --db <path>', BEADS_DIR or BEADS_DB value depends on something only the running command knew, when a plain 'bd' ran in a directory the event did not report, or when the command ran script the hook could not read (eval \"\$X\", bash -c \"\$(...)\").")
+    WARNINGS+=("beads: a bead store that was written could not be resolved to a path, so it was not synced or recorded; run ${SYNC_BY_HAND} there if the write matters. This happens when a 'bd -C <dir>', 'bd --db <path>', BEADS_DIR or BEADS_DB value depends on something only the running command knew, when a 'bd' argument known only at run time stands before '--' and so may be an option (write bd close -- \"\$ID\" rather than bd close \"\$ID\"), when a plain 'bd' ran in a directory the event did not report, or when the command ran script the hook could not read (eval \"\$X\", bash -c \"\$(...)\").")
   fi
 
   # `bd -C <dir>` can write a store outside every workspace root, which no

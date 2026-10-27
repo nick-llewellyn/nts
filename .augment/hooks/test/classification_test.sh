@@ -2559,6 +2559,23 @@ check sync 'bd ready --label foo "$(printf x)"'
 # unknown past it, the write still counting.
 check_target '/tmp/store' 'bd -C /tmp/store "close$(printf x)" CHR-1'
 check_unresolved 'bd -C /tmp/store "$(printf close)" CHR-1'
+# An issue ID known only at run time is the common case, as one taken from an
+# earlier `bd create`. Past `--` it is an operand however it is spelled, so the
+# store is named and nothing is counted: the fix the warning gives. Options go
+# before the `--`, where they are still read as options.
+check_unresolved "cd $STORE && bd close \"\$CS_SOMETHING_UNSET\""
+check_target_unresolved "$STORE" "cd $STORE && ID=\$(bd create x --json | jq -r .id); bd defer \"\$ID\""
+for resolved in "cd $STORE && bd close -- \"\$CS_SOMETHING_UNSET\"" \
+  "cd $STORE && ID=\$(bd create x --json | jq -r .id); bd defer -- \"\$ID\"" \
+  "cd $STORE && bd update --notes x -- \"\$CS_SOMETHING_UNSET\""; do
+  scan_command "$resolved" "$BASE"
+  got="${SCAN_TARGETS[*]:+${SCAN_TARGETS[*]}}"
+  [ "$got" = "$STORE" ] && [ "$SCAN_UNRESOLVED" -eq 0 ] && PASS=$((PASS + 1)) || {
+    FAIL=$((FAIL + 1))
+    printf 'FAIL want=[%s] unresolved=0 got=[%s] unresolved=%s %s\n' \
+      "$STORE" "$got" "$SCAN_UNRESOLVED" "$resolved"
+  }
+done
 
 # --- a wrapper's environment reaches the command --------------------------
 # `env VAR=value` is the syntactic prefix's twin: it reaches the child, and the

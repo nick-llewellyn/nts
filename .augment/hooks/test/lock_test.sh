@@ -2297,6 +2297,23 @@ grep -q "BEADS_DIR" <<<"$OUTPUT" && report ok ||
   report bad "the warning must name BEADS_DIR as a route to the store"
 teardown
 
+# And a `bd` argument known only at run time before `--`, which may be an
+# option such as `--db`: the fourth route, and the one with a fix the caller
+# can make. The warning gives it, and the command written that way does not
+# warn.
+setup
+OUTPUT=$(FIRE_CWD="$WS" event 'bd close "$SOMETHING_ONLY_THE_COMMAND_KNEW"' |
+  "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null)
+grep -q "could not be resolved" <<<"$OUTPUT" && report ok ||
+  report bad "a runtime-only argument before -- must warn (out: $OUTPUT)"
+grep -qF -- "bd close -- " <<<"$OUTPUT" && report ok ||
+  report bad "the warning must suggest putting the argument after -- (out: $OUTPUT)"
+OUTPUT=$(FIRE_CWD="$WS" event 'bd close -- "$SOMETHING_ONLY_THE_COMMAND_KNEW"' |
+  "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null)
+! grep -q "could not be resolved" <<<"$OUTPUT" && report ok ||
+  report bad "a runtime-only argument after -- must not warn (out: $OUTPUT)"
+teardown
+
 # A cwd the event does supply is used, so the above has not simply stopped
 # relative targets from resolving at all.
 setup
