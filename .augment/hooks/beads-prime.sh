@@ -7,7 +7,15 @@
 
 set -uo pipefail
 
-command -v bd >/dev/null 2>&1 || exit 0
+BD=$(command -v bd 2>/dev/null) || exit 0
+
+# A relative PATH entry gives a relative path (`bin/bd`, `./bd`), which the
+# `cd` below would point elsewhere, so it is anchored here. A bare name, such
+# as an exported function, is left to resolve as before.
+case "$BD" in
+  /*) ;;
+  */*) BD="$PWD/$BD" ;;
+esac
 
 WORKSPACE="${AUGMENT_PROJECT_DIR:-$PWD}"
 [ -d "$WORKSPACE/.beads" ] || exit 0
@@ -21,7 +29,7 @@ WORKSPACE="${AUGMENT_PROJECT_DIR:-$PWD}"
 # Discarding the output would start the session with no Beads context and no
 # hint that durable task tracking is unavailable. Report the failure as context
 # instead, while still exiting 0 so startup is never blocked.
-if PRIME_OUT=$(CDPATH='' cd -- "$WORKSPACE" 2>&1 && bd prime 2>&1); then
+if PRIME_OUT=$(CDPATH='' cd -- "$WORKSPACE" 2>&1 && "$BD" prime 2>&1); then
   printf '%s\n' "$PRIME_OUT"
 else
   printf '%s\n' \

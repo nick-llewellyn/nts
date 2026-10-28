@@ -100,6 +100,33 @@ OUT=$(cd "$WS/real" && CDPATH="$WS/decoy" "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null
   report bad "cd must print nothing into the context (got: $OUT)"
 teardown
 
+# --- bd is found before the move ---------------------------------------
+# A relative PATH entry names another directory once the hook has moved to
+# the workspace, so `bd` must be looked up first. PATH leaves out the real
+# `bd`, which a lookup after the move would otherwise fall through to.
+setup
+PROJ=$(mktemp -d)
+mkdir -p "$PROJ/.beads"
+export AUGMENT_PROJECT_DIR="$PROJ"
+OUT=$(cd "$WS" && PATH="bin:/usr/bin:/bin" "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null)
+[ "$OUT" = PRIMED-CONTEXT ] && report ok ||
+  report bad "bd found through a relative PATH entry must run (got: $OUT)"
+[ "$(cat "$BD_CWD")" = "$(cd "$PROJ" && pwd)" ] && report ok ||
+  report bad "bd must still run from the project dir (got: $(cat "$BD_CWD"))"
+rm -rf "$PROJ"
+teardown
+
+# A `bd` exported as a shell function has no path; it is still called.
+setup
+export AUGMENT_PROJECT_DIR="$WS"
+rm -f "$WS/bin/bd"
+OUT=$(bd() { echo FUNCTION-CONTEXT; }
+  export -f bd
+  PATH="$WS/bin:/usr/bin:/bin" "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null)
+[ "$OUT" = FUNCTION-CONTEXT ] && report ok ||
+  report bad "a bd exported as a function must be called (got: $OUT)"
+teardown
+
 # --- a failing prime is reported, not swallowed ------------------------
 # Discarding it would start the session with no context and no hint that
 # durable task tracking is unavailable.
