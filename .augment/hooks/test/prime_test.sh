@@ -32,13 +32,13 @@ report() {
 }
 
 # Scratch workspace with a stub `bd` that echoes a recognisable context
-# block, records the directory it was aimed at, and can be made to fail.
+# block, records the directory it ran in, and can be made to fail.
 setup() {
   WS=$(mktemp -d)
   mkdir -p "$WS/.beads" "$WS/bin"
   cat >"$WS/bin/bd" <<'STUB'
 #!/usr/bin/env bash
-[ "${1:-}" = -C ] && printf '%s\n' "${2:-}" >"${BD_TARGET:?}"
+pwd >"${BD_CWD:?}"
 if [ -n "${BD_PRIME_FAIL:-}" ]; then
   echo "prime refused: store locked"
   exit 1
@@ -47,15 +47,15 @@ echo "PRIMED-CONTEXT"
 exit 0
 STUB
   chmod +x "$WS/bin/bd"
-  export BD_TARGET="$WS/target"
-  : >"$BD_TARGET"
+  export BD_CWD="$WS/cwd"
+  : >"$BD_CWD"
   PATH="$WS/bin:$ORIG_PATH"
 }
 
 teardown() {
   rm -rf "$WS"
   PATH="$ORIG_PATH"
-  unset BD_PRIME_FAIL BD_TARGET AUGMENT_PROJECT_DIR
+  unset BD_PRIME_FAIL BD_CWD AUGMENT_PROJECT_DIR
 }
 
 # Runs the hook and captures stdout; RC is its exit status.
@@ -73,14 +73,31 @@ grep -q PRIMED-CONTEXT <<<"$OUT" && report ok ||
 [ "$RC" -eq 0 ] && report ok || report bad "hook must exit 0 on success (rc=$RC)"
 teardown
 
-# --- the workspace is addressed explicitly -----------------------------
-# `bd` inherits the agent's cwd, not the project's, so the hook must pass
-# `-C`. Running from elsewhere would otherwise prime the wrong store.
+# --- bd runs from the workspace ----------------------------------------
+# `bd` inherits the agent's cwd, not the project's, so the hook must move to
+# the project first. Aiming it with `-C` is not enough: `bd -C <dir> prime`
+# reads `.beads/PRIME.md` from the cwd's store when the cwd has one, so the
+# case runs the hook from a directory holding another store.
 setup
 export AUGMENT_PROJECT_DIR="$WS"
-(cd / && "$BASH_UNDER_TEST" "$HOOK" >/dev/null 2>&1)
-[ "$(cat "$BD_TARGET")" = "$WS" ] && report ok ||
-  report bad "bd must be aimed at the project dir (got: $(cat "$BD_TARGET"))"
+OTHER=$(mktemp -d)
+mkdir -p "$OTHER/.beads"
+(cd "$OTHER" && "$BASH_UNDER_TEST" "$HOOK" >/dev/null 2>&1)
+[ "$(cat "$BD_CWD")" = "$(cd "$WS" && pwd)" ] && report ok ||
+  report bad "bd must run from the project dir (got: $(cat "$BD_CWD"))"
+rm -rf "$OTHER"
+teardown
+
+# A CDPATH entry holding a directory of the same name must not redirect the
+# `cd`, nor have it print that directory into the context.
+setup
+mkdir -p "$WS/decoy/rel/.beads" "$WS/real/rel/.beads"
+export AUGMENT_PROJECT_DIR=rel
+OUT=$(cd "$WS/real" && CDPATH="$WS/decoy" "$BASH_UNDER_TEST" "$HOOK" 2>/dev/null)
+[ "$(cat "$BD_CWD")" = "$(cd "$WS/real/rel" && pwd)" ] && report ok ||
+  report bad "CDPATH must not redirect the workspace (got: $(cat "$BD_CWD"))"
+[ "$OUT" = PRIMED-CONTEXT ] && report ok ||
+  report bad "cd must print nothing into the context (got: $OUT)"
 teardown
 
 # --- a failing prime is reported, not swallowed ------------------------
