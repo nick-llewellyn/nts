@@ -6,7 +6,7 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
-## 10.0.2
+## 10.1.0
 
 ### Security
 
@@ -41,6 +41,32 @@ tarball.
   0.10.4, which has no fixed 0.10.x release. It reaches the build only
   through the `flutter_rust_bridge_macros` procedural macro, so it runs
   inside the compiler and is not part of the native library.
+
+### Changed
+
+- NTS-KE no longer accepts certificate chains that end at `emSign ECC
+  Root CA - G3` or pass through the distrusted emSign intermediates,
+  which 10.0.1 accepted. This is the security fix above, and it ships
+  in a minor rather than a major release so that apps on a `^10`
+  constraint receive it. The handshakes that now fail certificate
+  verification:
+  - Under `TrustMode.bundledOnly`, a server whose chain ends at that
+    root. The same applies to `TrustMode.platformWithFallback`
+    whenever it uses the bundled roots: after a TLS configuration
+    build failure on any platform, and in the per-chain fallback on
+    Android.
+  - Under any mode that verifies with `rustls-webpki`, a chain through
+    the distrusted intermediates, whatever the trust anchors. That
+    covers `TrustMode.custom`, and both platform modes on Linux, where
+    the platform verifier checks the chain with `rustls-webpki`
+    against the system store. Platform verification on Apple
+    platforms, Windows and Android is done by the OS and is unchanged.
+
+  Only servers with certificates from emSign are affected. On
+  2026-10-29, 55 of the 82 servers in the example app's server list
+  (`example/assets/nts-sources.yml`) completed a TLS handshake, and
+  none had emSign in its chain.
+  ([#403](https://github.com/nick-llewellyn/nts/pull/403))
 
 ## 10.0.1
 
