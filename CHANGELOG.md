@@ -6,6 +6,42 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 10.0.2
+
+### Security
+
+- Five Rust dependencies move to patched releases, clearing five
+  RustSec advisories. The native library is built from the
+  `rust/Cargo.lock` this package ships, so an app on 10.0.1 keeps the
+  affected versions until it upgrades. Only the lockfiles change;
+  `rust/Cargo.toml` is untouched.
+  ([#402](https://github.com/nick-llewellyn/nts/pull/402))
+  - RUSTSEC-2026-0385: `ctutils` 0.4.2 → 0.4.6. Before 0.4.4 its mask
+    generation could compile to a branch on common platforms, and its
+    `u128` comparisons branched on 32-bit targets, so operations meant
+    to run in constant time did not. `aes-siv` and `aes-gcm-siv`, which
+    encrypt and authenticate NTS packets, build on it.
+  - RUSTSEC-2026-0381 (CVE-2026-111943), RUSTSEC-2026-0382 and
+    RUSTSEC-2026-0383: `webpki-roots` and `webpki-root-certs` 1.0.9 →
+    1.0.11, `rustls-webpki` 0.103.15 → 0.103.16. The bundled roots
+    included `emSign ECC Root CA - G3`, and certificate verification
+    could accept chains through emSign intermediates whose private
+    keys are now public. NTS-KE trusts the bundled `webpki-roots` set
+    under `TrustMode.bundledOnly` and whenever the default
+    `TrustMode.platformWithFallback` falls back to it. The new
+    releases drop the root, and `rustls-webpki` rejects chains through
+    those intermediates whatever the trust anchors.
+  - RUSTSEC-2026-0386: `tokio` 1.53.1 → 1.54.1. Its `AsyncFd`
+    constructors accepted any raw file descriptor, violating I/O
+    safety. This package cannot reach them: `tokio` arrives through
+    `flutter_rust_bridge` without the `net` feature, so `AsyncFd` is
+    not compiled.
+
+  One advisory remains: GHSA-qwgh-2vcv-g2f7 against `block-buffer`
+  0.10.4, which has no fixed 0.10.x release. It reaches the build only
+  through the `flutter_rust_bridge_macros` procedural macro, so it runs
+  inside the compiler and is not part of the native library.
+
 ## 10.0.1
 
 ### Security
