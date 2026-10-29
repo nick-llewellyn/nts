@@ -13,8 +13,9 @@ tarball.
 - Five Rust dependencies move to patched releases, clearing five
   RustSec advisories. The native library is built from the
   `rust/Cargo.lock` this package ships, so an app on 10.0.1 keeps the
-  affected versions until it upgrades. Only the lockfiles change;
-  `rust/Cargo.toml` is untouched.
+  affected versions until it upgrades. The fix is lockfile-only: the
+  version constraints in `rust/Cargo.toml` already admitted every
+  patched release.
   ([#402](https://github.com/nick-llewellyn/nts/pull/402))
   - RUSTSEC-2026-0385: `ctutils` 0.4.2 → 0.4.6. Before 0.4.4 its mask
     generation could compile to a branch on common platforms, and its
@@ -29,8 +30,11 @@ tarball.
     keys are now public. NTS-KE trusts the bundled `webpki-roots` set
     under `TrustMode.bundledOnly` and whenever the default
     `TrustMode.platformWithFallback` falls back to it. The new
-    releases drop the root, and `rustls-webpki` rejects chains through
-    those intermediates whatever the trust anchors.
+    releases drop that root, and `rustls-webpki` rejects chains
+    through those intermediates whatever the trust anchors.
+    `webpki-roots` 1.0.11 also drops `emSign Root CA - C1` and
+    `emSign ECC Root CA - C3`, two further eMudhra roots removed from
+    the Mozilla-derived root list it tracks.
   - RUSTSEC-2026-0386: `tokio` 1.53.1 → 1.54.1. Its `AsyncFd`
     constructors accepted any raw file descriptor, violating I/O
     safety. This package cannot reach them: `tokio` arrives through
@@ -44,23 +48,30 @@ tarball.
 
 ### Changed
 
-- NTS-KE no longer accepts certificate chains that end at `emSign ECC
-  Root CA - G3` or pass through the distrusted emSign intermediates,
-  which 10.0.1 accepted. This is the security fix above, and it ships
-  in a minor rather than a major release so that apps on a `^10`
+- On the verification paths that use the bundled roots or
+  `rustls-webpki`, NTS-KE no longer accepts some certificate chains
+  that 10.0.1 accepted: chains ending at one of the three removed
+  emSign roots, and chains through the distrusted emSign
+  intermediates. This is the security fix above, and it ships in a
+  minor rather than a major release so that apps on a `^10`
   constraint receive it. The handshakes that now fail certificate
   verification:
-  - Under `TrustMode.bundledOnly`, a server whose chain ends at that
-    root. The same applies to `TrustMode.platformWithFallback`
-    whenever it uses the bundled roots: after a TLS configuration
-    build failure on any platform, and in the per-chain fallback on
-    Android.
+  - Under `TrustMode.bundledOnly`, a server whose chain ends at
+    `emSign ECC Root CA - G3`, `emSign Root CA - C1` or
+    `emSign ECC Root CA - C3`. The same applies to
+    `TrustMode.platformWithFallback` whenever it uses the bundled
+    roots: after a TLS configuration build failure on any platform,
+    and in the per-chain fallback on Android.
   - Under any mode that verifies with `rustls-webpki`, a chain through
     the distrusted intermediates, whatever the trust anchors. That
-    covers `TrustMode.custom`, and both platform modes on Linux, where
-    the platform verifier checks the chain with `rustls-webpki`
-    against the system store. Platform verification on Apple
-    platforms, Windows and Android is done by the OS and is unchanged.
+    covers the bundled-root paths above, `TrustMode.custom`, and both
+    platform modes on Linux, where the platform verifier checks the
+    chain with `rustls-webpki` against the system store.
+
+  Platform verification on Apple platforms, Windows and Android is
+  done by the OS, so this release does not change what it accepts:
+  those paths keep accepting such chains for as long as the OS trusts
+  them.
 
   Only servers with certificates from emSign are affected. On
   2026-10-29, 55 of the 82 servers in the example app's server list
