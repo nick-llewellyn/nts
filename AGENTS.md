@@ -989,12 +989,12 @@ consumes:
        maintainer-bypass path that otherwise would let a single
        `git push` skip every required check (re-apply with
        `gh api -X POST /repos/<owner>/<repo>/branches/main/protection/enforce_admins`).
-     - `required_status_checks` refuses the PR merge until the eight
+     - `required_status_checks` refuses the PR merge until the nine
        listed contexts (`Detect changed paths`, `Dart tests gate`,
        `Verify FRB bindings are in sync`, `Rust build + tests +
        coverage`, `Hooks shell-syntax check`, `Hooks behaviour
-       check`, `Android KGP gate matrix`, `Auggie hook tests gate`)
-       report success.
+       check`, `Android KGP gate matrix`, `Auggie hook tests gate`,
+       `Dependency review`) report success.
 
 CI is not a separate enforcement layer — it does not gate the
 merge. It runs the workflows that publish the status checks

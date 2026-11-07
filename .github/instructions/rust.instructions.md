@@ -100,6 +100,9 @@ information the caller needs to decide whether to retry.
 
 # Any rust/Cargo.toml or rust/Cargo.lock change
 (cd rust && cargo audit)
+
+# Any rust/fuzz/Cargo.toml or rust/fuzz/Cargo.lock change
+(cd rust/fuzz && cargo audit)
 ```
 
 `DEVELOPMENT.md` is authoritative. Run these verbatim — dropping

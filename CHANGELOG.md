@@ -20,6 +20,21 @@ tarball.
   Documentation only — no change to the package.
   ([#405](https://github.com/nick-llewellyn/nts/pull/405))
 
+### Internal
+
+- The Rust dependency audit now also checks `rust/fuzz/Cargo.lock`,
+  and on `main` it opens an issue for each advisory it finds in
+  `rust/Cargo.lock`, closing it once the advisory is fixed. The audit
+  action already tried to open those issues, but the job's token could
+  not create them and the action does not report the refusal, so the
+  daily failures in late October 2026 showed only in the Actions tab.
+  `Dependency review` becomes the ninth required status check, so a
+  pull request that introduces a Dart or Rust dependency version with
+  a moderate-or-higher advisory can no longer merge. `SECURITY.md` now
+  says which checks block a merge and which only flag. No package
+  surface is affected.
+  ([#406](https://github.com/nick-llewellyn/nts/pull/406))
+
 ## 10.1.0
 
 ### Security

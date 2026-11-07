@@ -12,10 +12,11 @@ name: Cross-platform live probes
 #     That must never block a merge.
 #   - Status-check semantics differ: this workflow is NOT in branch
 #     protection's required status checks on `main`. That list stays at
-#     its eight entries (`Detect changed paths`, `Dart tests gate`,
+#     its nine entries (`Detect changed paths`, `Dart tests gate`,
 #     `Verify FRB bindings are in sync`, `Rust build + tests +
 #     coverage`, `Hooks shell-syntax check`, `Hooks behaviour check`,
-#     `Android KGP gate matrix`, `Auggie hook tests gate`).
+#     `Android KGP gate matrix`, `Auggie hook tests gate`,
+#     `Dependency review`).
 #
 # ## Two premises worth stating so they are not re-broken
 #

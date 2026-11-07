@@ -53,6 +53,8 @@ old one, that's a real signal, not a flake.
       (mirrors CI; emits `rust/coverage/lcov.info`)
 - [ ] `(cd rust && cargo audit)` (any change to `rust/Cargo.toml` or `rust/Cargo.lock`;
       mirrors CI)
+- [ ] `(cd rust/fuzz && cargo audit)` (any change to `rust/fuzz/Cargo.toml` or
+      `rust/fuzz/Cargo.lock`; mirrors CI)
 - [ ] `sh -n tool/hooks/pre-commit tool/hooks/pre-merge-commit tool/hooks/pre-push`
       (any change under `tool/hooks/**`; mirrors the
       `Hooks shell-syntax check` CI job)

@@ -6,12 +6,16 @@ on:
     paths:
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
+      - 'rust/fuzz/Cargo.toml'
+      - 'rust/fuzz/Cargo.lock'
       - '.github/workflows/audit.yml'
   pull_request:
     branches: [main]
     paths:
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
+      - 'rust/fuzz/Cargo.toml'
+      - 'rust/fuzz/Cargo.lock'
       - '.github/workflows/audit.yml'
   schedule:
     - cron: '0 0 * * *' # Daily at midnight UTC
@@ -20,12 +24,27 @@ on:
 permissions:
   contents: read
 
+# The `audit` job reconciles advisory issues from one snapshot of the
+# open issues, so two overlapping runs on `main` (schedule, push,
+# workflow_dispatch) could open duplicates or close an issue that still
+# applies. Runs on `main` queue rather than cancel, so each one
+# completes and the next starts from a fresh snapshot. Superseded PR
+# runs are cancelled, as in ci.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   audit:
     name: Audit Rust dependencies
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # actions-rust-lang/audit opens an issue per advisory on runs
+      # against main (its createIssues default) and closes it once the
+      # advisory is gone. It ignores the API response, so without this
+      # grant the issues are refused silently.
+      issues: write
     outputs:
       # cargo audit's exit code from the JSON-generation step, surfaced
       # cross-job so post-audit can branch on it. Contract (nts-0rn):
@@ -345,3 +364,23 @@ jobs:
         with:
           header: cargo-audit
           path: audit-summary.md
+
+  audit-fuzz:
+    # rust/fuzz is its own workspace, so its lockfile resolves versions
+    # independently of the shipped rust/Cargo.lock. It fails the run
+    # but opens no issues: the action closes every open RUSTSEC- issue
+    # missing from its own results, so a second issue-opening run would
+    # close the issues the `audit` job opened.
+    name: Audit Rust fuzz dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Audit Rust fuzz dependencies
+        uses: actions-rust-lang/audit@72c09e02f132669d52284a3323acdb503cfc1a24 # v1
+        with:
+          workingDirectory: rust/fuzz
+          createIssues: false
