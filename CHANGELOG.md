@@ -6,6 +6,20 @@ which is kept in the repository but excluded from the published
 tarball.
 
 
+## 10.1.1
+
+### Security
+
+- GHSA-qwgh-2vcv-g2f7 does not affect this package. The 10.1.0 entry
+  lists it as the one advisory remaining, against `block-buffer`
+  0.10.4. On 2026-10-30 GitHub narrowed the advisory to releases from
+  0.11.0 up to, but not including, 0.12.1: the flaw is in how 0.11
+  stores a buffer's position inside the buffer, and 0.10.4 keeps it in
+  a separate field. `rust/Cargo.lock` was already clear, since its
+  0.10.4 is outside that range and its 0.12.1 is the fixed release.
+  Documentation only — no change to the package.
+  ([#405](https://github.com/nick-llewellyn/nts/pull/405))
+
 ## 10.1.0
 
 ### Security
