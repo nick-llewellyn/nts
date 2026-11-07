@@ -1,3 +1,66 @@
+# NTS server catalog for the example app.
+#
+# Curated from nts-sources.yml in https://github.com/jauderho/nts-servers,
+# last reviewed against upstream commit
+# b1b0902cfa6afd5b4753a49bca07286c359acf6e. Entries keep upstream's text,
+# fields and order. sysadmin.wiki comes from the list at
+# https://netfuture.ch/public-nts-server-list/ instead, so its vm value
+# is unknown and left out.
+#
+# This is a subset, not a mirror: check each new upstream entry against
+# the rules below and probe it with bin/nts_health.dart before adding it.
+# The catalog is for end users of the example app, so it leaves out:
+#
+# - Distro-only servers (location "Distro"): 1-4.ntp.ubuntu.com.
+# - Pool names and pool members: TimeNL's ntppool1-4.time.nl,
+#   any.time.nl and nts.time.nl.
+# - Servers that fail bin/nts_health.dart. Removed on 2026-11-07 after
+#   failing two probes: 1.nts.nothingtohide.nl, b.st1.ntp.br,
+#   ntp2.cam.ac.uk, ntpmon.dcs1.biz, ntp.trifence.ch,
+#   ntp.zeitgitter.net, time.signorini.ch.
+# - ntp.neu.edu.cn, ntp1.neu.edu.cn, 0.ntp.bksp.in, mirror.mdapi.ch,
+#   solarium.stellata.ch and nts.amethyst.name, left out on 2026-06-29.
+# - ntp-0-gnss-hq.rdem-systems.com and ntp-0-gps-hq.rdem-systems.com,
+#   which are IPv6 only, left out on 2026-11-07.
+#
+# Running on a virtual machine is not a reason to leave a server out,
+# and no fields are added to upstream's schema.
+#
+# Held back until the client falls back to IPv4 when a server's IPv6
+# address does not answer: time.dfm.dk, nts.dogporkcow.com.
+#
+# The upstream file is distributed under this licence:
+#
+# BSD 3-Clause License
+#
+# Copyright (c) 2022, Jauder Ho
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+#    contributors may be used to endorse or promote products derived from
+#    this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 servers:
 - hostname: time.cloudflare.com
   stratum: 3
@@ -13,12 +76,6 @@ servers:
   vm: false
 
 - hostname: a.st1.ntp.br
-  stratum: 1
-  location: Brazil
-  owner: '[ntp.br](https://ntp.br)'
-  vm: false
-
-- hostname: b.st1.ntp.br
   stratum: 1
   location: Brazil
   owner: '[ntp.br](https://ntp.br)'
@@ -49,9 +106,9 @@ servers:
   vm: false
 
 - hostname: time.bolha.one
-  stratum: 2
+  stratum: 1
   location: Brazil
-  owner: Cadu Silva
+  owner: '[Bolhinha](https://info.bolha.one/servicos/ntp/)'
   vm: false
 
 - hostname: '[time1.mbix.ca](https://time1.mbix.ca)'
@@ -106,6 +163,12 @@ servers:
   stratum: 3
   location: Finland
   owner: miuku.net
+  vm: false
+
+- hostname: '[ntp.obspm.fr](https://syrte.obspm.fr/spip/fr/services/ref-temps/article/diffusion-de-l-heure-par-internet-ntp-network-time-protocol.html)'
+  stratum: 2
+  location: France
+  owner: Paris Observatory
   vm: false
 
 - hostname: paris.time.system76.com
@@ -184,6 +247,34 @@ servers:
   notes: "TH2 Paris, IPv4 and IPv6"
   vm: true
 
+- hostname: ntp12.rdem-systems.com
+  stratum: 2
+  location: France
+  owner: "[RDEM Systems](https://www.rdem-systems.com)"
+  notes: "Lauterbourg, IPv4 and IPv6"
+  vm: true
+
+- hostname: ntp14.rdem-systems.com
+  stratum: 2
+  location: France
+  owner: "[RDEM Systems](https://www.rdem-systems.com)"
+  notes: "Lyon, IPv4 and IPv6"
+  vm: true
+
+- hostname: ntp15.rdem-systems.com
+  stratum: 2
+  location: France
+  owner: "[RDEM Systems](https://www.rdem-systems.com)"
+  notes: "Valence, IPv4 and IPv6"
+  vm: true
+
+- hostname: ntp16.rdem-systems.com
+  stratum: 2
+  location: France
+  owner: "[RDEM Systems](https://www.rdem-systems.com)"
+  notes: "Paris, IPv4 and IPv6"
+  vm: true
+
 - hostname: ntp3.fau.de
   stratum: 1
   location: Germany
@@ -202,7 +293,14 @@ servers:
   location: Germany
   owner: "[RDEM Systems](https://www.rdem-systems.com)"
   notes: "Frankfurt area, IPv4 and IPv6"
-  vm: true
+  vm: false
+
+- hostname: ntp13.rdem-systems.com
+  stratum: 2
+  location: Germany
+  owner: "[RDEM Systems](https://www.rdem-systems.com)"
+  notes: "Frankfurt area, IPv4 and IPv6"
+  vm: false
 
 - hostname: ptbtime1.ptb.de
   stratum: 1
@@ -247,12 +345,17 @@ servers:
   notes: IPv4 and IPv6
   vm: false
 
-- hostname: 1.nts.nothingtohide.nl
+- hostname: sysadmin.wiki
   stratum: 2
-  location: Netherlands
-  owner: Nothing to hide
-  notes: IPv4 and IPv6
-  vm: false
+  location: Germany
+  owner: Stephan Pietzko
+
+- hostname: '[ntp-jp.aki.quest](https://ntp-jp.aki.quest)'
+  stratum: 2
+  location: Japan
+  owner: aki
+  notes: Osaka, IPv4
+  vm: true
 
 - hostname: 2.nts.nothingtohide.nl
   stratum: 2
@@ -275,28 +378,24 @@ servers:
   notes: IPv4 and IPv6
   vm: false
 
-- hostname: ntppool1.time.nl
-  stratum: 1
-  location: Netherlands
-  owner: TimeNL
-  vm: false
-
-- hostname: ntppool2.time.nl
-  stratum: 1
-  location: Netherlands
-  owner: TimeNL
-  vm: false
-
 - hostname: nts.decepticon.space
   stratum: 1
   location: Netherlands
   owner: Rick Betting
   vm: false
 
-- hostname: '[ntpmon.dcs1.biz](https://ntpmon.dcs1.biz)'
-  stratum: 3
+- hostname: '[ntp-sg.aki.quest](https://ntp-sg.aki.quest)'
+  stratum: 2
   location: Singapore
-  owner: Sanjeev Gupta
+  owner: aki
+  notes: IPv4
+  vm: true
+
+- hostname: ntp.movi2.net
+  stratum: 1
+  location: Spain
+  owner: Víctor Soriano
+  notes: GPS/PPS, IPv4
   vm: false
 
 - hostname: nts.netnod.se
@@ -382,18 +481,6 @@ servers:
   owner: Adrian Zaugg
   vm: false
 
-- hostname: '[ntp.trifence.ch](https://ntp.trifence.ch)'
-  stratum: 2
-  location: Switzerland
-  owner: Marcel Waldvogel
-  vm: false
-
-- hostname: '[ntp.zeitgitter.net](https://ntp.zeitgitter.net)'
-  stratum: 2
-  location: Switzerland
-  owner: Marcel Waldvogel
-  vm: false
-
 - hostname: '[ntp01.maillink.ch](https://ntp01.maillink.ch)'
   stratum: 1
   location: Switzerland
@@ -412,11 +499,12 @@ servers:
   owner: Ueli Heuer
   vm: false
 
-- hostname: time.signorini.ch
-  stratum: 1
-  location: Switzerland
-  owner: Attilio Signorini
-  vm: false
+- hostname: beatquantum.com
+  stratum: 2
+  location: UK
+  owner: BeatQuantum
+  notes: IPv4 and IPv6, Pure/Hybrid PQC NTS-KE
+  vm: true
 
 - hostname: ntp2.glypnod.com
   stratum: 2
@@ -453,19 +541,19 @@ servers:
   notes: IPv4 and IPv6
   vm: false
 
-- hostname: ntp2.cam.ac.uk
-  stratum: 2
-  location: UK
-  owner: University of Cambridge, Department of Engineering
-  notes: IPv4 and IPv6
-  vm: false
-
 - hostname: ntp3.cam.ac.uk
   stratum: 2
   location: UK
   owner: University of Cambridge, University Information Services (UIS)
   notes: IPv4 and IPv6
   vm: false
+
+- hostname: '[ntp-us.aki.quest](https://ntp-us.aki.quest)'
+  stratum: 2
+  location: US
+  owner: aki
+  notes: Phoenix, IPv4 and IPv6
+  vm: true
 
 - hostname: ntp1.glypnod.com
   stratum: 2
@@ -498,10 +586,31 @@ servers:
   owner: Mike Cifelli
   vm: false
 
+- hostname: '[time-gps.globalentry.systems](https://time.globalentry.systems)'
+  stratum: 2
+  location: US
+  owner: Global Entry Systems
+  notes: Colorado. GPS/PPS stratum 1 upstream
+  vm: false
+
 - hostname: '[time.cifelli.xyz](https://time.cifelli.xyz)'
   stratum: 2
   location: US
   owner: Mike Cifelli
+  vm: false
+
+- hostname: '[time.globalentry.systems](https://time.globalentry.systems)'
+  stratum: 2
+  location: US
+  owner: Global Entry Systems
+  notes: Chicago
+  vm: true
+
+- hostname: time.sshlab.net
+  stratum: 2
+  location: US
+  owner: Z&D
+  notes: Pennsylvania, NIST/USNO upstream
   vm: false
 
 - hostname: '[time.txryan.com](https://time.txryan.com)'

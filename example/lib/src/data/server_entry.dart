@@ -1,11 +1,12 @@
 // In-memory representation of one server record from
 // `assets/nts-sources.yml`.
 //
-// The YAML is a publicly-curated list of NTP / NTS-KE endpoints with a
-// fixed schema (`hostname`, `stratum`, `location`, `owner`, `notes`,
-// `vm`). Two of those fields — `hostname` and `owner` — sometimes
-// arrive wrapped in Markdown link syntax (`[label](url)`) because the
-// upstream gist renders to HTML. We split that form into a clean
+// The YAML is a curated subset of the jauderho/nts-servers list of
+// NTS-KE endpoints, with a fixed schema (`hostname`, `stratum`,
+// `location`, `owner`, `notes`, `vm`). Two of those fields — `hostname`
+// and `owner` — sometimes arrive wrapped in Markdown link syntax
+// (`[label](url)`) because the upstream list renders them into its
+// README. We split that form into a clean
 // `hostname` / `owner` plus an optional `*Url` so the UI can render
 // either a tappable link or plain text without re-parsing on every
 // build.
