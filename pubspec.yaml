@@ -83,15 +83,16 @@ dependencies:
   # SDK resolves these out-of-band when running the Native Assets pipeline,
   # so they don't pull native_toolchain_rust into the app's runtime graph.
   hooks: ^2.0.2
-  # Held at `^1.0.4` rather than the current `1.0.6`: from 1.0.5 onward
+  # Held at `^1.0.4` rather than the current `1.0.7`: from 1.0.5 onward
   # `native_toolchain_rust` requires `hooks ^2.1.0`, which pulls
   # `record_use ^1.0.0` and therefore `meta ^1.19.0`. Flutter pinned
   # `meta` exactly through the 3.44 line (3.38.0 at 1.17.0, 3.44.6 at
   # 1.18.0), so the bump makes version solving fail on any of those.
-  # Current stable 3.47.1 relaxed the pin to `^1.18.3` and does resolve
+  # Current stable 3.47.9 relaxed the pin to `^1.18.3` and does resolve
   # the bump, but the `flutter: '>=3.38.0'` floor above keeps the
   # exactly-pinned releases in scope. Revisit once that floor moves
-  # past 3.44.
+  # past 3.44. 1.0.7 also requires `code_assets ^2.0.0`, which the
+  # `code_assets` range below already allows.
   native_toolchain_rust: ^1.0.4
   # Already in the graph transitively via both packages above; declared
   # directly because `hook/build.dart` reads `CodeConfig.targetOS` and
