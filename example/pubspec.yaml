@@ -45,12 +45,13 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   # Bundled at build time and read at app startup by `ServerLoader`
-  # (lib/src/data/server_loader.dart). The file is a verbatim copy of
-  # the public NTS-KE server list curated at
-  # https://gist.github.com/mutin-sa/eea1c396b1e610a2da1e5550d94b0453,
-  # republished as YAML so the example can ship a meaningful catalog
-  # without hard-coding entries into Dart source. Refresh by replacing
-  # the file in-tree; no codegen step is involved.
+  # (lib/src/data/server_loader.dart). The file is a curated subset of
+  # https://github.com/jauderho/nts-servers, so the example can ship a
+  # meaningful catalog without hard-coding entries into Dart source.
+  # Its header comment records the upstream commit, the rules for
+  # leaving servers out, and the upstream licence; review new upstream
+  # entries against those rules rather than replacing the file. No
+  # codegen step is involved.
   assets:
     - assets/nts-sources.yml
 

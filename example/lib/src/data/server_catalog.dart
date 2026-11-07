@@ -12,8 +12,8 @@
 // asset through `rootBundle`) lives in `server_loader.dart`, which
 // re-exports everything here so existing GUI imports keep working.
 //
-// The bundled file follows the schema produced by the upstream gist
-// (mutin-sa/eea1c396b1e610a2da1e5550d94b0453) republished as YAML:
+// The bundled file is a curated subset of `nts-sources.yml` from
+// https://github.com/jauderho/nts-servers and keeps its schema:
 //
 //   servers:
 //     - hostname: time.cloudflare.com
@@ -38,8 +38,8 @@ import 'package:yaml/yaml.dart' show YamlList, YamlMap, loadYaml;
 import 'server_entry.dart';
 
 /// Matches the upstream Markdown link form `[label](url)` used by the
-/// gist for some hostnames and owner attributions. Capture group 1 is
-/// the visible label, group 2 is the URL.
+/// upstream list for some hostnames and owner attributions. Capture
+/// group 1 is the visible label, group 2 is the URL.
 final RegExp _markdownLink = RegExp(r'^\[([^\]]+)\]\((.*)\)$');
 
 /// Parses a YAML document with the shape documented in this file's

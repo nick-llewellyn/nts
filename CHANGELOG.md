@@ -20,6 +20,26 @@ tarball.
   Documentation only — no change to the package.
   ([#405](https://github.com/nick-llewellyn/nts/pull/405))
 
+### Changed
+
+- The example app's server catalog (`example/assets/nts-sources.yml`)
+  has been reviewed against the community list it is curated from,
+  [jauderho/nts-servers](https://github.com/jauderho/nts-servers). It
+  drops 9 servers and adds 15, for 88 in total, all of which passed a
+  live probe with `bin/nts_health.dart` on 2026-11-07. The 9 removed
+  are 7 that failed two probes (no DNS record, port 4460 closed, or a
+  reset during the NTS-KE handshake) and TimeNL's `ntppool1` and
+  `ntppool2.time.nl`, which are pool members. The 15 added are in
+  France, Germany, Spain, the UK, the US, Japan and Singapore; the last
+  two replace the catalog's only Asian server, which no longer
+  answers. A header comment in the file now records the upstream
+  commit, the rules for leaving servers out, and the upstream BSD
+  3-Clause licence, which the copy did not carry before. Comments that
+  named a different list as the source are corrected, and
+  `example/assets/reliable-servers.json` is regenerated from the new
+  catalog. Example app only; the library ships no server list.
+  ([#407](https://github.com/nick-llewellyn/nts/pull/407))
+
 ### Internal
 
 - The Rust dependency audit now also checks `rust/fuzz/Cargo.lock`,

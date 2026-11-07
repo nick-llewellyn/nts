@@ -96,6 +96,15 @@ zero usable rows, the app surfaces an empty-catalog state and the
 action buttons stay disabled rather than silently reverting to a
 preset.
 
+The bundled file is a curated subset of the community-maintained
+[jauderho/nts-servers](https://github.com/jauderho/nts-servers) list,
+not a mirror of it. Its header comment records the upstream commit it
+was last reviewed against, the rules for leaving servers out
+(distro-only servers, pool names, and servers that fail
+[`nts_health`](#cli-binnts_healthdart)), and the upstream BSD 3-Clause licence.
+Check new upstream entries against those rules rather than copying the
+upstream file over it.
+
 A few representative entries from the bundled file, useful as
 copy-paste targets when you're driving the CLI directly:
 
