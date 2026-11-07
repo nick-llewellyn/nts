@@ -559,7 +559,10 @@ open `RUSTSEC-` issue missing from its own results, so a second
 issue-opening job would close the first one's issues on every run.
 The action also ignores the API response when it opens an issue,
 which is why `audit` needs `issues: write`: without it the issues are
-refused and nothing reports it.
+refused and nothing reports it. Each run reconciles against one
+snapshot of the open issues, so the workflow's `concurrency:` group
+queues runs on `main` instead of letting two overlap; superseded PR
+runs are cancelled, as in `ci.yml`.
 
 Neither job is a required status check on `main`. The workflow runs
 only on pull requests that touch those paths, so a required check
