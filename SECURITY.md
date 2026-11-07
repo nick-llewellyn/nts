@@ -25,7 +25,15 @@ You can expect an **initial response within 48 hours**. Further updates will be 
 ## Dependencies
 
 Published advisories against dependencies are tracked automatically:
-`cargo audit` checks the Rust lockfile daily and on every change to
-it, pull requests fail on moderate-or-higher advisories in Dart or
-Rust dependencies, and Dependabot security updates are enabled.
+
+- A pull request cannot merge if it introduces a Dart or Rust
+  dependency version with a moderate-or-higher advisory.
+- `cargo audit` checks both Rust lockfiles daily and whenever one
+  changes. On `main`, each advisory it finds in the lockfile the
+  package ships opens an issue, which closes once the advisory is
+  fixed. On a pull request it flags advisories but does not block
+  merging, since an advisory can be published against a dependency
+  the pull request did not change.
+- Dependabot security updates are enabled.
+
 Fixes ship in the next release and are listed in `CHANGELOG.md`.

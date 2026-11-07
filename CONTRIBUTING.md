@@ -25,7 +25,8 @@ page is the short path; where the two disagree, `DEVELOPMENT.md` wins.
   (`cargo install cargo-tarpaulin --locked --version 0.35.2`, the
   version CI pins), only if your change touches `rust/**`.
 - **`cargo-audit`** (`cargo install cargo-audit --locked`), only if
-  your change touches `rust/Cargo.toml` or `rust/Cargo.lock`.
+  your change touches `Cargo.toml` or `Cargo.lock` under `rust/` or
+  `rust/fuzz/`.
 - **`flutter_rust_bridge_codegen`**, only if your change touches
   `rust/src/api/**`. It must match the exact `flutter_rust_bridge`
   pin in `pubspec.yaml` — `tool/check_bindings.dart` refuses to run
@@ -116,6 +117,9 @@ flutter test --coverage
 # Any change to rust/Cargo.toml or rust/Cargo.lock
 (cd rust && cargo audit)
 
+# Any change to rust/fuzz/Cargo.toml or rust/fuzz/Cargo.lock
+(cd rust/fuzz && cargo audit)
+
 # Any change to rust/src/api/** or lib/src/ffi/**
 dart run tool/check_bindings.dart
 
@@ -132,10 +136,11 @@ Tick the boxes you actually ran; do not blanket-check the rest.
 
 ## What CI requires
 
-Eight status checks gate the merge: `Detect changed paths`,
+Nine status checks gate the merge: `Detect changed paths`,
 `Dart tests gate`, `Verify FRB bindings are in sync`, `Rust build +
 tests + coverage`, `Hooks shell-syntax check`, `Hooks behaviour
-check`, `Android KGP gate matrix`, and `Auggie hook tests gate`.
+check`, `Android KGP gate matrix`, `Auggie hook tests gate`, and
+`Dependency review`.
 Doc-only diffs still run the workflow, but the heavy jobs skip and
 report as passing.
 
