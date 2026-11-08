@@ -40,6 +40,25 @@ tarball.
   catalog. Example app only; the library ships no server list.
   ([#407](https://github.com/nick-llewellyn/nts/pull/407))
 
+- Both Rust lockfiles take 21 compatible updates. The native library is
+  built from the `rust/Cargo.lock` this package ships, so apps pick
+  them up when they upgrade. The notable ones:
+  - `cc` 1.4.0 → 1.11.1. It compiles the C and assembly code in
+    `ring`, the cryptography library under `rustls`, for every target.
+  - `cpufeatures` 0.3.0 → 0.3.1, which fixes detection of the x86 AVX
+    feature that `aes` and `polyval` check.
+  - `ctutils` 0.4.6 → 0.4.8. Its constant-time hardening applies to
+    Cortex-M0 and 32-bit RISC-V, which this package does not build for.
+
+  None fixes a known advisory, and `rust/Cargo.toml` is unchanged.
+  Held back because they need more than a lockfile change: `aes` 0.9.4
+  and `backtrace` 0.3.77, which need Rust 1.89 and 1.88 against the
+  declared minimum of 1.87, and the `futures`, `thiserror`,
+  `delegate-attr` and `wasm-bindgen` updates, which bring in `syn` 3
+  alongside the `syn` 2 that `flutter_rust_bridge_macros` and others
+  still need.
+  ([#409](https://github.com/nick-llewellyn/nts/pull/409))
+
 ### Internal
 
 - The Rust dependency audit now also checks `rust/fuzz/Cargo.lock`,
