@@ -20,8 +20,10 @@
 #   ntp.zeitgitter.net, time.signorini.ch.
 # - ntp.neu.edu.cn, ntp1.neu.edu.cn, 0.ntp.bksp.in, mirror.mdapi.ch,
 #   solarium.stellata.ch and nts.amethyst.name, left out on 2026-06-29.
-# - ntp-0-gnss-hq.rdem-systems.com and ntp-0-gps-hq.rdem-systems.com,
-#   which are IPv6 only, left out on 2026-11-07.
+# - IPv6-only servers, which IPv4-only networks cannot reach:
+#   ntp-0-gnss-hq.rdem-systems.com and ntp-0-gps-hq.rdem-systems.com,
+#   left out on 2026-11-07, and ntp3.ipv6.fau.de, removed on
+#   2026-11-08.
 #
 # Running on a virtual machine is not a reason to leave a server out,
 # and no fields are added to upstream's schema.
@@ -279,13 +281,6 @@ servers:
   stratum: 1
   location: Germany
   owner: FAU
-  vm: false
-
-- hostname: ntp3.ipv6.fau.de
-  stratum: 1
-  location: Germany
-  owner: FAU
-  notes: IPv6 only
   vm: false
 
 - hostname: ntp7.rdem-systems.com
