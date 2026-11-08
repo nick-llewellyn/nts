@@ -71,15 +71,19 @@ class NtsServerSpec {
 /// Phases that did not run are reported as `0` rather than absent --
 /// e.g. on a cache-hit query (no KE handshake), [connectMicros],
 /// [tlsHandshakeMicros], and [keRecordIoMicros] are all `0` and
-/// [dnsMicros] reflects only the UDP-path lookup of the NTPv4 host. On
-/// a fresh-session query both KE-path and UDP-path DNS lookups run;
-/// their costs are summed into a single [dnsMicros] value so callers
-/// do not have to reason about which leg contributed.
+/// [dnsMicros] reflects only the UDP-path lookup of the NTPv4 host.
+/// That lookup runs only when the KE response named an NTPv4 server
+/// (RFC 8915 §4.1.7); otherwise the UDP leg sends to the address the
+/// KE connection reached, and it contributes `0`. On a fresh-session
+/// query both lookups can run; their costs are summed into a single
+/// [dnsMicros] value so callers do not have to reason about which leg
+/// contributed.
 class PhaseTimings {
   /// Sum of wall-clock microseconds spent in the bounded DNS resolver
   /// across both the KE-host lookup (when a handshake runs) and the
-  /// NTPv4-host lookup. See `ARCHITECTURE.md`'s "Timeout budget and
-  /// bounded DNS" section for the resolver semantics.
+  /// NTPv4-host lookup (when the KE response named an NTPv4 server).
+  /// See `ARCHITECTURE.md`'s "Timeout budget and bounded DNS" section
+  /// for the resolver semantics.
   final int dnsMicros;
 
   /// Wall-clock microseconds spent in the per-address

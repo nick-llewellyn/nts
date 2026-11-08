@@ -196,7 +196,12 @@ I/O paths:
   `remaining()` plus `apply_to(&TcpStream)`. `perform_handshake`
   builds one `Deadline` at the top of the call and threads it through
   DNS resolution, TCP connect, post-connect socket-timeout setup,
-  pre-write/pre-flush refreshes, and the read loop. The KE-side
+  pre-write/pre-flush refreshes, and the read loop. The connect step
+  (`connect_resolved`) tries the resolved addresses one at a time,
+  alternating IPv6 and IPv4 (RFC 8305 §4), and gives each attempt an
+  equal share of the time left rather than all of it, so an address
+  that never answers cannot use up the budget before the other family
+  is tried. The KE-side
   reader (`read_to_end_capped`) refreshes the underlying socket's
   read/write timeouts on every iteration so a server that drip-feeds
   the NTS-KE response cannot stretch the read phase past the global
@@ -208,7 +213,13 @@ I/O paths:
   on some platforms). `bind_connected_udp_using` anchors one
   `UdpDeadline` and threads it through DNS resolution and the UDP
   socket-timeout setup so the downstream `socket.send` / `socket.recv`
-  in `nts_query` trip no later than the global deadline.
+  in `nts_query` trip no later than the global deadline. The DNS step
+  runs only when the KE response carried an NTPv4 Server record;
+  without one, RFC 8915 §4.1.7 puts the NTP server at the IP address
+  the KE connection reached, and the UDP leg sends there directly.
+  After a Server record, addresses in the KE connection's family are
+  tried first, because a UDP `connect` sends nothing and cannot tell a
+  dead address from a live one.
 
 Both newtypes anchor on `nts::boottime::BootInstant`, the sleep-aware
 counterpart to `std::time::Instant` described in the clock section
@@ -523,12 +534,14 @@ covers it; publishing the same fact twice would be a documentation
 hazard, so the doc on `round_trip_micros` calls out that it *is*
 the UDP-phase wall-clock cost. `dns_micros` is summed across both
 the KE-host lookup (when a handshake runs) and the NTPv4-host
-lookup, because callers diagnosing slow DNS care about the
+lookup (when the KE response named an NTPv4 server), because callers
+diagnosing slow DNS care about the
 host-level cost regardless of which leg consumed it. Phases that
 did not run in this call are reported as `0` rather than absent —
 e.g. on a cache-hit query (no KE handshake), `connect_micros`,
 `tls_handshake_micros`, and `ke_record_io_micros` are all zero and
-`dns_micros` reflects only the UDP-path lookup.
+`dns_micros` reflects only the UDP-path lookup, which is also zero
+when the session has no Server record.
 
 A caller who wants the same "preNtp" view earlier integrators
 constructed from a Dart-side `Stopwatch` can sum the four
