@@ -552,7 +552,7 @@ fn bind_connected_udp_sends_to_the_ke_peer_without_a_lookup() {
         &clock,
         "dual-stack.invalid",
         echo_port,
-        NtpAddress::KePeer(IpAddr::from([127, 0, 0, 1])),
+        NtpAddress::KePeer(SocketAddr::from(([127, 0, 0, 1], 4460))),
         deadline_after(&clock, Duration::from_secs(2)),
         64,
         move |_host, _port| {
@@ -575,6 +575,44 @@ fn bind_connected_udp_sends_to_the_ke_peer_without_a_lookup() {
     let mut buf = [0u8; 16];
     let (n, _) = echo.recv_from(&mut buf).expect("recv");
     assert_eq!(&buf[..n], b"ping");
+}
+
+/// A link-local KE peer is only reachable through its interface scope,
+/// so the UDP leg must keep the whole peer address and replace just
+/// the port. The scope here names no real interface: the bind either
+/// connects and reports the scope back, or fails with an error that
+/// names the candidate it tried. Either way the scope must still be on
+/// the address.
+#[test]
+fn bind_connected_udp_keeps_the_ke_peers_ipv6_scope() {
+    let peer = SocketAddr::V6(std::net::SocketAddrV6::new(
+        std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0xabcd),
+        4460,
+        0,
+        4242,
+    ));
+    let mut expected = peer;
+    expected.set_port(123);
+
+    let clock = SequentialReader::bind();
+    match bind_connected_udp_using(
+        &clock,
+        "link-local.invalid",
+        123,
+        NtpAddress::KePeer(peer),
+        deadline_after(&clock, Duration::from_secs(2)),
+        64,
+        system_lookup,
+    ) {
+        Ok(UdpBindOutcome { socket, .. }) => {
+            assert_eq!(socket.peer_addr().expect("peer"), expected);
+        }
+        Err(NtsError::Network { message, .. }) => assert!(
+            message.contains(&expected.to_string()),
+            "the candidate lost its scope: {message}",
+        ),
+        Err(other) => panic!("expected a bind or a Network error, got {other:?}"),
+    }
 }
 
 /// With a Server record the NTP host is looked up, and the addresses
@@ -615,16 +653,26 @@ fn bind_connected_udp_tries_the_ke_peer_family_first_after_a_server_record() {
 }
 
 /// The session's `NtpAddress` follows RFC 8915 §4.1.7: the KE peer's
-/// IP when the response named no NTPv4 server, a lookup ordered by the
-/// KE peer's family when it did, and a plain lookup when the peer is
-/// unknown.
+/// address when the response named no NTPv4 server, a lookup ordered
+/// by the KE peer's family when it did, and a plain lookup when the
+/// peer is unknown. A scoped IPv6 peer keeps its scope.
 #[test]
 fn ntp_address_from_handshake_follows_the_server_record() {
     let peer = SocketAddr::from(([198, 51, 100, 4], 4460));
     assert_eq!(
         NtpAddress::from_handshake(Some(peer), false),
-        NtpAddress::KePeer(peer.ip()),
+        NtpAddress::KePeer(peer),
     );
+    let scoped = SocketAddr::V6(std::net::SocketAddrV6::new(
+        std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+        4460,
+        0,
+        7,
+    ));
+    match NtpAddress::from_handshake(Some(scoped), false) {
+        NtpAddress::KePeer(SocketAddr::V6(a)) => assert_eq!(a.scope_id(), 7),
+        other => panic!("expected the scoped KE peer, got {other:?}"),
+    }
     assert_eq!(
         NtpAddress::from_handshake(Some(peer), true),
         NtpAddress::Lookup {

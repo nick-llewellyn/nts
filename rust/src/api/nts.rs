@@ -1597,8 +1597,10 @@ enum NtpAddress {
     /// §4.1.7 puts the NTP server at the IP address the KE connection
     /// reached. The UDP leg uses it without a lookup, so it cannot
     /// pick a different address of the same host — for example one in
-    /// a family the server does not answer on.
-    KePeer(IpAddr),
+    /// a family the server does not answer on. The whole peer address
+    /// is kept, not just its IP, so a link-local IPv6 peer keeps its
+    /// interface scope; only the port is replaced.
+    KePeer(SocketAddr),
     /// Look up `ntpv4_host`. Addresses in `ke_peer`'s family are tried
     /// first, since §4.1.7 asks a server that names an NTP host to
     /// name one reachable in the KE session's family. `ke_peer` is
@@ -1609,7 +1611,7 @@ enum NtpAddress {
 impl NtpAddress {
     fn from_handshake(ke_peer: Option<SocketAddr>, ntpv4_server_record: bool) -> Self {
         match ke_peer {
-            Some(peer) if !ntpv4_server_record => Self::KePeer(peer.ip()),
+            Some(peer) if !ntpv4_server_record => Self::KePeer(peer),
             _ => Self::Lookup {
                 ke_peer: ke_peer.map(|p| p.ip()),
             },
@@ -3925,7 +3927,10 @@ where
 {
     let deadline = UdpDeadline::at(clock, deadline);
     let (candidates, dns_micros) = match ntp_address {
-        NtpAddress::KePeer(ip) => (vec![SocketAddr::new(ip, port)], 0),
+        NtpAddress::KePeer(mut peer) => {
+            peer.set_port(port);
+            (vec![peer], 0)
+        }
         NtpAddress::Lookup { ke_peer } => {
             let (mut candidates, dns_micros) =
                 resolve_ntp_host(&deadline, host, port, dns_concurrency_cap, lookup)?;
