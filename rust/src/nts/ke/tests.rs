@@ -555,6 +555,10 @@ mod validate_response {
         assert_eq!(p.cookies.len(), 2);
         assert_eq!(p.ntpv4_host, "time.example.com");
         assert_eq!(p.ntpv4_port, 123);
+        assert!(
+            !p.ntpv4_server_record,
+            "no Server record: the NTP server is at the KE server's IP (RFC 8915 §4.1.7)",
+        );
         assert!(p.warnings.is_empty());
     }
 
@@ -569,6 +573,7 @@ mod validate_response {
         let p = validate_response("ke.example.com", &[aead::AES_SIV_CMAC_256], &records).unwrap();
         assert_eq!(p.ntpv4_host, "ntp.alt.example");
         assert_eq!(p.ntpv4_port, 4123);
+        assert!(p.ntpv4_server_record);
     }
 
     /// RFC 8915 §4.1.3 — Warning records are advisory: the handshake
@@ -1150,6 +1155,155 @@ mod connect {
             elapsed < cap,
             "connect_with_deadline_using took {elapsed:?} (> {cap:?}); \
              OS-default connect timeout is leaking through",
+        );
+    }
+
+    fn v6(last: u16, port: u16) -> SocketAddr {
+        SocketAddr::from((
+            std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, last),
+            port,
+        ))
+    }
+
+    fn v4(last: u8, port: u16) -> SocketAddr {
+        SocketAddr::from(([192, 0, 2, last], port))
+    }
+
+    /// RFC 8305 §4 ordering: the families alternate, starting with the
+    /// resolver's first family, and each family keeps the resolver's
+    /// order. A lone family, or no addresses at all, pass through.
+    #[test]
+    fn interleave_families_alternates_starting_with_the_first_family() {
+        assert_eq!(
+            interleave_families(vec![v6(1, 0), v6(2, 0), v4(1, 0), v4(2, 0), v6(3, 0)]),
+            vec![v6(1, 0), v4(1, 0), v6(2, 0), v4(2, 0), v6(3, 0)],
+        );
+        assert_eq!(
+            interleave_families(vec![v4(1, 0), v6(1, 0), v6(2, 0)]),
+            vec![v4(1, 0), v6(1, 0), v6(2, 0)],
+        );
+        assert_eq!(
+            interleave_families(vec![v4(1, 0), v4(2, 0)]),
+            vec![v4(1, 0), v4(2, 0)],
+        );
+        assert!(interleave_families(Vec::new()).is_empty());
+    }
+
+    /// The NTS-198 regression: the first address never answers, as a
+    /// server's IPv6 address does on a path that drops IPv6, and the
+    /// second accepts. Before the fix the first attempt was handed the
+    /// whole budget and the second was never made; now the first gets
+    /// half, and the call connects to the second well inside the
+    /// budget. The dead address is simulated by a connector that waits
+    /// out its timeout, so the test does not depend on how the host's
+    /// network treats an unroutable address.
+    #[test]
+    fn connect_resolved_falls_back_when_the_first_address_never_answers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let live = listener.local_addr().expect("listener addr");
+        let dead = v6(1, live.port());
+        let budget = Duration::from_millis(600);
+        let clock = SequentialReader::bind();
+        let deadline = Deadline::new(&clock, budget).expect("strict clock");
+        let mut attempts: Vec<(SocketAddr, Duration)> = Vec::new();
+        let started = Instant::now();
+        let stream = connect_resolved("dual.test", 4460, vec![dead, live], &deadline, |addr, t| {
+            attempts.push((*addr, t));
+            if *addr == dead {
+                std::thread::sleep(t);
+                Err(std::io::Error::from(std::io::ErrorKind::TimedOut))
+            } else {
+                TcpStream::connect_timeout(addr, t)
+            }
+        })
+        .expect("must fall back to the address that answers");
+        let elapsed = started.elapsed();
+
+        assert_eq!(stream.peer_addr().expect("peer"), live);
+        assert_eq!(
+            attempts.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+            vec![dead, live],
+        );
+        let (_, dead_share) = attempts[0];
+        assert!(
+            dead_share <= budget / 2,
+            "the dead address got {dead_share:?} of a {budget:?} budget; \
+             it must get at most an even share so the next one is tried",
+        );
+        assert!(
+            elapsed < budget,
+            "connected after {elapsed:?}, outside the {budget:?} budget",
+        );
+    }
+
+    /// Each attempt gets `remaining / addresses_left`: with four
+    /// addresses that all fail at once, the shares grow towards the
+    /// last attempt, which gets everything left. The error is the last
+    /// attempt's, so a refused connection still reaches Dart as
+    /// `NtsError::Network` rather than as a timeout.
+    #[test]
+    fn connect_resolved_splits_the_time_left_across_the_remaining_addresses() {
+        let budget = Duration::from_secs(4);
+        let clock = SequentialReader::bind();
+        let deadline = Deadline::new(&clock, budget).expect("strict clock");
+        let mut shares: Vec<Duration> = Vec::new();
+        let addrs = vec![v6(1, 4460), v6(2, 4460), v4(1, 4460), v4(2, 4460)];
+        let err = connect_resolved("refused.test", 4460, addrs, &deadline, |_, t| {
+            shares.push(t);
+            Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+        })
+        .expect_err("every address refuses");
+
+        assert!(
+            matches!(&err, KeError::Io(e) if e.kind() == std::io::ErrorKind::ConnectionRefused),
+            "expected the last attempt's ConnectionRefused, got {err:?}",
+        );
+        assert_eq!(shares.len(), 4);
+        assert!(shares[0] <= budget / 4, "first share {:?}", shares[0]);
+        assert!(
+            shares.windows(2).all(|w| w[0] < w[1]),
+            "shares must grow as addresses run out: {shares:?}",
+        );
+        assert!(
+            shares[3] > budget / 2,
+            "the last attempt must get what is left, got {:?}",
+            shares[3],
+        );
+    }
+
+    /// When every address waits out its share, the last attempt has
+    /// used up the deadline, so the call still ends in
+    /// `PhaseTimeout(Connect)` — and only once the budget is spent.
+    #[test]
+    fn connect_resolved_reports_a_connect_timeout_when_every_address_times_out() {
+        let budget = Duration::from_millis(200);
+        let clock = SequentialReader::bind();
+        let deadline = Deadline::new(&clock, budget).expect("strict clock");
+        let started = Instant::now();
+        let err = connect_resolved(
+            "blackholed.test",
+            4460,
+            vec![v6(1, 4460), v4(1, 4460)],
+            &deadline,
+            |_, t| {
+                std::thread::sleep(t);
+                Err(std::io::Error::from(std::io::ErrorKind::TimedOut))
+            },
+        )
+        .expect_err("every address times out");
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(err, KeError::PhaseTimeout(KeTimeoutPhase::Connect)),
+            "expected PhaseTimeout(Connect), got {err:?}",
+        );
+        assert!(
+            elapsed >= budget * 9 / 10,
+            "gave up after {elapsed:?}, before the {budget:?} budget was spent",
+        );
+        assert!(
+            elapsed < budget * 5,
+            "took {elapsed:?}; the shares overran the budget"
         );
     }
 }
@@ -1824,6 +1978,8 @@ mod ke_outcome {
         let outcome = KeOutcome {
             ntpv4_host: String::new(),
             ntpv4_port: 0,
+            ntpv4_server_record: false,
+            ke_peer: None,
             aead_id: 0,
             c2s_key: Zeroizing::new(vec![0u8; 1]),
             s2c_key: Zeroizing::new(vec![0u8; 1]),
@@ -1875,6 +2031,8 @@ mod ke_outcome {
         let outcome = KeOutcome {
             ntpv4_host: "ntp.example.test".to_owned(),
             ntpv4_port: 4123,
+            ntpv4_server_record: true,
+            ke_peer: Some(SocketAddr::from(([203, 0, 113, 7], 4460))),
             aead_id: 15,
             c2s_key: Zeroizing::new(vec![0x55u8; 32]),
             s2c_key: Zeroizing::new(vec![0x77u8; 32]),
@@ -1908,6 +2066,10 @@ mod ke_outcome {
             rendered.contains("ntp.example.test"),
             "non-secret host field must remain visible: {rendered}",
         );
+        assert!(
+            rendered.contains("203.0.113.7:4460"),
+            "non-secret KE peer address must remain visible: {rendered}",
+        );
     }
 }
 
@@ -1938,6 +2100,7 @@ mod ke_outcome_partial {
         let partial = KeOutcomePartial {
             ntpv4_host: "ntp.example.test".to_owned(),
             ntpv4_port: 4123,
+            ntpv4_server_record: true,
             aead_id: 15,
             cookies: vec![Zeroizing::new(vec![0xBBu8; 64]); 3],
             warnings: Vec::new(),

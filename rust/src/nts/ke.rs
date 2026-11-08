@@ -621,16 +621,24 @@ struct ConnectedTcp {
 /// with `{:?}` (assertion-failure messages, panic payloads,
 /// accidental log lines) would leak live key material and active
 /// cookies. The non-secret fields (`ntpv4_host`, `ntpv4_port`,
-/// `aead_id`, `warnings`, `phase_timings`, `trust_backend`) pass
-/// through verbatim. The redaction pattern matches `SivKey` and
-/// `Aes128GcmSivKey` in `aead.rs`, where manual `Debug` impls
-/// render the wrapped fixed-size key arrays as `<redacted>`.
+/// `ntpv4_server_record`, `ke_peer`, `aead_id`, `warnings`,
+/// `phase_timings`, `trust_backend`) pass through verbatim. The
+/// redaction pattern matches `SivKey` and `Aes128GcmSivKey` in
+/// `aead.rs`, where manual `Debug` impls render the wrapped
+/// fixed-size key arrays as `<redacted>`.
 #[derive(Clone)]
 pub struct KeOutcome {
     /// Server's chosen NTPv4 host (defaults to `request.host` when omitted).
     pub ntpv4_host: String,
     /// Server's chosen NTPv4 port (defaults to 123 when omitted).
     pub ntpv4_port: u16,
+    /// Whether the response carried an NTPv4 Server record (RFC 8915
+    /// §4.1.7). When it did not, `ntpv4_host` is the KE host and the
+    /// NTP server is at `ke_peer`'s IP address.
+    pub ntpv4_server_record: bool,
+    /// Address the NTS-KE TCP connection reached, or `None` if the OS
+    /// could not report the connected socket's peer.
+    pub ke_peer: Option<SocketAddr>,
     /// AEAD algorithm IANA ID the server selected.
     pub aead_id: u16,
     /// Client-to-server AEAD key exported from the TLS session
@@ -690,13 +698,16 @@ impl std::fmt::Debug for KeOutcome {
     /// renders as `<redacted; N {bytes,cookies}>` so the on-wire
     /// length stays observable for diagnostics without leaking the
     /// underlying material. Non-secret fields (`ntpv4_host`,
-    /// `ntpv4_port`, `aead_id`, `warnings`, `phase_timings`,
-    /// `trust_backend`) pass through verbatim. See the type-level
-    /// rustdoc on [`KeOutcome`] for the threat model.
+    /// `ntpv4_port`, `ntpv4_server_record`, `ke_peer`, `aead_id`,
+    /// `warnings`, `phase_timings`, `trust_backend`) pass through
+    /// verbatim. See the type-level rustdoc on [`KeOutcome`] for the
+    /// threat model.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KeOutcome")
             .field("ntpv4_host", &self.ntpv4_host)
             .field("ntpv4_port", &self.ntpv4_port)
+            .field("ntpv4_server_record", &self.ntpv4_server_record)
+            .field("ke_peer", &self.ke_peer)
             .field("aead_id", &self.aead_id)
             .field(
                 "c2s_key",
@@ -1294,6 +1305,7 @@ pub(crate) fn validate_response(
     if redirect_host.as_deref().is_some_and(str::is_empty) {
         return Err(KeError::EmptyServer);
     }
+    let ntpv4_server_record = redirect_host.is_some();
     let ntpv4_host = redirect_host.unwrap_or_else(|| request_host.to_owned());
     let redirect_port = records.iter().find_map(|r| match &r.kind {
         RecordKind::Port(p) => Some(*p),
@@ -1313,6 +1325,7 @@ pub(crate) fn validate_response(
     Ok(KeOutcomePartial {
         ntpv4_host,
         ntpv4_port,
+        ntpv4_server_record,
         aead_id,
         cookies,
         warnings,
@@ -1339,6 +1352,7 @@ pub(crate) fn validate_response(
 pub(crate) struct KeOutcomePartial {
     ntpv4_host: String,
     ntpv4_port: u16,
+    ntpv4_server_record: bool,
     aead_id: u16,
     cookies: Vec<Zeroizing<Vec<u8>>>,
     warnings: Vec<WarningCode>,
@@ -1353,6 +1367,7 @@ impl std::fmt::Debug for KeOutcomePartial {
         f.debug_struct("KeOutcomePartial")
             .field("ntpv4_host", &self.ntpv4_host)
             .field("ntpv4_port", &self.ntpv4_port)
+            .field("ntpv4_server_record", &self.ntpv4_server_record)
             .field("aead_id", &self.aead_id)
             .field(
                 "cookies",
@@ -1866,6 +1881,7 @@ pub fn perform_handshake(
         dns_micros,
         connect_micros,
     } = connected;
+    let ke_peer = tcp.peer_addr().ok();
     // Connect succeeded; the next blocking phase is the TLS handshake
     // (folded into the first `write_all`/`flush` under rustls' lazy
     // model). A waiter timing out from here on attributes to `Tls`.
@@ -1982,6 +1998,8 @@ pub fn perform_handshake(
     Ok(KeOutcome {
         ntpv4_host: partial.ntpv4_host,
         ntpv4_port: partial.ntpv4_port,
+        ntpv4_server_record: partial.ntpv4_server_record,
+        ke_peer,
         aead_id: partial.aead_id,
         c2s_key,
         s2c_key,
@@ -2065,7 +2083,8 @@ where
 /// Core connect helper bounded by an optional [`Deadline`]. When
 /// `deadline` is `Some`, the same instant bounds the DNS lookup *and*
 /// every per-`SocketAddr` `TcpStream::connect_timeout` attempt, so the
-/// total wall-clock cost cannot exceed the caller's original budget.
+/// total wall-clock cost cannot exceed the caller's original budget;
+/// [`connect_resolved`] splits what is left across the addresses.
 /// When `deadline` is `None`, falls through to a plain
 /// [`TcpStream::connect`] for parity with callers that explicitly opted
 /// out of timeout enforcement.
@@ -2129,18 +2148,49 @@ where
         r.enter(KeTimeoutPhase::Connect);
     }
     let connect_started = Instant::now();
+    let stream = connect_resolved(host, port, addrs, deadline, TcpStream::connect_timeout)?;
+    let connect_micros = connect_started.elapsed().as_micros() as i64;
+    Ok(ConnectedTcp {
+        stream,
+        dns_micros,
+        connect_micros,
+    })
+}
+
+/// Connect to the first of `addrs` that accepts, within `deadline`.
+///
+/// Addresses are tried one at a time in [`interleave_families`] order,
+/// and each attempt gets an equal share of the time left
+/// (`remaining / addresses_left`) rather than all of it. An address
+/// that never answers — typically IPv6 on a path that drops it — can
+/// then use at most its share before the other family is tried; the
+/// last attempt gets everything that remains, so the deadline is
+/// still the only bound on the total.
+///
+/// `connect` is [`TcpStream::connect_timeout`] in production; the
+/// tests inject a fake so a dead address can be simulated without
+/// depending on how the host's network treats an unroutable one.
+fn connect_resolved<C>(
+    host: &str,
+    port: u16,
+    addrs: Vec<SocketAddr>,
+    deadline: &Deadline<'_>,
+    mut connect: C,
+) -> Result<TcpStream, KeError>
+where
+    C: FnMut(&SocketAddr, Duration) -> std::io::Result<TcpStream>,
+{
+    let addrs = interleave_families(addrs);
     let mut last_err: Option<std::io::Error> = None;
-    for addr in addrs {
+    for (tried, addr) in addrs.iter().enumerate() {
         let remaining = deadline.check_or_timeout(KeTimeoutPhase::Connect)?;
-        match TcpStream::connect_timeout(&addr, remaining) {
-            Ok(stream) => {
-                let connect_micros = connect_started.elapsed().as_micros() as i64;
-                return Ok(ConnectedTcp {
-                    stream,
-                    dns_micros,
-                    connect_micros,
-                });
-            }
+        let left = u32::try_from(addrs.len() - tried).unwrap_or(u32::MAX);
+        let share = remaining / left;
+        // `connect_timeout` rejects a zero duration; a sub-nanosecond
+        // share only happens on a budget that is about to expire.
+        let attempt = if share.is_zero() { remaining } else { share };
+        match connect(addr, attempt) {
+            Ok(stream) => return Ok(stream),
             Err(e) => last_err = Some(e),
         }
     }
@@ -2150,6 +2200,31 @@ where
             format!("no addresses resolved for {host}:{port}"),
         )
     })))
+}
+
+/// Reorder `addrs` so IPv6 and IPv4 alternate, starting with the
+/// family of the first address and keeping the resolver's order within
+/// each family (RFC 8305 §4). With the resolver's usual IPv6-first
+/// order, a dead IPv6 path then costs one attempt before IPv4 is tried
+/// rather than one attempt per IPv6 address.
+fn interleave_families(addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    let Some(first_is_v6) = addrs.first().map(SocketAddr::is_ipv6) else {
+        return addrs;
+    };
+    let (first_family, other_family): (Vec<SocketAddr>, Vec<SocketAddr>) =
+        addrs.into_iter().partition(|a| a.is_ipv6() == first_is_v6);
+    let mut out = Vec::with_capacity(first_family.len() + other_family.len());
+    let mut first_family = first_family.into_iter();
+    let mut other_family = other_family.into_iter();
+    loop {
+        let (a, b) = (first_family.next(), other_family.next());
+        if a.is_none() && b.is_none() {
+            break;
+        }
+        out.extend(a);
+        out.extend(b);
+    }
+    out
 }
 
 /// Read until the peer closes the TLS stream or the cap is reached.

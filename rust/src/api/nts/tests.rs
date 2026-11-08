@@ -480,6 +480,7 @@ fn bind_connected_udp_handles_ipv4_loopback() {
         &clock,
         "127.0.0.1",
         echo_port,
+        NtpAddress::Lookup { ke_peer: None },
         deadline_after(&clock, Duration::from_secs(2)),
         64,
         system_lookup,
@@ -517,6 +518,7 @@ fn bind_connected_udp_handles_ipv6_loopback() {
         &clock,
         "::1",
         echo_port,
+        NtpAddress::Lookup { ke_peer: None },
         deadline_after(&clock, Duration::from_secs(2)),
         64,
         system_lookup,
@@ -531,6 +533,156 @@ fn bind_connected_udp_handles_ipv6_loopback() {
     let (n, src) = echo.recv_from(&mut buf).expect("recv");
     assert_eq!(&buf[..n], b"ping6");
     assert!(matches!(src, SocketAddr::V6(_)));
+}
+
+/// RFC 8915 §4.1.7: with no NTPv4 Server record the NTP server is at
+/// the KE server's IP, so the UDP leg sends there without looking the
+/// host up. Looking it up again is what let a query reach the KE
+/// server over IPv4 and then send NTP to the same host's dead IPv6
+/// address (NTS-198). The injected lookup records whether it ran.
+#[test]
+fn bind_connected_udp_sends_to_the_ke_peer_without_a_lookup() {
+    let echo = UdpSocket::bind("127.0.0.1:0").expect("bind echo");
+    let echo_port = echo.local_addr().expect("local addr").port();
+    let looked_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&looked_up);
+
+    let clock = SequentialReader::bind();
+    let UdpBindOutcome { socket, dns_micros } = bind_connected_udp_using(
+        &clock,
+        "dual-stack.invalid",
+        echo_port,
+        NtpAddress::KePeer(SocketAddr::from(([127, 0, 0, 1], 4460))),
+        deadline_after(&clock, Duration::from_secs(2)),
+        64,
+        move |_host, _port| {
+            flag.store(true, Ordering::SeqCst);
+            Ok(Vec::new())
+        },
+    )
+    .expect("bind to the KE peer");
+
+    assert!(
+        !looked_up.load(Ordering::SeqCst),
+        "the NTP host must not be looked up"
+    );
+    assert_eq!(dns_micros, 0);
+    assert_eq!(
+        socket.peer_addr().expect("peer"),
+        SocketAddr::from(([127, 0, 0, 1], echo_port)),
+    );
+    socket.send(b"ping").expect("send");
+    let mut buf = [0u8; 16];
+    let (n, _) = echo.recv_from(&mut buf).expect("recv");
+    assert_eq!(&buf[..n], b"ping");
+}
+
+/// A link-local KE peer is only reachable through its interface scope,
+/// so the UDP leg must keep the whole peer address and replace just
+/// the port. The scope here names no real interface: the bind either
+/// connects and reports the scope back, or fails with an error that
+/// names the candidate it tried. Either way the scope must still be on
+/// the address.
+#[test]
+fn bind_connected_udp_keeps_the_ke_peers_ipv6_scope() {
+    let peer = SocketAddr::V6(std::net::SocketAddrV6::new(
+        std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0xabcd),
+        4460,
+        0,
+        4242,
+    ));
+    let mut expected = peer;
+    expected.set_port(123);
+
+    let clock = SequentialReader::bind();
+    match bind_connected_udp_using(
+        &clock,
+        "link-local.invalid",
+        123,
+        NtpAddress::KePeer(peer),
+        deadline_after(&clock, Duration::from_secs(2)),
+        64,
+        system_lookup,
+    ) {
+        Ok(UdpBindOutcome { socket, .. }) => {
+            assert_eq!(socket.peer_addr().expect("peer"), expected);
+        }
+        Err(NtsError::Network { message, .. }) => assert!(
+            message.contains(&expected.to_string()),
+            "the candidate lost its scope: {message}",
+        ),
+        Err(other) => panic!("expected a bind or a Network error, got {other:?}"),
+    }
+}
+
+/// With a Server record the NTP host is looked up, and the addresses
+/// in the KE connection's family go first: a UDP `connect` sends
+/// nothing, so a dead address is only noticed when the `recv` times
+/// out. The lookup returns IPv6 first, as resolvers usually do, and
+/// the KE peer is IPv4, so the socket must connect to the IPv4
+/// address. Skipped without an IPv6 loopback, where the IPv6
+/// candidate would fail for an unrelated reason.
+#[test]
+fn bind_connected_udp_tries_the_ke_peer_family_first_after_a_server_record() {
+    let echo6 = match UdpSocket::bind("[::1]:0") {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("skipping: host lacks IPv6 loopback support ({e})");
+            return;
+        }
+    };
+    let echo4 = UdpSocket::bind("127.0.0.1:0").expect("bind echo");
+    let addr6 = echo6.local_addr().expect("local addr");
+    let addr4 = echo4.local_addr().expect("local addr");
+
+    let clock = SequentialReader::bind();
+    let UdpBindOutcome { socket, .. } = bind_connected_udp_using(
+        &clock,
+        "ntp.redirect.invalid",
+        addr4.port(),
+        NtpAddress::Lookup {
+            ke_peer: Some(IpAddr::from([127, 0, 0, 1])),
+        },
+        deadline_after(&clock, Duration::from_secs(2)),
+        64,
+        move |_host, _port| Ok(vec![addr6, addr4]),
+    )
+    .expect("bind to the redirect target");
+
+    assert_eq!(socket.peer_addr().expect("peer"), addr4);
+}
+
+/// The session's `NtpAddress` follows RFC 8915 §4.1.7: the KE peer's
+/// address when the response named no NTPv4 server, a lookup ordered
+/// by the KE peer's family when it did, and a plain lookup when the
+/// peer is unknown. A scoped IPv6 peer keeps its scope.
+#[test]
+fn ntp_address_from_handshake_follows_the_server_record() {
+    let peer = SocketAddr::from(([198, 51, 100, 4], 4460));
+    assert_eq!(
+        NtpAddress::from_handshake(Some(peer), false),
+        NtpAddress::KePeer(peer),
+    );
+    let scoped = SocketAddr::V6(std::net::SocketAddrV6::new(
+        std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+        4460,
+        0,
+        7,
+    ));
+    match NtpAddress::from_handshake(Some(scoped), false) {
+        NtpAddress::KePeer(SocketAddr::V6(a)) => assert_eq!(a.scope_id(), 7),
+        other => panic!("expected the scoped KE peer, got {other:?}"),
+    }
+    assert_eq!(
+        NtpAddress::from_handshake(Some(peer), true),
+        NtpAddress::Lookup {
+            ke_peer: Some(peer.ip())
+        },
+    );
+    assert_eq!(
+        NtpAddress::from_handshake(None, false),
+        NtpAddress::Lookup { ke_peer: None },
+    );
 }
 
 /// Build a throwaway `Session` for cookie-jar plumbing tests.
@@ -563,6 +715,7 @@ fn make_test_session(host: &str, ntpv4_port: u16, generation: u64) -> Session {
         s2c_key,
         ntpv4_host: host.to_owned(),
         ntpv4_port,
+        ntp_address: NtpAddress::Lookup { ke_peer: None },
         jar: CookieJar::new(),
         trust_backend: TrustBackend::Platform,
         ke_warnings: Vec::new(),
@@ -1181,6 +1334,7 @@ fn bind_connected_udp_reports_dns_failure() {
         &clock,
         "no-such-host.invalid",
         123,
+        NtpAddress::Lookup { ke_peer: None },
         deadline_after(&clock, Duration::from_millis(500)),
         64,
         system_lookup,
@@ -1216,6 +1370,7 @@ fn bind_connected_udp_surfaces_slow_dns_as_timeout() {
         &clock,
         "ignored.invalid",
         0,
+        NtpAddress::Lookup { ke_peer: None },
         deadline_after(&clock, budget),
         64,
         |_host, _port| {
@@ -1286,6 +1441,7 @@ fn bind_connected_udp_socket_timeouts_reflect_remaining_budget() {
         &clock,
         "ignored.invalid",
         echo_port,
+        NtpAddress::Lookup { ke_peer: None },
         deadline_after(&clock, budget),
         64,
         move |_host, _port| {
@@ -5007,6 +5163,7 @@ fn query_context_cookie_is_zeroizing_wrapped() {
         s2c_key: AeadKey::from_keying_material(AES_SIV_CMAC_256, &[0u8; 32]).unwrap(),
         ntpv4_host: String::new(),
         ntpv4_port: 0,
+        ntp_address: super::NtpAddress::Lookup { ke_peer: None },
         aead_id: AES_SIV_CMAC_256,
         trust_backend: super::TrustBackend::Platform,
         ke_warnings: Vec::new(),

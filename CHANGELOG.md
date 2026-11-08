@@ -20,6 +20,36 @@ tarball.
   Documentation only — no change to the package.
   ([#405](https://github.com/nick-llewellyn/nts/pull/405))
 
+### Fixed
+
+- A server whose IPv6 address does not answer is now reached over
+  IPv4. The NTS-KE connection tried the resolved addresses one at a
+  time and gave the first, usually IPv6, the whole timeout, so IPv4
+  was never tried and the query failed with `NtsError.timeout`
+  (`TimeoutPhase.connect`). Addresses are now tried alternating
+  between IPv6 and IPv4, and each attempt gets an equal share of the
+  time left; the last gets everything that remains, so the timeout
+  still bounds the whole query.
+  ([#415](https://github.com/nick-llewellyn/nts/pull/415))
+
+- When the NTS-KE response names no NTPv4 server, the NTP request now
+  goes to the IP address the NTS-KE connection reached, as RFC 8915
+  §4.1.7 requires, instead of a fresh lookup of the host. The lookup
+  took the first address, which could be in a family the server does
+  not answer on: a query could complete the handshake over IPv4 and
+  then time out sending NTP over IPv6. When the response does name an
+  NTPv4 server, its addresses in the NTS-KE connection's family are
+  tried first.
+  ([#415](https://github.com/nick-llewellyn/nts/pull/415))
+
+  What callers see: queries that timed out against such servers now
+  succeed, after spending part of the timeout on the address that
+  does not answer. If the last address refuses the connection, the
+  query now fails with `NtsError.network` instead of a timeout.
+  `PhaseTimings.dnsMicros` no longer includes a lookup of the NTP
+  host when the response named no NTPv4 server. The API is
+  unchanged.
+
 ### Changed
 
 - The example app's server catalog (`example/assets/nts-sources.yml`)

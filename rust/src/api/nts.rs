@@ -50,7 +50,7 @@
 //! and is unaffected by the per-client refactor.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -194,14 +194,18 @@ impl From<KeTimeoutPhase> for TimeoutPhase {
 /// e.g. on a cache-hit query (no KE handshake), `connect_micros`,
 /// `tls_handshake_micros`, and `ke_record_io_micros` are all `0` and
 /// `dns_micros` reflects only the UDP-path lookup of the NTPv4 host.
-/// On a fresh-session query both KE-path and UDP-path DNS lookups
-/// run; their costs are summed into a single `dns_micros` value so
-/// callers do not have to reason about which path contributed.
+/// That lookup runs only when the KE response named an NTPv4 server
+/// (RFC 8915 §4.1.7); otherwise the UDP leg sends to the address the
+/// KE connection reached, and it contributes `0`. On a fresh-session
+/// query both lookups can run; their costs are summed into a single
+/// `dns_micros` value so callers do not have to reason about which
+/// path contributed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PhaseTimings {
     /// Sum of wall-clock microseconds spent in the bounded DNS
     /// resolver across both the KE-host lookup (when a handshake
-    /// runs) and the NTPv4-host lookup. Combined into a single
+    /// runs) and the NTPv4-host lookup (when the KE response named an
+    /// NTPv4 server). Combined into a single
     /// field because callers diagnosing slow DNS care about the
     /// host-level cost regardless of which leg consumed it. See
     /// `ARCHITECTURE.md`'s "Timeout budget and bounded DNS"
@@ -1585,6 +1589,36 @@ impl From<std::io::Error> for NtsError {
     }
 }
 
+/// Where the UDP leg sends NTP, decided once from the KE handshake
+/// that established the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NtpAddress {
+    /// The KE response carried no NTPv4 Server record, so RFC 8915
+    /// §4.1.7 puts the NTP server at the IP address the KE connection
+    /// reached. The UDP leg uses it without a lookup, so it cannot
+    /// pick a different address of the same host — for example one in
+    /// a family the server does not answer on. The whole peer address
+    /// is kept, not just its IP, so a link-local IPv6 peer keeps its
+    /// interface scope; only the port is replaced.
+    KePeer(SocketAddr),
+    /// Look up `ntpv4_host`. Addresses in `ke_peer`'s family are tried
+    /// first, since §4.1.7 asks a server that names an NTP host to
+    /// name one reachable in the KE session's family. `ke_peer` is
+    /// `None` when the KE connection's peer address is unknown.
+    Lookup { ke_peer: Option<IpAddr> },
+}
+
+impl NtpAddress {
+    fn from_handshake(ke_peer: Option<SocketAddr>, ntpv4_server_record: bool) -> Self {
+        match ke_peer {
+            Some(peer) if !ntpv4_server_record => Self::KePeer(peer),
+            _ => Self::Lookup {
+                ke_peer: ke_peer.map(|p| p.ip()),
+            },
+        }
+    }
+}
+
 /// Cached per-(KE host:port) session built from a successful handshake.
 struct Session {
     /// Process-wide unique identifier for *this* handshake instance.
@@ -1607,6 +1641,8 @@ struct Session {
     /// NTPv4 host the KE response pointed at (often the same as the KE host).
     ntpv4_host: String,
     ntpv4_port: u16,
+    /// How the UDP leg turns `ntpv4_host` into an address.
+    ntp_address: NtpAddress,
     /// Cookie pool for this session's server. A single unkeyed queue
     /// rather than a host-keyed map: a `Session` is 1:1 with a
     /// negotiated `host:port`, so the key was redundant with
@@ -2731,6 +2767,7 @@ fn establish_session(
         s2c_key,
         ntpv4_host: outcome.ntpv4_host,
         ntpv4_port: outcome.ntpv4_port,
+        ntp_address: NtpAddress::from_handshake(outcome.ke_peer, outcome.ntpv4_server_record),
         jar,
         trust_backend,
         ke_warnings,
@@ -2782,6 +2819,7 @@ struct QueryContext {
     s2c_key: AeadKey,
     ntpv4_host: String,
     ntpv4_port: u16,
+    ntp_address: NtpAddress,
     aead_id: u16,
     /// Trust-anchor backend the [`Session`] this context was checked
     /// out from authenticated against. Carried verbatim from the
@@ -2856,6 +2894,7 @@ fn build_query_context(s: &Session, cookie: Zeroizing<Vec<u8>>) -> QueryContext 
         s2c_key: s.s2c_key.clone(),
         ntpv4_host: s.ntpv4_host.clone(),
         ntpv4_port: s.ntpv4_port,
+        ntp_address: s.ntp_address,
         aead_id: s.aead_id,
         trust_backend: s.trust_backend,
         ke_warnings: s.ke_warnings.clone(),
@@ -3718,14 +3757,21 @@ fn take_udp_connect_stamp() -> Option<u64> {
     LAST_UDP_CONNECT_NTP64.with(std::cell::Cell::take)
 }
 
-/// Resolve `(host, port)` and return a UDP socket bound to the local
-/// wildcard address of the matching family, already `connect()`ed to the
-/// first remote candidate that accepts the binding.
+/// Find the NTP server's address and return a UDP socket bound to the
+/// local wildcard address of the matching family, already
+/// `connect()`ed to the first remote candidate that accepts the
+/// binding.
 ///
-/// Resolution honours whatever `getaddrinfo` (or its platform equivalent)
-/// returns through [`ToSocketAddrs`] — on Apple, glibc, and musl that
-/// already implements the RFC 6724 destination-address selection rules,
-/// so no per-address scoring is needed here. The wildcard bind is the
+/// For [`NtpAddress::KePeer`] the only candidate is the KE server's IP
+/// and nothing is resolved (RFC 8915 §4.1.7). For
+/// [`NtpAddress::Lookup`], resolution honours whatever `getaddrinfo`
+/// (or its platform equivalent) returns through [`ToSocketAddrs`] — on
+/// Apple, glibc, and musl that already implements the RFC 6724
+/// destination-address selection rules. The one reordering applied
+/// here moves addresses in the KE connection's family to the front: a
+/// UDP `connect` sends nothing, so a dead address is not detected
+/// until the `recv` times out, and the family the KE connection
+/// reached is the one known to work. The wildcard bind is the
 /// idiomatic way to pick an ephemeral source port; a bound socket whose
 /// family does not match the destination would emit
 /// `AddrNotAvailable` / `Network is unreachable` on `connect`, which is
@@ -3737,8 +3783,8 @@ fn take_udp_connect_stamp() -> Option<u64> {
 /// FRB) sees the full picture rather than just the last error.
 ///
 /// `deadline` is enforced as a single global deadline that spans every
-/// blocking phase of the UDP setup — bounded DNS lookup (via the
-/// resolver in [`crate::nts::dns`]), the per-address `bind`+`connect`
+/// blocking phase of the UDP setup — bounded DNS lookup when there is
+/// one (via the resolver in [`crate::nts::dns`]), the per-address `bind`+`connect`
 /// loop, and the read/write timeouts written onto the returned socket
 /// (which then bound the subsequent `send`/`recv` in [`nts_query`]).
 /// It is the call-wide endpoint, bound via [`UdpDeadline::at`], and the
@@ -3840,7 +3886,8 @@ impl<'c> UdpDeadline<'c> {
 }
 
 /// UDP socket plus the wall-clock microseconds the bounded DNS lookup
-/// consumed during setup. Returned by [`bind_connected_udp_using`] so
+/// consumed during setup (`0` for [`NtpAddress::KePeer`], which does
+/// not look anything up). Returned by [`bind_connected_udp_using`] so
 /// callers can fold the UDP-path DNS cost into [`PhaseTimings`]
 /// without re-instrumenting the resolver.
 #[derive(Debug)]
@@ -3849,8 +3896,9 @@ struct UdpBindOutcome {
     dns_micros: i64,
 }
 
-/// Resolve `host:port` and bind a connected UDP socket, taking a
-/// caller-supplied lookup closure.
+/// Bind a connected UDP socket to the NTP server `ntp_address`
+/// selects, taking a caller-supplied lookup closure for
+/// [`NtpAddress::Lookup`].
 ///
 /// Production callers reach this through [`nts_query_inner`], which
 /// forwards [`system_lookup`]; the `nts-6ka` slow-DNS regression test
@@ -3869,6 +3917,7 @@ fn bind_connected_udp_using<F>(
     clock: &SequentialReader,
     host: &str,
     port: u16,
+    ntp_address: NtpAddress,
     deadline: BootInstant,
     dns_concurrency_cap: usize,
     lookup: F,
@@ -3877,6 +3926,90 @@ where
     F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
 {
     let deadline = UdpDeadline::at(clock, deadline);
+    let (candidates, dns_micros) = match ntp_address {
+        NtpAddress::KePeer(mut peer) => {
+            peer.set_port(port);
+            (vec![peer], 0)
+        }
+        NtpAddress::Lookup { ke_peer } => {
+            let (mut candidates, dns_micros) =
+                resolve_ntp_host(&deadline, host, port, dns_concurrency_cap, lookup)?;
+            if let Some(peer) = ke_peer {
+                // Stable, so the resolver's order holds within each family.
+                candidates.sort_by_key(|a| a.is_ipv6() != peer.is_ipv6());
+            }
+            (candidates, dns_micros)
+        }
+    };
+    let mut errors: Vec<String> = Vec::with_capacity(candidates.len());
+    for addr in &candidates {
+        // `[::]:0` works as a dual-stack bind on most modern stacks but
+        // causes `connect` to fail when the kernel has IPV6_V6ONLY
+        // forced on (Linux with `net.ipv6.bindv6only=1`, OpenBSD by
+        // default). Always pairing the bind family with the destination
+        // family avoids that whole class of failure.
+        let local: SocketAddr = match addr {
+            SocketAddr::V4(_) => "0.0.0.0:0".parse().expect("constant is valid"),
+            SocketAddr::V6(_) => "[::]:0".parse().expect("constant is valid"),
+        };
+        let socket = match UdpSocket::bind(local) {
+            Ok(s) => s,
+            Err(e) => {
+                errors.push(format!("bind {local} for {addr}: {e}"));
+                continue;
+            }
+        };
+        // Set socket timeouts to the *remaining* budget rather than the
+        // caller's original `timeout`. The subsequent `send`/`recv` in
+        // `nts_query` inherit these values, so the only blocking
+        // post-bind syscall (`recv`) trips no later than the global
+        // deadline. Re-arming the original `timeout` here is exactly
+        // the regression nts-zf2 fixes — it allowed the UDP phase to
+        // overshoot the caller's budget by up to 2x.
+        //
+        // Tag a post-DNS budget exhaustion as `Ntp` because the next
+        // blocking syscall after this point is the NTP `send`/`recv`.
+        let socket_budget = deadline.remaining_or_timeout(TimeoutPhase::Ntp)?;
+        if let Err(e) = socket.set_read_timeout(Some(socket_budget)) {
+            errors.push(format!("set_read_timeout for {addr}: {e}"));
+            continue;
+        }
+        if let Err(e) = socket.set_write_timeout(Some(socket_budget)) {
+            errors.push(format!("set_write_timeout for {addr}: {e}"));
+            continue;
+        }
+        match socket.connect(addr) {
+            Ok(()) => {
+                #[cfg(test)]
+                record_udp_connect_stamp(clock);
+                return Ok(UdpBindOutcome { socket, dns_micros });
+            }
+            Err(e) => errors.push(format!("connect {addr}: {e}")),
+        }
+    }
+    Err(NtsError::Network {
+        message: format!(
+            "failed to bind/connect any of {} resolved addresses for {host}:{port}: [{}]",
+            candidates.len(),
+            errors.join("; "),
+        ),
+        trust_backend: None,
+    })
+}
+
+/// Bounded lookup of the NTP host for [`bind_connected_udp_using`]'s
+/// [`NtpAddress::Lookup`] case. Returns the resolved candidates, never
+/// empty, and the wall-clock microseconds the lookup took.
+fn resolve_ntp_host<F>(
+    deadline: &UdpDeadline<'_>,
+    host: &str,
+    port: u16,
+    dns_concurrency_cap: usize,
+    lookup: F,
+) -> Result<(Vec<SocketAddr>, i64), NtsError>
+where
+    F: FnOnce(&str, u16) -> std::io::Result<Vec<SocketAddr>> + Send + 'static,
+{
     // Pre-DNS budget exhaustion is tagged as `DnsTimeout` because
     // that is the next phase the call would have entered — see the
     // `remaining_or_timeout` rustdoc.
@@ -3932,60 +4065,7 @@ where
             trust_backend: None,
         });
     }
-    let mut errors: Vec<String> = Vec::with_capacity(candidates.len());
-    for addr in &candidates {
-        // `[::]:0` works as a dual-stack bind on most modern stacks but
-        // causes `connect` to fail when the kernel has IPV6_V6ONLY
-        // forced on (Linux with `net.ipv6.bindv6only=1`, OpenBSD by
-        // default). Always pairing the bind family with the destination
-        // family avoids that whole class of failure.
-        let local: SocketAddr = match addr {
-            SocketAddr::V4(_) => "0.0.0.0:0".parse().expect("constant is valid"),
-            SocketAddr::V6(_) => "[::]:0".parse().expect("constant is valid"),
-        };
-        let socket = match UdpSocket::bind(local) {
-            Ok(s) => s,
-            Err(e) => {
-                errors.push(format!("bind {local} for {addr}: {e}"));
-                continue;
-            }
-        };
-        // Set socket timeouts to the *remaining* budget rather than the
-        // caller's original `timeout`. The subsequent `send`/`recv` in
-        // `nts_query` inherit these values, so the only blocking
-        // post-bind syscall (`recv`) trips no later than the global
-        // deadline. Re-arming the original `timeout` here is exactly
-        // the regression nts-zf2 fixes — it allowed the UDP phase to
-        // overshoot the caller's budget by up to 2x.
-        //
-        // Tag a post-DNS budget exhaustion as `Ntp` because the next
-        // blocking syscall after this point is the NTP `send`/`recv`.
-        let socket_budget = deadline.remaining_or_timeout(TimeoutPhase::Ntp)?;
-        if let Err(e) = socket.set_read_timeout(Some(socket_budget)) {
-            errors.push(format!("set_read_timeout for {addr}: {e}"));
-            continue;
-        }
-        if let Err(e) = socket.set_write_timeout(Some(socket_budget)) {
-            errors.push(format!("set_write_timeout for {addr}: {e}"));
-            continue;
-        }
-        match socket.connect(addr) {
-            Ok(()) => {
-                #[cfg(test)]
-                record_udp_connect_stamp(clock);
-                return Ok(UdpBindOutcome { socket, dns_micros });
-            }
-            Err(e) => errors.push(format!("connect {addr}: {e}")),
-        }
-    }
-    Err(NtsError::Network {
-        message: format!(
-            "failed to bind/connect any of {} resolved addresses for {host}:{port}: [{}]",
-            candidates.len(),
-            errors.join("; "),
-        ),
-        trust_backend: None,
-    })
+    Ok((candidates, dns_micros))
 }
 
 /// Run a complete authenticated NTPv4 exchange against `spec`.
@@ -4314,6 +4394,7 @@ where
         &clock,
         &ctx.ntpv4_host,
         ctx.ntpv4_port,
+        ctx.ntp_address,
         deadline,
         cap,
         lookup,

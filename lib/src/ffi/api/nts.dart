@@ -8,9 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'nts.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `arm_send_against_call_deadline`, `at`, `bind_connected_udp_using`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `clock_fault`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner_using`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `pre_epoch_token_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`, `hash`, `hash`, `hash`
+// These functions are ignored because they are not marked as `pub`: `arm_recv_against_call_deadline`, `arm_send_against_call_deadline`, `at`, `bind_connected_udp_using`, `build_query_context`, `checkout_with`, `checkout`, `clear`, `clock_fault`, `complete`, `complete`, `cookies_remaining`, `counter_to_i64`, `default_nts_client`, `deposit_cookies`, `effective_dns_concurrency_cap`, `effective_timeout`, `establish_session`, `evict_session`, `fresh_request_uid_and_nonce`, `from_handshake`, `invalidate`, `ke_warning_redirect_note`, `lock_recover`, `log_oversized_cookie_drops`, `new`, `new`, `new`, `new`, `next_session_generation`, `note_unique_id`, `note`, `ntp64_to_unix_micros`, `ntp_short_signed_to_micros`, `ntp_short_to_micros`, `nts_query_inner_using`, `nts_query_inner`, `nts_warm_cookies_inner`, `on_wire_statistics`, `pre_epoch_fallback_ntp64`, `pre_epoch_token_ntp64`, `prune_sessions`, `prune`, `remaining_budget_or_ntp_timeout`, `remaining_or_timeout`, `remaining`, `resolve_ntp_host`, `session_key`, `system_time_to_ntp64`, `unix_duration_to_ntp64`, `validate_verification_time_ms`, `validate`, `wait_until`, `waiter_timeout_phase`, `warm_cookies_with`, `warm_cookies`, `with_trust_backend`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HandshakeSlotOk`, `HandshakeSlot`, `LeaderGuard`, `NtpAddress`, `QueryContext`, `Role`, `SeenUidCache`, `SessionTable`, `Session`, `UdpBindOutcome`, `UdpDeadline`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `hash`, `hash`, `hash`, `hash`, `hash`
 
 /// Snapshot the bounded DNS resolver pool counters. Reads four atomics
 /// with `Relaxed` ordering; the snapshot is intended for
@@ -1272,13 +1272,17 @@ class NtsWarmCookiesOutcome {
 /// e.g. on a cache-hit query (no KE handshake), `connect_micros`,
 /// `tls_handshake_micros`, and `ke_record_io_micros` are all `0` and
 /// `dns_micros` reflects only the UDP-path lookup of the NTPv4 host.
-/// On a fresh-session query both KE-path and UDP-path DNS lookups
-/// run; their costs are summed into a single `dns_micros` value so
-/// callers do not have to reason about which path contributed.
+/// That lookup runs only when the KE response named an NTPv4 server
+/// (RFC 8915 §4.1.7); otherwise the UDP leg sends to the address the
+/// KE connection reached, and it contributes `0`. On a fresh-session
+/// query both lookups can run; their costs are summed into a single
+/// `dns_micros` value so callers do not have to reason about which
+/// path contributed.
 class PhaseTimings {
   /// Sum of wall-clock microseconds spent in the bounded DNS
   /// resolver across both the KE-host lookup (when a handshake
-  /// runs) and the NTPv4-host lookup. Combined into a single
+  /// runs) and the NTPv4-host lookup (when the KE response named an
+  /// NTPv4 server). Combined into a single
   /// field because callers diagnosing slow DNS care about the
   /// host-level cost regardless of which leg consumed it. See
   /// `ARCHITECTURE.md`'s "Timeout budget and bounded DNS"
