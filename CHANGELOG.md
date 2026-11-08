@@ -40,6 +40,13 @@ tarball.
   catalog. Example app only; the library ships no server list.
   ([#407](https://github.com/nick-llewellyn/nts/pull/407))
 
+- The example app's server catalog also drops `ntp3.ipv6.fau.de`,
+  which answers over IPv6 only and so cannot be reached from an
+  IPv4-only network. This applies the rule the review above set for
+  new servers, which left out two IPv6-only ones, to a server the
+  catalog already had. 87 servers remain. Example app only.
+  ([#413](https://github.com/nick-llewellyn/nts/pull/413))
+
 - Both Rust lockfiles take 21 compatible updates. The native library is
   built from the `rust/Cargo.lock` this package ships, so apps pick
   them up when they upgrade. The notable ones:
