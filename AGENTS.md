@@ -603,9 +603,10 @@ PY
    in flight, the head is **unreviewed**, not reviewed: commits pushed
    after the last review — a fix, a rebase — have not been read by
    Copilot. Whether waiting can end this state depends on the repo's
-   Copilot review rule, which has changed over this repo's life
-   (push-triggered re-reviews were recorded in August 2026; the rule
-   now has them off), so read it rather than assuming:
+   Copilot review rule. The rule has changed over this repo's life —
+   push-triggered re-reviews were recorded as on in August 2026, off
+   in September 2026, and on again in November 2026 — so read it
+   rather than assuming:
    ```bash
    ids=$(gh api repos/<owner>/<repo>/rulesets --paginate --jq '.[].id' < /dev/null) ||
      { echo "FETCH FAILED: rulesets list" >&2; exit 1; }
