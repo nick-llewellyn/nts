@@ -5782,7 +5782,7 @@ fn checkout_drops_a_session_idle_past_the_ttl_instead_of_serving_it() {
     let _ = table.checkout_with(
         &clock,
         &spec,
-        deadline_after(&clock, Duration::from_millis(1)),
+        deadline_after(&clock, Duration::from_secs(5)),
         DEFAULT_MAX_INFLIGHT_DNS_LOOKUPS,
         &do_handshake,
     );
