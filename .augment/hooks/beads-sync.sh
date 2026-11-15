@@ -306,7 +306,7 @@ run_tracked() {
   shift 2
   local child_link="$root/.beads/.augment-sync.child"
   local gate
-  gate=$(mktemp "${TMPDIR:-/tmp}/cs-gate.XXXXXX") || return 1
+  gate=$(mktemp "${TMPDIR:-/tmp}/beads-hook-gate.XXXXXX") || return 1
   rm -f "$gate"
   (
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
@@ -1011,8 +1011,14 @@ HOOK_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HOOK_DIR/lib/command-scan.sh"
 
 if [ "$EVENT_NAME" = "PostToolUse" ]; then
+  # Auggie CLI 1.2.0 renamed the shell tool from `launch-process` to `bash`,
+  # and hands each hook the name its matcher uses. A copy whose settings still
+  # match the old name, which 1.x matches for now, receives that one.
   TOOL_NAME=$(jq -r '.tool_name // ""' <<<"$EVENT_JSON")
-  [ "$TOOL_NAME" = "launch-process" ] || exit 0
+  case "$TOOL_NAME" in
+    bash | launch-process) ;;
+    *) exit 0 ;;
+  esac
 
   COMMAND=$(jq -r '.tool_input.command // ""' <<<"$EVENT_JSON")
   # The directory the tool call was launched from, and empty when the event does
@@ -1296,7 +1302,7 @@ sync_root() {
   # only for a retry that met the same refusal. The marker is left standing
   # -- it is the record -- and the lock released, so a later invocation with
   # a working directory takes both up.
-  if ! run_out=$(mktemp "${TMPDIR:-/tmp}/cs-bd.XXXXXX"); then
+  if ! run_out=$(mktemp "${TMPDIR:-/tmp}/beads-hook-bd.XXXXXX"); then
     WARNINGS+=("beads: could not create a temporary file under ${TMPDIR:-/tmp}, so ${root} was not synced; the request stays marked, but until the directory is writable no invocation can serve it -- run ${SYNC_BY_HAND} there if the write matters.")
     drop_lock "$lock_dir"
     return 0

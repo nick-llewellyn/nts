@@ -13,7 +13,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "launch-process",
+        "matcher": "bash",
         "hooks": [
           {
             "type": "command",

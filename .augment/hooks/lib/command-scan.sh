@@ -56,7 +56,7 @@ scan_command() {
   SCAN_TARGETS=()
   SCAN_ASYNC=()
   SCAN_FAILED=0
-  out=$(mktemp "${TMPDIR:-/tmp}/cs-scan.XXXXXX") || {
+  out=$(mktemp "${TMPDIR:-/tmp}/beads-hook-scan.XXXXXX") || {
     SCAN_FAILED=1
     return 0
   }

@@ -29,7 +29,7 @@ ORIG_PATH="$PATH"
 # behind look at just this run's. Scanning the shared directory instead reads
 # every concurrent run's gates as this one's -- a false failure -- and any it
 # leaks are indistinguishable from another suite's litter.
-SUITE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/cs-lock-suite.XXXXXX") || exit 2
+SUITE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/beads-hook-lock-suite.XXXXXX") || exit 2
 trap 'rm -rf "$SUITE_TMP"' EXIT
 export TMPDIR="$SUITE_TMP"
 
@@ -116,12 +116,13 @@ teardown() {
 # what a relative `-C` target resolves against. Empty by default, since the
 # field is optional on the real event. `$CONV` sets the `conversation_id`,
 # which is left out when empty. `$FIRE_WAIT`, `true` or `false`, sets the
-# launch's `wait`, which is left out when empty.
+# launch's `wait`, which is left out when empty. `$FIRE_TOOL` sets the
+# `tool_name`, `launch-process` by default.
 event_as() {
   local e="$1" c="$2"; shift 2
-  jq -n --arg e "$e" --arg w "$WS" --arg c "$c" \
+  jq -n --arg e "$e" --arg w "$WS" --arg c "$c" --arg n "${FIRE_TOOL:-launch-process}" \
     --arg d "${FIRE_CWD:-}" --arg v "${CONV:-}" --arg t "${FIRE_WAIT:-}" --args \
-    '{hook_event_name:$e, workspace_roots:([$w] + $ARGS.positional), tool_name:"launch-process", tool_input:({command:$c} + (if $d == "" then {} else {cwd:$d} end) + (if $t == "" then {} else {wait:($t == "true")} end))} + (if $v == "" then {} else {conversation_id:$v} end)' \
+    '{hook_event_name:$e, workspace_roots:([$w] + $ARGS.positional), tool_name:$n, tool_input:({command:$c} + (if $d == "" then {} else {cwd:$d} end) + (if $t == "" then {} else {wait:($t == "true")} end))} + (if $v == "" then {} else {conversation_id:$v} end)' \
     "$@"
 }
 
@@ -189,7 +190,7 @@ lock_exists() { [ -L "$1" ]; }
 # planted at that name beforehand redirects the write onto whatever it points
 # at -- `>` follows a symlink, so the extraction lands on the target while the
 # link stays a link. An unpredictable name is what makes both unreachable.
-OWNER_FIELDS=$(mktemp "$SUITE_TMP/cs-owner-fields.XXXXXX") || exit 2
+OWNER_FIELDS=$(mktemp "$SUITE_TMP/beads-hook-owner-fields.XXXXXX") || exit 2
 sed -n '/^boot_token()/,/^}/p;/^proc_start()/,/^}/p' "$HOOK" >"$OWNER_FIELDS"
 # Passed in as an argument rather than spliced into the script text, so the
 # path is data to the shell that reads it and not more of the program.
@@ -210,6 +211,21 @@ setup
 fire 'bd close CHR-1'
 [ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 1 ] && ! pending &&
   report ok || report bad "write: commit+push once, marker cleared (log: $(tr '\n' ',' <"$BD_LOG"))"
+teardown
+
+# --- Auggie 1.x's `bash` tool name syncs as `launch-process` does ------
+# Auggie passes each hook the tool name its matcher uses, so a `bash` matcher
+# delivers `bash`. Read as some other tool, the call is skipped before the
+# scan and the write stays local until SessionEnd. A call from any other tool
+# is still skipped.
+setup
+FIRE_TOOL=bash fire 'bd close CHR-1'
+[ "$(count commit)" -eq 1 ] && [ "$(count push)" -eq 1 ] && ! pending &&
+  report ok || report bad "bash tool: commit+push once, marker cleared (log: $(tr '\n' ',' <"$BD_LOG"))"
+: >"$BD_LOG"
+FIRE_TOOL=read fire 'bd close CHR-1'
+[ "$(count commit)" -eq 0 ] && [ "$(count push)" -eq 0 ] && report ok ||
+  report bad "a tool other than the shell must not sync (log: $(tr '\n' ',' <"$BD_LOG"))"
 teardown
 
 # --- a read-only command does not sync ---------------------------------
@@ -466,8 +482,15 @@ wait $! 2>/dev/null
 teardown
 
 # --- a marker set mid-push earns a second pass -------------------------
+# The marker is set once the stub logs that its push has begun, rather than
+# after a fixed second: a hook slow to reach its push under load took the
+# marker in that same pass, which pushed once, correctly, and failed the case.
 setup
-( sleep 1; : >"$WS/.beads/.augment-sync.pending" ) &
+( for _ in $(seq 100); do
+    grep -q push-begin "$BD_LOG.span" 2>/dev/null && break
+    sleep 0.1
+  done
+  : >"$WS/.beads/.augment-sync.pending" ) &
 POKE=$!
 export BD_PUSH_SLEEP=3
 fire 'bd close CHR-1'
@@ -2201,7 +2224,7 @@ fire 'bd close CHR-1'
 # The gate is not left in place for every refused run to accumulate one.
 # Looked for in this run's own temp directory, which the hook inherits, so a
 # concurrent run's gate is neither read as this one's nor able to hide a leak.
-[ -z "$(find "$SUITE_TMP" -maxdepth 1 -name 'cs-gate.*' -newer "$BD_LOG" 2>/dev/null)" ] &&
+[ -z "$(find "$SUITE_TMP" -maxdepth 1 -name 'beads-hook-gate.*' -newer "$BD_LOG" 2>/dev/null)" ] &&
   report ok || report bad "a refused run must not leave its gate behind"
 rmdir "$WS/.beads/.augment-sync.child"
 # Cleared, the same command syncs, so the refusal was the record and not the

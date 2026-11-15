@@ -68,6 +68,13 @@ READONLY_PAIRS = {
     ("dolt", "status"), ("dolt", "log"),
 }
 
+# Verbs that check `bd`'s global `--readonly` before every write, so under the
+# flag they only read: `bd --readonly sql "update ..."` refuses the statement
+# wherever the flag stands among its options, while `bd --readonly import`
+# writes regardless. A verb missing here is judged by the tables above whatever
+# flags it carries, so the flag alone never makes a call read-only.
+READONLY_MODE_VERBS = {"sql"}
+
 # Words that may stand in front of the real command without changing which
 # command it is: `command bd -C /tmp/x close CHR-1` is a write to /tmp/x, and
 # reading `command` as the command name loses the target. The shell keywords
@@ -220,9 +227,9 @@ NICE_ADJUST = re.compile(r"^-[-+]?[0-9]+$")
 # out of `--noprofile` is not a flag of anything: `bash --noprofile --norc -c
 # '...'` runs its script, and reading the first `-` inside the word as an
 # unknown short flag abandoned the invocation. Only the ones that certainly
-# take nothing are listed; `--help` and `--version` run no script and are
-# left out, as is any long option not known here, so an unknown one still
-# abandons the invocation rather than misplacing the script.
+# take nothing are listed, and any other abandons the invocation rather than
+# misplacing the script, except under zsh, which takes each of its options in
+# long form; see `shell_script`.
 SHELL_OPT_ARGS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file",
                   "--emulate"}
 SHELL_NOARG_LETTERS = set("abcefhiklmnprstuvxBCEHPT")
@@ -230,10 +237,19 @@ SHELL_LONG_NOARG = {"--noprofile", "--norc", "--posix", "--login",
                     "--noediting", "--restricted", "--verbose", "--debugger",
                     "--pretty-print", "--protected", "--no-rcs",
                     "--no-globalrcs", "--interactive"}
+# The long options with which bash and zsh alike run no script.
+SHELL_LONG_NOSCRIPT = {"--help", "--version"}
 # Those of them only zsh takes. bash refuses them as it does any long option it
 # does not know, and runs neither a startup file nor the script: `bash
 # --interactive -c '...'` exits 2 at once.
 SHELL_ZSH_LONG = {"--no-rcs", "--no-globalrcs", "--interactive", "--emulate"}
+# Where zsh's global zshenv lives, which it runs before any script, `-f` or
+# not. The place is set when zsh is built: /etc for most builds, /etc/zsh for
+# Debian's.
+ZSH_GLOBAL_ZSHENV = ("/etc/zshenv", "/etc/zsh/zshenv")
+# The file an interactive ksh93 reads before ENV, whatever ENV says, as builds
+# with SHOPT_SYSRC, the default, do.
+KSH_SYSTEM_RC = "/etc/ksh.kshrc"
 
 # `bd`'s own global options that consume the word after them. The verb is the
 # first operand that is not an option, so an option's value must be stepped
@@ -249,6 +265,10 @@ BD_DIR_OPTS = ("-C", "--dir", "--directory")
 # The one global that names the store itself rather than a directory to look
 # from. It has no short form, so only the two long spellings are read.
 BD_DB_OPT = "--db"
+
+# The global that makes `bd` refuse writes, under the verbs that check it; see
+# READONLY_MODE_VERBS.
+BD_READONLY_OPT = "--readonly"
 
 # The environment `bd` reads its store from, in the order it consults them
 # when no `--db` is given. `-C` sets BEADS_DIR before either is read, so a
@@ -373,6 +393,9 @@ DIR_STACK_ROTATE = re.compile(r"^[-+][0-9]+$")
 # 'X-Y=1' bd -C /external close X` runs `bd`. Matched against the identifier
 # shape, the word was read as the command and the write was missed.
 ASSIGN_WORD = re.compile(r"^[^=]+=")
+# An argument shaped like an assignment whose value opens with an unquoted
+# `~`; see `assignment_tilde`.
+ASSIGN_TILDE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=~")
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # The arithmetic operators that assign to their left operand, and the unary
@@ -420,6 +443,12 @@ SOURCE_WORDS = {"source", "."}
 # the shell: `/usr/bin/cd /decoy; bd close X` writes the store it started in.
 SHELL_STATE_WORDS = CHDIR_WORDS | set(READ_WORDS) | {
     "unset", "set", "shopt", "eval", "getopts", "printf"}
+# The POSIX special builtins, which a shell in POSIX mode finds before a
+# function of the same name, whether this scan reads the builtin or not; see
+# `Scope.posix`. bash treats `source` as it treats `.`.
+SPECIAL_BUILTINS = SOURCE_WORDS | {
+    ":", "break", "continue", "eval", "exec", "exit", "export", "readonly",
+    "return", "set", "shift", "times", "trap", "unset"}
 # The `set -o` names of the options `set` is read for, by the letter that is
 # their short form; see `set_builtin`.
 SET_O_LETTERS = {"allexport": "a", "monitor": "m", "physical": "P"}
@@ -531,7 +560,7 @@ def _q(pattern):
 
     shfmt names the tokens in its errors in backticks, but only since 3.9 --
     3.8 uses double quotes for some and nothing for others, and 3.8 is what
-    `apt-get install shfmt` gives on the CI image. A pattern that requires one
+    `apt-get install shfmt` gives on Ubuntu 24.04. A pattern that requires one
     spelling matches nothing under the other, so no repair is found and a
     fragment that should parse is abandoned: the write is then reported with no
     target and its store goes unregistered, which is the silent outcome this
@@ -542,7 +571,10 @@ def _q(pattern):
 
 
 _INCOMPLETE = (
-    (_q(r"unclosed here-document `(.+)`$"),
+    # 3.8 and 3.12 quote the delimiter in single quotes, 3.14 in backticks, so
+    # neither quote is taken into it: a delimiter carrying one closed nothing,
+    # and the fragment fell to `truncate`.
+    (re.compile(r"unclosed here-document [`\"']?(.+?)[`\"']?$"),
      lambda t, m: t + "\n" + m.group(1) + "\n"),
     (_q(r"matching `\{` with `\}`$"), lambda t, m: t + "\n}"),
     (_q(r"matching `\(` with `\)`$"), lambda t, m: t + "\n)"),
@@ -557,11 +589,56 @@ _INCOMPLETE = (
      lambda t, m: "if :\n" + t),
     (_q(r"`(do|done|fi|esac|elif|else)` can only be used"),
      lambda t, m: t.replace(m.group(1), ":", 1)),
+    # shfmt reads these names as declaration keywords, and `let` as an
+    # arithmetic one, so it rejects a function of that name, `export() { ...;
+    # }`, which bash accepts outside POSIX mode. Spelled `function export`, it
+    # parses; see `keyword_function`.
+    (_q(r"^(?P<row>\d+):(?P<col>\d+): `(?P<name>export|declare|local|"
+        r"readonly|typeset|nameref)` must be followed by names or "
+        r"assignments$"), lambda t, m: keyword_function(t, m)),
+    (_q(r"^(?P<row>\d+):(?P<col>\d+): `\(` must be followed by an "
+        r"expression$"), lambda t, m: keyword_function(t, m)),
 )
 
 
 # Where shfmt says the text stopped making sense, as `line:col:`.
 _AT = re.compile(r"^(\d+):(\d+):")
+
+
+def byte_offset(raw, row, col):
+    """The offset in the encoded text `raw` of shfmt's `row:col`, or None.
+
+    The column counts bytes, as every offset shfmt reports does.
+    """
+    lines = raw.splitlines(True)
+    if row < 1 or row > len(lines):
+        return None
+    return sum(len(one) for one in lines[:row - 1]) + col - 1
+
+
+def keyword_function(text, match):
+    """`text` with the definition shfmt rejected at `match` spelled `function
+    NAME()`, or None when the text there is no such definition.
+
+    The error names the `(` after the name, which must be directly followed by
+    `)` and preceded by the name as a word of its own: `export ( a )` is no
+    definition, and is left to `truncate`. The `()` stays, as the body may
+    follow it with no space: dropped, `export(){ :; }` became `function
+    export{ :; }`, and `export()(:)` and `local()for ...` fail as `function
+    NAME` with a space too.
+    """
+    raw = text.encode("utf-8")
+    cut = byte_offset(raw, int(match.group("row")), int(match.group("col")))
+    if cut is None or not 0 < cut < len(raw):
+        return None
+    name = (match.groupdict().get("name") or "let").encode()
+    head = re.search(rb"(?<![^\s;&|(){}])" + re.escape(name) + rb"[ \t]*$",
+                     raw[:cut])
+    parens = re.match(rb"\([ \t]*\)", raw[cut:])
+    if not head or not parens:
+        return None
+    return (raw[:head.start()] + b"function " +
+            raw[head.start():]).decode("utf-8", "ignore")
 
 
 def truncate(text, line):
@@ -577,34 +654,40 @@ def truncate(text, line):
     character before the fault put the cut past the offending token, which
     then failed the same way again -- or past the end of the text, where the
     prefix was abandoned and the write in it with it.
+
+    What it cuts off may hold a write as well, so `parse` reports the cut and
+    the caller counts it as a script that cannot be read; see
+    `unreadable_script`.
     """
     match = _AT.match(line)
     if not match:
         return None
-    row, col = int(match.group(1)), int(match.group(2))
     raw = text.encode("utf-8")
-    lines = raw.splitlines(True)
-    if row < 1 or row > len(lines):
-        return None
-    cut = sum(len(one) for one in lines[:row - 1]) + col - 1
-    if not 0 < cut < len(raw):
+    cut = byte_offset(raw, int(match.group(1)), int(match.group(2)))
+    if cut is None or not 0 < cut < len(raw):
         return None
     return raw[:cut].decode("utf-8", "ignore")
 
 
 def parse(text):
-    """The syntax tree of `text` and the text it was parsed from.
+    """The syntax tree of `text`, the text it was parsed from, and whether
+    any of `text` went unparsed.
 
-    The two are returned together because a repair changes the text, and the
-    tree's offsets index what was parsed rather than what was passed in. A
-    caller reading a node back out of the source needs the same string shfmt
-    saw. `(None, text)` when it cannot be parsed at all.
+    The first two are returned together because a repair changes the text,
+    and the tree's offsets index what was parsed rather than what was passed
+    in. A caller reading a node back out of the source needs the same string
+    shfmt saw. `(None, text, True)` when it cannot be parsed at all. The third
+    is true, too, when `truncate` cut text off, which the caller counts as a
+    script that cannot be read: shfmt rejects some text bash runs, and a write
+    in the cut-off part was reported as no write at all, with nothing synced
+    and no warning.
 
     Raises `Unavailable` when shfmt could not be run, which is a different
     answer from "this text does not parse": no command can be scanned at all,
     so reporting it as a command that writes nothing would strand every write
     of every command for as long as the install stays broken.
     """
+    dropped = False
     for _ in range(MAX_REPAIRS):
         try:
             done = subprocess.run(["shfmt", "--to-json", "-"], input=text,
@@ -617,7 +700,7 @@ def parse(text):
             raise Unavailable("shfmt exited %d" % done.returncode)
         if done.returncode == 0:
             try:
-                return json.loads(done.stdout), text
+                return json.loads(done.stdout), text, dropped
             except ValueError as err:
                 raise Unavailable("shfmt emitted no readable tree: %s" % err)
         lines = done.stderr.strip().splitlines()
@@ -632,10 +715,11 @@ def parse(text):
                 break
         if repaired is None:
             repaired = truncate(text, lines[0]) if lines else None
+            dropped = True
         if repaired is None or repaired == text:
-            return None, text
+            return None, text, True
         text = repaired
-    return None, text
+    return None, text, True
 
 
 # --- words ----------------------------------------------------------------
@@ -657,6 +741,10 @@ UNKNOWN = object()
 # a word it is as unknowable as any other unset name, since `get` does not
 # answer for those either.
 UNSET = object()
+
+# A name a scope's table has no entry for, as distinct from any value one
+# may hold; see `settle_prefix`.
+MISSING = object()
 
 # How a wrapper sealed the child's environment against the names it did not
 # carry. CLEARED is `env -i` and `exec -c`: a name not carried is certainly
@@ -680,31 +768,33 @@ class ShellOpts:
 
     bash keeps the variable in step with every option in force, its defaults
     among them -- `braceexpand:hashall:interactive-comments` before any is
-    set -- and this scan follows only `physical` and `monitor`, and `posix`
-    as far as it can. So the string is unknowable, as is a word expanding
-    it, while whether it lists each of those is known: True, False or
-    UNKNOWN, which is all a bash started from it reads.
+    set -- and this scan follows only `physical`, `monitor` and `allexport`,
+    and `posix` as far as it can. So the string is unknowable, as is a word
+    expanding it, while whether it lists each of those is known: True, False
+    or UNKNOWN, which is all a bash started from it reads.
     """
 
-    __slots__ = ("physical", "monitor", "posix")
+    __slots__ = ("physical", "monitor", "posix", "allexport")
 
-    def __init__(self, physical, monitor, posix):
+    def __init__(self, physical, monitor, posix, allexport):
         self.physical = physical
         self.monitor = monitor
         self.posix = posix
+        self.allexport = allexport
 
     def __eq__(self, other):
         return isinstance(other, ShellOpts) and \
             other.physical is self.physical and \
-            other.monitor is self.monitor and other.posix is self.posix
+            other.monitor is self.monitor and other.posix is self.posix and \
+            other.allexport is self.allexport
 
     def __hash__(self):
         return hash(ShellOpts)
 
 
 def opts_option(value, option):
-    """Whether the SHELLOPTS `value` lists `option`, `physical`, `monitor` or
-    `posix`: True, False or UNKNOWN.
+    """Whether the SHELLOPTS `value` lists `option`, `physical`, `monitor`,
+    `posix` or `allexport`: True, False or UNKNOWN.
 
     None or UNSET is a SHELLOPTS that is not there, which lists nothing.
     """
@@ -717,6 +807,19 @@ def opts_option(value, option):
     return option in value.split(":")
 
 
+def zsh_option_setting(name, names):
+    """What setting the zsh option `name` gives the option `names` spell, in
+    lower case without `_`s: True, False, or None for another option. zsh
+    reads a name whatever its case, `_`s and, spelled as a long option, `-`s,
+    and reads a leading `no` as the inverse."""
+    name = name.lower().replace("_", "").replace("-", "")
+    if name in names:
+        return True
+    if name[:2] == "no" and name[2:] in names:
+        return False
+    return None
+
+
 def bash_kind(word):
     """Whether the shell `word` names is bash: True, False, or UNKNOWN for
     `sh`, which is bash on some systems and another shell on others."""
@@ -724,6 +827,22 @@ def bash_kind(word):
     if name == "bash":
         return True
     return UNKNOWN if name == "sh" else False
+
+
+def merge_bodies(first, second):
+    """The bodies a function has where it may have any of `first` or of
+    `second`, each a tuple of `(body, text, raw)`: those of `first` in order,
+    then those of `second` it does not hold. A body is the same one where it
+    is the same node of the parse, which a set of their ids finds in one
+    pass: `t && f() { :; }` written 3000 times took more than a minute when
+    each join compared every pair."""
+    merged = list(first)
+    seen = {id(entry[0]) for entry in merged}
+    for entry in second:
+        if id(entry[0]) not in seen:
+            seen.add(id(entry[0]))
+            merged.append(entry)
+    return tuple(merged)
 
 
 def unescape(text):
@@ -1078,6 +1197,65 @@ def assignment_name(word, raw=None):
     if not match or match.group(0).startswith("-"):
         return None
     return match.group(0)[:-1]
+
+
+def may_assign(field, name):
+    """Whether `field`, an operand of `export` or `readonly`, may assign
+    `name`: one reading `name=...` or `name+=...`, or one this scan cannot
+    read that is not certainly an assignment of another name. An append is
+    unknown here like any other: after `set -o posix; OUT=/p export
+    OUT+=/r`, bash 3.2 and 5.2 leave OUT /r."""
+    if field.value is UNKNOWN:
+        return field.assign in (None, name, name + "+")
+    return field.value.startswith((name + "=", name + "+="))
+
+
+def unexports(operands, name):
+    """Whether `export` run with `operands` takes the export of `name` away:
+    True, False, or UNKNOWN where a word this scan cannot read may be an
+    option or the name.
+
+    `-n` does, given the name, unless `-f` turns it on functions; options
+    end at `--` or the first operand, after which an `-n` is an operand.
+    """
+    flag = functions = named = False
+    options = True
+    for field in operands:
+        word = field.value
+        if word is UNKNOWN:
+            if field.assign is None:
+                named = named or UNKNOWN
+            elif field.assign in (name, name + "+"):
+                named = True
+            if options is not False and field.assign is None and (
+                    field.dash or field.split):
+                flag = flag or UNKNOWN
+                functions = functions or UNKNOWN
+                options = UNKNOWN
+            else:
+                options = False
+        elif options is not False and word == "--":
+            options = False
+        elif options is not False and word.startswith("-") and word != "-":
+            if "n" in word[1:]:
+                flag = True if options is True else flag or UNKNOWN
+            if "f" in word[1:]:
+                functions = True if options is True else functions or UNKNOWN
+        else:
+            options = False
+            if word == name or word.startswith((name + "=", name + "+=")):
+                named = True
+    if False in (flag, named) or functions is True:
+        return False
+    if flag is True and named is True and functions is False:
+        return True
+    return UNKNOWN
+
+
+def join_states(one, other):
+    """The value and export state a name has after one of two paths, each
+    as `settle_prefix` holds it: what they share, and UNKNOWN elsewhere."""
+    return tuple(a if a is b else UNKNOWN for a, b in zip(one, other))
 
 
 def split_fields(segments, separators, keep_nulls=False):
@@ -1480,7 +1658,8 @@ class Scope:
 
     def __init__(self, cwd, known, assigns, sealed=False, exported=None,
                  allexport=False, lastpipe=False, monitor=False,
-                 physical=False, spelled=True, bash=True, zsh=False):
+                 physical=False, spelled=True, bash=True, zsh=False,
+                 posix=False, readonly=None, readonly_opaque=False):
         self.cwd = cwd
         self.known = known
         # Whether `cwd` is also how the shell's PWD spells the directory:
@@ -1512,6 +1691,15 @@ class Scope:
         # runs `bd` with no BEADS_DIR at all unless something exported it, and
         # reading every assignment as exported named a store `bd` never saw.
         self.exported = {} if exported is None else exported
+        # The names made readonly, True or UNKNOWN where a `readonly` may or
+        # may not have run. An `unset` of one fails and leaves it as it was;
+        # see `is_readonly`.
+        self.readonly = {} if readonly is None else readonly
+        # Whether a name not in `readonly` may be readonly all the same, as
+        # after something this scan cannot read ran in this shell; see
+        # `seal_opaque`. A new process starts with no name readonly, however
+        # little is known of the environment it inherits.
+        self.readonly_opaque = readonly_opaque
         # `set -a` in force: every later assignment is exported. UNKNOWN when
         # a `set -a` may or may not have run.
         self.allexport = allexport
@@ -1535,12 +1723,20 @@ class Scope:
         # Whether this shell is zsh, which unlike the others ignores a CDPATH
         # in a `cd`'s own prefix; see `cd_path`.
         self.zsh = zsh
+        # Whether a special builtin is found before a function of the same
+        # name, as POSIX asks. bash does so in its POSIX mode, which `set -o
+        # posix`, an inherited SHELLOPTS listing `posix` and POSIXLY_CORRECT
+        # turn on, and which it is in as `sh`; dash and ksh refuse to define
+        # such a function at all; zsh never does. UNKNOWN when the text may or
+        # may not have changed it. See `function_first`.
+        self.posix = posix
 
     def child(self):
         return Scope(self.cwd, self.known, dict(self.assigns), self.sealed,
                      dict(self.exported), self.allexport, self.lastpipe,
                      self.monitor, self.physical, self.spelled, self.bash,
-                     self.zsh)
+                     self.zsh, self.posix, dict(self.readonly),
+                     self.readonly_opaque)
 
     def last_member_stays(self):
         """Whether a pipeline's last member runs in this shell: True, False
@@ -1579,19 +1775,25 @@ class Scanner:
         # start instead, which leaves such a target unresolved.
         #
         # The shell the command runs in imports an inherited SHELLOPTS, so one
-        # listing `physical` starts it in physical mode, and one listing
-        # `monitor` with job control; see `shellopts_option`. It sets and
-        # exports PWD as it starts, whatever this process's environment
-        # holds; see `sub_scan`.
+        # listing `allexport` starts it exporting every assignment, one
+        # listing `physical` in physical mode, one listing `monitor` with job
+        # control, and one listing `posix`, or a POSIXLY_CORRECT, in POSIX
+        # mode; see `shellopts_option`. It sets and exports PWD as it starts,
+        # whatever this process's environment holds; see `sub_scan`.
         opts = os.environ.get("SHELLOPTS", "").split(":")
         self.scope = Scope(launch_cwd, bool(launch_cwd), {},
                            exported={"PWD": True},
+                           allexport="allexport" in opts,
                            monitor="monitor" in opts,
-                           physical="physical" in opts)
+                           physical="physical" in opts,
+                           posix="posix" in opts or
+                           "POSIXLY_CORRECT" in os.environ or
+                           "POSIX_PEDANTIC" in os.environ)
         self.depth = 0
-        # Bodies of the functions defined so far, by name, each with the text
-        # it was parsed from, and the names whose bodies are being scanned
-        # right now. A body is scanned twice -- once where it is defined and
+        # The functions defined so far, by name, each with a tuple of the
+        # bodies it may have and the text each was parsed from; see
+        # `func_decl`. And the names whose bodies are being scanned right
+        # now. A body is scanned twice -- once where it is defined and
         # once at each call -- so the same store can be named more than once;
         # a repeated target is dropped rather than reported twice, since a
         # caller would sync it twice for no purpose.
@@ -1601,6 +1803,10 @@ class Scanner:
         # first may be a function it does not list; see `seal_opaque` and
         # `imported_functions`.
         self.functions_sealed = False
+        # The functions an `unset -f` may or may not have removed, or a
+        # definition on a path the shell may not take may not have made,
+        # which are kept in the table; see `call_listed`.
+        self.possibly_unset = set()
         # The variables unset, and the number of seals, so far; see
         # `call_function`.
         self.unset_names = set()
@@ -1624,6 +1830,9 @@ class Scanner:
         # The scope each command a wrapper moved was invoked from, by the
         # command's node; see `call`.
         self.callers = {}
+        # The values a special builtin's prefix gives, read before they were
+        # made assignments of this shell, by the command's node; see `call`.
+        self.prefixes = {}
 
     def found_target(self, path):
         if path not in self.targets:
@@ -1639,6 +1848,20 @@ class Scanner:
 
     # --- assignment state -------------------------------------------------
 
+    def is_readonly(self, name):
+        """Whether `name` is readonly here: True, False or UNKNOWN.
+
+        Only the text makes a name readonly: a new process inherits none, and
+        a subshell keeps its parent's. After a seal, any name may have been
+        made readonly by what the scan could not read, in this shell and not
+        in a process it starts; see `Scope.readonly_opaque`.
+        """
+        if name in self.scope.readonly:
+            return self.scope.readonly[name]
+        if self.scope.readonly_opaque:
+            return UNKNOWN
+        return False
+
     def is_exported(self, name):
         """Whether `name` reaches a child process: True, False or UNKNOWN.
 
@@ -1649,6 +1872,11 @@ class Scanner:
         """
         if name in self.scope.exported:
             return self.scope.exported[name]
+        return self.inherited_export(name)
+
+    def inherited_export(self, name):
+        """Whether `name` reaches a child process where the text said
+        nothing of it; see `is_exported`."""
         if self.scope.sealed is OPAQUE:
             return UNKNOWN
         if self.scope.sealed is CLEARED:
@@ -1703,7 +1931,8 @@ class Scanner:
                 assigns["SHELLOPTS"] = ShellOpts(
                     self.carried_option("physical"),
                     self.carried_option("monitor"),
-                    self.carried_option("posix"))
+                    self.carried_option("posix"),
+                    self.carried_option("allexport"))
                 exported["SHELLOPTS"] = True
             elif state is UNKNOWN:
                 assigns["SHELLOPTS"] = UNKNOWN
@@ -1931,9 +2160,50 @@ class Scanner:
                                  assign=assignment_name(word, self.raw),
                                  split=may_split(word, self.raw),
                                  dash=may_be_option(word)))
-            else:
-                out.extend(fields)
+            elif fields:
+                out.append(self.assignment_tilde(word, fields[0]))
+                out.extend(fields[1:])
         return out
+
+    def assignment_tilde(self, word, field):
+        """`field`, the first argument `word` gives, with the `~` after its
+        `=` expanded where it is shaped like an assignment and the shell
+        expands it there. The shell expands it before splitting the word, so
+        `env BEADS_DIR=~/x$TAIL` expands it where TAIL splits too.
+
+        bash expands an unquoted `~` after the `=` of such an argument to any
+        command, outside POSIX mode: `env BEADS_DIR=~/ext/.beads bd close X`
+        writes $HOME/ext. Read as written, the value was a relative path, and
+        the store named sat below the launch directory. bash in POSIX mode,
+        dash, ksh and zsh leave the `~` as written, and so does a quoted one.
+        The prefix runs to the first unquoted `/` or `:`; one holding a
+        quoted character, as `~\\/store` and `~us\\er` do, or running into a
+        quoted or expanded part, is left as it is, as the shell leaves it.
+        A line continuation is no quoting, and the parse has removed it.
+        Where the shell or its mode is in doubt, the value is unknown.
+        """
+        parts = list(word_parts(word, nulls=True))
+        if not parts:
+            return field
+        part, quoted = parts[0]
+        literal = part.get("Value", "") if part["Type"] == "Lit" else ""
+        if quoted or not ASSIGN_TILDE.match(literal):
+            return field
+        name, _, rest = literal.partition("=")
+        end = min([rest.find(sep) for sep in "/:" if sep in rest] or
+                  [len(rest)])
+        if "\\" in rest[:end] or end == len(rest) and len(parts) > 1:
+            return field
+        bash, posix = self.scope.bash, self.scope.posix
+        if bash is False or posix is True:
+            return field
+        if bash is UNKNOWN or posix is UNKNOWN:
+            return Field(UNKNOWN, assign=name)
+        value = field.value[len(name) + 1:]
+        prefix = self.expand_tilde(value[:end])
+        if prefix is UNKNOWN:
+            return Field(UNKNOWN, assign=name)
+        return Field(name + "=" + prefix + value[end:])
 
     def assigned_value(self, word):
         """The value `word` gives a variable, or UNKNOWN.
@@ -2845,7 +3115,8 @@ class Scanner:
         return assigns, sealed
 
     def bd_operands(self, args, start):
-        """What the `bd` at `args[start]` says: operands, `-C`, `--db`, help.
+        """What the `bd` at `args[start]` says: operands, `-C`, `--db`, help,
+        and whether it runs in read-only mode.
 
         The target and the store come back as `Field`s, since both `-C dir`
         and `-C=dir` name one and only the first carries its own argument --
@@ -2873,11 +3144,23 @@ class Scanner:
         `--directory` all set one scalar option, and `bd -C /a -C /b close X`
         writes /b. Keeping the first pushed and registered /a while the store
         that was written went unrecorded.
+
+        Read-only mode follows `--readonly` as `bd` does, the last one winning:
+        `bd --readonly --readonly=false sql "update ..."` writes. A bare flag
+        turns it on and `--readonly=` turns it off whatever the value, so
+        `--readonly=true` is read as a write -- a no-op commit, where reading a
+        value the wrong way round strands one. A bare flag that may be another
+        option's value, or that may stand past an unreadable `--`, does not
+        turn it on, and an unreadable word that may hold options turns it off:
+        with OPTS=--readonly=false, `bd --readonly $OPTS sql "update ..."`
+        writes.
         """
         operands = []
         target = None
         store = None
         helped = False
+        versioned = False
+        readonly_mode = False
         flags = set()
         i = start + 1
         end_of_opts = False
@@ -2939,9 +3222,21 @@ class Scanner:
                 helped = True
                 i += 1
                 continue
+            # A version flag is read the same way, but counts only where no
+            # verb follows; see the end of this function.
+            if not end_of_opts and not after_unknown_opt \
+                    and not may_have_ended and word == "--version":
+                versioned = True
+                i += 1
+                continue
             if not end_of_opts and word.startswith("--"):
                 name, sep, inline = word.partition("=")
                 flags.add(name)
+                if name == BD_READONLY_OPT:
+                    if sep:
+                        readonly_mode = False
+                    elif not after_unknown_opt and not may_have_ended:
+                        readonly_mode = True
                 if sep:
                     # `--opt=value` carries its value, so nothing follows it.
                     if name in BD_DIR_OPTS:
@@ -2990,6 +3285,9 @@ class Scanner:
                 if "h" in letters and not after_unknown_opt \
                         and not may_have_ended:
                     helped = True
+                if "V" in letters and not after_unknown_opt \
+                        and not may_have_ended:
+                    versioned = True
                 if opt is None:
                     i += 1
                     continue
@@ -3012,9 +3310,16 @@ class Scanner:
                 continue
             operands.append(word)
             i += 1
+        # `bd --version` and `bd -V` print the version and exit, as `--help`
+        # does. No verb takes either flag, and `bd` 1.3.4 refuses `bd --version
+        # close X`, but a later release that gave a verb one would run it, so a
+        # verb after either is still read.
+        if versioned and not operands:
+            helped = True
         if opaque:
             store = Field(UNKNOWN)
-        return operands, target, store, helped, flags
+            readonly_mode = False
+        return operands, target, store, helped, flags, readonly_mode
 
     @staticmethod
     def splits_value(args, i):
@@ -3027,7 +3332,7 @@ class Scanner:
         return i < len(args) and args[i].value is UNKNOWN and args[i].split
 
     @staticmethod
-    def readonly(operands, helped, flags=frozenset()):
+    def readonly(operands, helped, flags=frozenset(), readonly_mode=False):
         """Whether a `bd` invocation with these operands only reads.
 
         The verb is compared whole, so `bd list-add` is not read as `bd list`
@@ -3045,6 +3350,10 @@ class Scanner:
         this scan cannot read behind such a verb: `bd ready "$(printf %s
         --claim)"` runs the claim, and the substitution is the only place the
         flag could be hiding.
+
+        `readonly_mode` is whether `--readonly` is in force, as `bd_operands`
+        reads it. It decides only for READONLY_MODE_VERBS: `bd --readonly sql`
+        refuses every write, while `bd --readonly import` still writes.
         """
         if helped:
             return True
@@ -3054,6 +3363,8 @@ class Scanner:
         if write_flags and (flags & write_flags
                             or any(op is UNKNOWN for op in operands[1:])):
             return False
+        if readonly_mode and operands[0] in READONLY_MODE_VERBS:
+            return True
         if operands[0] in READONLY_VERBS:
             return True
         return tuple(operands[:2]) in READONLY_PAIRS
@@ -3120,9 +3431,20 @@ class Scanner:
                 # invocation is abandoned. Unlike an unknown letter, which
                 # some shell may take, it is no write: bash refuses an
                 # option it does not know, and `--help` runs no script.
+                #
+                # zsh takes every option of its own in long form, though,
+                # `--shwordsplit` as `-o shwordsplit`, and each is a flag, so
+                # none but `--emulate` takes a word: `zsh --shwordsplit -c
+                # '...'` runs its script, and abandoning it missed the write.
+                # One not known here is read as taking nothing. A name zsh
+                # does not know makes it refuse to run, as `--bogus` does,
+                # and the write then read is a sync for nothing. `zsh_rcs`
+                # reads RCS from them, so `zsh -f --rcs` reads `.zshenv`.
                 opt = word.partition("=")[0]
+                zsh = args[start].value.rsplit("/", 1)[-1] == "zsh"
                 if opt in SHELL_LONG_NOARG or \
-                        (opt in SHELL_OPT_ARGS and "=" in word):
+                        (opt in SHELL_OPT_ARGS and "=" in word) or \
+                        (zsh and opt not in SHELL_LONG_NOSCRIPT):
                     i += 1
                     continue
                 return None
@@ -3238,6 +3560,79 @@ class Scanner:
             i += 1 + taken
         return value
 
+    @staticmethod
+    def zsh_rcs(words):
+        """Whether zsh's own options `words` leave its RCS option on, so that
+        it reads `.zshenv` and the files after it: True, False or UNKNOWN.
+
+        `-f` turns it off and `+f` on, and so does the option by name, which
+        zsh reads whatever its case and `_`s, a leading `no` inverting it:
+        `-o norcs`, `+o rcs` and `--no-rcs` turn it off, `-o RCS` and `+o
+        no_rcs` on. The last word wins, so `zsh -f -o rcs` reads `.zshenv`
+        after all.
+        """
+        return Scanner.zsh_option(words, ("rcs",), True, "f", False)
+
+    @staticmethod
+    def zsh_physical(words):
+        """Whether zsh's own options `words` start it in physical mode: True,
+        False or UNKNOWN.
+
+        That mode is CHASE_LINKS, which PHYSICAL also names, set by name as
+        RCS is: `--chase-links`, `-o PHYSICAL` and `--chaselinks` turn it on,
+        so `zsh --chaselinks -c 'cd /ws/link/..'` lands where the link points;
+        read by bash's spellings alone, it named /ws. zsh's `-P` is
+        RC_EXPAND_PARAM, and leaves the mode alone. CHASE_DOTS resolves a path
+        holding a `..` as CHASE_LINKS does and keeps the spelling of any
+        other, and a `cd -L` keeps it where it gives up CHASE_LINKS, so with
+        it on the mode is UNKNOWN; see `cd`.
+        """
+        if Scanner.zsh_option(words, ("chasedots",), False) is not False:
+            return UNKNOWN
+        return Scanner.zsh_option(words, ("chaselinks", "physical"), False)
+
+    @staticmethod
+    def zsh_option(words, names, state, letter="", sets=True):
+        """The state zsh's own options `words` leave one of its options in,
+        `state` being the one it starts in: True, False or UNKNOWN.
+
+        The option goes by `names`, read as `zsh_option_setting` reads them,
+        and `-<letter>` sets it to `sets`, `+<letter>` to the other: `-m`
+        turns MONITOR on, and `-f` turns RCS off. The last word wins.
+        """
+        i = 0
+        while i < len(words):
+            word = words[i].value
+            if word is UNKNOWN:
+                return UNKNOWN
+            if word.startswith("--"):
+                setting = zsh_option_setting(word[2:], names)
+                if setting is not None:
+                    state = setting
+                i += 2 if word in SHELL_OPT_ARGS else 1
+                continue
+            if word[:1] not in ("-", "+"):
+                i += 1
+                continue
+            on = word.startswith("-")
+            taken = 0
+            for ch in word[1:]:
+                if ch == letter:
+                    state = sets if on else not sets
+                elif ch in "oO":
+                    taken += 1
+                    if ch == "o":
+                        at = i + taken
+                        option = words[at].value if at < len(words) else None
+                        if option is UNKNOWN:
+                            return UNKNOWN
+                        setting = zsh_option_setting(option, names) \
+                            if option else None
+                        if setting is not None:
+                            state = setting if on else not setting
+            i += 1 + taken
+        return state
+
     # --- the walk ---------------------------------------------------------
 
     def scoped(self, fn):
@@ -3252,11 +3647,13 @@ class Scanner:
         saved = self.scope
         functions = self.functions
         sealed = self.functions_sealed
+        possibly_unset = self.possibly_unset
         unset_names = self.unset_names
         seals = self.seals
         leader = self.leader
         self.scope = saved.child()
         self.functions = dict(functions)
+        self.possibly_unset = set(possibly_unset)
         self.unset_names = set()
         if leader is EXEC_ONLY:
             self.leader = False
@@ -3266,6 +3663,7 @@ class Scanner:
             self.scope = saved
             self.functions = functions
             self.functions_sealed = sealed
+            self.possibly_unset = possibly_unset
             self.unset_names = unset_names
             self.seals = seals
             self.leader = leader
@@ -3284,7 +3682,7 @@ class Scanner:
         finally:
             self.background -= 1
 
-    def tentative(self, fn):
+    def tentative(self, fn, origin=None):
         """Runs `fn` in a frame whose effects may or may not have happened.
 
         The body of a branch, a function call, or an `eval` runs in this shell,
@@ -3297,40 +3695,75 @@ class Scanner:
         it. One that never did leaves the cwd standing: `if t; then X=1; fi; bd
         close X`, launched from an external store, gave the cwd up and the
         store went unregistered for a branch that could not have moved it.
+
+        `origin` is a scope to start the frame from instead of this one, for
+        one of several alternatives that each start where the others did;
+        see `call_listed`. What the frame changed from it is unknown here
+        afterwards.
         """
         saved = self.scope
-        inner = saved.child()
+        base = saved if origin is None else origin
+        inner = base.child()
         self.scope = inner
+        functions = dict(self.functions)
+        possibly_unset = set(self.possibly_unset)
+        seals = self.seals
         try:
             fn()
         finally:
             self.scope = saved
+        # A function the frame unset may still be defined after it, as after
+        # an `unset -f` on one branch, so it is put back and read both ways;
+        # see `call_listed`. One it defined anew may be undefined after it,
+        # so it is possibly unset as well, and one it defined over an old one
+        # may still have the old body, which it keeps beside the new. A frame
+        # that sealed has put the whole table in doubt already, and one that
+        # left it as it was, as most do, has nothing to put back.
+        if self.seals == seals:
+            if self.functions != functions:
+                for name, bodies in functions.items():
+                    now = self.functions.get(name)
+                    if now is None:
+                        self.functions[name] = bodies
+                        self.possibly_unset.add(name)
+                    elif now is not bodies:
+                        self.functions[name] = merge_bodies(now, bodies)
+                self.possibly_unset |= self.functions.keys() - functions.keys()
+            self.possibly_unset |= possibly_unset & self.functions.keys()
         # A name the frame touched -- assigned, exported, unset, or dropped as
         # `cd` drops an explicit PWD -- is unknown afterwards, in value and in
         # export state alike.
         missing = object()
-        for name in set(inner.assigns) | set(saved.assigns):
-            if saved.assigns.get(name, missing) != \
+        for name in set(inner.assigns) | set(base.assigns):
+            if base.assigns.get(name, missing) != \
                     inner.assigns.get(name, missing):
                 saved.assigns[name] = UNKNOWN
-        for name in set(inner.exported) | set(saved.exported):
-            if saved.exported.get(name, missing) != \
+        for name in set(inner.exported) | set(base.exported):
+            if base.exported.get(name, missing) != \
                     inner.exported.get(name, missing):
                 saved.exported[name] = UNKNOWN
-        if saved.allexport != inner.allexport:
+        for name in set(inner.readonly) | set(base.readonly):
+            if base.readonly.get(name, missing) != \
+                    inner.readonly.get(name, missing):
+                saved.readonly[name] = UNKNOWN
+        if base.readonly_opaque != inner.readonly_opaque:
+            saved.readonly_opaque = True
+        if base.allexport != inner.allexport:
             saved.allexport = UNKNOWN
-        if saved.lastpipe != inner.lastpipe:
+        if base.lastpipe != inner.lastpipe:
             saved.lastpipe = UNKNOWN
-        if saved.monitor != inner.monitor:
+        if base.monitor != inner.monitor:
             saved.monitor = UNKNOWN
-        if saved.physical != inner.physical:
+        if base.physical != inner.physical:
             saved.physical = UNKNOWN
+        if base.posix != inner.posix:
+            saved.posix = UNKNOWN
         # A frame that sealed its scope -- a `source`d file may export
         # anything -- leaves every name in doubt, not only those it touched:
         # `if t; then . ./select-store.sh; fi; bd close X` may run with a
         # BEADS_DIR the file set, where reading on unsealed took it for unset
         # and named the store the walk found.
-        if saved.sealed != inner.sealed:
+        if base.sealed != inner.sealed:
             saved.sealed = OPAQUE
         if inner.moved:
             saved.known = False
@@ -3339,7 +3772,8 @@ class Scanner:
     def sub_scan(self, stmts, cwd=None, known=None, seed=None, text=None,
                  sealed=False, conditional=False, frame="subshell",
                  process=False, physical=False, monitor=False, shell=None,
-                 pwd=None, startup=False, functions=None):
+                 pwd=None, startup=False, functions=None, posix=False,
+                 allexport=False):
         """Scans `stmts` as a subshell: its writes count, its state does not.
 
         `text` is the source those statements were parsed from, needed when they
@@ -3358,9 +3792,9 @@ class Scanner:
         of this shell, variables and all; a new process gets the environment,
         which is the exported names alone -- see `environment_view`. `seed` is
         what the command line handed the process on top of that, and is
-        exported there, having arrived as environment. `physical` and
-        `monitor` are the process's own `set -P` and `set -m` states; see
-        `shell_wrapper`. `shell` names the
+        exported there, having arrived as environment. `physical`, `monitor`
+        and `allexport` are the process's own `set -P`, `set -m` and `set -a`
+        states, and `posix` its `Scope.posix`; see `shell_wrapper`. `shell` names the
         program the process is -- a shell, or `env` for what `env -S` runs --
         which settles `Scope.bash` and `Scope.zsh`, and `pwd`, for a shell,
         the directory it starts in as its PWD names it and whether that
@@ -3392,10 +3826,13 @@ class Scanner:
                 assigns, exported = self.environment_view(sealed)
                 self.scope.assigns = assigns
                 self.scope.exported = exported
-                self.scope.allexport = False
+                self.scope.readonly = {}
+                self.scope.readonly_opaque = False
+                self.scope.allexport = allexport
                 self.scope.lastpipe = False
                 self.scope.monitor = monitor
                 self.scope.physical = physical
+                self.scope.posix = posix
             if sealed:
                 self.scope.sealed = sealed
             if seed:
@@ -3405,6 +3842,18 @@ class Scanner:
             if shell is not None:
                 self.scope.bash = bash_kind(shell)
                 self.scope.zsh = shell == "zsh"
+            # bash that starts in POSIX mode -- `--posix`, `-o posix`, a
+            # SHELLOPTS listing `posix`, or run as `sh` -- sets POSIXLY_CORRECT
+            # to `y`, unexported, where its environment holds none, so in 5.2
+            # a later `set -a; set -o posix` leaves it unexported. Where the
+            # mode or the shell is in doubt, so is the value.
+            if process and posix is not False and \
+                    self.scope.bash is not False and \
+                    self.shell_var("POSIXLY_CORRECT") is None:
+                certain = posix is True and self.scope.bash is True
+                self.scope.assigns["POSIXLY_CORRECT"] = \
+                    "y" if certain else UNKNOWN
+                self.scope.exported["POSIXLY_CORRECT"] = False
             if pwd is not None:
                 # Every shell sets PWD as it starts, and exports it, whatever
                 # it inherited: after `env -i bash -c 'cd /ws/link; ...'` a
@@ -3423,6 +3872,7 @@ class Scanner:
             if functions is not None:
                 self.functions = {}
                 self.functions_sealed = functions
+                self.possibly_unset = set()
             if startup:
                 self.seal_sourced()
             outer = self.text
@@ -3585,6 +4035,58 @@ class Scanner:
         self.scope.assigns[name] = UNKNOWN
         if self.scope.allexport:
             self.scope.exported[name] = UNKNOWN
+        if name == "POSIXLY_CORRECT":
+            self.posix_mode(UNKNOWN)
+
+    def posix_mode(self, state):
+        """Records bash's POSIX mode as `state`, True, False or UNKNOWN, in a
+        shell that may be bash; see `Scope.posix`.
+
+        `set -o posix` and `set +o posix` turn the mode on and off, and so do
+        assigning POSIXLY_CORRECT and unsetting it; the other shells have no
+        such mode, and refuse that `set`. Where the variable got a value this
+        scan did not read, the mode is in doubt: a `for` binding it changes
+        nothing, while `read` or `((...))` turns it on.
+        """
+        if self.scope.bash is not False:
+            self.scope.posix = state
+
+    def posix_option(self, state):
+        """Records POSIX mode as `set -o posix` or `set +o posix` leaves it,
+        `state` being True, False or UNKNOWN; see `posix_mode`.
+
+        bash keeps POSIXLY_CORRECT in step with the option: turning it on
+        sets the variable to `y` where it was unset, exported only under `set
+        -a`, and turning it off unsets it, export and all. So after `export
+        POSIXLY_CORRECT=1; set +o posix`, `bash -c ...` starts out of POSIX
+        mode, and after `set -o posix; export POSIXLY_CORRECT` in it. That
+        unset takes a readonly variable too, so a later `POSIXLY_CORRECT=1;
+        unset POSIXLY_CORRECT` leaves the mode off.
+        """
+        self.posix_mode(state)
+        if self.scope.bash is False:
+            return
+        name = "POSIXLY_CORRECT"
+        if state is False:
+            self.unset_names.add(name)
+            self.scope.assigns[name] = UNSET
+            self.scope.exported[name] = False
+            self.scope.readonly[name] = False
+        elif state is UNKNOWN:
+            # `t && set +o posix` may have unset it, as a conditional `unset`
+            # may; see `call_function`.
+            self.unset_names.add(name)
+            self.scope.assigns[name] = UNKNOWN
+            self.scope.exported[name] = UNKNOWN
+            if self.is_readonly(name) is not False:
+                self.scope.readonly[name] = UNKNOWN
+        elif self.shell_var(name) is None:
+            self.bind(name, "y")
+        elif self.scope.allexport is not False and \
+                self.is_exported(name) is not True:
+            # bash 3.2 sets a set one to `y` anew, which exports it under `set
+            # -a`; 5.2 leaves it as it was.
+            self.scope.exported[name] = UNKNOWN
 
     def seal_opaque(self, cwd=False):
         """Puts every name, attribute and function in this scope in doubt.
@@ -3601,9 +4103,17 @@ class Scanner:
         self.scope.assigns = {"IFS": UNKNOWN}
         self.scope.exported = {}
         self.scope.sealed = OPAQUE
+        # A mark of its own does not outlast the file either: one may make
+        # POSIXLY_CORRECT readonly where `set +o posix` had unset it, or run
+        # `set +o posix` over a readonly one, which unsets it, mark and all.
+        self.scope.readonly = {}
+        self.scope.readonly_opaque = True
         self.functions = {}
         self.functions_sealed = True
+        self.possibly_unset = set()
         self.seals += 1
+        # POSIXLY_CORRECT is among the names, and bash's POSIX mode follows it.
+        self.posix_mode(UNKNOWN)
         if cwd:
             self.leave_cwd()
 
@@ -3787,7 +4297,7 @@ class Scanner:
                     self.word_subs(pattern)
                 self.branch(item.get("Stmts"))
         elif kind == "FuncDecl":
-            self.func_decl(cmd)
+            self.func_decl(cmd, conditional)
         elif kind == "TimeClause":
             if cmd.get("Stmt"):
                 self.stmt(cmd["Stmt"], conditional, follows)
@@ -3801,7 +4311,7 @@ class Scanner:
                 self.in_background(
                     lambda: self.stmt(cmd["Stmt"], conditional))
         elif kind == "DeclClause":
-            self.decl(cmd, conditional)
+            self.decl_clause(cmd, conditional, follows)
         elif kind == "TestClause":
             # `[[ ]]` runs no command and writes no store, but a substitution
             # inside one still runs.
@@ -3888,7 +4398,8 @@ class Scanner:
         self.forget(name)
 
     def bind(self, name, value):
-        """Gives `name` the `value` a `for` binds, exported under `set -a`."""
+        """Gives `name` the `value` a `for` binds, or `posix_option` sets,
+        exported under `set -a`."""
         self.scope.assigns[name] = value
         if self.scope.allexport is UNKNOWN:
             self.scope.exported[name] = UNKNOWN
@@ -3921,7 +4432,7 @@ class Scanner:
             for item in node:
                 self.walk_words(item)
 
-    def func_decl(self, cmd):
+    def func_decl(self, cmd, conditional=False):
         """Scans a function body without letting it speak for the shell.
 
         A definition stores its body rather than running it, so a `cd` in one
@@ -3930,6 +4441,13 @@ class Scanner:
         and assignments must not reach past the definition -- but a `bd` written
         inside one is still a write this text performs if the function is ever
         called, and dropping it would strand the store it opens.
+
+        On a path the shell may not take, the definition may not have been
+        made: after `t && bd() { command bd -C /ext close X; }`, `bd close X`
+        may run the program, and after `h() { cd /ext; }; t && h() { :; }`,
+        `h` may still run the old body. A name defined anew there is possibly
+        unset, as after an `unset -f` on such a path, and one defined before
+        keeps the bodies it had beside the new one; see `call_listed`.
         """
         body = cmd.get("Body")
         if not body:
@@ -3940,7 +4458,16 @@ class Scanner:
         # `call_function`.
         if cmd.get("Name"):
             name = cmd["Name"]["Value"]
-            self.functions[name] = (body, self.text, self.raw)
+            bodies = ((body, self.text, self.raw),)
+            if not conditional:
+                self.functions[name] = bodies
+                self.possibly_unset.discard(name)
+            elif name in self.functions:
+                self.functions[name] = merge_bodies(bodies,
+                                                    self.functions[name])
+            else:
+                self.functions[name] = bodies
+                self.possibly_unset.add(name)
 
         def run():
             # Scanned here too, and with the cwd unknown. A definition that is
@@ -3957,8 +4484,9 @@ class Scanner:
 
         self.scoped(run)
 
-    def call_function(self, name, seed=None):
-        """Scans the body of `name` as it runs here, in the caller's directory.
+    def call_function(self, name, entry, seed=None, origin=None):
+        """Scans `entry`, a body of `name`, as it runs here, in the caller's
+        directory.
 
         This is what makes `f() { bd -C store ...; }; cd /x; f` name /x/store.
         The definition alone cannot: it does not say where its caller stands, so
@@ -3987,10 +4515,13 @@ class Scanner:
         calls itself names no further store on the second pass. That is the whole
         termination argument here: a body already being scanned is not scanned
         again, so a chain of calls is at most as long as there are definitions.
+
+        `origin` is a scope to start the call from instead of this one, for
+        one of several bodies the function may have; see `call_listed`.
         """
         if name in self.calling:
             return
-        body, text, raw = self.functions[name]
+        body, text, raw = entry
         seed = seed or {}
 
         def run():
@@ -4003,6 +4534,7 @@ class Scanner:
                 self.scope.exported[each] = value is not UNSET
             outer_unset, self.unset_names = self.unset_names, set()
             seals = self.seals
+            posix = self.scope.posix
             outer_text, outer_raw = self.text, self.raw
             self.text, self.raw = text, raw
             try:
@@ -4011,8 +4543,12 @@ class Scanner:
                 self.text, self.raw = outer_text, outer_raw
                 unset = self.unset_names
                 self.unset_names = outer_unset | unset
+                # In POSIX mode, bash 3.2 and ksh keep a call's prefix
+                # assignments after it, where bash 5.2 and dash restore them,
+                # so they are in doubt unless the mode was off throughout.
+                kept = posix is not False or self.scope.posix is not False
                 for each, (value, exported) in before.items():
-                    if each in unset or self.seals != seals:
+                    if each in unset or self.seals != seals or kept:
                         self.scope.assigns[each] = UNKNOWN
                         self.scope.exported[each] = UNKNOWN
                         continue
@@ -4031,12 +4567,199 @@ class Scanner:
             # to the end, and which of its branches it took, is exactly what
             # the scan declines to infer -- so what it changed is unknown
             # afterwards, as it is after any compound command.
-            self.tentative(run)
+            self.tentative(run, origin)
         finally:
             self.depth -= 1
             self.calling.discard(name)
 
-    def decl(self, cmd, conditional):
+    def call_listed(self, cmd, fields, start, split, conditional, follows,
+                    word, passed=False, builtin=None):
+        """Runs the call to `word`, a function this text defined.
+
+        One an `unset -f` may have removed may also be gone by the call, and
+        the command then runs as `call` runs one with no function of that
+        name, its PWD read as given. Both are read, each from the state
+        before the call and as a frame that may or may not have run: after
+        `g() { cd /ext; }; if t; then unset -f g; fi`, `g; bd close X` may
+        write /ext's store, so the cwd after the call is unknown, and after
+        `bd() { cd /ext; command bd close X; }; t && unset -f bd`, `bd close
+        X` writes /ext or the store it walks up to from where it started.
+
+        `passed` says the shell may pass the function by for the special
+        builtin of its name, its POSIX mode being unknown; see
+        `function_first`. That builtin is read the same way, with the
+        function still defined: after `unset() { :; }; t && set -o posix`,
+        `unset BEADS_DIR; bd close X` may run with or without the BEADS_DIR
+        it inherited. Where the function may be gone as well, the two are
+        read apart, since the builtin may call the function yet: after `D=/a;
+        eval() { bd -C "$D" close X; }; t && unset -f eval; t && set -o
+        posix`, `eval 'D=/b; set +o posix; eval :'` may write /b.
+
+        One defined over an earlier one on a path the shell may not take may
+        still have the earlier body by the call, and each body is read the
+        same way: after `h() { cd /ext; }; t && h() { :; }`, `h; bd -C store
+        close X` may write /ext/store. See `func_decl` and `tentative`.
+
+        Each reading starts from the function table before the call as well,
+        so what one does to it is not seen by another. After `bd() { :; };
+        g() { bd -C /ext close X; }`, `t && g() { unset -f bd; }; g` writes
+        nothing either way, and `t && g() { . ./defs.sh; bd() { :; }; };
+        unset -f bd; g` may run the program and write /ext, where reading the
+        old body after the new found the new one's `bd`. So does a builtin
+        read in place of the call: after `g() { cd /ext; }; eval() { unset -f
+        g; }; t && unset -f eval`, `eval g` may still run `g`.
+
+        With the table in doubt, the command run with no function of that
+        name listed may still run one, which `call` reads as a function it
+        cannot read, and so it is read here: after `. ./defs.sh; t && g() {
+        builtin :; }`, `g` may run a `g` the file defined, so the state after
+        it is in doubt.
+
+        The table after the call is what any reading may leave; see
+        `join_reading`. Where it was gone it is still gone after the
+        call, whatever the body defined, so it stays possibly unset: after
+        `bd() { . ./defs.sh; bd() { :; }; }; t && unset -f bd; bd list`, `bd
+        -C /ext close X` may write /ext. A function the body defined anew
+        exists only where the body ran, so it is possibly unset after the
+        call: after `g() { bd() { :; }; }; t && unset -f g; g`, `bd -C /ext
+        close X` may write /ext.
+
+        `builtin`, where given, reads the command the shell runs in place of
+        the function, for a clause the parse made of an assignment builtin;
+        see `decl_clause`.
+        """
+        possibly_unset = word in self.possibly_unset
+        bodies = self.functions[word]
+        # A call from inside one of the function's own bodies reads none of
+        # them again (see `call_function`), so one reading stands for them
+        # all. A table taken and joined for each did nothing but cost: with
+        # `t && f() { g; }` written 400 times and `g() { return; f; }`, `f`
+        # took 11s, while the steps charged for it stayed few.
+        if word in self.calling:
+            bodies = bodies[:1]
+        if not possibly_unset and not passed and len(bodies) == 1:
+            self.call_function(word, bodies[0], self.prefix_seed(cmd))
+            return
+        before = self.scope.child()
+        table = self.function_table()
+        seed = self.prefix_seed(cmd)
+        joined = [None, False]
+        for i, entry in enumerate(bodies):
+            self.call_function(word, entry, seed, before if i else None)
+            self.join_reading(joined, table)
+        unread = self.functions_sealed and word not in ("builtin", "command")
+
+        def passed_by(gone):
+            if gone:
+                del self.functions[word]
+
+            def run():
+                if builtin is not None:
+                    builtin()
+                    return
+                self.run_command(cmd, fields, start, split, conditional,
+                                 follows, passed=True)
+                if unread:
+                    self.seal_sourced()
+
+            self.tentative(run, origin=before)
+            self.join_reading(joined, table)
+
+        if passed:
+            passed_by(False)
+        if possibly_unset:
+            passed_by(True)
+        listed, unset, sealed, seals = joined[0]
+        self.functions = listed
+        self.possibly_unset = unset & listed.keys()
+        self.functions_sealed = sealed
+        self.seals = seals
+
+    def function_table(self):
+        """The function table as it stands and what is known of it, to put
+        back with `restore_function_table` or join with others."""
+        return (dict(self.functions), set(self.possibly_unset),
+                self.functions_sealed, self.seals)
+
+    def restore_function_table(self, table):
+        """Puts back a table `function_table` returned."""
+        functions, possibly_unset, sealed, seals = table
+        self.functions = dict(functions)
+        self.possibly_unset = set(possibly_unset)
+        self.functions_sealed = sealed
+        self.seals = seals
+
+    def join_reading(self, joined, table):
+        """Joins the function table one reading of a call left into
+        `joined`, and leaves `table`, the one from before the call, for the
+        next reading.
+
+        A function in the join has every body any reading gives it, and is
+        possibly unset where one may lack it. The join is sealed where any
+        reading sealed, with the highest seal count, so a frame around the
+        call sees that seal.
+
+        `joined` holds the join so far, once there is one, and whether a
+        reading that left `table` as it was has been joined. Most leave it
+        so, which comparing the two tells at little cost, and such a reading
+        adds nothing after the first. So only the join is kept, not a table
+        for each reading, and a table is copied and walked only where a
+        reading changed it: with 4000 bodies among 4000 other functions, a
+        table kept for each reading took 600MB and 8s.
+        """
+        functions, possibly_unset, sealed, seals = table
+        if self.functions == functions and \
+                self.possibly_unset == possibly_unset and \
+                self.functions_sealed == sealed and self.seals == seals:
+            if joined[1]:
+                return
+            joined[1] = True
+            left = table
+        else:
+            left = (self.functions, self.possibly_unset,
+                    self.functions_sealed, self.seals)
+            self.restore_function_table(table)
+        if joined[0] is None:
+            joined[0] = [dict(left[0]), set(left[1]), left[2], left[3]]
+            return
+        merged = joined[0]
+        listed, unset = merged[0], merged[1]
+        unset |= listed.keys() - left[0].keys()
+        for name, bodies in left[0].items():
+            had = listed.get(name)
+            if had is None:
+                listed[name] = bodies
+                unset.add(name)
+            elif had is not bodies:
+                listed[name] = merge_bodies(had, bodies)
+        unset |= left[1]
+        merged[2] = merged[2] or left[2]
+        merged[3] = max(merged[3], left[3])
+
+    def decl_clause(self, cmd, conditional, follows):
+        """Runs an assignment builtin, or the function of its name this text
+        defined where the shell finds that first.
+
+        The parse makes a clause of `export`, `readonly`, `declare`,
+        `typeset` and `local` wherever one is named first, but a function of
+        the name comes before the builtin as it does before any other; see
+        `function_first`. So after `function readonly { :; }`, `readonly
+        BEADS_DIR` marks nothing in bash outside POSIX mode, and `unset
+        BEADS_DIR` removes it. Where the shell may pass the function by, the
+        builtin is read as well; see `call_listed`.
+        """
+        word = (cmd.get("Variant") or {}).get("Value")
+        first = self.function_first(word) if word in self.functions else False
+        if first is False:
+            self.decl(cmd, conditional)
+            return
+        for arg in cmd.get("Args") or ():
+            self.node_subs(arg)
+        self.call_listed(cmd, None, 0, None, conditional, follows, word,
+                         passed=first is UNKNOWN,
+                         builtin=lambda: self.decl(cmd, conditional, False))
+
+    def decl(self, cmd, conditional, subs=True):
         """Records the assignments an assignment builtin makes.
 
         An assignment builtin is the same thing said as a command, and unlike a
@@ -4049,8 +4772,9 @@ class Scanner:
         # A substitution in any operand runs, the ones that assign nothing
         # included: `export $(bd close X)` runs the write. It runs whatever the
         # command's own reachability is, so the operands are visited for them
-        # before that is consulted.
-        for arg in args:
+        # before that is consulted. `decl_clause` has visited them already
+        # where it read a function as well.
+        for arg in args if subs else ():
             self.node_subs(arg)
         # The parse makes a clause of one only where it is named first, so
         # after a startup or sourced file it may be a function; see
@@ -4068,6 +4792,11 @@ class Scanner:
         variant = (cmd.get("Variant") or {}).get("Value")
         state = None
         functions = False
+        printing = False
+        # `readonly`, and `declare`, `typeset` or `local` with `-r`, make the
+        # names readonly too; see `is_readonly`.
+        readonly = variant == "readonly"
+        unread = cancelled = False
         if variant == "export":
             state = True
         elif variant == "local":
@@ -4079,10 +4808,16 @@ class Scanner:
             if flag is not UNKNOWN and flag.startswith("-") and \
                     "f" in flag[1:]:
                 functions = True
+            if flag is not UNKNOWN and flag.startswith("-") and \
+                    "p" in flag[1:]:
+                printing = True
             if flag is UNKNOWN:
-                # A flag this scan cannot read may be `-x`, `-n` or `-f`, so
-                # what the builtin did to the attribute is unknown.
+                # A flag this scan cannot read may be `-x`, `-n`, `-r`, `-p`
+                # or `-f`, so what the builtin did to the attributes is
+                # unknown, a known `-r` beside it or not: after `declare -r
+                # "$OPT" BEADS_DIR`, OPT holding `-p`, an `unset` removes it.
                 state = UNKNOWN
+                unread = True
             elif flag == "--":
                 break
             elif variant == "export" and flag.startswith("-") and \
@@ -4094,20 +4829,66 @@ class Scanner:
             elif variant != "export" and flag.startswith("+") and \
                     "x" in flag[1:]:
                 state = False
+            if flag is not UNKNOWN and flag.startswith("-") and \
+                    "r" in flag[1:] and variant != "export":
+                readonly = True
+            if flag is not UNKNOWN and flag.startswith("+") and \
+                    "r" in flag[1:] and variant not in ("export", "readonly"):
+                cancelled = True
+        # `+r` takes the command's own `-r` away, wherever it stands, and an
+        # unread flag's with it: `declare -r +r BEADS_DIR` leaves it
+        # writable. A mark set earlier stays, below; `readonly +r` marks.
+        if cancelled:
+            readonly = False
+        elif unread and variant != "export":
+            readonly = UNKNOWN
         if functions:
             return
+        # `declare -p` and `typeset -p` print the names and change nothing,
+        # whatever else they are asked: after `export BEADS_DIR=/ext/.beads;
+        # declare -rp BEADS_DIR`, `unset BEADS_DIR` removes it. `local -p`
+        # prints in bash 5.2, where 3.2 runs it as a plain `local`, so what
+        # it does to the names is unknown. `readonly -p` and `export -p` act
+        # on the names they are given.
+        if printing and variant in ("declare", "typeset"):
+            return
+        if printing and variant == "local":
+            for arg in args:
+                name = (arg.get("Name") or {}).get("Value")
+                if not name:
+                    continue
+                self.forget(name)
+                self.scope.exported[name] = UNKNOWN
+                if readonly and self.scope.readonly.get(name) is not True:
+                    self.scope.readonly[name] = UNKNOWN
+            return
+        if conditional and readonly:
+            readonly = UNKNOWN
         if conditional and state is not None:
             state = UNKNOWN
         for arg in args:
             name = (arg.get("Name") or {}).get("Value")
             if not name:
                 continue
+            # A readonly name refuses an assignment and keeps its value, and
+            # bash carries on outside POSIX mode: after `readonly
+            # BEADS_DIR=/ext/.beads; export BEADS_DIR=/other/.beads`, `bd close
+            # X` writes /ext. `export` gives the attribute all the same,
+            # where `declare -x` and `local` change nothing.
+            refused = False if arg.get("Naked") else self.is_readonly(name)
             # `export OUT` exports a name without changing its value, so only
             # the operands that are assignments assign.
-            if gives_value(arg) or replaces_value(arg):
-                self.assign(arg, conditional)
+            if refused is not True and (gives_value(arg) or
+                                        replaces_value(arg)):
+                self.assign(arg, conditional or refused is UNKNOWN)
             if state is not None:
-                self.scope.exported[name] = state
+                if refused is False or variant == "export":
+                    self.scope.exported[name] = state
+                elif refused is UNKNOWN and \
+                        state is not self.is_exported(name):
+                    self.scope.exported[name] = UNKNOWN
+            if readonly and self.scope.readonly.get(name) is not True:
+                self.scope.readonly[name] = readonly
 
     def assign(self, arg, conditional):
         """Records the assignment node `arg` in this scope.
@@ -4127,6 +4908,8 @@ class Scanner:
         if replaces_value(arg):
             self.forget(name)
             return
+        if name == "POSIXLY_CORRECT":
+            self.posix_mode(UNKNOWN if conditional else True)
         self.scope.assigns[name] = (UNKNOWN if conditional
                                     else self.assign_value(arg))
         if self.scope.allexport is UNKNOWN:
@@ -4187,6 +4970,144 @@ class Scanner:
         unread = self.functions_sealed and (
             first is UNKNOWN or (first not in self.functions and
                                  first not in ("builtin", "command")))
+        # A temporary POSIXLY_CORRECT puts bash 5.2 in POSIX mode for the
+        # command, which may keep it: there `POSIXLY_CORRECT=1 unset X` runs
+        # the builtin over a function `unset`, as does a function so called
+        # in its body, and the mode outlives a special builtin. bash 3.2
+        # does none of this, so the mode is in doubt from here on.
+        if any((arg.get("Name") or {}).get("Value") == "POSIXLY_CORRECT"
+               for arg in assigns):
+            self.posix_mode(UNKNOWN)
+        # `exec` is a special builtin though it wraps a command, and with
+        # none its prefix outlives it as any other's: after `set -o posix;
+        # BEADS_DIR=/ext/.beads exec`, `bd close X` writes /ext. The prefix
+        # is read once, before the shell makes it its own, and that reading
+        # stands for the command too, so `OUT=$OUT/x eval ...` adds `/x`
+        # once rather than twice; see `prefix_values`.
+        held = None
+        if assigns and first in SPECIAL_BUILTINS:
+            prefix = self.prefix_values(cmd)
+            self.prefixes[id(cmd)] = prefix
+            if self.scope.posix is not False:
+                held = {name: (self.scope.assigns.get(name, MISSING),
+                               self.scope.exported.get(name, MISSING))
+                        for name in prefix}
+            self.special_prefix(cmd, conditional)
+        try:
+            self.run_command(cmd, fields, start, split, conditional, follows)
+        finally:
+            self.prefixes.pop(id(cmd), None)
+        if held:
+            operands = fields[start + 1:] if first in (
+                "export", "readonly") else ()
+            self.settle_prefix(held, operands, first)
+        if unread:
+            self.seal_sourced()
+
+    def special_prefix(self, cmd, conditional):
+        """Makes the prefix assignments of the special builtin `cmd` runs
+        assignments of this shell, where they outlive it.
+
+        In POSIX mode they do, as POSIX requires: after `set -o posix;
+        BEADS_DIR=/ext/.beads :`, `bd close X` writes /ext. bash 3.2 and 5.2
+        export them as well; dash and ksh keep them as shell variables. They
+        are made before the builtin runs, and `settle_prefix` reads what the
+        builtin did to them. Outside POSIX mode, or through `command` or
+        `builtin`, which the caller rules out, they reach the builtin alone.
+        Where the mode is in doubt, so is every name assigned, and where the
+        builtin may not run, so is its export.
+        """
+        posix = self.scope.posix
+        if posix is False:
+            return
+        bash = self.scope.bash
+        for name, value in self.prefix_values(cmd).items():
+            if posix is UNKNOWN or conditional:
+                value = UNKNOWN
+            self.scope.assigns[name] = value
+            if name == "POSIXLY_CORRECT":
+                self.posix_mode(UNKNOWN if value is UNKNOWN else True)
+            if posix is UNKNOWN or bash is UNKNOWN or conditional or \
+                    self.scope.allexport is UNKNOWN:
+                self.scope.exported[name] = UNKNOWN
+            elif bash is True or self.scope.allexport:
+                self.scope.exported[name] = True
+
+    def settle_prefix(self, held, operands, builtin):
+        """Settles the prefix `special_prefix` made assignments of this shell,
+        once the builtin `builtin` has run, from the state `held` its names
+        had before.
+
+        bash makes the prefix a temporary variable over the shell's own, and
+        keeps it only where POSIX mode still holds when the builtin returns:
+        after `set -o posix; BEADS_DIR=/ext/.beads set +o posix`, BEADS_DIR is
+        as it was. An `unset` of the name removes the temporary variable
+        alone, so after `export X=/a; X=/b unset X`, X is /a. dash and ksh
+        make the prefix in the shell itself, where the builtin then acts on
+        it. An operand of `export` or `readonly` run as a command, which this
+        scan does not read, may assign a name over its prefix, so such a name
+        is unknown: `OUT=/p export OUT=/r` leaves OUT /r. `export -n` takes
+        away the export bash gives the prefix, leaving the one the name had
+        before or allexport gives it: after `set -o posix; unset BEADS_DIR;
+        BEADS_DIR=/ext/.beads export -n BEADS_DIR`, `bd close X` walks up.
+        """
+        bash, posix = self.scope.bash, self.scope.posix
+        for name, before in held.items():
+            now = (self.scope.assigns.get(name, MISSING),
+                   self.scope.exported.get(name, MISSING))
+            if now[0] is UNSET or posix is False:
+                settled = before
+            elif posix is UNKNOWN:
+                settled = join_states(now, before)
+            else:
+                settled = now
+            if bash is UNKNOWN:
+                settled = join_states(settled, now)
+            if bash is not False:
+                self.restore_state(name, settled)
+            if posix is not False and any(
+                    may_assign(field, name) for field in operands):
+                self.scope.assigns[name] = UNKNOWN
+            if builtin == "export" and posix is not False:
+                self.unexport_prefix(name, before[1],
+                                     unexports(operands, name),
+                                     bash is True and posix is True)
+
+    def unexport_prefix(self, name, was, applies, certain):
+        """Applies an `export -n` that `applies` to the prefixed `name`,
+        which was exported as `was` before the prefix. `certain` says the
+        shell is bash in POSIX mode, where that export is all that remains.
+        """
+        if applies is False:
+            return
+        if was is MISSING:
+            was = self.inherited_export(name)
+        allexport = self.scope.allexport
+        if was is True or allexport is True:
+            kept = True
+        elif was is UNKNOWN or allexport is UNKNOWN:
+            kept = UNKNOWN
+        else:
+            kept = False
+        now = self.is_exported(name)
+        if applies is not True or not certain or now is UNKNOWN:
+            kept = kept if kept is now else UNKNOWN
+        self.scope.exported[name] = kept
+
+    def restore_state(self, name, state):
+        """Puts back the value and export state `state` of `name`, where
+        MISSING says the scope had none of its own."""
+        for table, value in zip((self.scope.assigns, self.scope.exported),
+                                state):
+            if value is MISSING:
+                table.pop(name, None)
+            else:
+                table[name] = value
+
+    def run_command(self, cmd, fields, start, split, conditional, follows,
+                    passed=False):
+        """Runs the command `fields` spell where its wrappers put it, and with
+        the PWD it was given; see `call`. `passed` is for `dispatch`."""
         # A wrapper may run the command in a directory of its own, and which
         # store `bd` selects turns on the directory it runs in. Applied here,
         # once, around every reader below rather than at each of them: the
@@ -4228,15 +5149,14 @@ class Scanner:
             self.callers[id(cmd)] = self.scope
             try:
                 run(lambda: self.dispatch(cmd, fields, start, split,
-                                          conditional, follows, cwd, spelled))
+                                          conditional, follows, cwd, spelled,
+                                          passed))
             finally:
                 self.callers.pop(id(cmd), None)
                 self.leader = leader
         else:
             self.dispatch(cmd, fields, start, split, conditional, follows,
-                          None)
-        if unread:
-            self.seal_sourced()
+                          None, passed=passed)
 
     def wrapper_pwd(self, cmd, args, end, cwd, posix=False):
         """The directory the wrappers moved the command to, as it names it,
@@ -4347,14 +5267,29 @@ class Scanner:
             return UNKNOWN
         return self.command_env(cmd, args, last, "PWD")
 
+    def function_first(self, name):
+        """Whether this shell finds a function named `name` before the
+        builtin of that name: True, False or UNKNOWN.
+
+        A function comes first, except that a shell in POSIX mode finds a
+        special builtin before it: after `unset() { cd /ext; }`, `unset X`
+        runs the function in bash, and the builtin under `set -o posix`. See
+        `Scope.posix`.
+        """
+        if name not in SPECIAL_BUILTINS:
+            return True
+        posix = self.scope.posix
+        return UNKNOWN if posix is UNKNOWN else not posix
+
     def dispatch(self, cmd, fields, start, split, conditional, follows, cwd,
-                 spelled=True):
+                 spelled=True, passed=False):
         """Hands the command at `fields[start]` to the reader that knows it.
 
         `cwd` is the directory a wrapper runs it in, or None when it runs here,
         and `spelled` whether its PWD spelling is known. Applied to this frame
         rather than passed on, so every reader below -- and every scope nested
-        inside them -- resolves against it.
+        inside them -- resolves against it. `passed` says a function named
+        first is passed by for the builtin of its name; see `call_listed`.
         """
         if cwd is not None:
             if cwd is UNKNOWN:
@@ -4381,10 +5316,28 @@ class Scanner:
         # writes /ext. No builtin is named by a path, so one this text
         # defined is called before the path is read as a program.
         if start == 0 and name != word and word in self.functions:
-            self.call_function(word, self.prefix_seed(cmd))
+            self.call_listed(cmd, fields, start, split, conditional, follows,
+                             word)
             return
         if name != word and name in SHELL_STATE_WORDS:
             return
+
+        # A call runs the body defined earlier in this text, and runs it here,
+        # where the cwd is known. Without this a relative store named inside a
+        # function was reported by nothing: the definition cannot resolve it and
+        # the call did not look. Only a command named first is one: `command`
+        # and every other wrapper run a program, so `bd() { command bd -C /ext
+        # close X; }; bd` writes /ext. A function is found before a builtin of
+        # the same name, so one named after a builtin read below is called
+        # rather than read: after `cd() { builtin cd /ext; }`, `cd /known; bd
+        # close X` writes /ext. A special builtin may come first instead; see
+        # `function_first`.
+        if start == 0 and not passed and word in self.functions:
+            first = self.function_first(name)
+            if first is not False:
+                self.call_listed(cmd, fields, start, split, conditional,
+                                 follows, word, passed=first is UNKNOWN)
+                return
 
         # After a startup or sourced file, a builtin read for what it does to
         # this shell may be a function that file defined, which may do
@@ -4457,21 +5410,12 @@ class Scanner:
             self.printf_builtin(fields, start)
             return
 
-        # A call runs the body defined earlier in this text, and runs it here,
-        # where the cwd is known. Without this a relative store named inside a
-        # function was reported by nothing: the definition cannot resolve it and
-        # the call did not look. Only a command named first is one: `command`
-        # and every other wrapper run a program, so `bd() { command bd -C /ext
-        # close X; }; bd` writes /ext.
-        if start == 0 and word in self.functions:
-            self.call_function(word, self.prefix_seed(cmd))
-            return
-
         if name != "bd":
             return
 
-        operands, target, store, helped, flags = self.bd_operands(fields, start)
-        if self.readonly(operands, helped, flags):
+        operands, target, store, helped, flags, readonly_mode = \
+            self.bd_operands(fields, start)
+        if self.readonly(operands, helped, flags, readonly_mode):
             return
         self.mutates = True
         # Named first after a startup or sourced file, `bd` may be a function
@@ -4787,10 +5731,15 @@ class Scanner:
                     break
                 if word is UNKNOWN or not CD_OPT.match(word):
                     break
-                # The last of `-L` and `-P` wins, as in bash.
+                # The last of `-L` and `-P` wins, as in bash. zsh's `-L` gives
+                # up CHASE_LINKS but not CHASE_DOTS, so there a mode that may
+                # be CHASE_DOTS stays UNKNOWN; see `zsh_physical`.
                 for letter in word[1:]:
-                    if letter in "LP":
-                        physical = letter == "P"
+                    if letter == "P":
+                        physical = True
+                    elif letter == "L":
+                        physical = UNKNOWN if self.scope.zsh and \
+                            self.scope.physical is UNKNOWN else False
                 i += 1
         # `cd` with no operand goes to $HOME, and `cd -` to a directory only the
         # shell's history knows.
@@ -4936,7 +5885,8 @@ class Scanner:
         name this scan cannot read may be any name, so every value and every
         attribute is in doubt after it -- the scope is sealed opaque, as under
         a wrapper whose effect cannot be read. On a path the shell may not
-        take, what was unset is unknown rather than gone.
+        take, what was unset is unknown rather than gone: a function stays in
+        the table, possibly unset; see `call_listed`.
         """
         functions = False
         names = []
@@ -4954,14 +5904,27 @@ class Scanner:
             names.append(word)
         for name in names:
             if functions:
-                self.functions.pop(name, None)
+                if conditional and name in self.functions:
+                    self.possibly_unset.add(name)
+                else:
+                    self.functions.pop(name, None)
+                    self.possibly_unset.discard(name)
                 continue
             # bash refuses to unset its readonly SHELLOPTS, which still
-            # carries its options to a child; see `carried_option`.
+            # carries its options to a child; see `carried_option`. Every
+            # shell refuses to unset a name the text made readonly, which
+            # keeps its value: after `readonly BEADS_DIR=/ext/.beads; export
+            # BEADS_DIR; unset BEADS_DIR`, `bd close X` writes /ext.
             refused = self.scope.bash if name == "SHELLOPTS" else False
-            if refused is True:
+            readonly = self.is_readonly(name)
+            if refused is True or readonly is True:
                 continue
+            if readonly is UNKNOWN:
+                refused = UNKNOWN
             self.unset_names.add(name)
+            if name == "POSIXLY_CORRECT":
+                self.posix_mode(UNKNOWN if conditional or refused is UNKNOWN
+                                else False)
             if conditional or refused is UNKNOWN:
                 self.scope.assigns[name] = UNKNOWN
                 self.scope.exported[name] = UNKNOWN
@@ -5052,26 +6015,56 @@ class Scanner:
             i += 1
 
     def set_builtin(self, args, start, conditional):
-        """Records `set -a`/`+a`, `set -m`/`+m` and `set -P`/`+P`.
+        """Records `set -a`/`+a`, `set -m`/`+m`, `set -P`/`+P` and `set -o
+        posix`/`+o posix`.
 
         Under `set -a` every assignment exports its name, so `set -a;
         BEADS_DIR=/x/.beads; bd close X` runs `bd` with that BEADS_DIR though
         nothing said `export`. `set -m` turns job control on, which switches
         `lastpipe` off again; see `Scope.last_member_stays`. `set -P` makes
-        every later `cd` resolve symlinks before `..`; see `cd_dest`. Only
-        those three are read; the rest of `set` says nothing about which store
-        a command opens.
+        every later `cd` resolve symlinks before `..`; see `cd_dest`. `set -o
+        posix` makes a special builtin come before a function of its name;
+        see `posix_option`. Only those four are read; the rest of `set` says
+        nothing about which store a command opens.
+
+        Each is changed as it is read, as bash changes it: `set -o posix -a`
+        leaves the POSIXLY_CORRECT it sets unexported, where `set -a -o posix`
+        exports it, and `set +o posix -o posix` sets it anew, unexported.
         """
-        state = {}
+        # A word this scan cannot read may be an operand or `--`, after which
+        # bash reads no option, or may split into options of its own: with
+        # X=foo, `set $X +o posix` leaves POSIX mode on. So no option read
+        # after one is certain.
+        doubt = False
+
+        def change(key, setting):
+            value = UNKNOWN if conditional or doubt else setting
+            if key == "a":
+                self.scope.allexport = value
+            elif key == "m":
+                self.scope.monitor = value
+            elif key == "P":
+                self.scope.physical = value
+            else:
+                self.posix_option(value)
+
+        def unread():
+            nonlocal doubt
+            doubt = True
+            for key in ("a", "m", "P", "posix"):
+                change(key, UNKNOWN)
+
         i = start + 1
         while i < len(args):
             word = args[i].value
             if word is UNKNOWN:
-                state = {"a": UNKNOWN, "m": UNKNOWN, "P": UNKNOWN}
+                unread()
                 i += 1
                 continue
-            if word == "--" or not (word.startswith("-") or
-                                    word.startswith("+")):
+            # A lone `-` ends the options as `--` does: `set - -a` makes `-a`
+            # the first operand and leaves allexport as it was.
+            if word in ("--", "-") or not (word.startswith("-") or
+                                           word.startswith("+")):
                 break
             # Read letter by letter, as bash does: each `o`, bundled or not,
             # takes the next word as an option's name, so `set -eo physical`
@@ -5081,23 +6074,19 @@ class Scanner:
             taken = 0
             for letter in word[1:]:
                 if letter in "amP":
-                    state[letter] = on
+                    change(letter, on)
                 elif letter == "o":
                     taken += 1
                     if i + taken >= len(args):
                         continue
                     option = args[i + taken].value
                     if option is UNKNOWN:
-                        state = {"a": UNKNOWN, "m": UNKNOWN, "P": UNKNOWN}
+                        unread()
                     elif option in SET_O_LETTERS:
-                        state[SET_O_LETTERS[option]] = on
+                        change(SET_O_LETTERS[option], on)
+                    elif option == "posix":
+                        change("posix", on)
             i += 1 + taken
-        if "a" in state:
-            self.scope.allexport = UNKNOWN if conditional else state["a"]
-        if "m" in state:
-            self.scope.monitor = UNKNOWN if conditional else state["m"]
-        if "P" in state:
-            self.scope.physical = UNKNOWN if conditional else state["P"]
 
     def shopt_builtin(self, args, start, conditional):
         """Records `shopt -s lastpipe` and `shopt -u lastpipe`.
@@ -5106,20 +6095,23 @@ class Scanner:
         `shopt -s lastpipe; true | cd /external; bd close X` writes
         /external's store where a scan that put every member in a subshell
         restored the old cwd. `-o` makes `shopt` a spelling of `set -o`, so
-        `shopt -so allexport` is `set -a`, `shopt -so physical` is `set -P`
-        and `shopt -so monitor` is `set -m`, which puts the last member of a
-        pipeline back in a subshell. Without `-s` or `-u` the builtin only
-        reports, and the rest of `shopt`'s options say nothing about which
-        store a command opens.
+        `shopt -so allexport` is `set -a`, `shopt -so physical` is `set -P`,
+        `shopt -so monitor` is `set -m`, which puts the last member of a
+        pipeline back in a subshell, and `shopt -so posix` is `set -o posix`.
+        Without `-s` or `-u` the builtin only reports, and the rest of
+        `shopt`'s options say nothing about which store a command opens.
         """
         setting = None
+        refused = False
         set_o = False
+        flag_unread = False
         names = []
         i = start + 1
         while i < len(args):
             word = args[i].value
             if word is UNKNOWN:
                 names.append(UNKNOWN)
+                flag_unread = True
                 i += 1
                 continue
             if word == "--":
@@ -5127,39 +6119,62 @@ class Scanner:
                 break
             if word.startswith("-") and len(word) > 1:
                 if "s" in word[1:]:
+                    refused = refused or (setting is False and
+                                          not flag_unread)
                     setting = True
                 if "u" in word[1:]:
+                    refused = refused or (setting is True and
+                                          not flag_unread)
                     setting = False
                 if "o" in word[1:]:
                     set_o = True
                 i += 1
                 continue
             break
+        # bash refuses `-s` with `-u` and changes nothing: after `shopt -so
+        # allexport; shopt -s -u -o allexport`, allexport is still on. Only
+        # flags before any word this scan cannot read count, since that word
+        # may end the flags: with X=allexport, `shopt -so "$X" -u` turns
+        # allexport on, `-u` being an option name there.
+        if refused:
+            return
         while i < len(args):
             names.append(args[i].value)
             i += 1
         if UNKNOWN in names:
             # A word that cannot be read may have been the option, or the
             # flag that set it, so whatever it could have named is unknown.
-            if set_o or "allexport" in names:
+            # One among the flags may hold the names as well: with X='-so
+            # posix', `shopt $X` is `shopt -so posix`. So every option read
+            # here is unknown after it.
+            every = set_o or flag_unread
+            if every or "allexport" in names:
                 self.scope.allexport = UNKNOWN
-            if set_o or "physical" in names:
+            if every or "physical" in names:
                 self.scope.physical = UNKNOWN
-            if set_o or "monitor" in names:
+            if every or "monitor" in names:
                 self.scope.monitor = UNKNOWN
-            if not set_o:
+            if every or "posix" in names:
+                self.posix_option(UNKNOWN)
+            if flag_unread or not set_o:
                 self.scope.lastpipe = UNKNOWN
             return
         if setting is None:
             return
         value = UNKNOWN if conditional else setting
         if set_o:
-            if "allexport" in names:
-                self.scope.allexport = value
-            if "physical" in names:
-                self.scope.physical = value
-            if "monitor" in names:
-                self.scope.monitor = value
+            # In the order given, as bash sets them: `shopt -so posix
+            # allexport` leaves the POSIXLY_CORRECT it sets unexported; see
+            # `set_builtin`.
+            for name in names:
+                if name == "allexport":
+                    self.scope.allexport = value
+                elif name == "physical":
+                    self.scope.physical = value
+                elif name == "monitor":
+                    self.scope.monitor = value
+                elif name == "posix":
+                    self.posix_option(value)
         elif "lastpipe" in names:
             self.scope.lastpipe = value
 
@@ -5213,7 +6228,13 @@ class Scanner:
         the command without it, the others standing, so `SHELLOPTS=physical
         bash -c ...` hands the child the SHELLOPTS this shell had. In `sh`,
         which may be bash or not, the value is UNKNOWN.
+
+        A special builtin's prefix is read before the shell makes it its
+        own, and that reading is kept for the command; see `call`.
         """
+        fixed = self.prefixes.get(id(cmd))
+        if fixed is not None:
+            return dict(fixed)
         caller = self.callers.get(id(cmd))
         if caller is not None and caller is not self.scope:
             return self.in_scope(caller, self.prefix_values, cmd)
@@ -5291,18 +6312,23 @@ class Scanner:
         # whatever SHELLOPTS says. A privileged shell ignores SHELLOPTS --
         # `env SHELLOPTS=physical bash -p -c ...` lands in /ws -- and whether
         # it is privileged is settled by the last of `-p`, `+p` and `-o
-        # privileged` among its options.
+        # privileged` among its options. zsh reads no SHELLOPTS, and spells
+        # its own physical mode as `zsh_physical` reads it.
         words = args[start + 1:idx]
+        shell = args[start].value.rsplit("/", 1)[-1]
         privileged = self.shell_option(words, "p", "privileged")
         inherited = {}
-        for option in ("physical", "monitor", "posix"):
+        for option in ("physical", "monitor", "posix", "allexport"):
             state = self.shellopts_option(cmd, args, start, option)
             if privileged is True:
                 state = False
             elif privileged is UNKNOWN and state is not False:
                 state = UNKNOWN
             inherited[option] = state
-        own = self.shell_option(words, "P", "physical")
+        if shell == "zsh":
+            own = self.zsh_physical(words)
+        else:
+            own = self.shell_option(words, "P", "physical")
         if inherited["physical"] is True or own is True:
             physical = True
         elif inherited["physical"] is False and own is False:
@@ -5314,9 +6340,14 @@ class Scanner:
         # returns at once, the `setsid` forking; see `detaches`. `-m` and
         # `-i` only ask for it, and bash grants it only with a terminal to
         # control, which a command may or may not have, so either leaves it
-        # in doubt.
-        asked = self.shell_option(words, "m", "monitor")
-        interactive = self.shell_option(words, "i", "interactive")
+        # in doubt. zsh's are read by its own names, so `--MONITOR` and `-o
+        # Interactive` ask for it too.
+        if shell == "zsh":
+            asked = self.zsh_option(words, ("monitor",), False, "m")
+            interactive = self.zsh_option(words, ("interactive",), False, "i")
+        else:
+            asked = self.shell_option(words, "m", "monitor")
+            interactive = self.shell_option(words, "i", "interactive")
         if inherited["monitor"] is True:
             monitor = True
         elif inherited["monitor"] is False and asked is False and \
@@ -5324,9 +6355,36 @@ class Scanner:
             monitor = False
         else:
             monitor = UNKNOWN
+        # A special builtin comes before a function of its name in bash's
+        # POSIX mode, which bash as `sh` starts in whatever `+o posix` says,
+        # and in dash and ksh, which refuse to define such a function; zsh
+        # finds the function first. So does busybox ash, the `sh` of Alpine,
+        # so for `sh`, which may be either, both are read. See `Scope.posix`.
+        if shell == "zsh":
+            posix = False
+        elif bash_kind(shell) is True:
+            posix = self.bash_posix(cmd, args, start, words,
+                                    inherited["posix"])
+        elif bash_kind(shell) is UNKNOWN:
+            posix = UNKNOWN
+        else:
+            posix = True
+        # allexport comes on from the shell's own `-a` or `-o allexport`, zsh's
+        # spellings among them, or from SHELLOPTS, which only turns options
+        # on: `env SHELLOPTS=allexport bash +a -c 'BEADS_DIR=/ext/.beads; bd
+        # close X'` writes /ext, as `bash -a -c ...` does.
+        if shell == "zsh":
+            exports = self.zsh_option(words, ("allexport",), False, "a")
+        else:
+            exports = self.shell_option(words, "a", "allexport")
+        if inherited["allexport"] is True or exports is True:
+            allexport = True
+        elif inherited["allexport"] is False and exports is False:
+            allexport = False
+        else:
+            allexport = UNKNOWN
         startup = self.startup_runs(cmd, args, start, words, privileged,
                                     interactive, inherited["posix"])
-        shell = args[start].value.rsplit("/", 1)[-1]
         leader = self.leader
         self.leader = self.leads(args, start)
         try:
@@ -5335,7 +6393,8 @@ class Scanner:
                              pwd=self.shell_pwd(cmd, args, start),
                              startup=startup,
                              functions=self.imported_functions(
-                                 shell, sealed, privileged, seed))
+                                 shell, sealed, privileged, seed),
+                             posix=posix, allexport=allexport)
         finally:
             self.leader = leader
 
@@ -5349,8 +6408,15 @@ class Scanner:
         BASH_ENV names, unless privileged or in POSIX mode. So
         `BASH_ENV=/tmp/select-store.sh bash -c 'bd close X'` writes whatever
         store that file exports, and what it does is as unknown as a
-        `source`d file's; see `sub_scan`. bash as `sh` reads none of them for
-        a `-c` script, and other shells are not read for theirs.
+        `source`d file's; see `sub_scan`.
+
+        zsh reads its global zshenv before any script, `-f` or not, and then,
+        unless `-f`, `.zshenv` from `$ZDOTDIR` or `$HOME`; `-i` and `-l` add
+        more. So `ZDOTDIR=/tmp/z zsh -c 'bd close X'` writes whatever store
+        `/tmp/z/.zshenv` selects, and only a zsh whose options leave RCS off,
+        see `zsh_rcs`, where no global zshenv exists at any place in
+        `ZSH_GLOBAL_ZSHENV`, runs none. The other shells are read in
+        `posix_startup_runs`.
 
         Each control is read as an option, where it stands as one and as the
         last word on it says: `bash --rcfile --posix -c ...` names a file
@@ -5360,36 +6426,29 @@ class Scanner:
 
         An interactive shell in POSIX mode reads the file ENV names in place
         of `.bashrc`, `--norc` or not, unless privileged: `ENV=/tmp/s.sh bash
-        --posix --norc -i -c ...` runs it. POSIXLY_CORRECT puts bash in that
-        mode whatever a `+o posix` says, and so does `inherited`, a SHELLOPTS
-        listing `posix` that a privileged shell has not ignored: `env
-        SHELLOPTS=posix ENV=/tmp/s.sh bash --norc -i -c ...` runs the file,
-        and `env SHELLOPTS=posix BASH_ENV=/tmp/s.sh bash -c ...` none.
+        --posix --norc -i -c ...` runs it. Whether it is in that mode is read
+        as `bash_posix` reads it from `inherited`: `env SHELLOPTS=posix
+        ENV=/tmp/s.sh bash --norc -i -c ...` runs the file, and `env
+        SHELLOPTS=posix BASH_ENV=/tmp/s.sh bash -c ...` none.
 
         A wrapper may make it a login shell too, by the name it runs it
         under; see `argv0_login`.
         """
-        if bash_kind(args[start].value) is not True:
-            return False
+        name = args[start].value.rsplit("/", 1)[-1]
+        if name == "zsh":
+            if self.zsh_rcs(words) is not False:
+                return True
+            return any(os.path.exists(path) for path in ZSH_GLOBAL_ZSHENV)
+        if bash_kind(name) is not True:
+            return self.posix_startup_runs(cmd, args, start, words, name,
+                                           interactive)
         login = self.shell_option(words, "l", "login")
         if login is False:
             login = self.argv0_login(args, start)
         if login is not False and \
                 self.shell_option(words, "", "noprofile") is not True:
             return True
-        option = self.shell_option(words, "", "posix")
-        variable = self.command_env(cmd, args, start, "POSIXLY_CORRECT")
-        if variable is not None and variable is not UNKNOWN:
-            variable = True
-        elif variable is None:
-            variable = False
-        states = {option, variable, inherited}
-        if True in states:
-            posix = True
-        elif UNKNOWN in states:
-            posix = UNKNOWN
-        else:
-            posix = False
+        posix = self.bash_posix(cmd, args, start, words, inherited)
         if interactive is not False:
             if interactive is UNKNOWN:
                 return True
@@ -5412,6 +6471,63 @@ class Scanner:
             return False
         return env is not None and env != ""
 
+    def bash_posix(self, cmd, args, start, words, inherited):
+        """Whether the bash at `args[start]`, with options `words`, starts in
+        POSIX mode: True, False or UNKNOWN.
+
+        `--posix` and `-o posix` turn it on, as the last word on it says; see
+        `startup_runs`. POSIXLY_CORRECT puts bash in that mode whatever a `+o
+        posix` says, and so does POSIX_PEDANTIC, which bash reads only from its
+        environment as it starts, and so does `inherited`, a SHELLOPTS listing
+        `posix` that a privileged shell has not ignored, and so does a wrapper
+        running it as `sh`; see `argv0_sh`.
+        """
+        option = self.shell_option(words, "", "posix")
+        states = {option, inherited, self.argv0_sh(args, start)}
+        for name in ("POSIXLY_CORRECT", "POSIX_PEDANTIC"):
+            variable = self.command_env(cmd, args, start, name)
+            if variable is not None and variable is not UNKNOWN:
+                variable = True
+            elif variable is None:
+                variable = False
+            states.add(variable)
+        if True in states:
+            return True
+        if UNKNOWN in states:
+            return UNKNOWN
+        return False
+
+    def posix_startup_runs(self, cmd, args, start, words, name, interactive):
+        """Whether `sh`, `dash`, `ksh` or `mksh` may run a startup file before
+        its `-c` script.
+
+        A login shell reads the profile, unless bash as `sh` is told
+        `--noprofile`, which the others refuse. An interactive one reads the
+        file ENV names, as dash and bash as `sh` do: `ENV=/tmp/s.sh sh -i -c
+        'bd close X'` runs it first. ksh reads `~/.kshrc` in its place when
+        ENV is unset, though not when it is set and empty, and reads
+        `KSH_SYSTEM_RC` first, where it exists, whatever ENV says. mksh reads
+        `${ENV:-~/.mkshrc}`, so an empty ENV runs its default file too. A
+        shell that is neither reads none of them, so `BASH_ENV=/tmp/s.sh sh
+        -c ...` runs no file.
+        """
+        login = self.shell_option(words, "l", "login")
+        if login is False:
+            login = self.argv0_login(args, start)
+        if login is not False and \
+                self.shell_option(words, "", "noprofile") is not True:
+            return True
+        if interactive is False:
+            return False
+        if interactive is UNKNOWN or name == "mksh":
+            return True
+        if name == "ksh" and os.path.exists(KSH_SYSTEM_RC):
+            return True
+        env = self.command_env(cmd, args, start, "ENV")
+        if env is None:
+            return name == "ksh"
+        return env is UNKNOWN or bool(env)
+
     def argv0_login(self, args, start):
         """Whether the wrapper that runs the shell at `args[start]` names it
         with a leading `-`, which makes bash a login shell: True, False or
@@ -5425,13 +6541,45 @@ class Scanner:
         macOS ships does so only when interactive, so `startup_runs` takes
         such a shell for one that may.
         """
+        argv0, dash = self.wrapper_argv0(args, start)
+        if dash is True:
+            return True
+        if argv0 is UNKNOWN or dash is UNKNOWN:
+            return UNKNOWN
+        return argv0 is not None and argv0.startswith("-")
+
+    def argv0_sh(self, args, start):
+        """Whether the wrapper that runs the bash at `args[start]` names it
+        `sh`, which puts it in POSIX mode as being run as `sh` does: True,
+        False or UNKNOWN.
+
+        bash reads the last component of the name, past one leading `-`, so
+        `exec -a sh bash -c ...`, `exec -a /bin/sh bash -c ...` and `env
+        --argv0=-sh bash -c ...` all run in that mode; see `argv0_login`.
+        """
+        argv0 = self.wrapper_argv0(args, start)[0]
+        if argv0 is UNKNOWN:
+            return UNKNOWN
+        if argv0 is None:
+            return False
+        name = argv0.rsplit("/", 1)[-1]
+        return (name[1:] if name.startswith("-") else name) == "sh"
+
+    def wrapper_argv0(self, args, start):
+        """The name the last wrapper before `args[start]` runs it under, and
+        whether `exec -l` puts a `-` before that, as `(argv0, dash)`.
+
+        `argv0` is None where no wrapper names it, so it runs under its own
+        name, and both are UNKNOWN where the wrapper cannot be read. Only the
+        last wrapper counts; see `argv0_login`.
+        """
         found = self.wrapper_words(args, start)
         if not found:
-            return False if found == [] else UNKNOWN
+            return (None, False) if found == [] else (UNKNOWN, UNKNOWN)
         i = found[-1]
         name = args[i].value.rsplit("/", 1)[-1]
         if name not in ("exec", "env"):
-            return False
+            return None, False
         takes, alone = WRAPPER_OPT_ARGS[name], WRAPPER_OPT_NOARG[name]
         dash, argv0 = False, None
         i += 1
@@ -5440,7 +6588,7 @@ class Scanner:
             if word is UNKNOWN:
                 if args[i].assign is not None:
                     break
-                return UNKNOWN
+                return UNKNOWN, UNKNOWN
             if word == "-" and name == "env":
                 i += 1
                 continue
@@ -5454,16 +6602,14 @@ class Scanner:
                 continue
             bundle = short_opts(word, takes, alone)
             if bundle is None:
-                return UNKNOWN
+                return UNKNOWN, UNKNOWN
             letters, opt, inline = bundle
             dash = dash or (name == "exec" and "l" in letters)
             if opt == "-a":
                 argv0 = inline if inline is not None else \
                     self.opt_value(args, i)
             i += 1 if opt is None or inline is not None else 2
-        if dash or argv0 is UNKNOWN:
-            return True if dash else UNKNOWN
-        return argv0 is not None and argv0.startswith("-")
+        return argv0, dash
 
     def shellopts_option(self, cmd, args, start, option):
         """Whether the shell at `args[start]` starts with `option` on from the
@@ -5506,27 +6652,24 @@ class Scanner:
 
     def carried_option(self, option):
         """Whether this shell's own SHELLOPTS hands a child `option`, physical
-        mode, job control or POSIX mode: True, False or UNKNOWN.
+        mode, job control, POSIX mode or allexport: True, False or UNKNOWN.
 
         Only an exported one reaches a child. bash keeps its SHELLOPTS in step
         with its options, so that carries the option as it stands now: `export
-        SHELLOPTS; set -P; bash -c ...` starts the child physical, and `export
-        SHELLOPTS; set -m; bash -c ...` with job control, while a `set +P`
-        before it starts the child logical whatever was inherited. Any other
-        shell holds SHELLOPTS as the plain variable it inherited or was given,
-        which its own options do not touch: `env SHELLOPTS=physical dash -c
-        'bash -c ...'` starts that bash physical.
+        SHELLOPTS; set -P; bash -c ...` starts the child physical, `export
+        SHELLOPTS; set -m; bash -c ...` with job control, and `export
+        SHELLOPTS; POSIXLY_CORRECT=1; bash -c ...` in POSIX mode, while a
+        `set +P` before it starts the child logical whatever was inherited.
+        Any other shell holds SHELLOPTS as the plain variable it inherited or
+        was given, which its own options do not touch: `env
+        SHELLOPTS=physical dash -c 'bash -c ...'` starts that bash physical.
         """
         exported = self.is_exported("SHELLOPTS")
         if exported is not True:
             return exported
         answers = set()
         if self.scope.bash is not False:
-            # This scan does not follow bash's own POSIX mode, which `set -o
-            # posix` turns on and so does assigning POSIXLY_CORRECT, so what
-            # its SHELLOPTS says of `posix` is in doubt.
-            answers.add(UNKNOWN if option == "posix"
-                        else getattr(self.scope, option))
+            answers.add(getattr(self.scope, option))
         if self.scope.bash is not True:
             answers.add(opts_option(self.shell_var("SHELLOPTS"), option))
         return answers.pop() if len(answers) == 1 else UNKNOWN
@@ -5717,7 +6860,8 @@ class Scanner:
     def scan_script(self, script, seed=None, sealed=False, cwd=None,
                     known=None, conditional=False, frame="subshell",
                     process=False, physical=False, monitor=False, shell=None,
-                    pwd=None, startup=False, functions=None):
+                    pwd=None, startup=False, functions=None, posix=False,
+                    allexport=False):
         """Scans `script` as shell text, in a scope of its own.
 
         The text is parsed afresh, so its offsets index it and not the command
@@ -5732,7 +6876,9 @@ class Scanner:
         if script in self.scripts:
             return
         self.spend(PARSE_STEPS)
-        tree, parsed = parse(script)
+        tree, parsed, dropped = parse(script)
+        if dropped:
+            self.unreadable_script()
         if tree is None:
             return
         self.scripts.add(script)
@@ -5742,7 +6888,8 @@ class Scanner:
                           conditional=conditional, frame=frame,
                           process=process, physical=physical,
                           monitor=monitor, shell=shell, pwd=pwd,
-                          startup=startup, functions=functions)
+                          startup=startup, functions=functions, posix=posix,
+                          allexport=allexport)
         finally:
             self.scripts.discard(script)
 
@@ -5757,10 +6904,12 @@ def scan(command, launch_cwd, unwaited=False):
     store; see `walk_from`. `unwaited` says the caller returned as the command
     started, so every write in it is one; see `in_background`.
     """
-    tree, parsed = parse(command)
+    tree, parsed, dropped = parse(command)
     scanner = Scanner(launch_cwd, parsed)
     if unwaited:
         scanner.background += 1
+    if dropped:
+        scanner.unreadable_script()
     if tree is not None:
         scanner.stmts(tree.get("Stmts") or (), conditional=False)
     return (scanner.mutates, scanner.unresolved, scanner.targets,

@@ -22,7 +22,7 @@ PASS=0
 FAIL=0
 
 # The cwd every case is scanned under, so a relative `-C` has a fixed base.
-BASE=/tmp/cs-classify-base
+BASE=/tmp/beads-hook-classify-base
 
 # Directories the `cd` cases enter. A `cd` to a path that is no directory
 # fails and leaves the shell where it was, which the scanner reads from the
@@ -32,7 +32,7 @@ BASE=/tmp/cs-classify-base
 # `TMPDIR` carries a trailing slash on macOS, and the doubled separator it leaves
 # is not what a path naming this directory looks like. The store cases compare
 # against the normalised form the scanner reports, so it is normalised here.
-CD=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/cs-classify-cd.XXXXXX")" && pwd -P)
+CD=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/beads-hook-classify-cd.XXXXXX")" && pwd -P)
 mkdir -p "$CD/base" "$CD/one/two" "$CD/other"
 trap 'rm -rf "$CD"' EXIT
 
@@ -134,6 +134,55 @@ check_gives_up() {
   fi
 }
 
+# Asserts the stores a command addresses, as check_target does, and that the
+# scan answered in the time check_gives_up allows giving up.
+check_target_in_time() {
+  local want="$1" command="$2" started=$SECONDS got
+  scan_command "$command" "$BASE"
+  got="${SCAN_TARGETS[*]:+${SCAN_TARGETS[*]}}"
+  if [ "$got" = "$want" ] && [ "$SCAN_FAILED" -eq 0 ] &&
+    [ $((SECONDS - started)) -le 20 ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    printf 'FAIL want=[%s] in time got=[%s] failed=%s after %ss: %.80s\n' \
+      "$want" "$got" "$SCAN_FAILED" $((SECONDS - started)) "$command"
+  fi
+}
+
+# zsh runs its global zshenv before any script, `-f` or not, and an
+# interactive ksh93 its system rc whatever ENV says, so a case that needs
+# neither to run holds only on a machine without the file. Asserts the stores
+# a command addresses, as check_target does, when the flag given is 0, and a
+# write the scan could not name when it is 1.
+if [ -e /etc/zshenv ] || [ -e /etc/zsh/zshenv ]; then
+  ZSH_GLOBAL_ZSHENV=1
+else
+  ZSH_GLOBAL_ZSHENV=0
+fi
+if [ -e /etc/ksh.kshrc ]; then
+  KSH_SYSTEM_RC=1
+else
+  KSH_SYSTEM_RC=0
+fi
+check_target_unless() {
+  if [ "$1" -eq 1 ]; then
+    check_unresolved "$3"
+  else
+    check_target "$2" "$3"
+  fi
+}
+# Asserts no store written in the background when the flag given is 0, and the
+# stores given, as check_async does, when it is 1 and the file may turn job
+# control on.
+check_async_unless() {
+  if [ "$1" -eq 1 ]; then
+    check_async "$2" "$3"
+  else
+    check_async "" "$3"
+  fi
+}
+
 # --- not bd at all -----------------------------------------------------
 check skip 'ls -la'
 check skip 'git commit -m "bd update"'
@@ -172,6 +221,32 @@ check skip 'bd swarm validate'
 check skip 'bd todo list'
 check skip 'bd human list'
 check skip 'bd human stats'
+
+# --- bd --readonly -----------------------------------------------------
+# `bd sql` refuses every write under `--readonly`, wherever the flag stands
+# among its options, and the last of `--readonly` and `--readonly=` wins
+# (#36). `bd import` writes under it, so the flag decides nothing for a verb
+# not known to check it. `--readonly=` turns the mode off whatever its value.
+check skip 'bd --readonly sql "select 1"'
+check skip 'bd sql --readonly "select 1"'
+check skip 'bd sql "update issues set title = 1" --readonly'
+check skip 'bd -C /tmp/store --readonly sql "select 1"'
+check skip 'bd --readonly=false --readonly sql "select 1"'
+check sync 'bd sql "select 1"'
+check sync 'bd --readonly import x.jsonl'
+check sync 'bd --readonly close CHR-1'
+check sync 'bd --readonly sql "select 1" && bd close CHR-1'
+check sync 'bd --readonly=false sql "select 1"'
+check sync 'bd --readonly --readonly=false sql "select 1"'
+check sync 'bd --readonly=true sql "select 1"'
+check sync 'bd sql -- --readonly'
+# A word after an option of unknown arity may be its value, and a command
+# substitution may name any verb.
+check sync 'bd sql --frob --readonly "select 1"'
+check sync 'bd --readonly "$(cat verb.txt)" "select 1"'
+# An unreadable word may be `--`, or may hold `--readonly=false`.
+check_unresolved 'FLAG=--; bd -C /tmp/store sql "${FLAG[0]}" --readonly "select 1"'
+check_unresolved 'OPTS=$(cat opts.txt); bd -C /tmp/store --readonly $OPTS sql "select 1"'
 
 # --- mutating verbs ----------------------------------------------------
 # Includes verbs an allow-list would plausibly have missed, which is why
@@ -293,6 +368,20 @@ check sync 'bd update CHR-1 -m --help'
 # A global option's arity is known, so a help flag past its value still reads
 # as one.
 check skip 'bd -C /tmp/x --actor me --help'
+
+# --- version flags -----------------------------------------------------
+# `bd --version` and `bd -V` print the version and exit, as `bd version` does.
+check skip 'bd --version'
+check skip 'bd -V'
+check skip 'bd -qV'
+check skip 'bd -C /tmp/x --version'
+check sync 'bd --version && bd close X-1'
+# No verb takes either flag, and `bd` 1.3.4 refuses both beside one, so this
+# writes nothing today. A verb that gained such a flag would run, so the verb
+# is still read.
+check sync 'bd --version close X-1'
+check sync 'bd -V close X-1'
+check sync 'bd close X-1 --version'
 
 # --- read-only token as an argument value ------------------------------
 check sync 'bd update CHR-1 --notes "run bd show CHR-2 next"'
@@ -796,13 +885,13 @@ check_unresolved 'IFS=:; false && unset IFS; OUT=/tmp/a:b; bd -C $OUT close CHR-
 # name it assigns: which of its paths ran is not inferred.
 check_unresolved 'IFS=:; f() { local IFS=" "; unset IFS; }; f; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
 # A startup or sourced file may set IFS, so after one it is unknowable until
-# the text sets or unsets it -- by `builtin unset`, a plain `unset` being one
-# a function the file defined may stand in for. A new shell starts with the
-# default, whatever it inherits.
+# the text sets it. An `unset` does not settle it, as the file may have made
+# IFS readonly, and a plain `unset` may be a function the file defined. A new
+# shell starts with the default, whatever it inherits.
 check_unresolved "BASH_ENV=/tmp/select-store.sh bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 check_unresolved 'source ./cs-ifs.sh; OUT=/tmp/a:b; bd -C $OUT close CHR-1'
 check_target '/tmp/a' "BASH_ENV=/tmp/select-store.sh bash -c 'IFS=:; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
-check_target '/tmp/a:b' "BASH_ENV=/tmp/select-store.sh bash -c 'builtin unset IFS; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
+check_unresolved "BASH_ENV=/tmp/select-store.sh bash -c 'builtin unset IFS; OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 check_unresolved "BASH_ENV=/tmp/select-store.sh bash -c 'unset IFS; OUT=/tmp/a:b; command bd -C \$OUT close CHR-1'"
 check_target '/tmp/a:b' "IFS=: bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
 check_target '/tmp/a:b' "export IFS=:; bash -c 'OUT=/tmp/a:b; bd -C \$OUT close CHR-1'"
@@ -839,7 +928,7 @@ check_target "$CD/base/store" "cd -- $CD/base; bd -C store close CHR-1"
 # where the shell already was. Recording the path anyway resolves the write
 # under a directory the shell never entered -- and where that path holds no
 # store, the real one is neither pushed nor registered.
-check_target "$BASE/store" 'cd /nonexistent-cs-classify; bd -C store close CHR-1'
+check_target "$BASE/store" 'cd /nonexistent-beads-hook-classify; bd -C store close CHR-1'
 check_target "$CD/base/store" "cd $CD/base; cd $CD/base/missing; bd -C store close CHR-1"
 # A `cd` whose execution depends on an exit status may not have run, so the
 # directory the write happened in is unknown. Reporting no target leaves the
@@ -867,7 +956,7 @@ check_target "$CD/one/two/store" "pushd $CD/one; pushd two; bd -C store close CH
 check_target "$STORE" "pushd $STORE; bd close CHR-1"
 check_target "$BASE/store" "pushd -n $CD/base; bd -C store close CHR-1"
 check_target "$BASE/store" "pushd $CD/base -n; bd -C store close CHR-1"
-check_target "$BASE/store" 'pushd /nonexistent-cs-classify; bd -C store close CHR-1'
+check_target "$BASE/store" 'pushd /nonexistent-beads-hook-classify; bd -C store close CHR-1'
 check_unresolved "pushd $CD/base; pushd; bd -C store close CHR-1"
 check_unresolved "pushd $CD/base; pushd +1; bd -C store close CHR-1"
 check_unresolved "pushd $CD/base; pushd -0; bd -C store close CHR-1"
@@ -885,7 +974,7 @@ check_target '/tmp/store' "pushd $CD/base; popd; bd -C /tmp/store close CHR-1"
 # pushed a different store with no warning. An empty entry is the cwd, and
 # an operand opening with `.` or `..`, or an absolute one, is not searched.
 check_target "$CD/one/two/store" "CDPATH=$CD/one; cd two; bd -C store close CHR-1"
-check_target "$CD/one/two/store" "CDPATH=/nonexistent-cs-classify:$CD/one; cd two; bd -C store close CHR-1"
+check_target "$CD/one/two/store" "CDPATH=/nonexistent-beads-hook-classify:$CD/one; cd two; bd -C store close CHR-1"
 check_target "$CD/one/two/store" "CDPATH=$CD/one; pushd two; bd -C store close CHR-1"
 check_target "$CD/one/two/store" "cd $CD; CDPATH=one; cd two; bd -C store close CHR-1"
 check_target "$CD/base/store" "cd $CD; CDPATH=:$CD/one; cd base; bd -C store close CHR-1"
@@ -902,11 +991,13 @@ check_unresolved "CDPATH=\$(pick); cd two; bd -C store close CHR-1"
 check_unresolved "false && CDPATH=$CD/one; cd two; bd -C store close CHR-1"
 check_unresolved "cd \$(pick); CDPATH=one:$CD/one; cd two; bd -C store close CHR-1"
 # A CDPATH in the `cd`'s own prefix is the one it searches, in bash, dash and
-# ksh, and lasts only for that `cd`; zsh ignores it.
+# ksh, and lasts only for that `cd`; zsh ignores it. A zsh may have run a
+# startup file first, so its case sets the cwd and CDPATH itself and passes
+# any `cd` function by.
 mkdir -p "$CD/cdp/repo" "$CD/cdp/ext/repo"
 check_target "$CD/cdp/ext/repo/store" "cd $CD/cdp; CDPATH=$CD/cdp/ext cd repo; bd -C store close CHR-1"
 check_target "$CD/cdp/ext/repo/store" "cd $CD/cdp; dash -c 'CDPATH=$CD/cdp/ext cd repo; bd -C store close CHR-1'"
-check_target "$CD/cdp/repo/store" "cd $CD/cdp; zsh -c 'CDPATH=$CD/cdp/ext cd repo; bd -C store close CHR-1'"
+check_target "$CD/cdp/repo/store" "zsh -c 'CDPATH=; builtin cd $CD/cdp; CDPATH=$CD/cdp/ext builtin cd repo; bd -C store close CHR-1'"
 check_target "$CD/cdp/repo/store" "cd $CD/cdp; CDPATH=$CD/cdp/ext; CDPATH= cd repo; bd -C store close CHR-1"
 check_target "$CD/cdp/repo/store" "cd $CD/cdp; CDPATH=$CD/cdp/ext cd repo; cd $CD/cdp; cd repo; bd -C store close CHR-1"
 check_unresolved "cd $CD/cdp; CDPATH=\$(pick) cd repo; bd -C store close CHR-1"
@@ -1687,6 +1778,46 @@ check_unresolved "shopt \$cs_flag lastpipe; true | cd $CD/other; bd -C store clo
 check_target "$STORE/nested/inner" "cd $STORE; shopt -so allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
 check_target "$STORE/nested/inner" "cd $STORE; shopt -s -o allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
 check_target "$STORE" "cd $STORE; shopt -so allexport; shopt -uo allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+# A child shell starts with allexport on from its own `-a` or `-o allexport`,
+# zsh's spellings among them, or from a SHELLOPTS listing it, which only turns
+# options on and which a privileged bash ignores. A parent's exported
+# SHELLOPTS carries its own `set -a`.
+check_target "$STORE/nested/inner" "unset BEADS_DB; cd $STORE; bash -a -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_target "$STORE/nested/inner" "unset BEADS_DB; cd $STORE; bash -o allexport -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_target "$STORE/nested/inner" "unset BEADS_DB; cd $STORE; dash -a -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$STORE/nested/inner" "unset BEADS_DB; cd $STORE; zsh -f -o ALL_EXPORT -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_target "$STORE/nested/inner" "unset BEADS_DB; cd $STORE; env SHELLOPTS=allexport bash +a -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_target "$STORE/nested/inner" "unset BEADS_DB; cd $STORE; export SHELLOPTS; set -a; bash -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; cd $STORE; env SHELLOPTS=allexport bash -p -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; cd $STORE; bash -a +a -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_unresolved "unset BEADS_DB; cd $STORE; bash \$CS_OPTS -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+# The shell the command runs in imports the hook's own SHELLOPTS and hands it
+# on, so one listing `allexport` exports every assignment there and in an
+# unflagged child; a privileged child ignores it.
+set -a
+export SHELLOPTS
+check_target "$STORE/nested/inner" "unset BEADS_DB; cd $STORE; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$STORE/nested/inner" "unset BEADS_DB; cd $STORE; bash -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; cd $STORE; bash -p -c 'BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1'"
+set +a
+export -n SHELLOPTS
+# A word `set` cannot read may be an operand, after which no option is read,
+# so an option after one is in doubt: with CS_OPTS=foo, `-a` is an operand.
+# One among `shopt`'s flags may be `-so allexport` itself. Past `--`, the
+# word is an operand and the option before it stands.
+check_unresolved "cd $STORE; set \$CS_OPTS -a; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_unresolved "cd $STORE; shopt \$CS_OPTS; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$STORE/nested/inner" "cd $STORE; set -a -- \$CS_OPTS; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+# A lone `-` ends `set`'s options as `--` does, so `-a` after it is an
+# operand. `shopt` refuses `-s` with `-u` and changes nothing.
+check_target "$STORE" "cd $STORE; set - -a; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$STORE/nested/inner" "cd $STORE; shopt -so allexport; shopt -s -u -o allexport; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+# A word `shopt` cannot read may end its flags, so a `-u` after one may be an
+# option name: with CS_OPTS=allexport, the first turns allexport on. Both
+# flags before such a word are still refused.
+check_unresolved "cd $STORE; CS_OPTS=\$(printf allexport); shopt -so \"\$CS_OPTS\" -u; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$STORE/nested/inner" "cd $STORE; shopt -so allexport; shopt -s -u -o \"\$CS_OPTS\"; BEADS_DIR=$STORE/nested/inner/.beads; bd close CHR-1"
+check_target "$CD/other/store" "shopt -s lastpipe; shopt -su lastpipe; true | cd $CD/other; bd -C store close CHR-1"
 # The write itself is still found inside one, under the cwd in force there.
 check sync "true | bd close CHR-1"
 check_target "$CD/other/store" "cd $CD/other; true | bd -C store close CHR-1"
@@ -1731,12 +1862,12 @@ check_target '/tmp/store' 'zsh -c "bd -C /tmp/store close CHR-1"'
 # may set, so a value holding a separator is in doubt there; one without is
 # the same either way.
 check_unresolved "zsh -c 'OUT=\"/tmp/a b\"; bd -C \$OUT close CHR-1'"
-check_target '/tmp/store' "zsh -c 'OUT=/tmp/store; bd -C \$OUT close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" '/tmp/store' "zsh -f -c 'OUT=/tmp/store; bd -C \$OUT close CHR-1'"
 check_target '/tmp/a' "bash -c 'OUT=\"/tmp/a b\"; bd -C \$OUT close CHR-1'"
 # bash runs a startup file before a `-c` script -- BASH_ENV, or a login or
 # interactive shell's own -- and what it sets is as unknown as a sourced
-# file's. Privileged and POSIX-mode shells read no BASH_ENV, and `sh` and
-# other shells are not read for theirs.
+# file's. Privileged and POSIX-mode shells read no BASH_ENV, and neither does
+# `sh`; the other shells' files are below.
 check_unresolved "cd $STORE; BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR-1'"
 check_unresolved "cd $STORE; env BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR-1'"
 check_unresolved "cd $STORE; bash -l -c 'bd close CHR-1'"
@@ -1788,6 +1919,34 @@ check_target "$STORE" "cd $STORE; exec -l nohup bash -c 'bd close CHR-1'"
 # name `env -u` unsets, it stops nothing.
 check_target "$STORE" "cd $STORE; sudo bash -c 'bd -C . close CHR-1'"
 check_unresolved "cd $STORE; BASH_ENV=\"\$(printf %s /tmp/select-store.sh)\" env -u sudo bash -c 'bd -C . close CHR-1'"
+# zsh reads its global zshenv before any script, `-f` or not, and `.zshenv`
+# from ZDOTDIR or HOME unless RCS is off, by `-f` or by name with the last
+# word winning, so a zsh may have run a file first unless RCS is off and there
+# is no global zshenv. An interactive sh, dash, ksh or mksh reads the file ENV
+# names; ksh its own with ENV unset but not empty, and its system rc either
+# way, and mksh its own with ENV unset or empty. A login one reads the
+# profile, unless bash as `sh` is told `--noprofile`. One that is neither
+# reads none.
+check_unresolved "cd $STORE; zsh -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; zsh -i -f +f -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; zsh -f -o rcs -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; zsh -f +o NO_RCS -c 'bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$STORE" "cd $STORE; zsh -f -c 'bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$STORE" "cd $STORE; zsh -o no_rcs -c 'bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$STORE" "cd $STORE; zsh +o rcs -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; zsh -f --rcs -c 'bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$STORE" "cd $STORE; zsh --NO_RCS -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; ENV=/tmp/select-store.sh sh -i -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; ENV=/tmp/select-store.sh dash -i -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; export ENV=/tmp/select-store.sh; dash -i -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; env -u ENV ksh -i -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; sh -l -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; exec -l dash -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; ENV=/tmp/select-store.sh dash -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; ENV= dash -i -c 'bd close CHR-1'"
+check_unresolved "cd $STORE; ENV= mksh -i -c 'bd close CHR-1'"
+check_target_unless "$KSH_SYSTEM_RC" "$STORE" "cd $STORE; ENV= ksh -i -c 'bd close CHR-1'"
+check_target "$STORE" "cd $STORE; sh --noprofile -l -c 'bd close CHR-1'"
 # The file may define a function named `bd`, which may write any store, so a
 # write by that name after it may be one the scan cannot name, though the
 # store its arguments name is still reported. `command bd` runs the program,
@@ -1814,9 +1973,9 @@ check_target "$STORE" ". ./select-store.sh; command cd -L $STORE; env -i bd clos
 check_target "$STORE" "(. ./select-store.sh); cd -L $STORE; env -i bd close CHR-1"
 check_target "$STORE" ". ./select-store.sh; BEADS_DIR=$STORE/.beads command bd close CHR-1"
 check_target '/tmp/store' ". ./select-store.sh; eval 'command bd -C /tmp/store close CHR-1'"
-# A function of its name this text defined does not displace the builtin:
-# in POSIX mode bash finds `export`, `unset` and the other special builtins
-# first, and that mode may be set at any point.
+# In POSIX mode, which may be set at any point, bash finds `export`, `unset`
+# and the other special builtins before a function of the same name this
+# text defined.
 check_target "$STORE" "function export { :; }; builtin set -o posix; export BEADS_DIR=$STORE/.beads; command bd close CHR-1"
 check_target "$STORE" "export BEADS_DIR=/tmp/store/.beads; function unset { :; }; builtin set -o posix; unset BEADS_DIR; cd $STORE; command bd close CHR-1"
 check_target '/tmp/store' '/bin/bash -c "bd -C /tmp/store close CHR-1"'
@@ -1895,6 +2054,15 @@ check skip "bash --noprofile --norc -c 'bd list'"
 check skip "bash --nosuchoption -c 'bd -C /tmp/store close CHR-1'"
 check skip "bash --help -c 'bd -C /tmp/store close CHR-1'"
 check skip "bash --version -c 'bd -C /tmp/store close CHR-1'"
+# zsh takes each of its options in long form, and none but `--emulate` takes
+# a word, so there one not known here is read as taking nothing. bash and
+# `sh` refuse `--shwordsplit` and run nothing.
+check_target '/tmp/store' "zsh --shwordsplit -c 'bd -C /tmp/store close CHR-1'"
+check_target '/tmp/store' "/bin/zsh --sh-word-split -x -c 'bd -C /tmp/store close CHR-1'"
+check skip "zsh --help -c 'bd -C /tmp/store close CHR-1'"
+check skip "zsh --version -c 'bd -C /tmp/store close CHR-1'"
+check skip "bash --shwordsplit -c 'bd -C /tmp/store close CHR-1'"
+check skip "sh --shwordsplit -c 'bd -C /tmp/store close CHR-1'"
 
 # An operand this scan cannot read is the fail-safe case, as it is for `eval`
 # and `env -S`: the shell runs that text whatever it says. Read as no write,
@@ -2093,6 +2261,57 @@ check_unresolved 'cs_f; cs_f() { bd -C store close CHR-1; }'
 check_unresolved "cs_f() { cd $CD/other; }; bash -l -c true; cs_f; bd -C store close CHR-1"
 check_unresolved "cs_f() { cd $CD/other; }; (unset -f cs_f); cs_f; bd -C store close CHR-1"
 check_target "$BASE/store" "(cs_f() { cd $CD/other; }); cs_f; bd -C store close CHR-1"
+# An `unset -f` on a path the shell may not take may leave the function
+# defined, so the call may still run the body; one on every path removes it.
+# The command may then also run with no function of that name, which is read
+# as well.
+check_unresolved "cs_f() { cd $CD/other; }; if true; then unset -f cs_f; fi; cs_f; bd -C store close CHR-1"
+check_unresolved "cs_f() { cd $CD/other; }; true && unset -f cs_f; cs_f; bd -C store close CHR-1"
+check_unresolved "cs_u() { true || return; unset -f cs_f; }; cs_f() { cd $CD/other; }; cs_u; cs_f; bd -C store close CHR-1"
+check_target "$BASE/store" "cs_f() { cd $CD/other; }; unset -f cs_f; cs_f; bd -C store close CHR-1"
+check_target "$BASE/store" "cs_f() { cd $CD/other; }; true && unset -f cs_f; cs_f() { :; }; cs_f; bd -C store close CHR-1"
+check_target "/tmp/ext $BASE/store" "bd() { command bd -C /tmp/ext close CHR-1; }; true && unset -f bd; bd -C store close CHR-1"
+# Each way starts from the state before the call, so the body's `cd` does not
+# move the walk the program makes.
+check_target "/tmp/ext $STORE" "cd $STORE; bd() { cd $CD/other; command bd -C /tmp/ext close CHR-1; }; true && unset -f bd; bd close CHR-1"
+# Where it was removed it is still removed after the call, even when the body
+# sources a file and defines it anew; where it was not, the new one runs.
+check_target "/tmp/ext" "bd() { . ./defs.sh; bd() { :; }; }; true && unset -f bd; bd list; bd -C /tmp/ext close CHR-1"
+check skip "bd() { . ./defs.sh; bd() { :; }; }; bd list; bd -C /tmp/ext close CHR-1"
+# A function the body defines anew exists only where the body ran, so where
+# the function was removed the program runs. Where the body sourced a file,
+# `bd` may also be a function that file defined.
+check_target "/tmp/ext" "cs_g() { bd() { :; }; }; true && unset -f cs_g; cs_g; bd -C /tmp/ext close CHR-1"
+check_target_unresolved "/tmp/ext" "cs_g() { . ./defs.sh; bd() { :; }; }; true && unset -f cs_g; cs_g; bd -C /tmp/ext close CHR-1"
+# A definition on a path the shell may not take may not have been made, so
+# a name defined anew there may run the program, as after an `unset -f` on
+# one, and a name defined before may still run its old body. A call or an
+# `eval` may stop before its definitions, as before its assignments. A
+# definition on every path is certain.
+check_target "/tmp/ext $STORE" "cd $STORE; if true; then bd() { command bd -C /tmp/ext close CHR-1; }; fi; bd close CHR-1"
+check_target "/tmp/ext $STORE" "cd $STORE; true && bd() { command bd -C /tmp/ext close CHR-1; }; bd close CHR-1"
+check_target "/tmp/ext $STORE" "cd $STORE; true || bd() { command bd -C /tmp/ext close CHR-1; }; bd close CHR-1"
+check_target "/tmp/ext $STORE" "cd $STORE; cs_g() { bd() { command bd -C /tmp/ext close CHR-1; }; }; cs_g; bd close CHR-1"
+check_target "/tmp/ext $STORE" "cd $STORE; eval 'bd() { command bd -C /tmp/ext close CHR-1; }'; bd close CHR-1"
+check_target "/tmp/ext" "cd $STORE; bd() { command bd -C /tmp/ext close CHR-1; }; bd close CHR-1"
+check_target "/tmp/other /tmp/ext" "cd $STORE; if true; then bd() { command bd -C /tmp/other close CHR-1; }; fi; bd() { command bd -C /tmp/ext close CHR-1; }; bd close CHR-1"
+check_unresolved "cs_f() { cd $CD/other; }; if true; then cs_f() { :; }; fi; cs_f; bd -C store close CHR-1"
+check_unresolved "cs_f() { cd $CD/other; }; true && cs_f() { :; }; cs_f; bd -C store close CHR-1"
+check_unresolved "cs_f() { cd $CD/other; }; cs_g() { cs_f() { :; }; }; cs_g; cs_f; bd -C store close CHR-1"
+check_unresolved "cs_f() { cd $CD/other; }; cs_g() { cs_f() { :; }; }; true && unset -f cs_g; cs_g; cs_f; bd -C store close CHR-1"
+check_target "$BASE/store" "cs_f() { cd $CD/other; }; cs_f() { :; }; cs_f; bd -C store close CHR-1"
+check_target "$BASE/store" "cs_f() { cd $CD/other; }; if true; then cs_f() { :; }; fi; cs_f() { :; }; cs_f; bd -C store close CHR-1"
+# Each body is read at the call, from where the caller stands, and with the
+# functions as they stood before it: what one body does to them is not seen
+# by another.
+check_target_unresolved "$BASE/two $BASE/one" "cs_f() { bd -C one close CHR-1; }; true && cs_f() { bd -C two close CHR-1; }; cs_f"
+check_target "/tmp/ext" "bd() { :; }; cs_g() { bd -C /tmp/ext close CHR-1; }; true && cs_g() { . ./defs.sh; bd() { :; }; }; unset -f bd; cs_g"
+check skip "bd() { :; }; cs_g() { bd -C /tmp/ext close CHR-1; }; true && cs_g() { unset -f bd; }; cs_g"
+# With the table in doubt after a sourced file, the command run with no
+# function of that name listed may run one the file defined, so the state
+# after it is in doubt, as after any command a function may be.
+check_unresolved ". ./defs.sh; builtin cd -L $CD/base; command false && cs_g() { builtin :; }; cs_g; command bd -C store close CHR-1"
+check_unresolved ". ./defs.sh; builtin cd -L $CD/base; cs_g() { builtin :; }; command false && builtin unset -f cs_g; cs_g; command bd -C store close CHR-1"
 # A subshell starts with this shell's functions. A new bash process starts
 # with those exported to it, which are not read: after any definition it may
 # have any of them, so a command it names first may be one, and the state
@@ -2148,6 +2367,158 @@ check_target "$STORE" "bd() { env bd -C $STORE close CHR-1; }; bd"
 # running the program, even where the name ends in a builtin's.
 check_target "$STORE" "./cd() { bd -C . close CHR-1; }; cd $STORE; ./cd"
 check_unresolved "./cd() { builtin cd /tmp; }; ./cd $STORE; env -i bd close CHR-1"
+# A function is found before a builtin of the same name, so one named after a
+# builtin the scan reads is called rather than read. `builtin cd` and `command
+# cd` pass it by.
+check_target "$STORE" "cd $STORE; cd() { bd -C . close CHR-1; }; cd /tmp"
+check_unresolved "cd() { builtin cd $STORE/nested/inner; }; cd $STORE; bd close CHR-1"
+check_target "$STORE" "cd() { builtin cd $STORE/nested/inner; }; builtin cd $STORE; bd close CHR-1"
+check_target "$STORE" "cd() { builtin cd $STORE/nested/inner; }; command cd $STORE; bd close CHR-1"
+check_unresolved "printf() { builtin cd $STORE/nested/inner; }; cd $STORE; printf x; bd close CHR-1"
+check_unresolved "bash() { builtin cd $STORE/nested/inner; }; cd $STORE; bash -c true; bd close CHR-1"
+check_target "$STORE" "source() { :; }; cd $STORE; source ./select-store.sh; bd close CHR-1"
+# A special builtin comes first in POSIX mode instead, and where that mode is
+# unknown both are read. `set -o posix`, `shopt -so posix` and assigning
+# POSIXLY_CORRECT turn it on, and unsetting POSIXLY_CORRECT turns it off.
+check_unresolved "unset() { builtin cd $STORE/nested/inner; }; cd $STORE; unset X; bd close CHR-1"
+check_target '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; unset() { :; }; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; set -o posix; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_unresolved "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; t && set -o posix; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; shopt -so posix; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; POSIXLY_CORRECT=1; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_target '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; unset() { :; }; POSIXLY_CORRECT=1; builtin unset POSIXLY_CORRECT; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+# So does every other special builtin, though the scan reads nothing from
+# it: `:`, `trap`, a quoted `export` and a `return` inside a function.
+check_target "$STORE" ":() { builtin cd $STORE/nested/inner; }; set -o posix; cd $STORE; :; bd close CHR-1"
+check_unresolved ":() { builtin cd $STORE/nested/inner; }; cd $STORE; :; bd close CHR-1"
+check_target "$STORE" "trap() { builtin cd $STORE/nested/inner; }; set -o posix; cd $STORE; trap '' HUP; bd close CHR-1"
+check_target "$STORE" "function export { builtin cd $STORE/nested/inner; }; set -o posix; cd $STORE; \\export CS_X=1; bd close CHR-1"
+check_target "$STORE" "return() { builtin cd $STORE/nested/inner; }; set -o posix; cs_f() { return; }; cd $STORE; cs_f; bd close CHR-1"
+# A temporary POSIXLY_CORRECT puts bash 5.2 in that mode for the command, for
+# a function's body, and after a special builtin, where bash 3.2 stays as it
+# was, so the mode is in doubt.
+check_unresolved "export BEADS_DIR=/tmp/store/.beads; unset() { :; }; cd $STORE; POSIXLY_CORRECT=1 unset BEADS_DIR; bd close CHR-1"
+check_target_unresolved '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; unset() { :; }; cs_f() { unset BEADS_DIR; bd close CHR-1; }; cd $STORE; POSIXLY_CORRECT=1 cs_f"
+check_unresolved "export BEADS_DIR=/tmp/store/.beads; unset() { :; }; POSIXLY_CORRECT=1 eval true; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+# A shell starts in that mode as bash's options and environment say, and
+# dash refuses the definition; zsh finds the function first. So does busybox
+# ash, the `sh` of Alpine, so in `sh` both are read.
+check_target '/tmp/store' "cd $STORE; BEADS_DIR=/tmp/store/.beads bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; cd $STORE; BEADS_DIR=/tmp/store/.beads bash --posix -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; cd $STORE; POSIXLY_CORRECT= BEADS_DIR=/tmp/store/.beads bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_unresolved "unset BEADS_DB; cd $STORE; BEADS_DIR=/tmp/store/.beads sh -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; cd $STORE; BEADS_DIR=/tmp/store/.beads dash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+# POSIX_PEDANTIC in its environment starts bash in that mode too, and then it
+# reads no BASH_ENV; assigned in a running shell, it changes nothing.
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; cd $STORE; POSIX_PEDANTIC=1 bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; export POSIX_PEDANTIC=1; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; cd $STORE; POSIX_PEDANTIC=1 BASH_ENV=/tmp/select-store.sh bash -c 'bd close CHR-1'"
+check_target '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; unset() { :; }; POSIX_PEDANTIC=1; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" '/tmp/store' "cd $STORE; BEADS_DIR=/tmp/store/.beads zsh -f -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+# bash keeps POSIXLY_CORRECT in step with `set -o posix` and `shopt -so posix`,
+# setting it unexported, or exported under `set -a`, and unsetting it, so a
+# child bash starts in POSIX mode as they leave it.
+check_target '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; export POSIXLY_CORRECT=1; set +o posix; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; export POSIXLY_CORRECT=1; shopt -uo posix; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; set -o posix; export POSIXLY_CORRECT; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; set -a; set -o posix; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+# Each option takes effect as it is read, so `-a` after `-o posix` does not
+# export the variable, and `+o posix -o posix` sets it anew, unexported.
+check_target '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; set -o posix -a; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; export POSIXLY_CORRECT=1; set +o posix -o posix; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target '/tmp/store' "export BEADS_DIR=/tmp/store/.beads; shopt -so posix allexport; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+# A bash that starts in POSIX mode sets the variable, unexported, so `set -a;
+# set -o posix` finds it set: bash 3.2 sets it anew and exports it, 5.2 leaves
+# it unexported, so whether a child is in POSIX mode, and reads BASH_ENV, is
+# in doubt. The same holds for a variable a first `set -o posix` set. Exported
+# outright, it puts the child in POSIX mode.
+check_unresolved "cd $STORE; bash --posix -c 'set -a; set -o posix; BASH_ENV=/tmp/select-store.sh bash -c \"bd close CHR-1\"'"
+check_unresolved "cd $STORE; exec -a sh bash -c 'set -a; set -o posix; BASH_ENV=/tmp/select-store.sh bash -c \"bd close CHR-1\"'"
+check_unresolved "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; cd $STORE; bash --posix -c 'set -a; set -o posix; bash -c \"unset() { :; }; unset BEADS_DIR; bd close CHR-1\"'"
+check_unresolved "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; set -o posix; set -a; set -o posix; cd $STORE; bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; cd $STORE; bash --posix -c 'export POSIXLY_CORRECT; bash -c \"unset() { :; }; unset BEADS_DIR; bd close CHR-1\"'"
+# Turning the option off unsets POSIXLY_CORRECT, so where it may have been
+# turned off -- on one path, or by a word the scan cannot read -- a value a
+# function assigns after it may outlive a call that set the variable for that
+# call only: with `t` true, bash 3.2 and 5.2 both run `bd -C /tmp/store`.
+check_unresolved 'POSIXLY_CORRECT=/tmp/a; cs_f() { t && set +o posix; POSIXLY_CORRECT=/tmp/store; }; POSIXLY_CORRECT=/tmp/a cs_f; bd -C "$POSIXLY_CORRECT" close CHR-1'
+check_unresolved 'POSIXLY_CORRECT=/tmp/a; cs_f() { t && shopt -uo posix; POSIXLY_CORRECT=/tmp/store; }; POSIXLY_CORRECT=/tmp/a cs_f; bd -C "$POSIXLY_CORRECT" close CHR-1'
+check_unresolved 'POSIXLY_CORRECT=/tmp/a; cs_f() { set +o $CS_OPTS; POSIXLY_CORRECT=/tmp/store; }; POSIXLY_CORRECT=/tmp/a cs_f; bd -C "$POSIXLY_CORRECT" close CHR-1'
+check_unresolved 'POSIXLY_CORRECT=/tmp/a; cs_f() { shopt -uo $CS_OPTS; POSIXLY_CORRECT=/tmp/store; }; POSIXLY_CORRECT=/tmp/a cs_f; bd -C "$POSIXLY_CORRECT" close CHR-1'
+# POSIX mode is in doubt after a word `set` or `shopt` cannot read: with
+# CS_OPTS=foo, `+o posix` and `-o posix` are operands, and with CS_OPTS='-so
+# posix', `shopt $CS_OPTS` turns the mode on. A literal operand ends the
+# options, so `+o posix` after `foo` leaves the mode on.
+check_unresolved "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; set -o posix; set \$CS_OPTS +o posix; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_unresolved "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; set \$CS_OPTS -o posix; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_unresolved "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; shopt \$CS_OPTS; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; set -o posix; set foo +o posix; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+# So does a lone `-`, and `shopt` refuses `-s` with `-u`, so neither turns
+# the mode off.
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; set -o posix; set - +o posix; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; unset() { :; }; set -o posix; shopt -suo posix; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+# In POSIX mode a special builtin's prefix assignments outlive it, made
+# before it runs: bash exports them, dash keeps them unexported. `command`
+# takes that away, and outside POSIX mode they reach the builtin alone.
+check_target '/tmp/ext' "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads :; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd $STORE; BEADS_DIR=/tmp/ext/.beads :; bd close CHR-1"
+check_unresolved "unset BEADS_DIR BEADS_DB; t && set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads :; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads export CS_X=1; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads command :; bd close CHR-1"
+# bash keeps them only where POSIX mode holds when the builtin returns, and
+# an `unset` of the name removes the temporary variable alone, leaving the
+# shell's own; dash unsets the name. Where the mode may have changed, as
+# this scan reads an `eval` that runs `set +o posix`, the name is unknown.
+# An `export` or `readonly` operand may assign the name over its prefix, as
+# `OUT+=` does too, and the store is then unresolved, as it is where the
+# builtin may not have run and the name later exported.
+check_target '/tmp/ext' "unset BEADS_DB; set -o posix; export BEADS_DIR=/tmp/ext/.beads; cd $STORE; BEADS_DIR=/tmp/x unset BEADS_DIR; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/x unset BEADS_DIR; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd $STORE; dash -c 'export BEADS_DIR=/tmp/ext/.beads; BEADS_DIR=/tmp/x unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads set +o posix; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd $STORE; BEADS_DIR=/tmp/ext/.beads set -o posix; bd close CHR-1"
+check_unresolved "set -o posix; OUT=/tmp/a; OUT=/tmp/b eval 'set +o posix'; bd -C \"\$OUT\" close CHR-1"
+check_unresolved 'unset OUT; set -o posix; OUT=/tmp/prefix export OUT=/tmp/real; bd -C "$OUT" close CHR-1'
+check_unresolved 'unset OUT; set -o posix; OUT=/tmp/prefix readonly OUT=/tmp/real; bd -C "$OUT" close CHR-1'
+check_unresolved 'unset OUT; set -o posix; OUT=/tmp/prefix export OUT+=/real; bd -C "$OUT" close CHR-1'
+check_unresolved 'unset OUT; set -o posix; OUT=/tmp/prefix readonly OUT+=/real; bd -C "$OUT" close CHR-1'
+check_unresolved 'unset OUT; set -o posix; OUT=/tmp/prefix export OUT+="$(cat f)"; bd -C "$OUT" close CHR-1'
+# `export -n` takes away the export bash gives the prefix, though not one the
+# name had before or allexport gives it; `-f` turns it on functions instead,
+# and after `--` an `-n` is an operand.
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads export -n BEADS_DIR; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads export -n -- BEADS_DIR; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DB; set -o posix; export BEADS_DIR=/tmp/a/.beads; cd $STORE; BEADS_DIR=/tmp/ext/.beads export -n BEADS_DIR; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DIR BEADS_DB; set -a; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads export -n BEADS_DIR; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads export -fn BEADS_DIR; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads export -- -n BEADS_DIR; bd close CHR-1"
+check_unresolved "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads export \"\$CS_OPTS\" BEADS_DIR; bd close CHR-1"
+check_unresolved "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; false && BEADS_DIR=/tmp/decoy/.beads :; BEADS_DIR=/tmp/ext/.beads; bd close CHR-1"
+check_target '/tmp/ext' "dash -c 'OUT=/tmp/a; OUT=/tmp/ext :; bd -C \"\$OUT\" close CHR-1'"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd $STORE; dash -c 'BEADS_DIR=/tmp/ext/.beads :; bd close CHR-1'"
+# `exec` with no command is one too. The prefix is read once, before the
+# shell makes it its own, so a value built from the name is not built again
+# for the command.
+check_target '/tmp/ext' "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; BEADS_DIR=/tmp/ext/.beads exec; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; cd $STORE; BEADS_DIR=/tmp/ext/.beads exec; bd close CHR-1"
+check_target '/tmp/store' "set -o posix; OUT=/tmp; OUT=\$OUT/store eval 'bd -C \"\$OUT\" close CHR-1'"
+check_target '/tmp/store' "set -o posix; OUT=/tmp; OUT=\$OUT/store exec bash -c 'bd -C \"\$OUT\" close CHR-1'"
+# A function call's are kept in POSIX mode by bash 3.2 and ksh and restored by
+# bash 5.2 and dash, so they are in doubt after the call unless the mode is
+# known to be off.
+check_unresolved "unset BEADS_DIR BEADS_DB; set -o posix; cd $STORE; cs_f() { :; }; BEADS_DIR=/tmp/ext/.beads cs_f; bd close CHR-1"
+check_unresolved 'set -o posix; OUT=/tmp/a; cs_f() { :; }; OUT=/tmp/ext cs_f; bd -C "$OUT" close CHR-1'
+check_target '/tmp/a' 'OUT=/tmp/a; cs_f() { :; }; OUT=/tmp/ext cs_f; bd -C "$OUT" close CHR-1'
+# A wrapper running bash as `sh` starts it in POSIX mode too, and then it
+# reads no BASH_ENV.
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/store/.beads; cd $STORE; exec -a sh bash -c 'unset() { :; }; unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "cd $STORE; BASH_ENV=/tmp/select-store.sh exec -a sh bash -c 'bd close CHR-1'"
+# A builtin read in place of a call reads the function table from before it,
+# whatever the body did to the table.
+check_unresolved "cd $STORE; cs_g() { builtin cd $STORE/nested/inner; }; eval() { unset -f cs_g; }; t && unset -f eval; eval cs_g; bd close CHR-1"
+# Where the function may be gone as well as passed by, the builtin is also
+# read with it defined: an `eval` may leave POSIX mode and call it.
+check_target "$STORE $STORE/nested/inner" "cd $STORE; CS_D=$STORE; eval() { bd -C \"\$CS_D\" close CHR-1; }; t && unset -f eval; t && set -o posix; eval 'CS_D=$STORE/nested/inner; set +o posix; eval :'"
 
 # --- comments -------------------------------------------------------------
 # A `#` that opens a word begins a comment, and what follows is not script.
@@ -2206,8 +2577,10 @@ check sync 'echo é ; bd close CHR-1 ; )'
 check sync 'echo 日本語 ; bd close CHR-1 ; )'
 check sync $'echo é\necho é ; bd close CHR-1 ; )'
 check_target '/tmp/store' 'echo é ; bd -C /tmp/store close CHR-1 ))))'
-check skip 'echo é ; )'
-check skip 'echo )))'
+# What is cut off counts as a script that cannot be read, so a stray closer
+# warns even with no write before it.
+check_unresolved 'echo é ; )'
+check_unresolved 'echo )))'
 check skip ''
 check skip '   '
 # A coprocess is a subshell, and the command in one is a real invocation.
@@ -2366,6 +2739,31 @@ check_target '/tmp/store' 'while bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'until bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'then bd -C /tmp/store close CHR-1'
 check_target '/tmp/store' 'bd -C "/tmp/store'
+# shfmt rejects a function named after a declaration keyword, or `let`, which
+# bash defines and runs outside POSIX mode. Spelled `function NAME()`, it
+# parses, and the rest of the command is read: before, everything after the
+# definition was cut off and read as no write. The body may follow the `()`
+# with no space, as a group, a subshell or a compound command.
+check_target '/tmp/store' 'export() { :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'declare() { :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'local() { :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'readonly() { :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'typeset() { :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'nameref() { :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'let() { :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'export () { :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'export(){ :; }; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'export()(:); bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'let()if true; then :; fi; bd -C /tmp/store close CHR-1'
+check_target '/tmp/store' 'local()for cs_x in a; do bd -C /tmp/store close CHR-1; done; local'
+check_target '/tmp/store' 'export() { bd -C /tmp/store close CHR-1; }; export CS_X=1'
+# Text the parse still cannot read is cut off, and what is cut off may hold a
+# write, so it counts as a script that cannot be read: a write with no store
+# named, which syncs the roots and warns. A genuine syntax error warns too.
+check_unresolved 'export ( a ); bd -C /tmp/store close CHR-1'
+check_unresolved 'echo ); bd -C /tmp/store close CHR-1'
+check_target_unresolved '/tmp/store' 'bd -C /tmp/store close CHR-1; echo )'
+check_unresolved "bash -c 'echo ); bd -C /tmp/store close CHR-1'"
 
 # --- PWD ------------------------------------------------------------------
 # The hook runs in a process of its own, whose cwd is neither the launch
@@ -2385,7 +2783,7 @@ check_target "$CD/base/store" "PWD=/tmp/decoy; pushd $CD/base; bd -C \"\$PWD/sto
 check_target "$CD/base/store" "export PWD=/tmp/decoy; cd $CD/base; bd -C \"\$PWD/store\" close CHR-1"
 check_target "$CD/one/store" "cd $CD/base; PWD=/tmp/decoy; cd $CD/one; bd -C \"\$PWD/store\" close CHR-1"
 # A `cd` that fails leaves PWD as it was, with the cwd.
-check_target '/tmp/decoy/store' 'PWD=/tmp/decoy; cd /nonexistent-cs-classify; bd -C "$PWD/store" close CHR-1'
+check_target '/tmp/decoy/store' 'PWD=/tmp/decoy; cd /nonexistent-beads-hook-classify; bd -C "$PWD/store" close CHR-1'
 # An assignment after the `cd` is the one that stands.
 check_target '/tmp/decoy/store' "cd $CD/base; PWD=/tmp/decoy; bd -C \"\$PWD/store\" close CHR-1"
 # Where the cwd is unknown, so is `$PWD` -- an assignment before the move
@@ -2425,6 +2823,24 @@ check_target "$BASE/~/store" 'OUT="~/store"; bd -C "$OUT" close CHR-1'
 check_unresolved 'HOME=$(pwd); OUT=~/store; bd -C "$OUT" close CHR-1'
 # `~` past the first character is literal, being no home reference at all.
 check_target "$BASE/x~/store" 'OUT=x~/store; bd -C "$OUT" close CHR-1'
+# bash expands it after the `=` of an argument shaped like an assignment, to
+# any command, outside POSIX mode. In POSIX mode, quoted, or in dash, it is
+# literal, so the value is relative; where the mode is in doubt, so is the
+# value.
+check_target '/tmp/home/store' 'HOME=/tmp/home; env BEADS_DIR=~/store/.beads bd close CHR-1'
+check_target "$BASE/~/store" 'HOME=/tmp/home; set -o posix; env BEADS_DIR=~/store/.beads bd close CHR-1'
+check_target "$BASE/~/store" 'HOME=/tmp/home; env "BEADS_DIR=~/store/.beads" bd close CHR-1'
+# A backslash in the prefix quotes it too, an escaped `/` included, while one
+# after the prefix does not, nor does a line continuation within it.
+check_target "$BASE/~/store" 'HOME=/tmp/home; env BEADS_DIR=~\/store/.beads bd close CHR-1'
+check_target '/tmp/home/store' 'HOME=/tmp/home; env BEADS_DIR=~/store\/.beads bd close CHR-1'
+# The `~` is expanded before the word is split, so a suffix that splits into
+# several arguments leaves the first one expanded.
+check_target '/tmp/home/store' "HOME=/tmp/home; CS_TAIL='/.beads CS_OTHER=1'; env BEADS_DIR=~/store\$CS_TAIL bd close CHR-1"
+check_target '/tmp/home/store' 'HOME=/tmp/home; env BEADS_DIR=~\
+/store/.beads bd close CHR-1'
+check_target "$BASE/~/store" "HOME=/tmp/home; dash -c 'env BEADS_DIR=~/store/.beads bd close CHR-1'"
+check_unresolved 'HOME=/tmp/home; t && set -o posix; env BEADS_DIR=~/store/.beads bd close CHR-1'
 
 # `~user` names that user's home from the passwd database, which HOME cannot
 # override. Handling only `~` and `~/` left it unexpanded -- and an unexpanded
@@ -2446,8 +2862,8 @@ check_target "$ROOT_HOME/store" 'OUT=~root/store; bd -C "$OUT" close CHR-1'
 check_target "$BASE/~root/store" 'bd -C "~root/store" close CHR-1'
 # A name no user holds is left as it is, which is what the shell does with it:
 # no expansion applies, so the word is the literal path it looks like.
-check_target "$BASE/~cs-no-such-user/store" \
-  'bd -C ~cs-no-such-user/store close CHR-1'
+check_target "$BASE/~beads-hook-no-such-user/store" \
+  'bd -C ~beads-hook-no-such-user/store close CHR-1'
 # Only the prefix up to the first `/` is the tilde expansion; a `~` further
 # along the path is an ordinary character.
 check_target "$ROOT_HOME/a~b/store" 'bd -C ~root/a~b/store close CHR-1'
@@ -2767,7 +3183,8 @@ check_unresolved "shopt -s lastpipe; source ./cs-opts.sh; cd $STORE; true | cd $
 # `monitor`, which `export SHELLOPTS` makes of this shell's `set -m`, and a
 # `+m` does not stop it; a privileged one ignores SHELLOPTS, and `env -i`
 # carries none. `-m` and `-i`, zsh's `--interactive` too, only ask for it,
-# which takes a terminal, so after either a `setsid` may fork.
+# which takes a terminal, so after either a `setsid` may fork. zsh's are read
+# by its own names, whatever their case and `_`s, and the last word wins.
 check_async "$STORE" "env SHELLOPTS=monitor bash -c 'setsid bash -c \"sleep 5; bd -C $STORE close CHR-1\" >/dev/null 2>&1; true'"
 check_async "$STORE" "env SHELLOPTS=braceexpand:monitor bash -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "$STORE" "env SHELLOPTS=monitor bash +m -c 'setsid bd -C $STORE close CHR-1; true'"
@@ -2778,6 +3195,12 @@ check_async "$STORE" "env SHELLOPTS=monitor sh -c 'setsid bd -C $STORE close CHR
 check_async "$STORE" "bash -m -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "$STORE" "bash -i -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "$STORE" "zsh --interactive -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "zsh -f -m -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "zsh -f --MONITOR -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "zsh -f --MON_ITOR -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async "$STORE" "zsh -f -o Interactive -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async_unless "$ZSH_GLOBAL_ZSHENV" "$STORE" "zsh -f -m --no-monitor -c 'setsid bd -C $STORE close CHR-1; true'"
+check_async_unless "$ZSH_GLOBAL_ZSHENV" "$STORE" "zsh -f --interactive +o INTERACTIVE -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "" "env SHELLOPTS=monitor bash -p -c 'setsid bd -C $STORE close CHR-1; true'"
 check_async "" "env SHELLOPTS=monitor bash -c 'set +m; setsid bd -C $STORE close CHR-1; true'"
 check_async "" "set -m; bash -c 'setsid bd -C $STORE close CHR-1; true'"
@@ -2814,6 +3237,23 @@ check_target "$WS_DIR" "set -P; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "bash -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$EXT" "bash -o physical -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "bash -P +P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+# zsh's physical mode is CHASE_LINKS, which PHYSICAL also names, set by name
+# whatever its case, `_`s and, in long form, `-`s. Its `-P` is
+# RC_EXPAND_PARAM. CHASE_DOTS resolves only a path holding a `..`, and a
+# `cd -L` keeps it, so there a `..` after a symlink is unknown.
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$EXT" "zsh -f --chaselinks -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$EXT" "zsh -f --chase-links -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$EXT" "zsh -f --PHYSICAL -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$EXT" "zsh -f -o CHASE_LINKS -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$WS_DIR" "zsh -f --chaselinks +o physical -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$WS_DIR" "zsh -f -o chaselinks --no-chase-links -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$WS_DIR" "zsh -f -P -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$WS_DIR" "zsh -f --chaselinks -c 'cd -L $WS_DIR/link/.. && bd close CHR-1'"
+check_unresolved "zsh -f --chasedots -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
+check_unresolved "zsh -f --chasedots -c 'cd -L $WS_DIR/link/.. && bd close CHR-1'"
+check_unresolved "zsh -f --chase-dots --chaselinks -c 'cd -L $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$EXT" "zsh -f --chasedots -c 'cd -P $WS_DIR/link/.. && bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$WS_DIR" "zsh -f --chasedots -c 'cd $WS_DIR && bd close CHR-1'"
 # bash also starts in physical mode when its SHELLOPTS lists it. It reads
 # SHELLOPTS after its own options, and SHELLOPTS only turns options on, so a
 # `+P` does not undo it. Only bash reads it; `sh` may or may not be bash.
@@ -2849,6 +3289,69 @@ check_unresolved "true && set -P; export SHELLOPTS; bash -c 'cd $WS_DIR/link/.. 
 check_target "$EXT" "export SHELLOPTS; set -P; unset SHELLOPTS; bash -c 'cd $WS_DIR/link/.. && bd close CHR-1'"
 check_target "$WS_DIR" "export -n SHELLOPTS; SHELLOPTS=physical bash -c 'set -P; bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
 check_target "$WS_DIR" "export -n SHELLOPTS; SHELLOPTS=physical env -S 'bash -c \"set -P; bash -c \\\"cd $WS_DIR/link/.. && bd close CHR-1\\\"\"'"
+# Every shell refuses to unset a name the text made readonly, which keeps its
+# value, and a readonly POSIXLY_CORRECT keeps bash in POSIX mode. A name that
+# may be readonly is unknown after the `unset`, as is one a function made
+# readonly with `local -r`. A subshell's readonly dies with it, and a new
+# process inherits none.
+check_target '/tmp/ext' "readonly BEADS_DIR=/tmp/ext/.beads; export BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target '/tmp/ext' "declare -r BEADS_DIR=/tmp/ext/.beads; export BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_unresolved "t && readonly BEADS_DIR=/tmp/ext/.beads; export BEADS_DIR=/tmp/ext/.beads; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_unresolved "cs_f() { local -r BEADS_DIR=/tmp/ext/.beads; }; cs_f; export BEADS_DIR=/tmp/ext/.beads; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; (readonly BEADS_DIR=/tmp/ext/.beads); export BEADS_DIR=/tmp/ext/.beads; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; readonly BEADS_DIR=/tmp/ext/.beads; export BEADS_DIR; cd $STORE; bash -c 'unset BEADS_DIR; bd close CHR-1'"
+check_target "$STORE" "unset BEADS_DB; unset() { :; }; export BEADS_DIR=/tmp/ext/.beads; POSIXLY_CORRECT=1; readonly POSIXLY_CORRECT; builtin unset POSIXLY_CORRECT; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+# `set +o posix` unsets POSIXLY_CORRECT, readonly or not, so a later one can
+# be unset again; where the `set` may not have run, so may the unset.
+check_target '/tmp/ext' "unset BEADS_DB; unset() { :; }; export BEADS_DIR=/tmp/ext/.beads; readonly POSIXLY_CORRECT=1; set +o posix; POSIXLY_CORRECT=1; builtin unset POSIXLY_CORRECT; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+check_unresolved "unset BEADS_DB; unset() { :; }; export BEADS_DIR=/tmp/ext/.beads; readonly POSIXLY_CORRECT=1; t && set +o posix; builtin unset POSIXLY_CORRECT; cd $STORE; unset BEADS_DIR; bd close CHR-1"
+# `declare -p` and `typeset -p` only print, whatever else they are asked;
+# `readonly -p` and `export -p` with a name act on it, and `local -p` prints
+# in bash 5.2 and is a plain `local` in 3.2.
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/ext/.beads; declare -rp BEADS_DIR >/dev/null; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/ext/.beads; typeset -p -r BEADS_DIR >/dev/null; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DIR BEADS_DB; BEADS_DIR=/tmp/ext/.beads; declare -xp BEADS_DIR >/dev/null; cd $STORE; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DB; export BEADS_DIR=/tmp/ext/.beads; readonly -p BEADS_DIR >/dev/null; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_unresolved "unset BEADS_DIR BEADS_DB; cs_f() { local -p BEADS_DIR=/tmp/ext/.beads >/dev/null; export BEADS_DIR; cd $STORE; bd close CHR-1; }; cs_f"
+# A flag this scan cannot read may be `-p`, or `-f` to `readonly`, as well as
+# `-r`, so whether the names end readonly is unknown, a known `-r` beside it
+# or not.
+check_unresolved "unset BEADS_DB; BEADS_DIR=/tmp/ext/.beads; OPT=\$(printf %s -p); declare -r \"\$OPT\" BEADS_DIR >/dev/null; export BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_unresolved "unset BEADS_DB; BEADS_DIR=/tmp/ext/.beads; declare \"\$CS_OPTS\" -r BEADS_DIR >/dev/null; export BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_unresolved "unset BEADS_DB; BEADS_DIR=/tmp/ext/.beads; readonly \"\$CS_OPTS\" BEADS_DIR; export BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+# A `+r` takes the command's own `-r` away, before it or after, and an unread
+# flag's with it, but not a mark set earlier; `readonly +r` still marks.
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/ext/.beads; declare -r +r BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/ext/.beads; typeset +r -r BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; export BEADS_DIR=/tmp/ext/.beads; declare \"\$CS_OPTS\" +r BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DB; export BEADS_DIR=/tmp/ext/.beads; readonly BEADS_DIR; declare -r +r BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DB; export BEADS_DIR=/tmp/ext/.beads; readonly +r BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+# A readonly name refuses an assignment and keeps its value, and bash carries
+# on outside POSIX mode. `export` still exports it, and `export -n` still takes
+# the export away, where `declare -x` and `local` change nothing. A name that
+# may be readonly is unknown after one.
+check_target '/tmp/real' "unset BEADS_DB; readonly BEADS_DIR=/tmp/real/.beads; export BEADS_DIR=/tmp/decoy/.beads; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target '/tmp/real' 'readonly OUT=/tmp/real; export OUT=/tmp/decoy; bd -C "$OUT" close CHR-1'
+check_target '/tmp/real' "unset BEADS_DB; readonly BEADS_DIR=/tmp/real/.beads; declare BEADS_DIR=/tmp/decoy/.beads; export BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; readonly BEADS_DIR=/tmp/real/.beads; declare -x BEADS_DIR=/tmp/decoy/.beads; cd $STORE; bd close CHR-1"
+check_target "$STORE" "unset BEADS_DB; readonly BEADS_DIR=/tmp/real/.beads; export BEADS_DIR; export -n BEADS_DIR=/tmp/decoy/.beads; cd $STORE; bd close CHR-1"
+check_unresolved "unset BEADS_DB; t && readonly BEADS_DIR=/tmp/real/.beads; export BEADS_DIR=/tmp/decoy/.beads; cd $STORE; bd close CHR-1"
+check_target '/tmp/real' "unset BEADS_DB; readonly BEADS_DIR=/tmp/real/.beads; export BEADS_DIR; cs_f() { local BEADS_DIR=/tmp/decoy/.beads; cd $STORE; bd close CHR-1; }; cs_f"
+# A function named after an assignment builtin runs in its place, except
+# that bash in POSIX mode finds a special builtin first.
+check_target "$STORE" "unset BEADS_DB; function readonly { :; }; export BEADS_DIR=/tmp/ext/.beads; readonly BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target '/tmp/ext' "unset BEADS_DB; function readonly { :; }; set -o posix; export BEADS_DIR=/tmp/ext/.beads; readonly BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_unresolved "unset BEADS_DB; function readonly { :; }; t && set -o posix; export BEADS_DIR=/tmp/ext/.beads; readonly BEADS_DIR; unset BEADS_DIR; cd $STORE; bd close CHR-1"
+check_target_unresolved '/tmp/store' 'unset CS_OUT; function declare { bd -C "$CS_OUT" close CHR-1; }; CS_OUT=/tmp/store; declare CS_X=1'
+# What a sourced file may have made readonly stays so in a subshell, but a
+# new process inherits no readonly name.
+check_target "$EXT" ". ./select-store.sh; command bash -p -c 'builtin unset BEADS_DIR BEADS_DB; builtin cd $EXT; command bd close CHR-1'"
+check_unresolved ". ./select-store.sh; (builtin unset BEADS_DIR BEADS_DB; builtin cd $EXT; command bd close CHR-1)"
+# Nor does a mark the text set before the file outlast it: the file may make
+# POSIXLY_CORRECT readonly where `set +o posix` had unset it, so whether the
+# `unset` below takes it, and with it POSIX mode, is unknown, and so is
+# whether `unset OUT` is the function or the builtin.
+check_unresolved "set +o posix; . ./select-store.sh; builtin unset POSIXLY_CORRECT; unset() { builtin :; }; OUT=/tmp/keep; unset OUT; command bd -C \"\$OUT\" close CHR-1"
 # As a word it lists every option in force, bash's defaults among them, and
 # this scan follows only one, so a path built from it is unknown, and so is
 # the mode of a child handed it.
@@ -2861,7 +3364,7 @@ check_unresolved "env SHELLOPTS=braceexpand bash -c 'set -P; env SHELLOPTS=\"\$S
 # Any other shell holds SHELLOPTS as a plain variable, which a bash it starts
 # reads as given, whatever that shell's own options.
 check_target "$EXT" "env SHELLOPTS=physical dash -c 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
-check_target "$EXT" "env SHELLOPTS=physical zsh -c 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$EXT" "env SHELLOPTS=physical zsh -f -c 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
 check_target "$EXT" "export SHELLOPTS; set -P; dash -c 'bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
 check_target "$WS_DIR" "export SHELLOPTS; set -P; dash -c 'unset SHELLOPTS; bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
 check_target "$WS_DIR" "env SHELLOPTS=physical dash -c 'SHELLOPTS=braceexpand bash -c \"cd $WS_DIR/link/.. && bd close CHR-1\"'"
@@ -2953,6 +3456,8 @@ check_target "$WS_DIR" "bd() { :; }; cd $EXT/child; export PWD=$WS_DIR/link; com
 check_target "$WS_DIR" "bd() { :; }; cd $EXT/child; PWD=$WS_DIR/link command bd -C .. close CHR-1"
 check_target "$WS_DIR" "bd() { :; }; cd $EXT/child; env PWD=$WS_DIR/link bd -C .. close CHR-1"
 check skip "bd() { :; }; cd $EXT/child; export PWD=$WS_DIR/link; bd -C .. close CHR-1"
+# One an `unset -f` may have removed may be the program by then, which does.
+check_target "$WS_DIR" "bd() { :; }; true && unset -f bd; cd $EXT/child; export PWD=$WS_DIR/link; bd -C .. close CHR-1"
 # Every shell sets PWD as it starts, and exports it, so a child of one keeps
 # the spelling a `cd` gave it even in a cleared environment; a shell that
 # inherited no PWD naming its directory starts from the physical path.
@@ -2970,8 +3475,8 @@ check_unresolved "cd $EXT; env PWD=$WS_DIR/link/.. bash -c 'cd -P .; bd close CH
 check_unresolved "cd $EXT; env -C . PWD=$WS_DIR/link/.. bash -c 'cd -P .; bd close CHR-1'"
 check_target "$EXT" "cd $EXT; env PWD=$WS_DIR/link/.. dash -c 'cd -P .; bd close CHR-1'"
 check_target "$EXT" "cd $EXT; env PWD=$WS_DIR/link/.. ksh -c 'cd -P .; bd close CHR-1'"
-check_target "$EXT" "cd $EXT; env PWD=$WS_DIR/link/.. zsh -c 'cd -P .; bd close CHR-1'"
-check_target "$EXT" "cd $EXT; env PWD=$WS_DIR/link/.. zsh -c 'bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$EXT" "cd $EXT; env PWD=$WS_DIR/link/.. zsh -f -c 'cd -P .; bd close CHR-1'"
+check_target_unless "$ZSH_GLOBAL_ZSHENV" "$EXT" "cd $EXT; env PWD=$WS_DIR/link/.. zsh -f -c 'bd close CHR-1'"
 check_target "$WS_DIR" "cd $EXT; env PWD=$WS_DIR/link/.. bash -c 'bd close CHR-1'"
 check_target "$WS_DIR" "cd $EXT; env PWD=$WS_DIR/link/.. dash -c 'bd close CHR-1'"
 check_target "$WS_DIR" "cd $EXT; env -C . PWD=$WS_DIR/link/.. bd close CHR-1"
@@ -3022,6 +3527,32 @@ for level in 1 2 3; do
   NESTED="for v$level in $ITEMS; do $NESTED; done"
 done
 check_gives_up "$NESTED"
+# A redefinition on a path the shell may not take keeps the bodies the name
+# had, and joining them costs no more than the bodies: 3000 in a row took
+# more than a minute when each join compared every pair.
+REDEFINED='cs_f() { :; }'
+for _ in $(seq 1 3000); do
+  REDEFINED="$REDEFINED; true && cs_f() { :; }"
+done
+check_target_in_time '/tmp/store' "$REDEFINED; bd -C /tmp/store close CHR-1"
+# A call from inside one of the function's own bodies reads none of them
+# again, so it costs one reading, not one per body: with 600 bodies calling
+# back into the function, one each took more than half a minute. Where the
+# function may be unset, that call still runs the program.
+RECURSIVE=''
+for _ in $(seq 1 600); do
+  RECURSIVE="${RECURSIVE}true && cs_f() { cs_g; }; "
+done
+check_target_in_time '/tmp/store' "${RECURSIVE}cs_g() { return; cs_f; }; cs_f; bd -C /tmp/store close CHR-1"
+check_target '/tmp/ext' "bd() { bd -C /tmp/ext close CHR-1; }; true && unset -f bd; bd list"
+# Each reading of a call is joined as it ends, and one that left the function
+# table as it found it is joined once, so the table is not copied for each:
+# 40 calls to a function with 300 bodies among 8000 other functions took
+# half a minute when every reading kept a copy.
+OTHERS=$(printf 'cs_u%d() { :; }; ' $(seq 1 8000))
+BODIES=$(printf 'true && cs_f() { :; }; %.0s' $(seq 1 300))
+CALLS=$(printf 'cs_f; %.0s' $(seq 1 40))
+check_target_in_time '/tmp/store' "$OTHERS$BODIES${CALLS}bd -C /tmp/store close CHR-1"
 
 echo "classification: pass=$PASS fail=$FAIL"
 [ "$FAIL" -eq 0 ]

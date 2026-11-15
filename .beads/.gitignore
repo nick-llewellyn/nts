@@ -26,6 +26,9 @@ push-state.json
 # Lock files (various runtime locks)
 *.lock
 
+# Auggie sync hook state (.augment/hooks/beads-sync.sh)
+.augment-sync.*
+
 # Credential key (encryption key for federation peer auth — never commit)
 .beads-credential-key
 

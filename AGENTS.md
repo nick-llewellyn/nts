@@ -1084,8 +1084,9 @@ bd init   # automatically configures the DoltHub remote via sync.git-remote
 ### Automatic push via the Auggie hooks
 
 In an Auggie session the push is automated: `.augment/settings.json` runs
-`.augment/hooks/beads-sync.sh` on `PostToolUse` (matcher `launch-process`)
-and on `SessionEnd`. After any command the scanner classifies as a bead
+`.augment/hooks/beads-sync.sh` on `PostToolUse` (matcher `bash`, the shell
+tool's name in Auggie CLI 1.2.0 and later) and on `SessionEnd`. After any
+command the scanner classifies as a bead
 write (`bd create` / `close` / `update` / `config set` / … — anything not on
 its read-only allow-list), the hook runs `bd dolt commit` followed by
 `bd dolt push --remote origin` in the store that was written, under a lock
