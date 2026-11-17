@@ -136,11 +136,10 @@ Tick the boxes you actually ran; do not blanket-check the rest.
 
 ## What CI requires
 
-Nine status checks gate the merge: `Detect changed paths`,
+Eight status checks gate the merge: `Detect changed paths`,
 `Dart tests gate`, `Verify FRB bindings are in sync`, `Rust build +
 tests + coverage`, `Hooks shell-syntax check`, `Hooks behaviour
-check`, `Android KGP gate matrix`, `Auggie hook tests gate`, and
-`Dependency review`.
+check`, `Android KGP gate matrix`, and `Dependency review`.
 Doc-only diffs still run the workflow, but the heavy jobs skip and
 report as passing.
 
