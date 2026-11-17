@@ -18,6 +18,8 @@
 //      hand them to the widget tree, where every reactive bit is
 //      mediated through the `signals` package.
 
+// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show DeviceOrientation, SystemChrome;
 import 'package:nts/nts.dart' show NtsBridge, NtsBridgeState, NtsRustLib;
