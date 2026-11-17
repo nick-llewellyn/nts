@@ -54,7 +54,7 @@ self-merge once the required status checks pass; **agents must
 not** self-merge — see [Agent merge policy](#agent-merge-policy-read-this-before-any-gh-pr-merge)
 below. Every PR triggers the CI workflow (including doc-only
 ones); the `build`, `rust`, `rust-bridge-sync`, `hooks-syntax`,
-`hooks-behaviour`, `android-kgp-gate`, and `auggie-hooks` jobs all
+`hooks-behaviour`, and `android-kgp-gate` jobs all
 skip the heavy work on doc-only diffs but still report a status, so branch
 protection resolves without manual intervention. See
 [`DEVELOPMENT.md`](DEVELOPMENT.md#contribution-workflow) for the
@@ -990,12 +990,12 @@ consumes:
        maintainer-bypass path that otherwise would let a single
        `git push` skip every required check (re-apply with
        `gh api -X POST /repos/<owner>/<repo>/branches/main/protection/enforce_admins`).
-     - `required_status_checks` refuses the PR merge until the nine
+     - `required_status_checks` refuses the PR merge until the eight
        listed contexts (`Detect changed paths`, `Dart tests gate`,
        `Verify FRB bindings are in sync`, `Rust build + tests +
        coverage`, `Hooks shell-syntax check`, `Hooks behaviour
-       check`, `Android KGP gate matrix`, `Auggie hook tests gate`,
-       `Dependency review`) report success.
+       check`, `Android KGP gate matrix`, `Dependency review`) report
+       success.
 
 CI is not a separate enforcement layer — it does not gate the
 merge. It runs the workflows that publish the status checks
@@ -1083,8 +1083,11 @@ bd init   # automatically configures the DoltHub remote via sync.git-remote
 
 ### Automatic push via the Auggie hooks
 
-In an Auggie session the push is automated: `.augment/settings.json` runs
-`.augment/hooks/beads-sync.sh` on `PostToolUse` (matcher `launch-process`)
+In an Auggie session the push is automated by the Auggie Beads hooks from
+[nick-llewellyn/auggie-beads-hooks](https://github.com/nick-llewellyn/auggie-beads-hooks),
+installed once per user from a tagged release and wired in
+`~/.augment/settings.json`. This repository carries no copy of them and no
+hook wiring. Their `beads-sync.sh` runs on `PostToolUse` (matcher `bash`)
 and on `SessionEnd`. After any command the scanner classifies as a bead
 write (`bd create` / `close` / `update` / `config set` / … — anything not on
 its read-only allow-list), the hook runs `bd dolt commit` followed by
@@ -1092,8 +1095,9 @@ its read-only allow-list), the hook runs `bd dolt commit` followed by
 with a pending-marker so concurrent invocations and the 60 s hook timeout
 cannot lose a write or double-push. The push is skipped for a store that
 sets `dolt.auto-push: false`; this repository's store leaves it unset, so it
-pushes. `bd prime` is injected at `SessionStart` by
-`.augment/hooks/beads-prime.sh`.
+pushes. `bd prime` is injected at `SessionStart` by their
+`beads-prime.sh`. Installing, updating, requirements and limitations are
+in that repository's README.
 
 The hooks need `bd`, `jq`, `shfmt` and `python3` on `PATH` — `shfmt` and
 `python3` are the command scanner, which parses each command's syntax tree
@@ -1144,16 +1148,9 @@ under `.beads/hooks/` are untracked and intentionally **not** activated —
 git supports one hooks path, and the Auggie hooks cover the standalone `bd`
 writes the shims would only catch on a git operation.
 
-Their test suites stub `bd` and run against scratch workspaces, so they
-never touch the real bead store. CI runs all three on ubuntu and macOS
-whenever `.augment/**` changes (`Auggie hook tests gate`); run them locally
-after editing a hook, under `/bin/bash` so macOS exercises bash 3.2:
-
-```bash
-/bin/bash .augment/hooks/test/classification_test.sh   # which commands count as writes
-/bin/bash .augment/hooks/test/prime_test.sh            # session-start context injection
-/bin/bash .augment/hooks/test/lock_test.sh             # lock and pending-marker handoff (~7 min)
-```
+Their test suites, and the CI that runs them, live in that repository. A
+hook bug found here is reported there, as an issue, and reaches this
+repository in a later release.
 
 ### Manual sequence (fallback, and the session-close order)
 

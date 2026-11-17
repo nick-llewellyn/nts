@@ -65,6 +65,9 @@ issues.jsonl
 # Per-project environment file (Dolt connection config, GH#2520)
 .env
 
+# Auggie Beads sync hook state (beads-sync.sh)
+.augment-sync.*
+
 # Legacy files (from pre-Dolt versions)
 *.db
 *.db?*
