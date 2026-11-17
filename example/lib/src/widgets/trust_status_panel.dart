@@ -24,6 +24,8 @@
 // between a successful in-log handshake and a "no handshake observed"
 // singleton row.
 
+// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:signals/signals_flutter.dart' show SignalBuilder;
 

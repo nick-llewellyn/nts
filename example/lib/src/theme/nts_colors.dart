@@ -11,6 +11,8 @@
 // downstream consumers retheme the example by overriding the extension
 // rather than the `ColorScheme`.
 
+// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 /// Domain-specific colours layered on top of the M3 [ColorScheme].

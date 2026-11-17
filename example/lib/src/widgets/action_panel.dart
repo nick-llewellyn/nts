@@ -21,6 +21,8 @@
 // on phone-portrait widths, avoiding the prior fixed two-row layout
 // that wasted ~70dp of vertical space on wide viewports.
 
+// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:nts/nts.dart' show TrustMode;
 import 'package:signals/signals_flutter.dart' show SignalBuilder;

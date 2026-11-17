@@ -15,6 +15,8 @@
 // Empty-state copy reuses the verb from the action button so a new
 // user is told exactly where to tap next.
 
+// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:signals/signals_flutter.dart' show SignalBuilder;
 
