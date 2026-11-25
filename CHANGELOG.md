@@ -77,6 +77,15 @@ tarball.
   catalog already had. 87 servers remain. Example app only.
   ([#413](https://github.com/nick-llewellyn/nts/pull/413))
 
+- The example app's server catalog adds `time.dfm.dk`, run by DFM,
+  Denmark's national metrology institute, and `nts.dogporkcow.com` in
+  the US, for 89 servers. Both were held back because their IPv6
+  addresses do not answer, which the IPv4 fallback under "Fixed" above
+  now handles. `nts.dogporkcow.com` answers some NTS time requests over
+  IPv4 and drops others, so expect occasional timeouts from it.
+  `example/assets/reliable-servers.json` is unchanged. Example app
+  only. ([#417](https://github.com/nick-llewellyn/nts/pull/417))
+
 - Both Rust lockfiles take 21 compatible updates. The native library is
   built from the `rust/Cargo.lock` this package ships, so apps pick
   them up when they upgrade. The notable ones:

@@ -3,9 +3,11 @@
 # Curated from nts-sources.yml in https://github.com/jauderho/nts-servers,
 # last reviewed against upstream commit
 # b1b0902cfa6afd5b4753a49bca07286c359acf6e. Entries keep upstream's text,
-# fields and order. sysadmin.wiki comes from the list at
-# https://netfuture.ch/public-nts-server-list/ instead, so its vm value
-# is unknown and left out.
+# fields and order. Two entries come from elsewhere, so their vm values
+# are unknown and left out: sysadmin.wiki from the list at
+# https://netfuture.ch/public-nts-server-list/, and time.dfm.dk from its
+# operator DFM, Denmark's national metrology institute, at
+# https://dfm.dk/ntp/.
 #
 # This is a subset, not a mirror: check each new upstream entry against
 # the rules below and probe it with bin/nts_health.dart before adding it.
@@ -27,9 +29,6 @@
 #
 # Running on a virtual machine is not a reason to leave a server out,
 # and no fields are added to upstream's schema.
-#
-# Held back until the client falls back to IPv4 when a server's IPv6
-# address does not answer: time.dfm.dk, nts.dogporkcow.com.
 #
 # The upstream file is distributed under this licence:
 #
@@ -160,6 +159,11 @@ servers:
   owner: Jiří Činčura
   notes: IPv4 and IPv6
   vm: false
+
+- hostname: time.dfm.dk
+  stratum: 1
+  location: Denmark
+  owner: DFM
 
 - hostname: ntp.miuku.net
   stratum: 3
@@ -542,6 +546,13 @@ servers:
   owner: University of Cambridge, University Information Services (UIS)
   notes: IPv4 and IPv6
   vm: false
+
+- hostname: nts.dogporkcow.com
+  stratum: 2
+  location: US
+  owner: dogporkcow
+  notes: US East
+  vm: true
 
 - hostname: '[ntp-us.aki.quest](https://ntp-us.aki.quest)'
   stratum: 2
