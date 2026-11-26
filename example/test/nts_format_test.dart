@@ -388,13 +388,9 @@ void main() {
     test('is JSON-encodable for every backend pair', () {
       for (final requiredBackend in TrustBackend.values) {
         for (final actualBackend in TrustBackend.values) {
-          final decoded =
-              jsonDecode(
-                    jsonEncode(
-                      jsonTrustMismatch(requiredBackend, actualBackend),
-                    ),
-                  )
-                  as Map<String, Object?>;
+          final decoded = jsonDecode(
+            jsonEncode(jsonTrustMismatch(requiredBackend, actualBackend)),
+          ) as Map<String, Object?>;
           expect(decoded['required_trust_backend'], requiredBackend.name);
           expect(decoded['trust_backend'], actualBackend.name);
         }

@@ -111,19 +111,9 @@ jobs:
               - 'rust/Cargo.toml'
 
   build:
-    # Matrix exercises an old-SDK leg (3.38.10, ships Dart 3.10.9) and the
-    # latest `stable` channel (matches .fvmrc `"flutter": "stable"`).
-    #
-    # 3.38.10 is deliberately *above* the `flutter: '>=3.38.0'` floor
-    # declared in pubspec.yaml, and is not the oldest release satisfying
-    # it: earlier 3.38.x patches do not build native dependencies through
-    # the Native Assets build hook reliably, so a leg pinned to the
-    # literal floor would fail for reasons that have nothing to do with
-    # this package's sources. This leg therefore guards against
-    # Dart-minor drift on the oldest SDK the pipeline can actually build
-    # on -- it is not evidence that the declared floor itself resolves
-    # and builds. Raise the `flutter:` constraint to match if that
-    # evidence is ever wanted.
+    # Matrix exercises an old-SDK leg (3.47.9, ships Dart 3.13.7 — the
+    # latest patch of the declared `flutter: '>=3.47.0'` floor line) and
+    # the latest `stable` channel (matches .fvmrc `"flutter": "stable"`).
     #
     # Format check runs only on the stable leg because `dart format`
     # output can shift between Dart minors and we don't want spurious
@@ -161,7 +151,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        flutter: ['3.38.10', 'stable']
+        flutter: ['3.47.9', 'stable']
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -740,12 +730,20 @@ jobs:
           # https://github.com/miguelpruivo/flutter_file_picker/blob/file_picker-v13.1.0/LICENSE
           # -- the immutable tag for the exact version bumped in
           # Dependabot PR #361, rather than the mutable `master` ref)
-          # -- all three already permitted by `allow-licenses` above; pub.dev
-          # publishes the field lowercased (`mit`, `bsd-3-clause`),
+          # -- all already permitted by `allow-licenses` above; pub.dev
+          # publishes the field lowercased (`mit`, `bsd-3-clause`) or
+          # omits it from GitHub's dependency graph (`meta`, `share_plus`),
           # which is not a valid SPDX identifier, so the action cannot
           # *validate* it and fails closed with "could not detect the
           # validity of all licenses" rather than rejecting the licence
-          # itself. This input is the only lever for that, and it is
+          # itself. The additional pub entries added for PR #433
+          # (`cupertino_icons` 2.0.0 MIT, `hooks` 2.2.0 BSD-3-Clause,
+          # `material_ui` 1.11.1 BSD-3-Clause, `meta` 1.19.0 BSD-3-Clause,
+          # `native_toolchain_rust` 1.1.1 MIT, `share_plus` 13.3.1
+          # BSD-3-Clause, `shared_preferences` 2.5.6 BSD-3-Clause, and
+          # `yaml` 3.1.4 MIT) were each hand-verified against their
+          # published `LICENSE` files in `~/.pub-cache/hosted/pub.dev/`.
+          # This input is the only lever for that, and it is
           # package-scoped rather than error-scoped: a listed package
           # is dropped from licence evaluation entirely, so *any*
           # licence a future release declares would pass here
@@ -758,7 +756,15 @@ jobs:
             pkg:githubactions/SonarSource/sonarqube-scan-action,
             pkg:pub/flutter_rust_bridge,
             pkg:pub/code_assets,
-            pkg:pub/file_picker
+            pkg:pub/file_picker,
+            pkg:pub/cupertino_icons,
+            pkg:pub/hooks,
+            pkg:pub/material_ui,
+            pkg:pub/meta,
+            pkg:pub/native_toolchain_rust,
+            pkg:pub/share_plus,
+            pkg:pub/shared_preferences,
+            pkg:pub/yaml
 
   cargo-deny:
     # Rust supply-chain policy gate (NTS-72): runs the `bans`,

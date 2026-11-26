@@ -13,9 +13,7 @@
 import 'dart:convert' show utf8;
 
 import 'package:file_picker/file_picker.dart';
-// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
-// ignore: deprecated_member_use
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:nts/nts.dart' show TrustMode;
 import 'package:signals/signals_flutter.dart' show SignalBuilder;
 

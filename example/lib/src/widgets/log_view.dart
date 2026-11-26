@@ -15,9 +15,7 @@
 //     buffer as plain text. The system sheet routes to Mail / Drive /
 //     AirDrop / Files / etc. without any further plumbing.
 
-// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
-// ignore: deprecated_member_use
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:signals/signals.dart' show effect;
 import 'package:signals/signals_flutter.dart' show SignalBuilder;

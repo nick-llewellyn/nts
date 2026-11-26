@@ -12,10 +12,10 @@ page is the short path; where the two disagree, `DEVELOPMENT.md` wins.
 
 ## Prerequisites
 
-- **Flutter ≥ 3.38.0** (Dart ≥ 3.10) on the `stable` channel — that is
+- **Flutter ≥ 3.47.0** (Dart ≥ 3.13) on the `stable` channel — that is
   the constraint `pubspec.yaml` declares. CI runs the latest `stable`
-  plus 3.38.10, the oldest stable release satisfying that constraint,
-  as a second matrix leg.
+  plus 3.47.9 (the latest patch of the floor line) as a second matrix
+  leg.
 - **`rustup` on your `PATH`.** Do not install or select a Rust
   toolchain manually — `rust/rust-toolchain.toml` pins the version and
   rustup resolves it automatically on the first build. See the

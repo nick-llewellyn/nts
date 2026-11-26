@@ -52,6 +52,19 @@ tarball.
 
 ### Changed
 
+- The minimum supported SDK is raised to **Flutter ≥ 3.47.0 / Dart
+  ≥ 3.13.0** (from Flutter ≥ 3.38.0 / Dart ≥ 3.10.0), matching the
+  N-1 stable line (`3.47.9` alongside `stable` in CI). Package
+  dependency floors rise accordingly: `meta` `^1.18.3`, `hooks`
+  `^2.2.0`, `native_toolchain_rust` `^1.1.1`, `code_assets` `^2.2.0`,
+  `freezed` `^4.0.3`, and `build_runner` `^2.17.1`. In the example
+  app, the `share_plus` `<13.2.0` cap is lifted (`^13.3.1`),
+  `cupertino_icons` moves to `^2.0.0`, `shared_preferences`,
+  `file_picker` and `yaml` move to their current patches, and the
+  twelve UI files migrate from deprecated `package:flutter/material.dart`
+  to `package:material_ui` (`^1.11.1`).
+  ([#433](https://github.com/nick-llewellyn/nts/pull/433))
+
 - The example app's server catalog (`example/assets/nts-sources.yml`)
   has been reviewed against the community list it is curated from,
   [jauderho/nts-servers](https://github.com/jauderho/nts-servers). It

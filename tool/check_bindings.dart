@@ -285,9 +285,9 @@ void _ensureCodegenAvailable(String pinnedVersion) {
   }
   // `--version` prints something like: `flutter_rust_bridge_codegen 2.12.0`.
   final versionText = '${result.stdout}'.trim();
-  final installed = RegExp(
-    r'(\d+\.\d+\.\d+)',
-  ).firstMatch(versionText)?.group(1);
+  final installed = RegExp(r'(\d+\.\d+\.\d+)')
+      .firstMatch(versionText)
+      ?.group(1);
   if (installed != pinnedVersion) {
     stderr.writeln(
       '${_errorPrefix}flutter_rust_bridge_codegen version mismatch.\n'

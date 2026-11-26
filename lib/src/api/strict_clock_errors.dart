@@ -165,10 +165,9 @@ final class StrictClockSourceFault extends StrictClockError {
   /// the public constructor requires.
   const StrictClockSourceFault._({
     required this.kind,
-    required String detail,
+    required this._detail,
     this.errno,
-  }) : _detail = detail,
-       super._();
+  }) : super._();
 
   /// What failed.
   final SourceFaultKind kind;

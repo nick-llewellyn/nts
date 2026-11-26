@@ -22,9 +22,7 @@
 // `_ClientTab` holds only the two `GlobalKey`s that carry its
 // subtrees across layout switches.
 
-// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
-// ignore: deprecated_member_use
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:signals/signals_flutter.dart' show SignalBuilder;
 
 import 'state/app_state.dart';

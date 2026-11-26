@@ -84,9 +84,8 @@ void main() {
       );
       // Push one source past the rest so the "newest" claim is
       // testable; with equal mtimes the first match legitimately wins.
-      File(
-        '${root.path}/src/lib.rs',
-      ).setLastModifiedSync(DateTime(2026, 7, 26, 12));
+      File('${root.path}/src/lib.rs')
+          .setLastModifiedSync(DateTime(2026, 7, 26, 12));
       final warning = dylibStalenessWarning(path);
       expect(warning, isNotNull);
       expect(warning, contains('warning:'));
@@ -119,9 +118,8 @@ void main() {
         dylib: DateTime(2026, 7, 25, 12),
         source: DateTime(2026, 7, 20, 12),
       );
-      File(
-        '${root.path}/Cargo.toml',
-      ).setLastModifiedSync(DateTime(2026, 7, 26, 12));
+      File('${root.path}/Cargo.toml')
+          .setLastModifiedSync(DateTime(2026, 7, 26, 12));
       expect(dylibStalenessWarning(path), contains('Cargo.toml'));
     });
 
