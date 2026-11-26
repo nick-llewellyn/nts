@@ -133,6 +133,7 @@ tarball.
   None fixes a known advisory, and `rust/Cargo.toml` is unchanged.
   `aes` 0.9.4, `backtrace` 0.3.77 and the `syn` 3 group remain held
   back for the same reasons as above.
+  ([#432](https://github.com/nick-llewellyn/nts/pull/432))
 
 ### Internal
 
