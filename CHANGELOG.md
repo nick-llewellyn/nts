@@ -116,6 +116,24 @@ tarball.
   still need.
   ([#409](https://github.com/nick-llewellyn/nts/pull/409))
 
+- Both Rust lockfiles take 15 further compatible updates (keeping
+  `rust-version = "1.87"` and a single `syn` 2 tree). The notable ones:
+  - `webpki-roots` and `webpki-root-certs` 1.0.11 → 1.0.12, removing
+    six roots from Mozilla's CA bundle: Buypass Class 2 Root CA,
+    Buypass Class 3 Root CA, DigiCert Trusted Root G4, QuoVadis Root CA
+    1 G3, QuoVadis Root CA 3 G3 (now email-only), and Certigna Root CA.
+  - `rustls-pki-types` 1.15.1 → 1.16.0: `DnsName` now rejects hostnames
+    whose final label is a hex number (such as `0x7f000001`), and
+    `DnsName` / `ServerName` strip a trailing dot when canonicalizing.
+  - `rustls-webpki` 0.103.16 → 0.103.17 (backported SPKI and SCT
+    accessors; unused by this crate).
+  - `zeroize` 1.9.1 → 1.9.2 (adds `zeroize_bytes` and extends the
+    `asm!` barrier to the slice `Zeroize` impl).
+
+  None fixes a known advisory, and `rust/Cargo.toml` is unchanged.
+  `aes` 0.9.4, `backtrace` 0.3.77 and the `syn` 3 group remain held
+  back for the same reasons as above.
+
 ### Internal
 
 - The Rust dependency audit now also checks `rust/fuzz/Cargo.lock`,
