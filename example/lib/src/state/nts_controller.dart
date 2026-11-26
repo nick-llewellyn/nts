@@ -93,10 +93,8 @@ class NtsController {
   /// `StrictClockContext.resolveForTesting` to bind one through theirs.
   NtsController(
     this.state, {
-    StrictClockContext Function() resolveStrictClock =
-        StrictClockContext.resolve,
-  }) : _resolveStrictClock = resolveStrictClock,
-       // Initialize from the same source-of-truth that builds `_client`
+    this._resolveStrictClock = StrictClockContext.resolve,
+  }) : // Initialize from the same source-of-truth that builds `_client`
        // so the two cannot diverge if the caller starts the app under
        // a non-default trust mode (e.g. a future deeplink that pre-
        // populates `state.trustMode` to `platformOnly` before the

@@ -32,9 +32,9 @@ it.
 <!--
 List the gates run locally. Cross out anything that doesn't apply.
 The CI matrix re-runs the Dart legs on the latest Flutter `stable`
-channel (matches `.fvmrc`) and 3.38.10 (oldest SDK the pipeline
-builds on, above the declared floor) -- if a leg fails only on the
-old one, that's a real signal, not a flake.
+channel (matches `.fvmrc`) and 3.47.9 (latest patch of the declared
+`>=3.47.0` floor) -- if a leg fails only on the old one, that's a real
+signal, not a flake.
 -->
 
 - [ ] `dart format --output=none --set-exit-if-changed .`

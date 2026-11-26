@@ -26,8 +26,10 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64, PlatformInt64Util;
+
 import '../ffi/api/nts.dart' as ffi;
 import 'clock.dart';
 import 'errors.dart';

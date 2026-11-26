@@ -38,10 +38,8 @@ import 'dart:ffi'
 import 'dart:io' show Platform, pid;
 
 import 'package:flutter/foundation.dart' show kDebugMode, kProfileMode;
-// Deprecated in Flutter 3.47 for material_ui; CI still builds on 3.38.
-// ignore: deprecated_member_use
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MethodChannel;
+import 'package:material_ui/material_ui.dart';
 // Process-wide generation advance: the call a strict fault or regression
 // makes, used to show another engine observing it.
 // ignore: implementation_imports

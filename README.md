@@ -42,7 +42,7 @@ the underlying RFC 8915 layering and cryptographic specifics.
 
 ### Prerequisites
 
-- **Flutter ≥ 3.38.0** (Dart ≥ 3.10). The package depends on the
+- **Flutter ≥ 3.47.0** (Dart ≥ 3.13). The package depends on the
   Flutter SDK and ships a Flutter plugin module on Android, so it
   must be consumed from a Flutter app — `dart pub add nts` from a
   pure-Dart project will not resolve.
@@ -753,7 +753,7 @@ boundary.
 
 The automatic library resolution described under
 [Prerequisites](#prerequisites) is a Flutter-app feature. On every
-supported SDK (Dart ≥ 3.10, Flutter ≥ 3.38) the Native Assets build
+supported SDK (Dart ≥ 3.13, Flutter ≥ 3.47) the Native Assets build
 hook runs under each command below and compiles the Rust crate, but
 only a Flutter app build puts the resulting dynamic library where
 bridge initialization looks for it:

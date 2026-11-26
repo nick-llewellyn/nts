@@ -53,25 +53,23 @@ const Duration _kMinDispatchBudget = Duration(milliseconds: 1);
 // The shape shared by the top-level `ntsWarmCookies` / `ntsQuery`
 // functions and their `NtsClient` method counterparts, so `_getTimeFor`
 // can select an endpoint pair by tear-off and bind the arguments once.
-typedef _WarmEndpoint =
-    Future<NtsWarmCookiesOutcome> Function({
-      required NtsServerSpec spec,
-      Duration timeout,
-      int dnsConcurrencyCap,
-      int bridgeConcurrencyCap,
-      DateTime? verificationTime,
-      StrictClockContext? context,
-    });
+typedef _WarmEndpoint = Future<NtsWarmCookiesOutcome> Function({
+  required NtsServerSpec spec,
+  Duration timeout,
+  int dnsConcurrencyCap,
+  int bridgeConcurrencyCap,
+  DateTime? verificationTime,
+  StrictClockContext? context,
+});
 
-typedef _QueryEndpoint =
-    Future<NtsTimeSample> Function({
-      required NtsServerSpec spec,
-      Duration timeout,
-      int dnsConcurrencyCap,
-      int bridgeConcurrencyCap,
-      DateTime? verificationTime,
-      StrictClockContext? context,
-    });
+typedef _QueryEndpoint = Future<NtsTimeSample> Function({
+  required NtsServerSpec spec,
+  Duration timeout,
+  int dnsConcurrencyCap,
+  int bridgeConcurrencyCap,
+  DateTime? verificationTime,
+  StrictClockContext? context,
+});
 
 typedef _BoundEndpoints = ({
   Future<NtsWarmCookiesOutcome> Function(Duration timeout) warm,

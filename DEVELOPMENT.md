@@ -31,12 +31,10 @@ else mandatory. The load-bearing facts:
   Optionally reclaim disk from the superseded pin with
   `rustup toolchain uninstall <old-version>`.
 - **Flutter tracks the `stable` channel** (see `.fvmrc`); CI also
-  runs an old-SDK leg (3.38.10) as a second matrix leg. That is
-  above the declared `flutter: '>=3.38.0'` floor on purpose —
-  earlier 3.38.x patches do not build native dependencies through
-  the build hook reliably.
+  runs an old-SDK leg (3.47.9 — latest patch of the declared
+  `flutter: '>=3.47.0'` floor line) as a second matrix leg.
 - **Native dylib for local testing:** on every supported SDK
-  (Flutter ≥ 3.38, Dart ≥ 3.10), `flutter test`, `flutter run`,
+  (Flutter ≥ 3.47, Dart ≥ 3.13), `flutter test`, `flutter run`,
   `flutter build` and `dart run` all run the Native Assets hook, so
   each needs rustup — even the mock-mode suite and the example
   CLIs' `--mock` runs, which load no dylib. Only `flutter run` and
@@ -522,7 +520,7 @@ that push events don't have:
 | Job | Cost | Purpose |
 |-----|------|---------|
 | `changes` | ~5 s | Classifies the diff via `dorny/paths-filter`; outputs `rust`, `bindings`, `dart`, `ci`, `docs`, `hooks`, and `android` flags consumed by the gates below (`docs` gates `doc-snippets`; `hooks` gates the two git-hook jobs; `android` gates the KGP gate matrix). Always runs. |
-| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the oldest buildable SDK (3.38.10 — above the declared `>=3.38.0` floor; see the comment on the `build` job) and the latest `stable` channel (matches `.fvmrc`). Also resolves, analyzes, and tests the example app, then smoke-runs the three `example/bin/` CLI scripts under `dart run` with `--mock` — those are the package's only non-Flutter consumers, so running them through `dart` rather than `flutter` is what catches a `dart:ui` import leaking back into the library surface, and the step also pins `nts_cli`'s no-host exit code at 64 so that invocation cannot become a silent success. It does not reach the native-reuse latch path, which needs a real dylib and a failing initialization. Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Stable-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
+| `build` | ~3–5 min × 2 | Dart format / analyze / `flutter test --coverage` on the floor SDK line (3.47.9 — latest patch of `>=3.47.0`; see the comment on the `build` job) and the latest `stable` channel (matches `.fvmrc`). Also resolves, analyzes, and tests the example app, then smoke-runs the three `example/bin/` CLI scripts under `dart run` with `--mock` — those are the package's only non-Flutter consumers, so running them through `dart` rather than `flutter` is what catches a `dart:ui` import leaking back into the library surface, and the step also pins `nts_cli`'s no-host exit code at 64 so that invocation cannot become a silent success. It does not reach the native-reuse latch path, which needs a real dylib and a failing initialization. Gated on `dart`/`rust`/`bindings`/`ci` (skips on doc-only diffs). Stable-leg uploads `coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. |
 | `build-gate` | ~5 s | Single-name aggregator (`Dart tests gate`) over the `build` matrix. `needs: [changes, build]` + `if: always()` so it runs whether the matrix executed, was skipped, or failed. Passes when `needs.changes.result == 'success'` AND `needs.build.result` is `success` or `skipped`; fails otherwise. The `changes`-success precondition discriminates a legitimate doc-only matrix skip from a `changes`-failure cascade-skip — without it, a transient paths-filter failure would silently green-light branch protection. Required-status-check entry on `main` for the Dart side. |
 | `rust` | ~7–10 min | `cargo build --locked` + `cargo test --lib --locked` + `cargo tarpaulin --lib` on Linux. Uploads `rust/coverage/lcov.info` as a workflow artifact and to Codecov via OIDC. Gated on `rust`/`ci`. |
 | `rust-bridge-sync` | ~5–10 min | Runs `tool/check_bindings.dart` to assert the committed bindings match what the generator produces. Gated on `rust`/`bindings`/`ci`. |

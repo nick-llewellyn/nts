@@ -117,8 +117,8 @@ final class StrictReading {
     required this.generation,
     required this.descriptor,
     required this.provenance,
-    required _ClockSource source,
-  }) : _source = source;
+    required this._source,
+  });
 
   /// Microseconds on [descriptor]'s coordinate. `0` is valid.
   final int micros;
@@ -261,8 +261,8 @@ final class StrictClockContext {
   StrictClockContext._({
     required this.descriptor,
     required this.generation,
-    required _ClockSource source,
-  }) : _source = source;
+    required this._source,
+  });
 
   /// Per-isolate count of bridge resets seen by [NtsBridge]. Compared
   /// against the value captured at resolution.

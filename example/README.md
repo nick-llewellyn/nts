@@ -258,7 +258,7 @@ are convenient starting points but in no way special.
 ### Prerequisite — build the host-arch dylib
 
 `dart run` runs the Native Assets build hook just as `flutter run`
-does (on every supported SDK, Dart ≥ 3.10 / Flutter ≥ 3.38), so
+does (on every supported SDK, Dart ≥ 3.13 / Flutter ≥ 3.47), so
 rustup must be on your `PATH` even for `--mock` runs. Only a Flutter
 app build, though, bundles the library the hook compiles where the
 bridge can load it. The CLI instead loads the dylib explicitly via
