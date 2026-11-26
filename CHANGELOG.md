@@ -63,6 +63,7 @@ tarball.
   `file_picker` and `yaml` move to their current patches, and the
   twelve UI files migrate from deprecated `package:flutter/material.dart`
   to `package:material_ui` (`^1.11.1`).
+  ([#433](https://github.com/nick-llewellyn/nts/pull/433))
 
 - The example app's server catalog (`example/assets/nts-sources.yml`)
   has been reviewed against the community list it is curated from,
