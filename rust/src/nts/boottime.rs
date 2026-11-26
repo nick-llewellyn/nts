@@ -348,9 +348,16 @@ pub(crate) mod test_sync {
     /// `exclusive()`, so the generation it samples cannot move under
     /// it until the guard drops.
     pub(super) fn assert_held_here() {
+        assert_held_for("a synthetic BootInstant");
+    }
+
+    /// Crate-wide counterpart of [`assert_held_here`] for test helpers
+    /// outside `boottime` (such as `SessionTable::install` and
+    /// `make_test_session`) that stamp `BootInstant` values across calls.
+    pub(crate) fn assert_held_for(what: &str) {
         assert!(
             EXCLUSIVE_HERE.with(Cell::get) || SHARED_HERE.with(Cell::get) > 0,
-            "boottime::test_sync: a synthetic BootInstant was stamped outside `shared()`; \
+            "boottime::test_sync: {what} was called outside `shared()`; \
              an exclusive test elsewhere could advance the generation between two stamps \
              of one fixture. Wrap the test in `let _s = test_sync::shared();`"
         );

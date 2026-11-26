@@ -3685,6 +3685,11 @@ impl SessionTable {
     /// NTS-KE responder.
     #[cfg(test)]
     fn install(&self, spec: &NtsServerSpec, session: Session) {
+        // `prune_sessions` compares each cached `Session::atime` against
+        // a fresh `BootInstant::now()` and retires entries from an older
+        // generation, so callers must hold `test_sync::shared()` (or
+        // `exclusive()`) across the fixture.
+        crate::nts::boottime::test_sync::assert_held_for("SessionTable::install");
         let key = session_key(spec);
         let mut g = lock_recover(&self.map);
         let headroom = usize::from(!g.contains_key(&key));
