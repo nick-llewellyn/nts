@@ -730,12 +730,20 @@ jobs:
           # https://github.com/miguelpruivo/flutter_file_picker/blob/file_picker-v13.1.0/LICENSE
           # -- the immutable tag for the exact version bumped in
           # Dependabot PR #361, rather than the mutable `master` ref)
-          # -- all three already permitted by `allow-licenses` above; pub.dev
-          # publishes the field lowercased (`mit`, `bsd-3-clause`),
+          # -- all already permitted by `allow-licenses` above; pub.dev
+          # publishes the field lowercased (`mit`, `bsd-3-clause`) or
+          # omits it from GitHub's dependency graph (`meta`, `share_plus`),
           # which is not a valid SPDX identifier, so the action cannot
           # *validate* it and fails closed with "could not detect the
           # validity of all licenses" rather than rejecting the licence
-          # itself. This input is the only lever for that, and it is
+          # itself. The additional pub entries added for PR #433
+          # (`cupertino_icons` 2.0.0 MIT, `hooks` 2.2.0 BSD-3-Clause,
+          # `material_ui` 1.11.1 BSD-3-Clause, `meta` 1.19.0 BSD-3-Clause,
+          # `native_toolchain_rust` 1.1.1 MIT, `share_plus` 13.3.1
+          # BSD-3-Clause, `shared_preferences` 2.5.6 BSD-3-Clause, and
+          # `yaml` 3.1.4 MIT) were each hand-verified against their
+          # published `LICENSE` files in `~/.pub-cache/hosted/pub.dev/`.
+          # This input is the only lever for that, and it is
           # package-scoped rather than error-scoped: a listed package
           # is dropped from licence evaluation entirely, so *any*
           # licence a future release declares would pass here
@@ -748,7 +756,15 @@ jobs:
             pkg:githubactions/SonarSource/sonarqube-scan-action,
             pkg:pub/flutter_rust_bridge,
             pkg:pub/code_assets,
-            pkg:pub/file_picker
+            pkg:pub/file_picker,
+            pkg:pub/cupertino_icons,
+            pkg:pub/hooks,
+            pkg:pub/material_ui,
+            pkg:pub/meta,
+            pkg:pub/native_toolchain_rust,
+            pkg:pub/share_plus,
+            pkg:pub/shared_preferences,
+            pkg:pub/yaml
 
   cargo-deny:
     # Rust supply-chain policy gate (NTS-72): runs the `bans`,
