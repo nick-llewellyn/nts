@@ -333,6 +333,8 @@ fn aligned_capture_points_keep_peer_delay_within_round_trip() {
 fn t1_is_stamped_after_the_udp_bind_on_the_production_path() {
     use crate::nts::ntp::{NtpHeader, HEADER_LEN};
 
+    let _shared = crate::nts::boottime::test_sync::shared();
+
     const SETUP: Duration = Duration::from_millis(400);
 
     // The marker is thread-local and this test reads its own call's
@@ -703,6 +705,7 @@ fn ntp_address_from_handshake_follows_the_server_record() {
 /// asserting the two sides agree, which this helper does not
 /// establish.
 fn make_test_session(host: &str, ntpv4_port: u16, generation: u64) -> Session {
+    crate::nts::boottime::test_sync::assert_held_for("make_test_session");
     let key_material = [0u8; 32];
     let c2s_key = AeadKey::from_keying_material(aead_ids::AES_SIV_CMAC_256, &key_material)
         .expect("32-byte SIV key");
@@ -741,6 +744,7 @@ fn next_session_generation_is_unique() {
 /// `QueryContext`, fresh cookies land in the jar as before.
 #[test]
 fn deposit_cookies_writes_when_generation_matches() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let key = "deposit-match.invalid:4460";
     let gen = next_session_generation();
     let session = make_test_session("deposit-match.invalid", 123, gen);
@@ -782,6 +786,7 @@ fn deposit_cookies_writes_when_generation_matches() {
 /// non-zero.
 #[test]
 fn deposit_and_draw_round_trip_when_ke_and_ntpv4_hosts_diverge() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let key = "ke-endpoint.invalid:4460";
     let gen = next_session_generation();
     // `make_test_session` names the NTPv4 host; the table key above
@@ -821,6 +826,7 @@ fn deposit_and_draw_round_trip_when_ke_and_ntpv4_hosts_diverge() {
 /// (wasted) re-handshake.
 #[test]
 fn deposit_cookies_drops_when_session_replaced() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let key = "deposit-mismatch.invalid:4460";
     // Stand up an "old" session and snapshot its generation as a
     // simulated `QueryContext.session_generation`. Generations come
@@ -901,6 +907,7 @@ fn deposit_cookies_is_noop_when_session_missing() {
 /// cookie pool through identical authentication failures.
 #[test]
 fn evict_session_drops_entry_when_generation_matches() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let key = "evict-match.invalid:4460";
     let gen = next_session_generation();
     let mut session = make_test_session("evict-match.invalid", 123, gen);
@@ -931,6 +938,7 @@ fn evict_session_drops_entry_when_generation_matches() {
 /// the same host through a redundant re-handshake.
 #[test]
 fn evict_session_preserves_entry_on_generation_mismatch() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let key = "evict-mismatch.invalid:4460";
     let stale_generation = next_session_generation();
     // The in-flight query thinks it's still on this generation.
@@ -1001,6 +1009,7 @@ fn evict_session_is_noop_when_session_missing() {
 /// recovery stall downstream consumers observed.
 #[test]
 fn nts_query_evicts_session_on_aead_authentication_failure() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
     faux_server
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -1073,6 +1082,7 @@ fn nts_query_evicts_session_on_aead_authentication_failure() {
 /// cookie pool.
 #[test]
 fn nts_query_preserves_session_on_non_authentication_failure() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
     faux_server
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -1160,6 +1170,7 @@ fn nts_query_evicts_session_on_ntsn_kod_with_matching_uid() {
         ext_type, mode, parse_extensions, NtpHeader, HEADER_LEN, STRATUM_KISS_OF_DEATH, VERSION_4,
     };
 
+    let _shared = crate::nts::boottime::test_sync::shared();
     let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
     faux_server
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -1247,6 +1258,7 @@ fn nts_query_evicts_session_on_ntsn_kod_with_matching_uid() {
 fn nts_query_preserves_session_on_ntsn_kod_with_wrong_uid() {
     use crate::nts::ntp::{ext_type, mode, NtpHeader, STRATUM_KISS_OF_DEATH, VERSION_4};
 
+    let _shared = crate::nts::boottime::test_sync::shared();
     let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
     faux_server
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -1902,6 +1914,7 @@ fn remaining_budget_or_ntp_timeout_short_circuits_when_elapsed_meets_total() {
 /// drops every remaining entry in one call.
 #[test]
 fn session_table_install_invalidate_clear_round_trip() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let spec_a = NtsServerSpec {
         host: "table-rt-a.invalid".into(),
@@ -1959,6 +1972,7 @@ fn session_table_install_invalidate_clear_round_trip() {
 /// a fresh `SessionTable`).
 #[test]
 fn session_table_instances_are_independent() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let a = SessionTable::new();
     let b = SessionTable::new();
     let spec = NtsServerSpec {
@@ -2011,6 +2025,7 @@ fn session_table_instances_are_independent() {
 /// `SessionTable` tests above.
 #[test]
 fn nts_client_invalidate_and_clear_pass_through_to_table() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let client = NtsClient::new();
     let spec = NtsServerSpec {
         host: "client-pass-through.invalid".into(),
@@ -2130,6 +2145,7 @@ fn nts_warm_cookies_top_level_rejects_invalid_spec_via_validate() {
 ///    this `host:port`.
 #[test]
 fn nts_client_query_evicts_session_on_aead_failure_in_client_table() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let faux_server = UdpSocket::bind("127.0.0.1:0").expect("bind faux server");
     faux_server
         .set_read_timeout(Some(Duration::from_secs(2)))
@@ -5649,6 +5665,7 @@ fn prune_sessions_reports_a_regressed_now() {
 /// cannot grow the process-wide table without limit.
 #[test]
 fn session_table_install_stays_within_the_capacity_bound() {
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     for i in 0..(SESSION_TABLE_CAP + 16) {
         let spec = NtsServerSpec {
@@ -5674,6 +5691,10 @@ fn session_table_install_stays_within_the_capacity_bound() {
 /// reinstalled when that key is itself the LRU.
 #[test]
 fn reinstalling_a_cached_key_evicts_nothing() {
+    // Stamped state (`Session::atime`) is kept across installs: hold the
+    // test-sync share so no concurrent test advances the generation
+    // mid-fill and causes `prune_sessions` to drop earlier entries.
+    let _shared = crate::nts::boottime::test_sync::shared();
     let table = SessionTable::new();
     let specs: Vec<NtsServerSpec> = (0..SESSION_TABLE_CAP)
         .map(|i| NtsServerSpec {
