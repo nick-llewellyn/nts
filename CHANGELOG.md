@@ -95,6 +95,7 @@ tarball.
   and Europe swaps to sibling UK hosts `ntp3.cam.ac.uk` and
   `ntp1.dmz.terryburton.co.uk`. Example app only; the library ships
   no server list.
+  ([#430](https://github.com/nick-llewellyn/nts/pull/430))
 
 - Both Rust lockfiles take 21 compatible updates. The native library is
   built from the `rust/Cargo.lock` this package ships, so apps pick
