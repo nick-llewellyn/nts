@@ -175,6 +175,7 @@ tarball.
   The `futures`, `thiserror`, `delegate-attr` and `wasm-bindgen`
   updates remain held back until proc-macro dependencies consolidate
   off `syn` 2.
+  ([#434](https://github.com/nick-llewellyn/nts/pull/434))
 
 ### Internal
 
