@@ -975,7 +975,7 @@ must admit exactly the version `nts` pins:
 
 | `nts` version | Required `flutter_rust_bridge` |
 |---|---|
-| 9.3.x – 10.0.x | `2.13.0` |
+| 9.3.x – 11.x | `2.13.0` |
 | 9.2.x and earlier | `2.12.0` |
 
 If your app does not depend on `flutter_rust_bridge` directly there
