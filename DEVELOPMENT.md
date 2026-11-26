@@ -18,7 +18,7 @@ else mandatory. The load-bearing facts:
   which auto-installs the toolchain and cross-compile targets on
   first use — never install or select a toolchain manually. The pin
   is distinct from two neighbouring version numbers: the MSRV in
-  `rust/Cargo.toml` (`rust-version = "1.87"`, the floor the crate
+  `rust/Cargo.toml` (`rust-version = "1.89"`, the floor the crate
   promises to compile on) and the nightly toolchain used only by
   cargo-fuzz (see [Fuzzing the Rust
   parsers](#fuzzing-the-rust-parsers-cargo-fuzz)). Toolchain bumps
@@ -1121,7 +1121,7 @@ the compiler emits an `unfulfilled_lint_expectations` warning that
 the suppression is now dead code. Stale suppressions are flagged
 automatically; they do not silently outlive the condition that
 justified them. The MSRV declared in `rust/Cargo.toml`
-(`rust-version = "1.87"`) covers the `reason` field syntax.
+(`rust-version = "1.89"`) covers the `reason` field syntax.
 
 ### `reason = "..."` content
 

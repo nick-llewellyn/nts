@@ -493,13 +493,11 @@ fn decode_kind(record_type: u16, body: &[u8]) -> Result<RecordKind, CodecError> 
 }
 
 fn decode_u16_array(body: &[u8]) -> Result<Vec<u16>, CodecError> {
-    if !body.len().is_multiple_of(2) {
+    let (chunks, remainder) = body.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err(CodecError::OddU16Array { len: body.len() });
     }
-    Ok(body
-        .chunks_exact(2)
-        .map(|c| u16::from_be_bytes([c[0], c[1]]))
-        .collect())
+    Ok(chunks.iter().copied().map(u16::from_be_bytes).collect())
 }
 
 fn decode_u16_scalar(body: &[u8]) -> Result<u16, CodecError> {

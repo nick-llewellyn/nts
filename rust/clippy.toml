@@ -3,4 +3,4 @@
 # in `rust-toolchain.toml`. Pinning here keeps clippy from suggesting
 # stabilized-after-floor APIs that downstream consumers on the floor
 # could not adopt without bumping their own toolchain.
-msrv = "1.87"
+msrv = "1.89"
