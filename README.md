@@ -53,7 +53,7 @@ the underlying RFC 8915 layering and cryptographic specifics.
   runs on `flutter run`, `flutter build`, `flutter test` and
   `dart run` in any project that depends on this package. It reads
   `rust/rust-toolchain.toml` via rustup, which automatically
-  installs the pinned toolchain (currently Rust 1.98.0) and the
+  installs the pinned toolchain (currently Rust 1.100.0) and the
   cross-compile target for the platform being built. In a Flutter
   app no manual `cargo` invocation, dylib copying, or build
   configuration is needed — but without rustup installed each of

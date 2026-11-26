@@ -10,7 +10,7 @@ description = "Rust client for RFC 8915 Network Time Security, bridged to Dart v
 # 3.7.0` via `rustls-platform-verifier`, which requires edition2024) plus
 # `usize::is_multiple_of` (stable in 1.87, used in `nts::ntp` and
 # `nts::records` for the extension-field length validators). The active
-# toolchain pin in `rust-toolchain.toml` is higher (currently 1.98.0);
+# toolchain pin in `rust-toolchain.toml` is higher (currently 1.100.0);
 # declaring the actual functional floor here keeps clippy's msrv-aware
 # suggestions accurate without over-constraining downstream consumers.
 # The matching `msrv` entry lives in `rust/clippy.toml`.
@@ -109,14 +109,6 @@ log = "0.4"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
 rustls-pki-types = "1"
 rustls-platform-verifier = "0.7"
-# `tracing` is the structured event surface used by the iOS observability
-# path (`src/ios_init.rs`) and any future cross-platform instrumentation.
-# Its `release_max_level_warn` is also routed through the `log-strip`
-# feature so a single hook-side toggle gates both `log::*!` and
-# `tracing::*!` call sites. On platforms that do not install a
-# `tracing::Subscriber` (Android, macOS host, desktop) events are
-# silently dropped, so this dep adds no host-side noise.
-tracing = { version = "0.1", default-features = false, features = ["std"] }
 webpki-roots = "1.0"
 # `zeroize` ≥ 1.8 is load-bearing for the security posture of the
 # `Zeroizing<Vec<u8>>` wrappers in `src/nts/{ke,cookies,ntp}.rs`
@@ -149,7 +141,12 @@ jni = { version = "0.22", default-features = false }
 # `log` logger, claiming the `log::set_logger` slot under a generic
 # subsystem and blocking `tracing-log::LogTracer` from installing.
 # Console.app filter: `process:Runner subsystem:com.nllewellyn.nts`.
+# `tracing` itself is target-gated here too because `src/ios_init.rs` is
+# its only call site (Cargo 1.100+'s `cargo::unused_dependencies` lint
+# otherwise warns on every non-iOS build); its `release_max_level_warn`
+# feature is still routed through `log-strip` above.
 [target.'cfg(target_os = "ios")'.dependencies]
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-oslog = "0.3"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 tracing-log = "0.2"

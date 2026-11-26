@@ -192,6 +192,23 @@ tarball.
   surface is affected.
   ([#406](https://github.com/nick-llewellyn/nts/pull/406))
 
+- Bump the pinned Rust toolchain in `rust/rust-toolchain.toml` from
+  `1.98.0` to `1.100.0` (released 2026-11-12)
+  ([#436](https://github.com/nick-llewellyn/nts/pull/436)). The MSRV in
+  `rust/Cargo.toml` (`1.89`) and the `[lints.clippy]` table are
+  unchanged (`cargo clippy -- -D warnings` is clean under the new pin).
+  `tracing` moves from unconditional `[dependencies]` into
+  `[target.'cfg(target_os = "ios")'.dependencies]` alongside
+  `tracing-oslog`, `tracing-subscriber`, and `tracing-log`: Cargo
+  `1.100.0`'s `cargo::unused_dependencies` lint flags it on non-iOS
+  targets because `src/ios_init.rs` is its only call site (`log-strip`
+  still routes `tracing/release_max_level_warn` on iOS, and both
+  lockfiles are unchanged). `lib/src/ffi/api/nts.dart` is refreshed via
+  `tool/check_bindings.dart` because Rust `1.100.0`'s `#[derive(Eq)]`
+  expansion emits fewer `assert_fields_are_eq` helpers (9 → 5); only
+  the generated header comment line changes, with no Dart API or
+  wire-format change.
+
 ## 10.1.0
 
 ### Security
