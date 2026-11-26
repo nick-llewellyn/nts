@@ -159,6 +159,24 @@ tarball.
   back for the same reasons as above.
   ([#432](https://github.com/nick-llewellyn/nts/pull/432))
 
+- The Rust crate's declared minimum supported Rust version (`rust-version`
+  in `rust/Cargo.toml` and `msrv` in `rust/clippy.toml`) rises from
+  `1.87` to `1.89` (the pinned build toolchain remains `1.98.0`),
+  unblocking the remaining non-`syn`-3 lockfile updates across both
+  `rust/Cargo.lock` and `rust/fuzz/Cargo.lock`:
+  - `aes` 0.9.2 → 0.9.4 (requires Rust 1.89; enables VAES on x86 by
+    default and updates the software backend's round-key layout).
+  - `backtrace` 0.3.76 → 0.3.77 (requires Rust 1.88) together with
+    `addr2line` 0.25.1 → 0.27.1, `gimli` 0.32.3 → 0.34.0, `object`
+    0.37.3 → 0.40.0, and `miniz_oxide` 0.8.9 → 0.9.1.
+  - `arbitrary` 1.4.2 → 1.5.0 (`rust/fuzz/Cargo.lock` only; excluded
+    from the published package).
+
+  The `futures`, `thiserror`, `delegate-attr` and `wasm-bindgen`
+  updates remain held back until proc-macro dependencies consolidate
+  off `syn` 2.
+  ([#434](https://github.com/nick-llewellyn/nts/pull/434))
+
 ### Internal
 
 - The Rust dependency audit now also checks `rust/fuzz/Cargo.lock`,
