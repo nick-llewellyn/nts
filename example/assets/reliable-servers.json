@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-07T16:50:17.634564Z",
+  "generated_at": "2026-11-26T08:48:26.785346Z",
   "source": "assets/nts-sources.yml",
   "criteria": {
     "verdict": "healthy",
@@ -24,8 +24,8 @@
         "stratum": 3,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 3909,
-        "offset_micros": -147,
+        "median_rtt_micros": 4861,
+        "offset_micros": 152,
         "vm": false
       }
     ],
@@ -39,8 +39,8 @@
         "stratum": 2,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 79260,
-        "offset_micros": 1351,
+        "median_rtt_micros": 78487,
+        "offset_micros": 254,
         "vm": false
       },
       {
@@ -52,8 +52,8 @@
         "stratum": 2,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 85996,
-        "offset_micros": 365,
+        "median_rtt_micros": 87209,
+        "offset_micros": 1397,
         "vm": true
       },
       {
@@ -65,26 +65,12 @@
         "stratum": 2,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 87508,
-        "offset_micros": -1845,
+        "median_rtt_micros": 87656,
+        "offset_micros": -4895,
         "vm": false
       }
     ],
     "South America": [
-      {
-        "hostname": "c.st1.ntp.br",
-        "port": 4460,
-        "region": "South America",
-        "location": "Brazil",
-        "owner": "ntp.br",
-        "owner_url": "https://ntp.br",
-        "stratum": 1,
-        "aead_id": 15,
-        "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 143326,
-        "offset_micros": 492,
-        "vm": false
-      },
       {
         "hostname": "time.bolha.one",
         "port": 4460,
@@ -95,8 +81,22 @@
         "stratum": 1,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 146211,
-        "offset_micros": -10110,
+        "median_rtt_micros": 140868,
+        "offset_micros": -20473,
+        "vm": false
+      },
+      {
+        "hostname": "c.st1.ntp.br",
+        "port": 4460,
+        "region": "South America",
+        "location": "Brazil",
+        "owner": "ntp.br",
+        "owner_url": "https://ntp.br",
+        "stratum": 1,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 178113,
+        "offset_micros": 17382,
         "vm": false
       },
       {
@@ -108,25 +108,12 @@
         "stratum": 2,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 204866,
-        "offset_micros": 422,
+        "median_rtt_micros": 207112,
+        "offset_micros": -4742,
         "vm": false
       }
     ],
     "Europe": [
-      {
-        "hostname": "ntp1.cam.ac.uk",
-        "port": 4460,
-        "region": "Europe",
-        "location": "UK",
-        "owner": "University of Cambridge, University Information Services (UIS)",
-        "stratum": 2,
-        "aead_id": 15,
-        "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 5125,
-        "offset_micros": 882,
-        "vm": false
-      },
       {
         "hostname": "ntp2.glypnod.com",
         "port": 4460,
@@ -136,12 +123,25 @@
         "stratum": 2,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 5755,
-        "offset_micros": 497,
+        "median_rtt_micros": 4185,
+        "offset_micros": 622,
         "vm": false
       },
       {
-        "hostname": "ntp2.dmz.terryburton.co.uk",
+        "hostname": "ntp3.cam.ac.uk",
+        "port": 4460,
+        "region": "Europe",
+        "location": "UK",
+        "owner": "University of Cambridge, University Information Services (UIS)",
+        "stratum": 2,
+        "aead_id": 15,
+        "aead_label": "AES-SIV-CMAC-256(15)",
+        "median_rtt_micros": 4786,
+        "offset_micros": 14,
+        "vm": false
+      },
+      {
+        "hostname": "ntp1.dmz.terryburton.co.uk",
         "port": 4460,
         "region": "Europe",
         "location": "UK",
@@ -149,8 +149,8 @@
         "stratum": 1,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 6710,
-        "offset_micros": 350,
+        "median_rtt_micros": 7337,
+        "offset_micros": -362,
         "vm": false
       }
     ],
@@ -164,8 +164,8 @@
         "stratum": 2,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 171015,
-        "offset_micros": 1631,
+        "median_rtt_micros": 184704,
+        "offset_micros": 10116,
         "vm": true
       },
       {
@@ -177,8 +177,8 @@
         "stratum": 2,
         "aead_id": 15,
         "aead_label": "AES-SIV-CMAC-256(15)",
-        "median_rtt_micros": 257676,
-        "offset_micros": -6208,
+        "median_rtt_micros": 257846,
+        "offset_micros": -7552,
         "vm": true
       }
     ]

@@ -86,6 +86,16 @@ tarball.
   `example/assets/reliable-servers.json` is unchanged. Example app
   only. ([#417](https://github.com/nick-llewellyn/nts/pull/417))
 
+- The example app's reliable-server manifest
+  (`example/assets/reliable-servers.json`) is regenerated against the
+  89-server catalog with `bin/nts_manifest.dart -n 5` on 2026-11-26
+  (86 healthy, 3 not replying, including `nts.dogporkcow.com`). All
+  five regions keep the same 12 server slots and operator diversity;
+  South America re-orders `time.bolha.one` ahead of `c.st1.ntp.br`,
+  and Europe swaps to sibling UK hosts `ntp3.cam.ac.uk` and
+  `ntp1.dmz.terryburton.co.uk`. Example app only; the library ships
+  no server list.
+
 - Both Rust lockfiles take 21 compatible updates. The native library is
   built from the `rust/Cargo.lock` this package ships, so apps pick
   them up when they upgrade. The notable ones:
