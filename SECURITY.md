@@ -4,12 +4,12 @@
 
 Security fixes ship in a new release of the latest major version.
 Earlier major versions do not receive backports, so upgrade to the
-latest 10.x release to get them.
+latest 11.x release to get them.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 10.x    | :white_check_mark: |
-| < 10.0  | :x:                |
+| 11.x    | :white_check_mark: |
+| < 11.0  | :x:                |
 
 ## Reporting a Vulnerability
 
